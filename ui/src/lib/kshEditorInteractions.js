@@ -16,6 +16,7 @@ import {
 import {
   GRID_CELL_W,
   normalizeSourceLayerMode,
+  normalizeSourceValueMode,
   phaseOffsetBeatsFromMs,
   phaseOffsetMs,
 } from "./kshEditorUtils.js";
@@ -94,7 +95,7 @@ export function loopDragNextValue(drag, clientY) {
   return drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE);
 }
 
-export function createCellDrag(source, lane, step, cell, layerMode, clientX, clientY) {
+export function createCellDrag(source, lane, step, cell, layerMode, valueMode, clientX, clientY) {
   return {
     source,
     lane,
@@ -108,7 +109,7 @@ export function createCellDrag(source, lane, step, cell, layerMode, clientX, cli
     startRoll: cell.roll,
     paintCell: cloneCell(cell),
     layerMode: normalizeSourceLayerMode(layerMode),
-    valueMode: normalizeSourceLayerMode(layerMode),
+    valueMode: normalizeSourceValueMode(valueMode ?? layerMode),
     paintEnabled: cell.enabled ? 0 : 1,
     mode: null,
     moved: false,
@@ -207,7 +208,7 @@ export function applySourceValueDrag(state, source, drag, clientY) {
     cell.enabled = 1;
   }
 
-  const valueMode = normalizeSourceLayerMode(drag.valueMode);
+  const valueMode = normalizeSourceValueMode(drag.valueMode);
   let startValue;
   let scale;
   let minValue;
@@ -218,6 +219,11 @@ export function applySourceValueDrag(state, source, drag, clientY) {
     scale = PROBABILITY_DRAG_SCALE;
     minValue = 0;
     maxValue = 100;
+  } else if (valueMode === "cycle_offset") {
+    startValue = drag.startCycleOffset;
+    scale = CYCLE_DRAG_SCALE;
+    minValue = 0;
+    maxValue = Math.max(0, cell.cycle - 1);
   } else if (valueMode === "cycle") {
     startValue = drag.startCycle;
     scale = CYCLE_DRAG_SCALE;
@@ -244,6 +250,10 @@ export function applySourceValueDrag(state, source, drag, clientY) {
 
   if (valueMode === "probability" && cell.probability !== nextValue) {
     cell.probability = nextValue;
+    return true;
+  }
+  if (valueMode === "cycle_offset" && cell.cycleOffset !== nextValue) {
+    cell.cycleOffset = nextValue;
     return true;
   }
   if (valueMode === "cycle" && cell.cycle !== nextValue) {

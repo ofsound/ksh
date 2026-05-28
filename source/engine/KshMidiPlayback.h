@@ -23,6 +23,7 @@ class MidiPlaybackRunner
 public:
     void prepare (double sampleRateIn);
     void reset();
+    void queueAuditionNote (const MidiNoteEvent& note);
 
     MidiPlaybackResult processBlock (KickSnareHatEngine& engine,
                                      double ppqPosition,
@@ -56,6 +57,10 @@ private:
                         int numSamples,
                         MidiPlaybackResult& result);
     void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
+    void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi);
+
+    juce::CriticalSection auditionLock;
+    std::optional<MidiNoteEvent> pendingAudition;
 };
 
 } // namespace ksh

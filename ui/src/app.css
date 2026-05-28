@@ -19,3 +19,15 @@
     @apply min-h-screen select-none bg-zinc-950;
   }
 }
+
+@layer components {
+  .cell-cycle-divider {
+    background: linear-gradient(
+      to bottom left,
+      transparent calc(50% - 0.5px),
+      rgba(26, 28, 33, 0.55) calc(50% - 0.5px),
+      rgba(26, 28, 33, 0.55) calc(50% + 0.5px),
+      transparent calc(50% + 0.5px)
+    );
+  }
+}

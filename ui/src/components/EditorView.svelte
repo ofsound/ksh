@@ -4,17 +4,22 @@
   import {
     GRID_CELL_H,
     GRID_CELL_W,
+    cycleOffsetLabel,
     editorDimensions,
     generationModeLabel,
+    isStepBeyondLoopLength,
     laneColor,
     lockLabel,
+    loopLengthForLane,
     modifierLayerMode,
     mutedLaneColor,
     normalizeSourceLayerMode,
-    phaseOffsetMs,
     playbackModeLabel,
+    phaseOffsetMs,
+    resolveCellTriangle,
     sourceLayerLabel,
     sourceLayerValue,
+    valueModeForCellInteraction,
   } from "../lib/kshEditorUtils.js";
   import {
     applySourcePaintRange,
@@ -49,7 +54,7 @@
     setHeaderValue,
     setLaneLabel,
     setRowLoopLength,
-    setSelectedLane,
+    setSelectedCell,
     setSourceLayerMode,
     shiftLaneRow,
     shiftPattern,
@@ -68,7 +73,7 @@
   let labelDraft = $state("");
   let laneRenameTap = $state({ lane: -1, at: 0 });
   let sourceRowResetTap = $state({ lane: -1, at: 0 });
-  let cycleCellTap = $state({ source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0 });
+  let cycleCellTap = $state({ source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" });
   let lastAudition = $state({ lane: -1, at: 0 });
 
   const dims = $derived(editorDimensions(session.kshState));
@@ -88,24 +93,37 @@
     const source = session.selectedSource;
     const cell = session.kshState.sources[source][lane][step];
     const muted = session.kshState.sourceChannelMutes[source][lane];
-    const inactive = step >= session.kshState.stepCount;
+    const beyondSteps = step >= session.kshState.stepCount;
+    const beyondLoop = isStepBeyondLoopLength(session.kshState, lane, step);
     const flashing = isEditorFlashing(source, lane, step);
 
     if (flashing) {
       return "background:#dbdee5;color:#1a1c21;";
     }
 
-    if (inactive) {
+    if (beyondSteps) {
       return "background:#242930;color:#5c636b;";
     }
 
+    if (beyondLoop) {
+      if (cell.enabled) {
+        return "background:#242930;color:#5c636b;";
+      }
+      return "background:#242930;color:#5c636b;opacity:0.55;";
+    }
+
     let color = laneColor(lane, false, session.dcColors);
+    let lightColor = laneColor(lane, true, session.dcColors);
     if (muted) {
       color = mutedLaneColor(color);
+      lightColor = mutedLaneColor(lightColor);
     }
 
     if (!cell.enabled) {
-      return `background:${color};opacity:0.22;color:#8c969e;`;
+      const downbeat = step % 4 === 0;
+      return downbeat
+        ? "background:#1e2228;color:#8c969e;opacity:0.55;"
+        : "background:#1a1c21;color:#8c969e;opacity:0.55;";
     }
 
     const layerValue = sourceLayerValue(cell, effectiveLayerMode);
@@ -116,7 +134,28 @@
           ? layerValue / 100
           : Math.min(1, layerValue / 8);
 
+    if (effectiveLayerMode === "cycle" && cell.cycleInverted) {
+      return `background:linear-gradient(to top, ${lightColor} ${Math.round(fill * 100)}%, rgba(26,28,33,0.85) ${Math.round(fill * 100)}%);color:#dbdee5;`;
+    }
+
     return `background:linear-gradient(to top, ${color} ${Math.round(fill * 100)}%, rgba(26,28,33,0.85) ${Math.round(fill * 100)}%);color:#dbdee5;`;
+  }
+
+  function cellClass(lane, step) {
+    const beyondSteps = step >= session.kshState.stepCount;
+    const beyondLoop = isStepBeyondLoopLength(session.kshState, lane, step);
+    const selected =
+      session.selectedLane === lane &&
+      session.selectedStep === step &&
+      !beyondSteps &&
+      !beyondLoop;
+    const cycleLayer = effectiveLayerMode === "cycle";
+
+    return [
+      "relative mr-0 flex overflow-hidden rounded-sm border text-[9px]",
+      selected ? "border-ksh-text" : beyondLoop ? "border-ksh-stroke-soft/40" : "border-black/20",
+      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle" : "items-end justify-center",
+    ].join(" ");
   }
 
   function cellLabel(lane, step) {
@@ -124,7 +163,34 @@
     if (!cell.enabled) {
       return "";
     }
+    if (effectiveLayerMode === "cycle") {
+      return "";
+    }
     return String(sourceLayerValue(cell, effectiveLayerMode));
+  }
+
+  function cyclePrimaryLabel(lane, step) {
+    const cell = session.kshState.sources[session.selectedSource][lane][step];
+    if (!cell.enabled || effectiveLayerMode !== "cycle") {
+      return "";
+    }
+    const value = sourceLayerValue(cell, "cycle");
+    return `${cell.cycleInverted ? "!" : ""}${value}`;
+  }
+
+  function loopLengthClass(lane) {
+    const shortened = loopLengthForLane(session.kshState, lane) < session.kshState.stepCount;
+    if (loopDrag?.lane === lane) {
+      return "text-ksh-amber";
+    }
+    if (shortened) {
+      return "text-ksh-amber";
+    }
+    return "text-ksh-blue";
+  }
+
+  function isCellInteractive(lane, step) {
+    return step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, lane, step);
   }
 
   function stepLabelClass(step) {
@@ -153,50 +219,69 @@
     headerDrag = null;
   }
 
-  function cycleCellMatches(source, lane, step) {
+  function cycleCellMatches(source, lane, step, valueMode) {
     return (
       cycleCellTap.source === source &&
       cycleCellTap.lane === lane &&
       cycleCellTap.step === step &&
+      cycleCellTap.valueMode === valueMode &&
       Date.now() - cycleCellTap.at <= LANE_RENAME_MS &&
       cycleCellTap.wasEnabled
     );
   }
 
-  function handleCycleCellDoubleClick(source, lane, step) {
-    if (!cycleCellMatches(source, lane, step)) {
+  function handleCycleCellDoubleClick(source, lane, step, valueMode) {
+    if (valueMode !== "cycle" || !cycleCellMatches(source, lane, step, valueMode)) {
       return false;
     }
 
     const cell = session.kshState.sources[source][lane][step];
     if (cell.cycle <= 1) {
-      cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0 };
+      cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
       return false;
     }
 
     cell.enabled = 1;
     cell.cycleInverted = cell.cycleInverted ? 0 : 1;
     sendCell(source, lane, step);
-    cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0 };
+    cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
     return true;
   }
 
   function onCellPointerDown(event, lane, step) {
-    if (step >= session.kshState.stepCount) {
+    if (!isCellInteractive(lane, step)) {
       return;
     }
 
     const source = session.selectedSource;
-    if (handleCycleCellDoubleClick(source, lane, step)) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    const layerMode =
+      modifierLayerMode(event.metaKey, event.shiftKey, event.altKey) ?? session.sourceLayerMode;
+    const triangle =
+      normalizeSourceLayerMode(layerMode) === "cycle"
+        ? resolveCellTriangle(localX, localY, GRID_CELL_W, GRID_CELL_H)
+        : null;
+    const valueMode = valueModeForCellInteraction(layerMode, triangle);
+
+    if (handleCycleCellDoubleClick(source, lane, step, valueMode)) {
       return;
     }
 
     const cell = session.kshState.sources[source][lane][step];
-    const layerMode =
-      modifierLayerMode(event.metaKey, event.shiftKey, event.altKey) ?? session.sourceLayerMode;
 
-    cellDrag = createCellDrag(source, lane, step, cell, layerMode, event.clientX, event.clientY);
-    setSelectedLane(lane);
+    cellDrag = createCellDrag(
+      source,
+      lane,
+      step,
+      cell,
+      layerMode,
+      valueMode,
+      event.clientX,
+      event.clientY
+    );
+    setSelectedCell(lane, step);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -221,6 +306,7 @@
         cellDrag.step,
         toStep
       );
+      setSelectedCell(cellDrag.lane, toStep);
       if (changed.length > 0) {
         await sendCellsForLane(session.selectedSource, cellDrag.lane, changed);
       }
@@ -250,16 +336,17 @@
       const cell = session.kshState.sources[source][cellDrag.lane][cellDrag.step];
       const wasEnabled = cell.enabled ? 1 : 0;
 
-      if (cellDrag.layerMode === "cycle" && wasEnabled && cell.cycle > 1) {
+      if (cellDrag.valueMode === "cycle" && wasEnabled && cell.cycle > 1) {
         cycleCellTap = {
           source,
           lane: cellDrag.lane,
           step: cellDrag.step,
           at: Date.now(),
           wasEnabled: 1,
+          valueMode: "cycle",
         };
       } else {
-        cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0 };
+        cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
       }
 
       toggleCellOnRelease(session.kshState, source, cellDrag);
@@ -275,7 +362,7 @@
       startY: clientY,
       startValue: session.kshState.lanes[lane].loopLength,
     };
-    setSelectedLane(lane);
+    setSelectedCell(lane, session.selectedStep);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -308,7 +395,7 @@
       ...muteDrag,
       touched: { ...muteDrag.touched, [lane]: true },
     };
-    setSelectedLane(lane);
+    setSelectedCell(lane, session.selectedStep);
 
     if (session.kshState.sourceChannelMutes[muteDrag.source][lane] === muteDrag.paintMuted) {
       return;
@@ -573,7 +660,7 @@
           </button>
           <button
             type="button"
-            class={`w-8 text-center ${loopDrag?.lane === lane ? "text-ksh-amber" : "text-ksh-blue"}`}
+            class={`w-8 text-center ${loopLengthClass(lane)}`}
             onpointerdown={(event) => beginLoopDrag(lane, event.clientY, event)}
             onpointermove={(event) => {
               if (loopDrag?.lane === lane) {
@@ -612,15 +699,35 @@
           {#each Array.from({ length: MAX_STEPS }, (_, step) => step) as step (step)}
             <button
               type="button"
-              class="relative mr-0 flex items-end justify-center overflow-hidden rounded-sm border border-black/20 text-[9px]"
+              class={cellClass(lane, step)}
               style={`width:${GRID_CELL_W}px;height:${GRID_CELL_H}px;${cellStyle(lane, step)}`}
-              disabled={step >= session.kshState.stepCount}
+              disabled={!isCellInteractive(lane, step)}
               onpointerdown={(event) => onCellPointerDown(event, lane, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={onCellPointerUp}
             >
-              {cellLabel(lane, step)}
+              {#if effectiveLayerMode === "cycle" && isCellInteractive(lane, step)}
+                <span class="pointer-events-none absolute left-1 top-1 text-[8px] leading-none">
+                  {cyclePrimaryLabel(lane, step)}
+                </span>
+                {#if session.kshState.sources[session.selectedSource][lane][step].enabled}
+                  <span class="pointer-events-none absolute bottom-1 right-1 text-[8px] leading-none">
+                    {cycleOffsetLabel(session.kshState.sources[session.selectedSource][lane][step].cycleOffset)}
+                  </span>
+                {/if}
+                <span class="cell-cycle-divider pointer-events-none absolute inset-0" aria-hidden="true"></span>
+              {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, lane, step) && session.kshState.sources[session.selectedSource][lane][step].enabled}
+                <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
+                  {cyclePrimaryLabel(lane, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][lane][step].cycleOffset)}
+                </span>
+              {:else if isStepBeyondLoopLength(session.kshState, lane, step) && session.kshState.sources[session.selectedSource][lane][step].enabled}
+                <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
+                  {cellLabel(lane, step)}
+                </span>
+              {:else}
+                {cellLabel(lane, step)}
+              {/if}
             </button>
           {/each}
         </div>
@@ -633,7 +740,7 @@
       Compact
     </button>
     <span class="text-ksh-muted">
-      Source {session.selectedSource + 1} · {session.kshState.laneCount} lane(s) · drag ↑↓ values · Shift/Cmd/Opt layers
+      Source {session.selectedSource + 1} · {session.kshState.laneCount} lane(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
     </span>
   </footer>
 </div>

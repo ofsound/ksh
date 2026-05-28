@@ -134,6 +134,43 @@ export function normalizeSourceLayerMode(mode) {
   return "velocity";
 }
 
+export function normalizeSourceValueMode(mode) {
+  if (mode === "cycle_offset") {
+    return "cycle_offset";
+  }
+  return normalizeSourceLayerMode(mode);
+}
+
+export function cycleOffsetLabel(value) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return "1";
+  }
+  return String(parsed + 1);
+}
+
+export function loopLengthForLane(state, lane) {
+  return clamp(state.lanes[lane]?.loopLength ?? state.stepCount, 1, state.stepCount);
+}
+
+export function isStepBeyondLoopLength(state, lane, step) {
+  return step >= loopLengthForLane(state, lane);
+}
+
+/** @returns {"top_left"|"bottom_right"} */
+export function resolveCellTriangle(localX, localY, cellWidth, cellHeight) {
+  const lineY = cellHeight - (cellHeight * localX) / cellWidth;
+  return localY <= lineY ? "top_left" : "bottom_right";
+}
+
+export function valueModeForCellInteraction(layerMode, triangle) {
+  const normalizedLayer = normalizeSourceLayerMode(layerMode);
+  if (normalizedLayer !== "cycle") {
+    return normalizedLayer;
+  }
+  return triangle === "bottom_right" ? "cycle_offset" : "cycle";
+}
+
 export function sourceLayerValue(cell, mode) {
   const layer = normalizeSourceLayerMode(mode);
   if (layer === "cycle") {

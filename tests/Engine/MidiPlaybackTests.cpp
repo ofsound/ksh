@@ -73,6 +73,22 @@ TEST_CASE ("midi playback does not emit while stopped", "[engine][transport]")
     REQUIRE (result.noteHits.empty());
 }
 
+TEST_CASE ("audition note emits while transport stopped", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    runner.queueAuditionNote ({ 42, 100, 1, 100, 0.0 });
+
+    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, false, 512);
+
+    REQUIRE (countNoteOns (result.midi) == 1);
+    REQUIRE (containsNoteOn (result.midi, 42));
+}
+
 TEST_CASE ("midi playback does not emit when device inactive", "[engine][transport]")
 {
     EngineFixture fixture;

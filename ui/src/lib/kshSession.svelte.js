@@ -46,6 +46,7 @@ export const session = $state({
   playingStep: 0,
   selectedSource: 0,
   selectedLane: 0,
+  selectedStep: 0,
   dcColors: 1,
   sourceLayerMode: "velocity",
   bridgeError: "",
@@ -189,7 +190,17 @@ export async function sendSourceChannelMute(source, lane) {
 }
 
 export function setSelectedLane(lane) {
+  setSelectedCell(lane, session.selectedStep);
+}
+
+export function setSelectedCell(lane, step) {
   session.selectedLane = clamp(lane, 0, MAX_LANES - 1);
+  const loopLength = clamp(
+    session.kshState.lanes[session.selectedLane]?.loopLength ?? session.kshState.stepCount,
+    1,
+    session.kshState.stepCount
+  );
+  session.selectedStep = clamp(step, 0, loopLength - 1);
 }
 
 export async function selectSource(source) {
@@ -267,6 +278,9 @@ export async function setRowLoopLength(lane, value) {
   }
 
   session.kshState.lanes[lane].loopLength = next;
+  if (session.selectedLane === lane && session.selectedStep >= next) {
+    session.selectedStep = next - 1;
+  }
   bumpState();
   await sendChannelLoopLength(lane);
 }

@@ -188,7 +188,7 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
     processor.suspendProcessing (true);
     const bool ok = ksh::dispatchEngineCommand (engine(), selector, args);
 
-    if (ok)
+    if (ok && selector != "channel_audition")
         processor.getMidiPlayback().reset();
 
     processor.suspendProcessing (false);

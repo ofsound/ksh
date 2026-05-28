@@ -48,9 +48,9 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
         uiBridge.emitStatus (message);
     };
 
-    callbacks.emitNote = [] (const ksh::MidiNoteEvent& note)
+    callbacks.emitNote = [this] (const ksh::MidiNoteEvent& note)
     {
-        juce::ignoreUnused (note);
+        midiPlayback.queueAuditionNote (note);
     };
 
     return callbacks;

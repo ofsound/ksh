@@ -26,6 +26,15 @@ void MidiPlaybackRunner::reset()
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
     pendingNoteOffs.clear();
+
+    const juce::ScopedLock lock (auditionLock);
+    pendingAudition = std::nullopt;
+}
+
+void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
+{
+    const juce::ScopedLock lock (auditionLock);
+    pendingAudition = note;
 }
 
 void MidiPlaybackRunner::clearPending()
@@ -47,6 +56,36 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const KickSnareHatEngine& eng
     const int sampleOffset = static_cast<int> (std::llround ((stepStartBeat - blockStartPpq) * samplesPerBeat));
 
     return clampSample (sampleOffset, numSamples);
+}
+
+void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
+{
+    std::optional<MidiNoteEvent> note;
+    {
+        const juce::ScopedLock lock (auditionLock);
+        note = std::exchange (pendingAudition, std::nullopt);
+    }
+
+    if (! note.has_value())
+        return;
+
+    const int delaySamples = static_cast<int> (std::llround (note->delayMs * sampleRate / 1000.0));
+    const int onSample = clampSample (delaySamples, numSamples);
+    const int durationSamples =
+        std::max (1, static_cast<int> (std::llround (static_cast<double> (note->durationMs) * sampleRate / 1000.0)));
+    const int offSample = onSample + durationSamples;
+    const auto velocity = static_cast<juce::uint8> (std::clamp (note->velocity, 1, 127));
+
+    midi.addEvent (juce::MidiMessage::noteOn (note->channel, note->pitch, velocity), onSample);
+
+    if (offSample < numSamples)
+    {
+        midi.addEvent (juce::MidiMessage::noteOff (note->channel, note->pitch), offSample);
+    }
+    else
+    {
+        pendingNoteOffs.push_back ({ offSample, note->channel, note->pitch });
+    }
 }
 
 void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi)
@@ -128,6 +167,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (KickSnareHatEngine& engine,
         return result;
 
     flushPendingNoteOffs (numSamples, result.midi);
+    flushAuditionNotes (numSamples, result.midi);
 
     if (! isPlaying || ! engine.deviceActive || bpm <= 0.0)
     {
