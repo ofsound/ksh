@@ -172,6 +172,7 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    const juce::ScopedLock lock (engineLock);
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
@@ -225,6 +226,8 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    const juce::ScopedLock lock (engineLock);
+
     if (data == nullptr || sizeInBytes <= 0)
         return;
 

@@ -47,6 +47,8 @@ public:
     ksh::KickSnareHatEngine& getEngine() { return engine; }
     const ksh::KickSnareHatEngine& getEngine() const { return engine; }
 
+    juce::CriticalSection& getEngineLock() { return engineLock; }
+
     ksh::MidiPlaybackRunner& getMidiPlayback() { return midiPlayback; }
 
     KshUiBridge& getUiBridge() { return uiBridge; }
@@ -70,6 +72,7 @@ private:
     std::vector<ksh::NativeHit> recentNoteHits;
     std::vector<ksh::NativeHit> pendingNoteHitsForUi;
     EditorResizeCallback editorResizeCallback;
+    juce::CriticalSection engineLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

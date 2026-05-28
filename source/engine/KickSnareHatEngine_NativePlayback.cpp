@@ -1,6 +1,7 @@
 #include "KickSnareHatEngine.h"
 #include "KshMath.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
@@ -59,7 +60,10 @@ int KickSnareHatEngine::nativePlaybackPeriod() const
     }
 
     if (hasVariation)
-        period *= kNativeProbabilityMultiplier;
+    {
+        const int maxPeriod = kNativePlaybackMaxRows / std::max (1, stepCount);
+        period = std::min (period * kNativeProbabilityMultiplier, maxPeriod);
+    }
 
     return period * stepCount > kNativePlaybackMaxRows ? 0 : period;
 }
@@ -71,7 +75,14 @@ bool KickSnareHatEngine::nativePlaybackSupported() const
 
 bool KickSnareHatEngine::nativePlaybackActive() const
 {
-    return deviceActive && nativePlaybackSupported();
+    if (! deviceActive)
+        return false;
+
+    if (nativePlaybackPeriod() > 0)
+        return true;
+
+    return nativePlaybackStepCount > 0
+           && nativePlaybackRows.size() == static_cast<size_t> (nativePlaybackStepCount);
 }
 
 int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) const
@@ -169,7 +180,7 @@ void KickSnareHatEngine::appendNativeHit (NativePlaybackRow& row,
     });
 }
 
-NativePlaybackTable KickSnareHatEngine::buildNativePlaybackRows (
+NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
     const std::optional<TransportProtection>& transportProtection)
 {
     NativePlaybackTable rows;
@@ -180,21 +191,21 @@ NativePlaybackTable KickSnareHatEngine::buildNativePlaybackRows (
     if (cyclePeriod < 1)
         cyclePeriod = 1;
 
-    nativePlaybackStepCount = stepCount * cyclePeriod;
+    const int playbackStepCount = stepCount * cyclePeriod;
 
     std::optional<int> minimumTargetPosition;
 
     if (transportProtection.has_value())
     {
-        minimumTargetPosition = mod (transportProtection->globalStep, nativePlaybackStepCount);
+        minimumTargetPosition = mod (transportProtection->globalStep, playbackStepCount);
 
         if (! transportProtection->includeCurrent)
             minimumTargetPosition = *minimumTargetPosition + 1;
     }
 
-    rows.resize (static_cast<size_t> (nativePlaybackStepCount));
+    rows.resize (static_cast<size_t> (playbackStepCount));
 
-    for (int step = 0; step < nativePlaybackStepCount; ++step)
+    for (int step = 0; step < playbackStepCount; ++step)
     {
         const int rowStep = mod (step, stepCount);
 
@@ -257,7 +268,7 @@ NativePlaybackTable KickSnareHatEngine::buildNativePlaybackRows (
 
                 const int targetRowFloat = static_cast<int> (std::floor (targetPosition));
                 const double targetDelayMs = (targetPosition - static_cast<double> (targetRowFloat)) * stepIntervalMs;
-                const int targetRow = mod (targetRowFloat, nativePlaybackStepCount);
+                const int targetRow = mod (targetRowFloat, playbackStepCount);
 
                 appendNativeHit (rows[static_cast<size_t> (targetRow)],
                                  channel,
@@ -270,7 +281,13 @@ NativePlaybackTable KickSnareHatEngine::buildNativePlaybackRows (
         }
     }
 
-    return rows;
+    return { std::move (rows), playbackStepCount };
+}
+
+void KickSnareHatEngine::commitNativePlaybackBuild (NativePlaybackBuild build)
+{
+    nativePlaybackStepCount = build.stepCount;
+    nativePlaybackRows = std::move (build.rows);
 }
 
 int KickSnareHatEngine::currentNativePlaybackStep() const
@@ -295,7 +312,7 @@ void KickSnareHatEngine::syncNativePlaybackTable()
         };
     }
 
-    nativePlaybackRows = buildNativePlaybackRows (transportProtection);
+    commitNativePlaybackBuild (buildNativePlaybackRows (transportProtection));
 }
 
 int KickSnareHatEngine::globalStepForBeats (double songBeats) const

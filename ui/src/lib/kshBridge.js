@@ -40,8 +40,14 @@ function getSendCommandNative() {
   return getNativeFunction("kshSendCommand");
 }
 
+/** Serializes engine commands so native playback table rebuilds never overlap. */
+let commandChain = Promise.resolve();
+
 export function sendCommand(selector, args = []) {
-  return getSendCommandNative()(JSON.stringify({ selector, args }));
+  const run = () => getSendCommandNative()(JSON.stringify({ selector, args }));
+  const task = commandChain.then(run, run);
+  commandChain = task.catch(() => {});
+  return task;
 }
 
 export function onBackendEvent(eventId, callback) {

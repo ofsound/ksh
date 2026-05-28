@@ -77,4 +77,11 @@ struct TransportProtection
     bool includeCurrent = false;
 };
 
+/** Result of {@link KickSnareHatEngine::buildNativePlaybackRows}; commit via syncNativePlaybackTable. */
+struct NativePlaybackBuild
+{
+    NativePlaybackTable rows;
+    int stepCount = 0;
+};
+
 } // namespace ksh

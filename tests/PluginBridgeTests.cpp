@@ -50,6 +50,50 @@ TEST_CASE ("ui bridge handleCommand applies cell edit", "[plugin][bridge]")
     REQUIRE (plugin.getEngine().sources[0][0][4].velocity == 90);
 }
 
+TEST_CASE ("processor engine setVelocityHumanize does not crash", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+    plugin.getEngine().setCell (0, 0, 0, true, 100, 100, 1);
+
+    plugin.getEngine().setVelocityHumanize (1);
+
+    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
+             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+}
+
+TEST_CASE ("ui bridge humanize commands rebuild native playback safely", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+    plugin.getEngine().setCell (0, 0, 0, true, 100, 100, 1);
+    plugin.getEngine().generateWindow (0, plugin.getEngine().stepCount, true);
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
+    REQUIRE (plugin.getEngine().nativePlaybackStepCount > plugin.getEngine().stepCount);
+    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
+             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"timing_humanize","args":[1]})"));
+    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
+             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+}
+
+TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+    plugin.getEngine().setCell (0, 0, 0, true, 100, 100, 1);
+    plugin.getEngine().generateWindow (0, plugin.getEngine().stepCount, true);
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
+             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+}
+
 TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")
 {
     PluginProcessor plugin;

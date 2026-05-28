@@ -215,10 +215,72 @@ TEST_CASE ("transport position does not fire while stopped", "[engine][transport
     REQUIRE (countNoteOns (result.midi) == 0);
 }
 
+TEST_CASE ("midi playback survives humanized native table expansion", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 16, true);
+    fixture.engine.setVelocityHumanize (1);
+    fixture.engine.syncNativePlaybackTable();
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+
+    REQUIRE (countNoteOns (result.midi) == 1);
+    REQUIRE (fixture.engine.nativePlaybackRows.size()
+             == static_cast<size_t> (fixture.engine.nativePlaybackStepCount));
+}
+
 TEST_CASE ("plugin processor initializes with playable default pattern", "[processor][transport]")
 {
     PluginProcessor processor;
 
     REQUIRE (processor.getEngine().nativePlaybackActive());
     REQUIRE (processor.getEngine().sources[0][0][0].enabled);
+}
+
+TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")
+{
+    PluginProcessor processor;
+    processor.prepareToPlay (44100.0, 512);
+    processor.getEngine().setVelocityHumanize (10);
+    REQUIRE (processor.getEngine().nativePlaybackActive());
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto result = runner.processBlock (processor.getEngine(), 0.0, 120.0, true, 512);
+
+    REQUIRE (countNoteOns (result.midi) >= 1);
+}
+
+TEST_CASE ("midi playback stays active when humanize caps variation period", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (32);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 9);
+    fixture.engine.generateWindow (0, 32, true);
+    fixture.engine.setVelocityHumanize (10);
+    fixture.engine.syncNativePlaybackTable();
+
+    REQUIRE (fixture.engine.nativePlaybackActive());
+    REQUIRE (fixture.engine.nativePlaybackStepCount > 0);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+
+    REQUIRE (countNoteOns (result.midi) >= 1);
 }

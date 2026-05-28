@@ -129,7 +129,7 @@ void MidiPlaybackRunner::emitNativeRow (KickSnareHatEngine& engine,
     if (nativeStep < 0 || nativeStep >= static_cast<int> (engine.nativePlaybackRows.size()))
         return;
 
-    const auto& row = engine.nativePlaybackRows[static_cast<size_t> (nativeStep)];
+    const NativePlaybackRow row = engine.nativePlaybackRows[static_cast<size_t> (nativeStep)];
 
     for (const auto& hit : row)
     {

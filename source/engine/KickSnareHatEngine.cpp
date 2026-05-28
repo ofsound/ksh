@@ -114,16 +114,21 @@ GenerationMode generationModeFromJson (const nlohmann::json& state, GenerationMo
 }
 } // namespace
 
+namespace
+{
+double defaultEngineRandom()
+{
+    static thread_local std::mt19937 generator { std::random_device{}() };
+    static thread_local std::uniform_real_distribution<double> distribution (0.0, 1.0);
+    return distribution (generator);
+}
+} // namespace
+
 KickSnareHatEngine::KickSnareHatEngine (EngineCallbacks callbacksIn)
     : callbacks (std::move (callbacksIn))
 {
     if (! callbacks.rng)
-    {
-        callbacks.rng = [this]
-        {
-            return nextRandom();
-        };
-    }
+        callbacks.rng = defaultEngineRandom;
 
     initChannels();
     initSources();
@@ -163,12 +168,7 @@ double KickSnareHatEngine::nextRandom() const
         return value;
     }
 
-    if (callbacks.rng)
-        return callbacks.rng();
-
-    static thread_local std::mt19937 generator { std::random_device{}() };
-    static thread_local std::uniform_real_distribution<double> distribution (0.0, 1.0);
-    return distribution (generator);
+    return callbacks.rng ? callbacks.rng() : defaultEngineRandom();
 }
 
 void KickSnareHatEngine::status (const std::string& message)

@@ -125,8 +125,9 @@ public:
     [[nodiscard]] bool nativePlaybackSupported() const;
     [[nodiscard]] bool nativePlaybackActive() const;
     [[nodiscard]] int playbackStepForChannel (int channel, int playbackIndex) const;
-    [[nodiscard]] NativePlaybackTable buildNativePlaybackRows (
+    [[nodiscard]] NativePlaybackBuild buildNativePlaybackRows (
         const std::optional<TransportProtection>& transportProtection = std::nullopt);
+    void commitNativePlaybackBuild (NativePlaybackBuild build);
     [[nodiscard]] int globalStepForBeats (double songBeats) const;
     [[nodiscard]] double beatsPerStep() const;
     void transportPosition (double songBeats, bool isPlaying);

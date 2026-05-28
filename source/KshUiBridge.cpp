@@ -186,10 +186,16 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return false;
 
     processor.suspendProcessing (true);
-    const bool ok = ksh::dispatchEngineCommand (engine(), selector, args);
 
-    if (ok && selector != "channel_audition")
-        processor.getMidiPlayback().reset();
+    bool ok = false;
+
+    {
+        const juce::ScopedLock engineLock (processor.getEngineLock());
+        ok = ksh::dispatchEngineCommand (engine(), selector, args);
+
+        if (ok && selector != "channel_audition")
+            processor.getMidiPlayback().reset();
+    }
 
     processor.suspendProcessing (false);
 
