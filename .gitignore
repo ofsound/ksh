@@ -28,3 +28,8 @@ cmake-build-debug
 cmake-build-release
 cmake-build-relwithdebinfo
 packaging/Output/*
+
+# WebView frontend
+ui/node_modules
+assets/webview/dist
+assets/webview/ui.zip

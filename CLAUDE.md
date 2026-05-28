@@ -1,74 +1,93 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## First-Time Setup
-
-If the values below still say "Pamplejuce" or "Pamplejuce Demo", this project was freshly created from the template and hasn't been personalized yet. Ask the user:
-
-1. **What's your plugin called?** (display name for DAWs, e.g. "Super Synth")
-2. **What's your company name?** (e.g. "My Audio Co")
-3. **What type of plugin is this?** (synth, effect, utility, etc.)
-4. **What IDE do you use?** (CLion, VS Code, Xcode, other)
-5. **Do you want CI/CD via GitHub Actions?** Note: public repos get unlimited CI minutes, but private repos have a limited monthly allowance. If they're on a private repo and want to avoid burning minutes during active development, suggest commenting out matrix entries in the workflow to build on just one platform (e.g. only their dev OS) and running tests only — they can re-enable the full matrix when preparing a release.
-6. **If using CI, do you need Intel IPP?** (provides SIMD-optimized DSP functions — if not, comment out the IPP install steps in the workflow to avoid CI failures)
-7. **Are you code signing?** Code signing is essentially required to distribute to anyone (beta testers, friends, customers) — without it, macOS Gatekeeper and Windows SmartScreen will block or warn on the plugin. But it can be set up later; it's fine to skip during early development. Ask separately for macOS and Windows:
-   - **macOS**: codesigning + notarization requires an Apple Developer account ($99/year). If not signing yet, comment out the codesign/notarize steps in the CI workflow. Guide: [How to code sign and notarize macOS audio plugins in CI](https://melatonin.dev/blog/how-to-code-sign-and-notarize-macos-audio-plugins-in-ci/)
-   - **Windows**: Azure Trusted Signing is the recommended approach (free tier available). If not signing yet, comment out the Azure signing step. Guide: [Code signing on Windows with Azure Trusted Signing](https://melatonin.dev/blog/code-signing-on-windows-with-azure-trusted-signing/)
-
-Then:
-- Update `CMakeLists.txt`: set `PROJECT_NAME` (no spaces), `PRODUCT_NAME` (display name), `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE` (4 chars), and `PLUGIN_CODE` (4 chars)
-- Let the user know: builds default to **Debug** mode for development (faster builds, better debugging). If they're making music with the plugin and experiencing performance issues (audio dropouts, high CPU), they should ask to build in **Release** mode instead.
-- Rewrite the **Build Commands** section below to match their IDE:
-  - **CLion**: use `cmake-build-debug` / `cmake-build-release` as build directories (CLion's defaults — sharing them avoids duplicate builds). Use `-G Ninja` with CLion's bundled ninja so the `.ninja_log` format stays compatible between CLI and IDE builds.
-  - **VS Code**: use `build` or `Builds` as the build directory. Recommend Ninja + the CMake Tools extension.
-  - **Xcode**: use `-G Xcode` and open the generated `.xcodeproj`. CLI builds can use `Builds` with Ninja.
-- If they don't want CI right now, comment out the platforms in the matrix they don't need
-- If they don't need IPP, comment out the IPP install steps in the workflow
-- If they're not code signing on a platform, comment out the relevant signing/notarization steps in the workflow
-- Remove this setup section from CLAUDE.md once complete
+This file provides guidance for AI coding agents working in this repository. See also `AGENTS.md` (symlink to this file).
 
 ## About This Project
 
-This project is derived from the [Pamplejuce](https://github.com/sudara/pamplejuce) template — a JUCE audio plugin template using CMake, C++23, and modern CI/CD. It builds cross-platform (macOS, Windows, Linux) with support for multiple plugin formats (VST3, AU, AUv3, CLAP, Standalone).
+**KSH** by **ofsound** — a MIDI effect plugin. Built on the [Pamplejuce](https://github.com/sudara/pamplejuce) template with JUCE 8, CMake, C++23, Catch2 tests, and CLAP/AU/VST3/AUv3/Standalone formats.
 
-The template provides the build system, CI/CD, and project structure. The plugin-specific logic lives in `source/`.
+Plugin-specific logic lives in `source/`. CI is macOS-only for now; code signing is disabled until release.
 
-## Build Commands
+**Hosts:** Logic — load the **AU** in the top **MIDI FX** slot (before the instrument). **Ableton** — use **VST3** only (Live does not expose AU MIDI-out). Live cannot place third-party plugins in the built-in MIDI-effects row; load **KSH** in the **instrument** slot on one MIDI track, put your synth on a second track, and set **MIDI From** → first track → **KSH** (Monitor **In**) — [Ableton guide](https://help.ableton.com/hc/en-us/articles/209070189-Accessing-the-MIDI-output-of-a-VST-plug-in).
+
+## Build Commands (VS Code / Cursor)
+
+Use the **CMake Tools** extension (`.vscode/settings.json` points at `Builds/` and Ninja).
+
+**macOS prerequisites** (once): Xcode or Xcode Command Line Tools, Homebrew CMake ≥ 3.25, and Ninja:
 
 ```bash
-# Configure (run once, or after CMakeLists.txt changes)
-cmake -B Builds -DCMAKE_BUILD_TYPE=Debug
-
-# Build
-cmake --build Builds --config Debug
-
-# Run tests (from project root)
-ctest --test-dir Builds --verbose --output-on-failure
-
-# Or run tests directly
-./Builds/Tests
-
-# Run a single test by name
-./Builds/Tests "[test name]"
-
-# Run benchmarks
-./Builds/Benchmarks
+xcode-select --install          # if needed
+brew install cmake ninja
 ```
 
-For faster builds, add Ninja: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
+```bash
+# One-time: fetch submodules
+git submodule update --init --recursive
 
-On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
+# Configure (after CMakeLists.txt changes)
+cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+# Build
+cmake --build Builds
+
+# Run tests
+ctest --test-dir Builds --verbose --output-on-failure
+# or: ./Builds/Tests
+
+# Run a single test
+./Builds/Tests "[Plugin instance]"
+
+# Release build (for DAW performance testing)
+cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build Builds
+```
+
+On macOS for universal binary: add `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` to configure.
+
+Built plugins are copied to `~/Library/Audio/Plug-Ins/` when `COPY_PLUGIN_AFTER_BUILD` is on (Debug builds too).
+
+Builds default to **Debug** for development (faster builds, better debugging). Use **Release** if you hit audio dropouts or high CPU in a DAW.
+
+## WebView UI (Svelte + Vite + Tailwind)
+
+The plugin editor is a JUCE 8 `WebBrowserComponent` ([overview](https://juce.com/blog/juce-8-feature-overview-webview-uis/)). Frontend lives in `ui/`.
+
+```bash
+# Hot reload (Debug plugin loads http://localhost:5173)
+cd ui && npm install && npm run dev
+
+# Production bundle → assets/webview/ui.zip (embedded via BinaryData)
+cd ui && npm run build
+```
+
+`cmake --build Builds` runs the UI build automatically when `ui/` sources change (requires `npm`).
+
+JUCE JS helpers: `JUCE/modules/juce_gui_extra/native/javascript/` (Vite alias `@juce`).
+
+Melatonin Inspector was removed — it only applies to native JUCE widgets, not WebView UIs.
+
+## Agent workflow (rebuild every time)
+
+After any change to `source/`, `CMakeLists.txt`, `ui/`, or plugin-related CMake modules:
+
+1. Reconfigure only if CMake changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
+2. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
+3. Fix compile errors before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
+
+Run `./Builds/Tests` when test or processor behavior changes.
 
 ## Project Structure
 
-- `source/` - Plugin source code (PluginProcessor, PluginEditor)
+- `source/` - Plugin source code (PluginProcessor, PluginEditor, WebViewResourceProvider)
+- `ui/` - Svelte/Vite/Tailwind WebView frontend
+- `cmake_project/` - Project-specific CMake (WebViewUI.cmake)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
-- `modules/` - Git submodules: clap-juce-extensions, melatonin_inspector
+- `modules/` - Git submodules: clap-juce-extensions
 - `JUCE/` - JUCE framework (git submodule)
-- `assets/` - Binary resources (auto-included via juce_add_binary_data)
+- `assets/` - Binary resources (auto-included via juce_add_binary_data; WebView bundle in `assets/webview/ui.zip`)
 - `packaging/` - Installer resources and scripts
 
 ## Architecture
@@ -80,7 +99,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 - `Assets.cmake` - Auto-includes all files in assets/ as binary data
 - `Tests.cmake` - Configures Catch2 test target
 - `Benchmarks.cmake` - Configures Catch2 benchmark target
-- `PamplejuceIPP.cmake` - Intel IPP integration (optional)
+- `PamplejuceIPP.cmake` - Intel IPP integration (optional, disabled for KSH)
 
 **Test Discovery**: Uses `catch_discover_tests()` with `PRE_TEST` discovery mode for Xcode compatibility.
 
@@ -130,7 +149,6 @@ For anything in the audio thread / hot DSP path (e.g. `processBlock`):
 
 **JUCE Modules** live in `modules/` as git submodules. Add with `git submodule add`, then `add_subdirectory` and link to `SharedCode` in `CMakeLists.txt`. Some useful ones:
 
-- [melatonin_inspector](https://github.com/sudara/melatonin_inspector) — runtime component debugger (already included)
 - [melatonin_blur](https://github.com/sudara/melatonin_blur) — fast cross-platform blurs for C++ UI (shadows, glows, frosted glass)
 - [melatonin_perfetto](https://github.com/sudara/melatonin_perfetto) — performance tracing with Perfetto, great for profiling `processBlock` and paint calls
 - [gin](https://github.com/FigBug/gin) — large collection of utilities (DSP, UI components, LookAndFeel, etc.)

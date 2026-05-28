@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ksh-bg: #292e35;
+  --color-ksh-panel2: #21262d;
+  --color-ksh-stroke-soft: #404854;
+  --color-ksh-text: #dbdee5;
+  --color-ksh-muted: #8c969e;
+  --color-ksh-amber: #f59e38;
+  --color-ksh-blue: #5ca8f2;
+  --color-ksh-off: #1a1c21;
+  --color-ksh-inactive-step: #242930;
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    @apply min-h-screen select-none bg-zinc-950;
+  }
+}

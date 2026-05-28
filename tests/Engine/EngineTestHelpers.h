@@ -1,0 +1,84 @@
+#pragma once
+
+#include <engine/KickSnareHatEngine.h>
+
+#include <vector>
+
+namespace ksh::test
+{
+
+inline void clearAll (KickSnareHatEngine& engine)
+{
+    for (int source = 0; source < Constants::sourceCount; ++source)
+    {
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
+        {
+            for (int step = 0; step < Constants::maxSteps; ++step)
+                engine.sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] =
+                    defaultCell();
+        }
+    }
+
+    engine.reset();
+}
+
+struct EngineFixture
+{
+    std::vector<double> randomValues;
+    std::vector<std::string> statuses;
+    std::vector<MidiNoteEvent> notes;
+    KickSnareHatEngine engine { EngineCallbacks {} };
+
+    explicit EngineFixture (std::vector<double> values = {})
+        : randomValues (std::move (values))
+    {
+        rebind();
+    }
+
+    void setRandomValues (std::vector<double> values)
+    {
+        randomValues = std::move (values);
+        randomIndex = 0;
+        engine.setRandomValuesForTests (randomValues);
+    }
+
+    void clearAll()
+    {
+        ksh::test::clearAll (engine);
+        statuses.clear();
+        notes.clear();
+        randomIndex = 0;
+    }
+
+private:
+    mutable size_t randomIndex = 0;
+
+    void rebind()
+    {
+        EngineCallbacks callbacks;
+        callbacks.rng = [this] { return nextRandom(); };
+        callbacks.emitStatus = [this] (const std::string& message)
+        {
+            statuses.push_back (message);
+        };
+        callbacks.emitNote = [this] (const MidiNoteEvent& note)
+        {
+            notes.push_back (note);
+        };
+
+        engine = KickSnareHatEngine { callbacks };
+        engine.setRandomValuesForTests (randomValues);
+    }
+
+    double nextRandom() const
+    {
+        if (randomValues.empty())
+            return 0.0;
+
+        const auto value = randomValues[randomIndex % randomValues.size()];
+        ++randomIndex;
+        return value;
+    }
+};
+
+} // namespace ksh::test
