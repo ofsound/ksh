@@ -37,7 +37,6 @@
     adjustChannelNote,
     auditionChannel,
     clearPattern,
-    closeEditor,
     cycleChannelLock,
     cycleChannelPlaybackMode,
     cycleMode,
@@ -489,9 +488,6 @@
 
   onMount(() => {
     const onKeyDown = (event) => {
-      if (session.viewMode !== "editor") {
-        return;
-      }
       onEditorKeyDown(event);
     };
 
@@ -735,10 +731,7 @@
     {/each}
   </div>
 
-  <footer class="flex items-center justify-between border-t border-ksh-stroke-soft px-3 py-1.5 text-[11px]">
-    <button type="button" class="rounded border border-ksh-stroke-soft px-3 py-1" onclick={closeEditor}>
-      Compact
-    </button>
+  <footer class="flex items-center justify-end border-t border-ksh-stroke-soft px-3 py-1.5 text-[11px]">
     <span class="text-ksh-muted">
       Source {session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
     </span>

@@ -1,4 +1,5 @@
 import {
+  COMPACT_HEIGHT,
   MAX_CHANNELS,
   MAX_STEPS,
   RATES,
@@ -13,6 +14,7 @@ export const GRID_CELL_H = 44;
 export const EDITOR_MIN_WIDTH = 1160;
 export const MAIN_TOP = 68;
 export const FOOTER_H = 28;
+export const COMBINED_GAP = 8;
 
 export const DC_CHANNEL_COLORS = [
   [0.86, 0.25, 0.28],
@@ -66,6 +68,16 @@ export function editorDimensions(state) {
   const sourceGridY0 = MAIN_TOP + 12 + 22 + 32;
   const height = sourceGridY0 + state.channelCount * GRID_CELL_H + 18 + 8 + FOOTER_H;
   return { width, height };
+}
+
+// The editor and the compact preview strip are stacked vertically and always
+// visible, so the plugin window must accommodate both plus the gap between them.
+export function combinedDimensions(state) {
+  const editor = editorDimensions(state);
+  return {
+    width: editor.width,
+    height: editor.height + COMBINED_GAP + COMPACT_HEIGHT,
+  };
 }
 
 export function generationModeLabel(mode) {

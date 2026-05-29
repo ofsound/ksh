@@ -1,6 +1,4 @@
 import {
-  COMPACT_HEIGHT,
-  COMPACT_WIDTH,
   DEFAULT_CHANNEL_LABELS,
   MAX_CHANNELS,
   MAX_STEPS,
@@ -14,10 +12,10 @@ import {
 } from "./kshEditorInteractions.js";
 import {
   clearSourcePattern,
+  combinedDimensions,
   cycleGenerationMode,
   cycleLayerMode,
   cycleRate,
-  editorDimensions,
   nextPlaybackMode,
   shiftSourceChannelRow,
 } from "./kshEditorUtils.js";
@@ -38,7 +36,6 @@ import {
 } from "./kshUiState.js";
 
 export const session = $state({
-  viewMode: "compact",
   kshState: makeDefaultKshState(),
   previewData: null,
   compactNoteFlashes: {},
@@ -132,11 +129,10 @@ function handleEditorNoteHit(payload) {
 }
 
 function handleNoteHit(payload) {
-  if (session.viewMode === "editor") {
-    handleEditorNoteHit(payload);
-  } else {
-    handleCompactNoteHit(payload);
-  }
+  // Both the editor grid and the compact preview strip are always visible, so
+  // flash both simultaneously.
+  handleEditorNoteHit(payload);
+  handleCompactNoteHit(payload);
 }
 
 export function isCompactFlashing(channel, step) {
@@ -230,9 +226,7 @@ export async function setHeaderValue(id, value) {
     bumpState();
     await sendCommand("steps", [next]);
     await sendCommand("refresh_steps", [state.refreshSteps]);
-    if (session.viewMode === "editor") {
-      await resizeForCurrentView();
-    }
+    await resizeForCurrentView();
     return;
   }
 
@@ -402,27 +396,8 @@ export async function clearPattern() {
 }
 
 export async function resizeForCurrentView() {
-  if (session.viewMode === "editor") {
-    const { width, height } = editorDimensions(session.kshState);
-    await setViewSize(width, height);
-    return;
-  }
-
-  await setViewSize(COMPACT_WIDTH, COMPACT_HEIGHT);
-}
-
-export async function openEditor() {
-  session.viewMode = "editor";
-  session.selectedSource = session.kshState.staticSource;
-  await sendCommand("open_editor");
-  await resizeForCurrentView();
-  await syncAll();
-}
-
-export async function closeEditor() {
-  session.viewMode = "compact";
-  session.playingStep = 0;
-  await resizeForCurrentView();
+  const { width, height } = combinedDimensions(session.kshState);
+  await setViewSize(width, height);
 }
 
 export function setSourceLayerMode(mode) {
@@ -479,6 +454,7 @@ export function initKshSession() {
   waitForBackend()
     .then(async () => {
       await syncAll();
+      await resizeForCurrentView();
       session.ready = true;
     })
     .catch((error) => {

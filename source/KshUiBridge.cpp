@@ -172,9 +172,6 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return true;
     }
 
-    if (selector == "open_editor")
-        return true;
-
     if (selector == "export_generated_bars")
         return false;
 

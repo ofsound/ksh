@@ -2,7 +2,6 @@ export const MAX_STEPS = 32;
 export const MAX_CHANNELS = 8;
 export const SOURCE_COUNT = 4;
 
-export const COMPACT_WIDTH = 736;
 export const COMPACT_HEIGHT = 176;
 
 export const EXPORT_BAR_VALUES = [1, 2, 4, 8, 16, 32];

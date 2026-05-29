@@ -1,17 +1,17 @@
 <script>
   import {
     COMPACT_HEIGHT,
-    COMPACT_WIDTH,
     MAX_CHANNELS,
     MAX_STEPS,
   } from "../lib/kshConstants.js";
+  import { editorDimensions } from "../lib/kshEditorUtils.js";
   import {
     isCompactFlashing,
-    openEditor,
     session,
   } from "../lib/kshSession.svelte.js";
 
   const previewChannels = $derived(Math.min(MAX_CHANNELS, session.kshState.channelCount));
+  const dims = $derived(editorDimensions(session.kshState));
 
   function cellFill(channel, step) {
     if (isCompactFlashing(channel, step)) {
@@ -33,19 +33,9 @@
 </script>
 
 <div
-  class="compact-strip mx-auto flex overflow-hidden rounded-md border border-ksh-stroke-soft bg-ksh-bg text-ksh-text"
-  style={`width: ${COMPACT_WIDTH}px; height: ${COMPACT_HEIGHT}px;`}
+  class="compact-strip flex overflow-hidden rounded-md border border-ksh-stroke-soft bg-ksh-bg text-ksh-text"
+  style={`width: ${dims.width}px; height: ${COMPACT_HEIGHT}px;`}
 >
-  <aside class="flex w-[86px] shrink-0 flex-col bg-ksh-panel2 px-3.5 py-[18px]">
-    <button
-      type="button"
-      class="rounded border border-ksh-amber bg-ksh-amber px-2 py-1.5 text-xs font-medium text-ksh-off"
-      onclick={openEditor}
-    >
-      Edit
-    </button>
-  </aside>
-
   <section class="min-w-0 flex-1 overflow-hidden py-[18px] pl-[50px] pr-3">
     {#if session.bridgeError}
       <p class="mb-2 text-xs text-red-400">{session.bridgeError}</p>

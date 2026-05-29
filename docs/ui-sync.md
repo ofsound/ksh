@@ -37,10 +37,14 @@ Use channel naming in UI state:
 
 The persisted JSON also uses `channelCount` and `channels`. Legacy UI `laneCount`/`lanes` naming should not come back.
 
-## Compact vs Editor
+## Editor and compact preview
 
-- Compact view shows the generated preview and flashes generated cells from `note_hit`.
-- Editor view shows the source grid and channel controls; source cells flash using `source` + `sourceStep`.
+The editor and compact preview are stacked in a single window and are always both visible (there is no view toggle — that was a leftover from the M4L device's second window).
+
+- The editor (top) shows the source grid and channel controls; source cells flash using `source` + `sourceStep`.
+- The compact preview strip (bottom) shows the generated preview and flashes generated cells from `note_hit`.
+- A single `note_hit` event flashes both grids simultaneously.
+- The window is sized via `combinedDimensions()` (editor height + gap + compact strip height); it resizes when the step count changes.
 - Cell edits are optimistic in the UI, then sent to the engine as `cell` or focused cell setter commands.
 
 ## Persistence
