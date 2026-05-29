@@ -237,8 +237,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
-    const auto playback = midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples);
-    midiMessages.addEvents (playback.midi, 0, numSamples, 0);
+    const auto playback = midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages);
 
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
 
@@ -268,8 +267,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     bool pushedHit = false;
 
-    for (const auto& hit : playback.noteHits)
-        pushedHit = noteHitsForUi.try_enqueue (hit) || pushedHit;
+    for (size_t i = 0; i < playback.noteHitCount; ++i)
+        pushedHit = noteHitsForUi.try_enqueue (playback.noteHits[i]) || pushedHit;
 
     if (pushedHit || notify)
         triggerAsyncUpdate();

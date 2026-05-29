@@ -4,22 +4,37 @@
 #include "KshNativePlayback.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <readerwriterqueue.h>
 
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <vector>
 
 namespace ksh
 {
 
 struct MidiPlaybackResult
 {
-    juce::MidiBuffer midi;
-    std::vector<NativeHit> noteHits;
+    static constexpr size_t maxNoteHitsPerBlock =
+        static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 8;
+
+    std::array<NativeHit, maxNoteHitsPerBlock> noteHits {};
+    size_t noteHitCount = 0;
+    bool noteHitsDropped = false;
     int currentStepOneBased = 0; ///< Playing step for the UI (0 = stopped).
     int latestGlobalStep = 0;    ///< Newest global step the audio thread reached.
     bool playing = false;        ///< Whether the transport was advancing this block.
+
+    void addNoteHit (const NativeHit& hit)
+    {
+        if (noteHitCount < noteHits.size())
+        {
+            noteHits[noteHitCount++] = hit;
+            return;
+        }
+
+        noteHitsDropped = true;
+    }
 };
 
 /** Audio-thread playback: evaluates {@link PlaybackSnapshot} live at each step boundary. */
@@ -34,7 +49,8 @@ public:
                                      double ppqPosition,
                                      double bpm,
                                      bool isPlaying,
-                                     int numSamples);
+                                     int numSamples,
+                                     juce::MidiBuffer& midiOut);
 
 private:
     static constexpr size_t cycleCounterSlots =
@@ -47,10 +63,14 @@ private:
         int pitch = 0;
     };
 
+    static constexpr size_t maxPendingNoteOffs =
+        static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
+
     double sampleRate = 44100.0;
     bool wasPlaying = false;
     std::optional<int> lastEmittedGlobalStep;
-    std::vector<PendingNoteOff> pendingNoteOffs;
+    std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
+    size_t pendingNoteOffCount = 0;
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
     uint32_t rngState = 0x12345678u;
 
@@ -67,16 +87,18 @@ private:
                              int globalStep,
                              int stepSampleOffset,
                              int numSamples,
+                             juce::MidiBuffer& midiOut,
                              MidiPlaybackResult& result);
     void scheduleHit (int stepSampleOffset,
                       int numSamples,
                       const NativeHit& hit,
+                      juce::MidiBuffer& midiOut,
                       MidiPlaybackResult& result);
     void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
     void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi);
+    void addPendingNoteOff (int sampleOffset, int midiChannel, int pitch);
 
-    juce::CriticalSection auditionLock;
-    std::optional<MidiNoteEvent> pendingAudition;
+    moodycamel::ReaderWriterQueue<MidiNoteEvent> pendingAuditions { 64 };
 };
 
 } // namespace ksh

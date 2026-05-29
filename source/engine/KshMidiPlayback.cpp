@@ -109,12 +109,15 @@ void MidiPlaybackRunner::reset()
 {
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
-    pendingNoteOffs.clear();
+    pendingNoteOffCount = 0;
     resetCycleCounters();
     rngState = 0x12345678u;
 
-    const juce::ScopedLock lock (auditionLock);
-    pendingAudition = std::nullopt;
+    MidiNoteEvent drained;
+
+    while (pendingAuditions.try_dequeue (drained))
+    {
+    }
 }
 
 void MidiPlaybackRunner::resetCycleCounters()
@@ -124,13 +127,12 @@ void MidiPlaybackRunner::resetCycleCounters()
 
 void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
 {
-    const juce::ScopedLock lock (auditionLock);
-    pendingAudition = note;
+    [[maybe_unused]] const bool queued = pendingAuditions.try_enqueue (note);
 }
 
 void MidiPlaybackRunner::clearPending()
 {
-    pendingNoteOffs.clear();
+    pendingNoteOffCount = 0;
 }
 
 double MidiPlaybackRunner::nextRandomUnit()
@@ -163,6 +165,7 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const PlaybackSnapshot& snaps
 void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
                                       int numSamples,
                                       const NativeHit& hit,
+                                      juce::MidiBuffer& midiOut,
                                       MidiPlaybackResult& result)
 {
     const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
@@ -171,18 +174,18 @@ void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
         std::max (1, static_cast<int> (std::llround (static_cast<double> (hit.durationMs) * sampleRate / 1000.0)));
     const int offSample = onSample + durationSamples;
 
-    result.midi.addEvent (juce::MidiMessage::noteOn (hit.midiChannel, hit.pitch,
-                                                     static_cast<juce::uint8> (std::clamp (hit.velocity, 1, 127))),
-                          onSample);
-    result.noteHits.push_back (hit);
+    midiOut.addEvent (juce::MidiMessage::noteOn (hit.midiChannel, hit.pitch,
+                                                 static_cast<juce::uint8> (std::clamp (hit.velocity, 1, 127))),
+                      onSample);
+    result.addNoteHit (hit);
 
     if (offSample < numSamples)
     {
-        result.midi.addEvent (juce::MidiMessage::noteOff (hit.midiChannel, hit.pitch), offSample);
+        midiOut.addEvent (juce::MidiMessage::noteOff (hit.midiChannel, hit.pitch), offSample);
     }
     else
     {
-        pendingNoteOffs.push_back ({ offSample, hit.midiChannel, hit.pitch });
+        addPendingNoteOff (offSample, hit.midiChannel, hit.pitch);
     }
 }
 
@@ -190,6 +193,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                                              int globalStep,
                                              int stepSampleOffset,
                                              int numSamples,
+                                             juce::MidiBuffer& midiOut,
                                              MidiPlaybackResult& result)
 {
     if (! snapshot.deviceActive || snapshot.stepCount <= 0 || snapshot.channelCount <= 0)
@@ -270,51 +274,57 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                              cell.source + 1,
                              cell.sourceStep + 1
                          },
+                         midiOut,
                          result);
         }
     }
 }
 
-void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
+void MidiPlaybackRunner::addPendingNoteOff (int sampleOffset, int midiChannel, int pitch)
 {
-    std::optional<MidiNoteEvent> note;
-    {
-        const juce::ScopedLock lock (auditionLock);
-        note = std::exchange (pendingAudition, std::nullopt);
-    }
-
-    if (! note.has_value())
+    if (pendingNoteOffCount >= pendingNoteOffs.size())
         return;
 
-    const int delaySamples = static_cast<int> (std::llround (note->delayMs * sampleRate / 1000.0));
-    const int onSample = std::clamp (delaySamples, 0, std::max (0, numSamples - 1));
-    const int durationSamples =
-        std::max (1, static_cast<int> (std::llround (static_cast<double> (note->durationMs) * sampleRate / 1000.0)));
-    const int offSample = onSample + durationSamples;
-    const auto velocity = static_cast<juce::uint8> (std::clamp (note->velocity, 1, 127));
+    pendingNoteOffs[pendingNoteOffCount++] = { sampleOffset, midiChannel, pitch };
+}
 
-    midi.addEvent (juce::MidiMessage::noteOn (note->channel, note->pitch, velocity), onSample);
+void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
+{
+    MidiNoteEvent note;
 
-    if (offSample < numSamples)
+    while (pendingAuditions.try_dequeue (note))
     {
-        midi.addEvent (juce::MidiMessage::noteOff (note->channel, note->pitch), offSample);
-    }
-    else
-    {
-        pendingNoteOffs.push_back ({ offSample, note->channel, note->pitch });
+        const int delaySamples = static_cast<int> (std::llround (note.delayMs * sampleRate / 1000.0));
+        const int onSample = std::clamp (delaySamples, 0, std::max (0, numSamples - 1));
+        const int durationSamples =
+            std::max (1, static_cast<int> (std::llround (static_cast<double> (note.durationMs) * sampleRate / 1000.0)));
+        const int offSample = onSample + durationSamples;
+        const auto velocity = static_cast<juce::uint8> (std::clamp (note.velocity, 1, 127));
+
+        midi.addEvent (juce::MidiMessage::noteOn (note.channel, note.pitch, velocity), onSample);
+
+        if (offSample < numSamples)
+        {
+            midi.addEvent (juce::MidiMessage::noteOff (note.channel, note.pitch), offSample);
+        }
+        else
+        {
+            addPendingNoteOff (offSample, note.channel, note.pitch);
+        }
     }
 }
 
 void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi)
 {
-    if (pendingNoteOffs.empty())
+    if (pendingNoteOffCount == 0)
         return;
 
-    std::vector<PendingNoteOff> remaining;
-    remaining.reserve (pendingNoteOffs.size());
+    size_t writeIndex = 0;
 
-    for (const auto& pending : pendingNoteOffs)
+    for (size_t i = 0; i < pendingNoteOffCount; ++i)
     {
+        const auto pending = pendingNoteOffs[i];
+
         if (pending.sampleOffset < numSamples)
         {
             midi.addEvent (juce::MidiMessage::noteOff (pending.midiChannel, pending.pitch),
@@ -322,26 +332,27 @@ void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer&
         }
         else
         {
-            remaining.push_back ({ pending.sampleOffset - numSamples, pending.midiChannel, pending.pitch });
+            pendingNoteOffs[writeIndex++] = { pending.sampleOffset - numSamples, pending.midiChannel, pending.pitch };
         }
     }
 
-    pendingNoteOffs.swap (remaining);
+    pendingNoteOffCount = writeIndex;
 }
 
 MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& snapshot,
                                                      double ppqPosition,
                                                      double bpm,
                                                      bool isPlaying,
-                                                     int numSamples)
+                                                     int numSamples,
+                                                     juce::MidiBuffer& midiOut)
 {
     MidiPlaybackResult result;
 
     if (numSamples <= 0)
         return result;
 
-    flushPendingNoteOffs (numSamples, result.midi);
-    flushAuditionNotes (numSamples, result.midi);
+    flushPendingNoteOffs (numSamples, midiOut);
+    flushAuditionNotes (numSamples, midiOut);
 
     if (! isPlaying || ! snapshot.deviceActive || bpm <= 0.0)
     {
@@ -390,7 +401,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     for (int globalStep = firstStep; globalStep <= globalStepEnd; ++globalStep)
     {
         const int stepSample = sampleOffsetForGlobalStep (snapshot, ppqPosition, bpm, globalStep, numSamples);
-        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, result);
+        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result);
         lastEmittedGlobalStep = globalStep;
         result.latestGlobalStep = globalStep;
     }

@@ -133,10 +133,12 @@ TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistenc
     runner.prepare (44100.0);
 
     const auto blockStartBeat = 4.0 * restored.getEngine().beatsPerStep();
-    const auto result = runner.processBlock (restored.getEngine().makePlaybackSnapshot(), blockStartBeat, 120.0, true, 512);
+    juce::MidiBuffer midi;
+    [[maybe_unused]] const auto result =
+        runner.processBlock (restored.getEngine().makePlaybackSnapshot(), blockStartBeat, 120.0, true, 512, midi);
 
-    REQUIRE (countNoteOns (result.midi) == 1);
-    REQUIRE (containsNoteOn (result.midi, 38));
+    REQUIRE (countNoteOns (midi) == 1);
+    REQUIRE (containsNoteOn (midi, 38));
 }
 
 TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")
