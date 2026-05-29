@@ -2,8 +2,6 @@
 
 #include "PluginProcessor.h"
 
-#include "engine/KshEngineCommands.h"
-
 #include <sstream>
 
 namespace
@@ -24,11 +22,6 @@ std::vector<std::string> splitStatusMessage (const std::string& message)
 KshUiBridge::KshUiBridge (PluginProcessor& processorIn)
     : processor (processorIn)
 {
-}
-
-ksh::KickSnareHatEngine& KshUiBridge::engine()
-{
-    return processor.getEngine();
 }
 
 void KshUiBridge::attachWebView (juce::WebBrowserComponent* browser)
@@ -63,7 +56,7 @@ void KshUiBridge::emitJsonEvent (const juce::Identifier& eventId, const nlohmann
 
 void KshUiBridge::emitEngineState()
 {
-    emitJsonEvent ("engine_state", engine().serializeForPersistence());
+    emitJsonEvent ("engine_state", processor.enginePersistenceState());
 }
 
 void KshUiBridge::emitPreview (const nlohmann::json& preview)
@@ -140,7 +133,7 @@ void KshUiBridge::pollTransportUi()
 void KshUiBridge::syncAll()
 {
     emitEngineState();
-    emitPreview (engine().snapshot());
+    emitPreview (processor.enginePreviewState());
 }
 
 void KshUiBridge::requestState()
@@ -185,17 +178,10 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
     if (selector == "export_generated_bars")
         return false;
 
-    // Message thread owns the engine: apply the edit, then hand the audio thread a new snapshot.
-    const bool ok = ksh::dispatchEngineCommand (engine(), selector, args);
+    const bool ok = processor.dispatchUiEngineCommand (selector, args);
 
     if (! ok)
         return false;
-
-    if (selector != "channel_audition")
-    {
-        processor.requestPlaybackReset();
-        processor.publishPlaybackSnapshot();
-    }
 
     if (selector == "reset")
     {
@@ -209,6 +195,6 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return true;
     }
 
-    emitPreview (engine().snapshot());
+    emitPreview (processor.enginePreviewState());
     return true;
 }

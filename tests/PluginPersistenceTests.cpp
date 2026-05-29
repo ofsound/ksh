@@ -7,6 +7,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <exception>
+#include <thread>
+
 using namespace ksh;
 
 namespace
@@ -139,6 +142,56 @@ TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistenc
 
     REQUIRE (countNoteOns (midi) == 1);
     REQUIRE (containsNoteOn (midi, 38));
+}
+
+TEST_CASE ("plugin state restore works off the message thread", "[plugin][persistence]")
+{
+    PluginProcessor original;
+    configureSnarePattern (original);
+
+    const auto saved = getPluginState (original);
+
+    PluginProcessor restored;
+    juce::MemoryBlock restoredState;
+    std::exception_ptr error;
+
+    std::thread worker ([&]
+    {
+        try
+        {
+            setPluginState (restored, saved);
+            restored.getStateInformation (restoredState);
+        }
+        catch (...)
+        {
+            error = std::current_exception();
+        }
+    });
+
+    worker.join();
+
+    if (error != nullptr)
+        std::rethrow_exception (error);
+
+    REQUIRE (restoredState.getSize() > 0);
+    REQUIRE (restored.getEngine().channelCount == 2);
+    REQUIRE (restored.getEngine().sources[0][1][4].enabled);
+}
+
+TEST_CASE ("plugin state save flushes pending host macro parameter changes", "[plugin][persistence]")
+{
+    PluginProcessor plugin;
+    auto* swing = plugin.getValueTreeState().getParameter ("swing");
+
+    REQUIRE (swing != nullptr);
+
+    swing->setValueNotifyingHost (swing->convertTo0to1 (64.0f));
+
+    const auto saved = getPluginState (plugin);
+    const auto parsed = nlohmann::json::parse (
+        std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
+
+    REQUIRE (parsed["swing"] == 64);
 }
 
 TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")

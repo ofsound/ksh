@@ -34,8 +34,6 @@ private:
     juce::Component::SafePointer<juce::WebBrowserComponent> webView;
     int lastEmittedStep = 0;
 
-    ksh::KickSnareHatEngine& engine();
-
     void emitJsonEvent (const juce::Identifier& eventId, const nlohmann::json& payload);
     void emitStatusSelector (const std::string& message);
 };

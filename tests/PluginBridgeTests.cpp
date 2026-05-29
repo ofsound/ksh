@@ -89,6 +89,30 @@ TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]
     REQUIRE (plugin.getEngine().nativePlaybackActive());
 }
 
+TEST_CASE ("ui bridge macro commands update host parameters", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"swing","args":[37]})"));
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"rate","args":["8n"]})"));
+
+    REQUIRE (plugin.getValueTreeState().getRawParameterValue ("swing")->load() == 37.0f);
+    REQUIRE (plugin.getValueTreeState().getRawParameterValue ("rate")->load() == 2.0f);
+}
+
+TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+    auto* swing = plugin.getValueTreeState().getParameter ("swing");
+
+    REQUIRE (swing != nullptr);
+
+    swing->setValueNotifyingHost (swing->convertTo0to1 (41.0f));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+    REQUIRE (plugin.getEngine().swing == 41);
+}
+
 TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")
 {
     PluginProcessor plugin;

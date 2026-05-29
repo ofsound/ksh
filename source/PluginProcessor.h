@@ -8,14 +8,18 @@
 #include <atomic>
 #include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <mutex>
+#include <nlohmann/json.hpp>
 #include <readerwriterqueue.h>
+#include <string_view>
 
 #if (MSVC)
 #include "ipps.h"
 #endif
 
 class PluginProcessor : public juce::AudioProcessor,
-                        private juce::AsyncUpdater
+                        private juce::AsyncUpdater,
+                        private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     PluginProcessor();
@@ -51,8 +55,10 @@ public:
     const ksh::KickSnareHatEngine& getEngine() const { return engine; }
 
     ksh::MidiPlaybackRunner& getMidiPlayback() { return midiPlayback; }
+    juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
+    const juce::AudioProcessorValueTreeState& getValueTreeState() const { return parameters; }
 
-    /** Message thread: rebuild the immutable playback snapshot and hand it to the audio thread. */
+    /** Non-audio thread: rebuild the immutable playback snapshot and hand it to the audio thread. */
     void publishPlaybackSnapshot();
 
     /** Message thread: ask the audio thread to flush pending playback state on its next block. */
@@ -60,6 +66,10 @@ public:
 
     KshUiBridge& getUiBridge() { return uiBridge; }
     const KshUiBridge& getUiBridge() const { return uiBridge; }
+
+    [[nodiscard]] nlohmann::json enginePersistenceState();
+    [[nodiscard]] nlohmann::json enginePreviewState();
+    [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
 
     using EditorResizeCallback = std::function<void (int, int)>;
     void setEditorResizeCallback (EditorResizeCallback callback);
@@ -70,13 +80,23 @@ public:
 
 private:
     static BusesProperties createBusesProperties();
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void initializeDefaultPattern();
     ksh::EngineCallbacks makeEngineCallbacks();
     void handleAsyncUpdate() override;
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void publishPlaybackSnapshotLocked();
+    void addMacroParameterListeners();
+    void removeMacroParameterListeners();
+    void applyMacroParametersToEngineLocked();
+    void syncMacroParametersFromEngineLocked (bool notifyHost);
 
+    juce::AudioProcessorValueTreeState parameters;
     KshUiBridge uiBridge;
     ksh::KickSnareHatEngine engine;
     ksh::MidiPlaybackRunner midiPlayback;
+    mutable std::mutex engineMutex;
+    std::atomic<bool> suppressEngineCallbacks { false };
 
     // Message thread builds the engine + snapshot; the audio thread only reads the published snapshot.
     RealtimeMailbox<ksh::PlaybackSnapshot> playbackMailbox;
@@ -93,6 +113,9 @@ private:
     std::atomic<bool> reportedPlaying { false };
     std::atomic<bool> transportReportPending { false };
     std::atomic<bool> playbackResetRequested { false };
+    std::atomic<bool> fullUiSyncPending { false };
+    std::atomic<bool> macroParametersDirty { false };
+    std::atomic<bool> suppressParameterCallbacks { false };
 
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;

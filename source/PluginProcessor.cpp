@@ -3,6 +3,97 @@
 #include "KshUiBridge.h"
 
 #include "engine/KshPersistence.h"
+#include "engine/KshEngineCommands.h"
+
+#include <array>
+#include <cmath>
+#include <string_view>
+#include <vector>
+
+namespace
+{
+constexpr std::array<std::string_view, 6> kMacroParameterIDs {{
+    "rate",
+    "swing",
+    "velocity_humanize",
+    "timing_humanize",
+    "device_active",
+    "phase_offset_beats"
+}};
+
+bool isMacroParameterID (std::string_view id)
+{
+    for (const auto macroID : kMacroParameterIDs)
+    {
+        if (macroID == id)
+            return true;
+    }
+
+    return false;
+}
+
+juce::String juceStringFromView (std::string_view text)
+{
+    return juce::String::fromUTF8 (text.data(), static_cast<int> (text.size()));
+}
+
+int rateIndexForValue (std::string_view rate)
+{
+    const auto normalized = ksh::Constants::normalizeRate (rate);
+
+    for (size_t i = 0; i < ksh::Constants::rates.size(); ++i)
+    {
+        if (ksh::Constants::rates[i] == normalized)
+            return static_cast<int> (i);
+    }
+
+    return 4; // 16n
+}
+
+juce::StringArray rateChoices()
+{
+    juce::StringArray choices;
+
+    for (const auto rate : ksh::Constants::rates)
+        choices.add (juceStringFromView (rate));
+
+    return choices;
+}
+
+float parameterValue (juce::AudioProcessorValueTreeState& parameters, const juce::String& id)
+{
+    if (const auto* value = parameters.getRawParameterValue (id))
+        return value->load (std::memory_order_relaxed);
+
+    return 0.0f;
+}
+
+void setParameterValue (juce::AudioProcessorValueTreeState& parameters,
+                        const juce::String& id,
+                        float plainValue,
+                        bool notifyHost)
+{
+    auto* parameter = parameters.getParameter (id);
+
+    if (parameter == nullptr)
+        return;
+
+    const auto normalized = parameter->convertTo0to1 (plainValue);
+
+    if (std::abs (parameter->getValue() - normalized) < 0.000001f)
+        return;
+
+    if (notifyHost)
+    {
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost (normalized);
+        parameter->endChangeGesture();
+        return;
+    }
+
+    parameter->setValue (normalized);
+}
+} // namespace
 
 PluginProcessor::BusesProperties PluginProcessor::createBusesProperties()
 {
@@ -12,6 +103,41 @@ PluginProcessor::BusesProperties PluginProcessor::createBusesProperties()
     return BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
                             .withOutput ("Output", juce::AudioChannelSet::stereo(), true);
   #endif
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
+{
+    using ParameterID = juce::ParameterID;
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        ParameterID { "rate", 1 }, "Rate", rateChoices(), rateIndexForValue (ksh::Constants::defaultRate)));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        ParameterID { "swing", 1 }, "Swing", juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f }, 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        ParameterID { "velocity_humanize", 1 },
+        "Velocity Humanize",
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f },
+        0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        ParameterID { "timing_humanize", 1 },
+        "Timing Humanize",
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f },
+        0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        ParameterID { "device_active", 1 }, "Device Active", true));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        ParameterID { "phase_offset_beats", 1 },
+        "Phase Offset",
+        juce::NormalisableRange<float> { -1.0f, 1.0f, 0.0001f },
+        0.0f));
+
+    return { params.begin(), params.end() };
 }
 
 void PluginProcessor::initializeDefaultPattern()
@@ -28,14 +154,23 @@ void PluginProcessor::initializeDefaultPattern()
 //==============================================================================
 PluginProcessor::PluginProcessor()
      : AudioProcessor (createBusesProperties()),
+       parameters (*this, nullptr, "KSH_PARAMETERS", createParameterLayout()),
        uiBridge (*this),
        engine (makeEngineCallbacks())
 {
     initializeDefaultPattern();
+    syncMacroParametersFromEngineLocked (false);
+    addMacroParameterListeners();
     publishPlaybackSnapshot();
 }
 
 void PluginProcessor::publishPlaybackSnapshot()
+{
+    std::scoped_lock lock { engineMutex };
+    publishPlaybackSnapshotLocked();
+}
+
+void PluginProcessor::publishPlaybackSnapshotLocked()
 {
     playbackMailbox.publish (engine.makePlaybackSnapshot());
     lastPublishedSnapshotVersion = engine.playbackSnapshotVersion();
@@ -47,16 +182,25 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
 
     callbacks.emitPreview = [this] (const nlohmann::json& preview)
     {
+        if (suppressEngineCallbacks.load (std::memory_order_relaxed))
+            return;
+
         uiBridge.emitPreview (preview);
     };
 
     callbacks.emitStatus = [this] (const std::string& message)
     {
+        if (suppressEngineCallbacks.load (std::memory_order_relaxed))
+            return;
+
         uiBridge.emitStatus (message);
     };
 
     callbacks.emitNote = [this] (const ksh::MidiNoteEvent& note)
     {
+        if (suppressEngineCallbacks.load (std::memory_order_relaxed))
+            return;
+
         midiPlayback.queueAuditionNote (note);
     };
 
@@ -65,29 +209,33 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    // Everything here runs on the message thread, the sole owner of the engine. The audio thread
-    // only reads published snapshots, so no lock is required.
-
-    // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
-    if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
     {
-        const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
+        std::scoped_lock lock { engineMutex };
 
-        if (bpm > 0.0 && std::abs (engine.tempo - bpm) > 0.01)
-            engine.setTempo (bpm);
+        if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+            applyMacroParametersToEngineLocked();
+
+        // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
+        if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
+        {
+            const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
+
+            if (bpm > 0.0 && std::abs (engine.tempo - bpm) > 0.01)
+                engine.setTempo (bpm);
+        }
+
+        // Advance generative regeneration from the transport position reported by the audio thread.
+        if (transportReportPending.exchange (false, std::memory_order_acquire))
+        {
+            const auto ppq = reportedPpq.load (std::memory_order_relaxed);
+            const auto playing = reportedPlaying.load (std::memory_order_relaxed);
+            engine.transportPosition (ppq, playing);
+        }
+
+        // Hand the audio thread a fresh snapshot only when playback-affecting state changed.
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+            publishPlaybackSnapshotLocked();
     }
-
-    // Advance generative regeneration from the transport position reported by the audio thread.
-    if (transportReportPending.exchange (false, std::memory_order_acquire))
-    {
-        const auto ppq = reportedPpq.load (std::memory_order_relaxed);
-        const auto playing = reportedPlaying.load (std::memory_order_relaxed);
-        engine.transportPosition (ppq, playing);
-    }
-
-    // Hand the audio thread a fresh snapshot only when the playback table actually changed.
-    if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-        publishPlaybackSnapshot();
 
     playbackMailbox.drainRetired();
 
@@ -95,9 +243,15 @@ void PluginProcessor::handleAsyncUpdate()
 
     while (noteHitsForUi.try_dequeue (hit))
         uiBridge.emitNoteHit (hit);
+
+    if (fullUiSyncPending.exchange (false, std::memory_order_acquire))
+        uiBridge.syncAll();
 }
 
-PluginProcessor::~PluginProcessor() = default;
+PluginProcessor::~PluginProcessor()
+{
+    removeMacroParameterListeners();
+}
 
 //==============================================================================
 const juce::String PluginProcessor::getName() const
@@ -288,13 +442,12 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    const auto jsonText = engine.serializeForPersistence().dump();
+    const auto jsonText = enginePersistenceState().dump();
     destData.replaceAll (jsonText.data(), jsonText.size());
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // Called on the message thread, the sole engine owner.
     if (data == nullptr || sizeInBytes <= 0)
         return;
 
@@ -304,8 +457,28 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! payload.has_value())
         return;
 
-    if (! engine.deserializeForPersistence (*payload))
-        return;
+    {
+        std::scoped_lock lock { engineMutex };
+        const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
+
+        try
+        {
+            if (! engine.deserializeForPersistence (*payload))
+            {
+                suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+                return;
+            }
+        }
+        catch (...)
+        {
+            suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+            return;
+        }
+
+        suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+        syncMacroParametersFromEngineLocked (false);
+        publishPlaybackSnapshotLocked();
+    }
 
     ksh::NativeHit drained;
 
@@ -315,8 +488,137 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
-    publishPlaybackSnapshot();
-    uiBridge.syncAll();
+    fullUiSyncPending.store (true, std::memory_order_release);
+    triggerAsyncUpdate();
+}
+
+nlohmann::json PluginProcessor::enginePersistenceState()
+{
+    std::scoped_lock lock { engineMutex };
+
+    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+    {
+        applyMacroParametersToEngineLocked();
+
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+            publishPlaybackSnapshotLocked();
+    }
+
+    return engine.serializeForPersistence();
+}
+
+nlohmann::json PluginProcessor::enginePreviewState()
+{
+    std::scoped_lock lock { engineMutex };
+
+    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+    {
+        applyMacroParametersToEngineLocked();
+
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+            publishPlaybackSnapshotLocked();
+    }
+
+    return engine.snapshot();
+}
+
+bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
+{
+    std::scoped_lock lock { engineMutex };
+
+    const bool ok = ksh::dispatchEngineCommand (engine, selector, args);
+
+    if (! ok)
+        return false;
+
+    if (selector != "channel_audition")
+    {
+        if (isMacroParameterID (selector))
+            syncMacroParametersFromEngineLocked (true);
+
+        requestPlaybackReset();
+        publishPlaybackSnapshotLocked();
+    }
+
+    return true;
+}
+
+void PluginProcessor::parameterChanged (const juce::String& parameterID, float newValue)
+{
+    juce::ignoreUnused (newValue);
+
+    if (suppressParameterCallbacks.load (std::memory_order_relaxed))
+        return;
+
+    if (! isMacroParameterID (parameterID.toStdString()))
+        return;
+
+    macroParametersDirty.store (true, std::memory_order_release);
+    triggerAsyncUpdate();
+}
+
+void PluginProcessor::addMacroParameterListeners()
+{
+    for (const auto id : kMacroParameterIDs)
+        parameters.addParameterListener (juceStringFromView (id), this);
+}
+
+void PluginProcessor::removeMacroParameterListeners()
+{
+    for (const auto id : kMacroParameterIDs)
+        parameters.removeParameterListener (juceStringFromView (id), this);
+}
+
+void PluginProcessor::applyMacroParametersToEngineLocked()
+{
+    const int rateIndex = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "rate"))),
+                                        0,
+                                        static_cast<int> (ksh::Constants::rates.size()) - 1);
+    const auto rate = ksh::Constants::rates[static_cast<size_t> (rateIndex)];
+
+    if (engine.rate != rate)
+        engine.setRate (rate);
+
+    const auto swing = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "swing"))), 0, 100);
+
+    if (engine.swing != swing)
+        engine.setSwing (swing);
+
+    const auto velocityHumanize =
+        ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "velocity_humanize"))), 0, 100);
+
+    if (engine.velocityHumanize != velocityHumanize)
+        engine.setVelocityHumanize (velocityHumanize);
+
+    const auto timingHumanize =
+        ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "timing_humanize"))), 0, 100);
+
+    if (engine.timingHumanize != timingHumanize)
+        engine.setTimingHumanize (timingHumanize);
+
+    const bool deviceActive = parameterValue (parameters, "device_active") >= 0.5f;
+
+    if (engine.deviceActive != deviceActive)
+        engine.setDeviceActive (deviceActive);
+
+    const auto phaseOffsetBeats = static_cast<double> (parameterValue (parameters, "phase_offset_beats"));
+
+    if (std::abs (engine.phaseOffsetBeats - phaseOffsetBeats) > 0.000001)
+        engine.setPhaseOffsetBeats (phaseOffsetBeats);
+}
+
+void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
+{
+    const auto previousSuppression = suppressParameterCallbacks.exchange (true, std::memory_order_acq_rel);
+
+    setParameterValue (parameters, "rate", static_cast<float> (rateIndexForValue (engine.rate)), notifyHost);
+    setParameterValue (parameters, "swing", static_cast<float> (engine.swing), notifyHost);
+    setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.velocityHumanize), notifyHost);
+    setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.timingHumanize), notifyHost);
+    setParameterValue (parameters, "device_active", engine.deviceActive ? 1.0f : 0.0f, notifyHost);
+    setParameterValue (parameters, "phase_offset_beats", static_cast<float> (engine.phaseOffsetBeats), notifyHost);
+
+    suppressParameterCallbacks.store (previousSuppression, std::memory_order_release);
 }
 
 void PluginProcessor::setEditorResizeCallback (EditorResizeCallback callback)
