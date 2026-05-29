@@ -476,6 +476,10 @@
     editingChannel = -1;
   }
 
+  function syncHoverLayerModeFromModifiers(metaKey, shiftKey, altKey) {
+    hoverLayerMode = modifierLayerMode(metaKey, shiftKey, altKey);
+  }
+
   function onEditorKeyDown(event) {
     if (event.key === "1") {
       setSourceLayerMode("velocity");
@@ -488,11 +492,26 @@
 
   onMount(() => {
     const onKeyDown = (event) => {
+      syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
       onEditorKeyDown(event);
     };
 
+    const onKeyUp = (event) => {
+      syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
+    };
+
+    const onBlur = () => {
+      hoverLayerMode = null;
+    };
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   });
 </script>
 
@@ -502,10 +521,10 @@
   aria-label="KSH pattern editor"
   style={`width:${dims.width}px;height:${dims.height}px;`}
   onpointermove={(event) => {
-    hoverLayerMode = modifierLayerMode(event.metaKey, event.shiftKey, event.altKey);
+    syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
   }}
-  onpointerleave={() => {
-    hoverLayerMode = null;
+  onpointerleave={(event) => {
+    syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
   }}
 >
   <header class="flex flex-wrap items-end gap-3 border-b border-ksh-stroke-soft px-3 py-2 text-[11px]">

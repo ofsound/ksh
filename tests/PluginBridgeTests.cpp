@@ -6,6 +6,38 @@
 
 namespace
 {
+class FixedPlayHead final : public juce::AudioPlayHead
+{
+public:
+    FixedPlayHead()
+    {
+        position.setBpm (120.0);
+        position.setPpqPosition (0.0);
+        position.setIsPlaying (true);
+    }
+
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        return position;
+    }
+
+private:
+    PositionInfo position;
+};
+
+int countNoteOns (const juce::MidiBuffer& midi)
+{
+    int count = 0;
+
+    for (const auto metadata : midi)
+    {
+        if (metadata.getMessage().isNoteOn())
+            ++count;
+    }
+
+    return count;
+}
+
 bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 {
     for (const auto metadata : midi)
@@ -87,6 +119,31 @@ TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]
     plugin.processBlock (buffer, midi);
 
     REQUIRE (plugin.engineStateSnapshot().deviceActive);
+}
+
+TEST_CASE ("ui playback edits do not retrigger the current step", "[plugin][bridge][transport]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    REQUIRE (countNoteOns (midi) == 1);
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"swing","args":[37]})"));
+
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    REQUIRE (countNoteOns (midi) == 0);
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"cell","args":[1,1,2,1,100,100,1]})"));
+
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    REQUIRE (countNoteOns (midi) == 0);
 }
 
 TEST_CASE ("ui bridge macro commands update host parameters", "[plugin][bridge]")

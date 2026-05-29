@@ -561,10 +561,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
             syncMacroParametersFromEngineLocked (true);
 
         if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-        {
-            requestPlaybackReset();
             publishPlaybackSnapshotLocked();
-        }
     }
 
     return true;
