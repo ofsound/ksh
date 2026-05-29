@@ -123,19 +123,19 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 {
     if (selector == "steps")
     {
-        engine.setStepCount (argInt (args, 0, engine.stepCount));
+        engine.setStepCount (argInt (args, 0, engine.getStepCount()));
         return true;
     }
 
     if (selector == "channels")
     {
-        engine.setChannelCount (argInt (args, 0, engine.channelCount));
+        engine.setChannelCount (argInt (args, 0, engine.getChannelCount()));
         return true;
     }
 
     if (selector == "refresh_steps")
     {
-        engine.setRefreshSteps (argInt (args, 0, engine.refreshSteps));
+        engine.setRefreshSteps (argInt (args, 0, engine.getRefreshSteps()));
         return true;
     }
 
@@ -159,37 +159,37 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 
     if (selector == "tempo")
     {
-        engine.setTempo (argDouble (args, 0, engine.tempo));
+        engine.setTempo (argDouble (args, 0, engine.getTempo()));
         return true;
     }
 
     if (selector == "swing")
     {
-        engine.setSwing (argInt (args, 0, engine.swing));
+        engine.setSwing (argInt (args, 0, engine.getSwing()));
         return true;
     }
 
     if (selector == "velocity_humanize")
     {
-        engine.setVelocityHumanize (argInt (args, 0, engine.velocityHumanize));
+        engine.setVelocityHumanize (argInt (args, 0, engine.getVelocityHumanize()));
         return true;
     }
 
     if (selector == "timing_humanize")
     {
-        engine.setTimingHumanize (argInt (args, 0, engine.timingHumanize));
+        engine.setTimingHumanize (argInt (args, 0, engine.getTimingHumanize()));
         return true;
     }
 
     if (selector == "device_active")
     {
-        engine.setDeviceActive (argBool (args, 0, engine.deviceActive));
+        engine.setDeviceActive (argBool (args, 0, engine.isDeviceActive()));
         return true;
     }
 
     if (selector == "phase_offset_beats")
     {
-        engine.setPhaseOffsetBeats (argDouble (args, 0, engine.phaseOffsetBeats));
+        engine.setPhaseOffsetBeats (argDouble (args, 0, engine.getPhaseOffsetBeats()));
         return true;
     }
 
@@ -219,7 +219,7 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 
     if (selector == "channel_loop_length")
     {
-        engine.setChannelLoopLength (zeroBased (argInt (args, 0, 1)), argInt (args, 1, engine.stepCount));
+        engine.setChannelLoopLength (zeroBased (argInt (args, 0, 1)), argInt (args, 1, engine.getStepCount()));
         return true;
     }
 

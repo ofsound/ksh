@@ -174,75 +174,12 @@ function applyPersistencePayload(state, payload) {
   return true;
 }
 
-/** Mirror M4L ksh_ui_shared.applyEngineState for compact UI. */
 export function applyEngineState(state, engineState) {
   if (!engineState) {
     return;
   }
 
-  if (engineState.v === 1 && applyPersistencePayload(state, engineState)) {
-    return;
-  }
-
-  if (!state.sources) {
-    state.sources = makeEmptySources();
-  }
-
-  state.stepCount = clamp(engineState.stepCount, 1, MAX_STEPS);
-  state.laneCount = clamp(engineState.channelCount, 1, MAX_LANES);
-  state.refreshSteps = clamp(engineState.refreshSteps, 1, state.stepCount);
-  state.generationMode =
-    engineState.generationMode === "per_channel" || engineState.generationMode === "static"
-      ? engineState.generationMode
-      : "stack";
-  state.staticSource = clamp(engineState.staticSource ?? 0, 0, SOURCE_COUNT - 1);
-  state.rate = normalizeRate(engineState.rate);
-  state.swing = clamp(engineState.swing, 0, 100);
-  state.velocityHumanize = clamp(engineState.velocityHumanize, 0, 100);
-  state.timingHumanize = clamp(engineState.timingHumanize, 0, 100);
-  if (engineState.deviceActive !== undefined) {
-    state.deviceActive = toggleValue(engineState.deviceActive);
-  }
-  state.tempo = Math.max(20, Math.min(300, Number.parseFloat(engineState.tempo) || 120));
-  state.phaseOffsetBeats = Number.parseFloat(engineState.phaseOffsetBeats) || 0;
-
-  const channels = engineState.channels ?? engineState.lanes ?? [];
-  for (let lane = 0; lane < Math.min(MAX_LANES, channels.length); lane += 1) {
-    const row = channels[lane];
-    if (Array.isArray(row)) {
-      state.lanes[lane].label = String(row[0] ?? state.lanes[lane].label);
-      state.lanes[lane].note = clamp(row[1], 0, 127);
-      state.lanes[lane].lock = clamp(row[2], -1, SOURCE_COUNT - 1);
-      state.lanes[lane].loopLength = clamp(row[3], 1, state.stepCount);
-      if (row[4] !== undefined) {
-        state.lanes[lane].playbackMode = normalizePlaybackMode(row[4]);
-      }
-    } else if (row && typeof row === "object") {
-      if (row.label !== undefined) state.lanes[lane].label = String(row.label);
-      if (row.note !== undefined) state.lanes[lane].note = clamp(row.note, 0, 127);
-      if (row.lock !== undefined) state.lanes[lane].lock = clamp(row.lock, -1, SOURCE_COUNT - 1);
-      if (row.loopLength !== undefined) {
-        state.lanes[lane].loopLength = clamp(row.loopLength, 1, state.stepCount);
-      }
-      if (row.playbackMode !== undefined) {
-        state.lanes[lane].playbackMode = normalizePlaybackMode(row.playbackMode);
-      }
-    }
-    state.lanes[lane].loopLength = clamp(state.lanes[lane].loopLength, 1, state.stepCount);
-  }
-
-  const sourcesIn = engineState.sources;
-  if (Array.isArray(sourcesIn)) {
-    for (let source = 0; source < Math.min(SOURCE_COUNT, sourcesIn.length); source += 1) {
-      const sourceLanes = sourcesIn[source] ?? [];
-      for (let lane = 0; lane < Math.min(MAX_LANES, sourceLanes.length); lane += 1) {
-        const laneSteps = sourceLanes[lane] ?? [];
-        for (let step = 0; step < Math.min(MAX_STEPS, laneSteps.length); step += 1) {
-          state.sources[source][lane][step] = cloneCell(laneSteps[step]);
-        }
-      }
-    }
-  }
+  applyPersistencePayload(state, engineState);
 }
 
 export function applyStatusMessage(state, selector, args = []) {

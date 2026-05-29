@@ -77,19 +77,17 @@ TEST_CASE ("parsePersistencePayload accepts v1 JSON", "[plugin][persistence]")
     REQUIRE ((*parsed)["stepCount"] == 8);
 }
 
-TEST_CASE ("parsePersistencePayload unwraps M4L pattern wrapper", "[plugin][persistence]")
+TEST_CASE ("parsePersistencePayload rejects M4L pattern wrapper", "[plugin][persistence]")
 {
     const std::string wrapped =
         R"({"ksh_pattern_data":[{"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"phaseOffsetBeats":0,"channels":[["Kick",36,-1,16,"normal"],["Snare",38,-1,16,"normal"]],"sourceChannelMutes":[[0,0],[0,0],[0,0],[0,0]],"cells":[]}]})";
 
     const auto parsed = parsePersistencePayload (wrapped);
 
-    REQUIRE (parsed.has_value());
-    REQUIRE ((*parsed)["v"] == 1);
-    REQUIRE ((*parsed)["stepCount"] == 8);
+    REQUIRE_FALSE (parsed.has_value());
 }
 
-TEST_CASE ("parsePersistencePayload accepts chunked M4L atoms", "[plugin][persistence]")
+TEST_CASE ("parsePersistencePayload rejects chunked M4L atoms", "[plugin][persistence]")
 {
     const std::string payload =
         R"({"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"phaseOffsetBeats":0,"channels":[["Kick",36,-1,16,"normal"]],"sourceChannelMutes":[[0],[0],[0],[0]],"cells":[]})";
@@ -99,9 +97,7 @@ TEST_CASE ("parsePersistencePayload accepts chunked M4L atoms", "[plugin][persis
     });
     const auto parsed = parsePersistencePayload (atoms.dump());
 
-    REQUIRE (parsed.has_value());
-    REQUIRE ((*parsed)["v"] == 1);
-    REQUIRE ((*parsed)["stepCount"] == 8);
+    REQUIRE_FALSE (parsed.has_value());
 }
 
 TEST_CASE ("plugin state roundtrips through getStateInformation", "[plugin][persistence]")
@@ -115,11 +111,11 @@ TEST_CASE ("plugin state roundtrips through getStateInformation", "[plugin][pers
     setPluginState (restored, saved);
 
     const auto& engine = restored.getEngine();
-    REQUIRE (engine.stepCount == 16);
-    REQUIRE (engine.channelCount == 2);
-    REQUIRE (engine.channels[1].note == 38);
-    REQUIRE (engine.sources[0][1][4].enabled);
-    REQUIRE (engine.sources[0][1][4].velocity == 90);
+    REQUIRE (engine.getStepCount() == 16);
+    REQUIRE (engine.getChannelCount() == 2);
+    REQUIRE (engine.channelAt (1).note == 38);
+    REQUIRE (engine.sourceCellAt (0, 1, 4).enabled);
+    REQUIRE (engine.sourceCellAt (0, 1, 4).velocity == 90);
 }
 
 TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistence]")
@@ -174,8 +170,8 @@ TEST_CASE ("plugin state restore works off the message thread", "[plugin][persis
         std::rethrow_exception (error);
 
     REQUIRE (restoredState.getSize() > 0);
-    REQUIRE (restored.getEngine().channelCount == 2);
-    REQUIRE (restored.getEngine().sources[0][1][4].enabled);
+    REQUIRE (restored.getEngine().getChannelCount() == 2);
+    REQUIRE (restored.getEngine().sourceCellAt (0, 1, 4).enabled);
 }
 
 TEST_CASE ("plugin state save flushes pending host macro parameter changes", "[plugin][persistence]")
@@ -200,8 +196,8 @@ TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")
     configureSnarePattern (plugin);
 
     setPluginStateText (plugin, "not json");
-    REQUIRE (plugin.getEngine().sources[0][1][4].enabled);
+    REQUIRE (plugin.getEngine().sourceCellAt (0, 1, 4).enabled);
 
     setPluginStateText (plugin, R"({"v":1,"stepCount":8,"channelCount":2,"cells":})");
-    REQUIRE (plugin.getEngine().sources[0][1][4].enabled);
+    REQUIRE (plugin.getEngine().sourceCellAt (0, 1, 4).enabled);
 }

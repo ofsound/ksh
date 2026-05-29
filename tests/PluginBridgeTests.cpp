@@ -26,8 +26,8 @@ TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge
 
     plugin.getUiBridge().syncAll();
 
-    REQUIRE (plugin.getEngine().stepCount == 16);
-    REQUIRE (plugin.getEngine().sources[0][0][0].enabled);
+    REQUIRE (plugin.getEngine().getStepCount() == 16);
+    REQUIRE (plugin.getEngine().sourceCellAt (0, 0, 0).enabled);
 }
 
 TEST_CASE ("ui bridge handleCommand parses sync_all json", "[plugin][bridge]")
@@ -46,8 +46,8 @@ TEST_CASE ("ui bridge handleCommand applies cell edit", "[plugin][bridge]")
     REQUIRE (plugin.getUiBridge().handleCommand (
         R"({"selector":"cell","args":[1,1,5,1,90,100,1]})"));
 
-    REQUIRE (plugin.getEngine().sources[0][0][4].enabled);
-    REQUIRE (plugin.getEngine().sources[0][0][4].velocity == 90);
+    REQUIRE (plugin.getEngine().sourceCellAt (0, 0, 4).enabled);
+    REQUIRE (plugin.getEngine().sourceCellAt (0, 0, 4).velocity == 90);
 }
 
 TEST_CASE ("processor engine setVelocityHumanize does not crash", "[plugin][bridge]")
@@ -64,7 +64,7 @@ TEST_CASE ("ui bridge humanize commands rebuild native playback safely", "[plugi
 {
     PluginProcessor plugin;
     plugin.getEngine().setCell (0, 0, 0, true, 100, 100, 1);
-    plugin.getEngine().generateWindow (0, plugin.getEngine().stepCount, true);
+    plugin.getEngine().generateWindow (0, plugin.getEngine().getStepCount(), true);
 
     REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
     REQUIRE (plugin.getEngine().nativePlaybackActive());
@@ -78,7 +78,7 @@ TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
     plugin.getEngine().setCell (0, 0, 0, true, 100, 100, 1);
-    plugin.getEngine().generateWindow (0, plugin.getEngine().stepCount, true);
+    plugin.getEngine().generateWindow (0, plugin.getEngine().getStepCount(), true);
 
     REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
 
@@ -110,7 +110,7 @@ TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
     swing->setValueNotifyingHost (swing->convertTo0to1 (41.0f));
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
 
-    REQUIRE (plugin.getEngine().swing == 41);
+    REQUIRE (plugin.getEngine().getSwing() == 41);
 }
 
 TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")

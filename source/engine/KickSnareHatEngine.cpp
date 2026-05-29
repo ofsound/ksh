@@ -71,23 +71,6 @@ NormalizedCellParams normalizeCellParams (const std::optional<int>& probability,
     };
 }
 
-nlohmann::json normalizeIncomingState (nlohmann::json state)
-{
-    if (state.is_null())
-        return {};
-
-    if (state.contains ("state") && state["state"].contains ("sources"))
-        state = state["state"];
-
-    if (state.contains ("laneCount") && ! state.contains ("channelCount"))
-        state["channelCount"] = state["laneCount"];
-
-    if (state.contains ("lanes") && ! state.contains ("channels"))
-        state["channels"] = state["lanes"];
-
-    return state;
-}
-
 nlohmann::json cellToJson (const Cell& cell, bool oneBasedSource = false)
 {
     return {
@@ -134,6 +117,89 @@ KickSnareHatEngine::KickSnareHatEngine (EngineCallbacks callbacksIn)
     initSources();
     generated = makeEmptySourcePattern();
     generateWindow (0, stepCount, true);
+}
+
+EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
+{
+    EngineStateSnapshot snapshot;
+    snapshot.stepCount = stepCount;
+    snapshot.channelCount = channelCount;
+    snapshot.refreshSteps = refreshSteps;
+    snapshot.generationMode = generationMode;
+    snapshot.staticSource = staticSource;
+    snapshot.rate = rate;
+    snapshot.tempo = tempo;
+    snapshot.stepIntervalMs = stepIntervalMs;
+    snapshot.swing = swing;
+    snapshot.velocityHumanize = velocityHumanize;
+    snapshot.timingHumanize = timingHumanize;
+    snapshot.deviceActive = deviceActive;
+    snapshot.currentStep = currentStep;
+    snapshot.phaseOffsetBeats = phaseOffsetBeats;
+    snapshot.playingStepOneBased = playingStepOneBased;
+    snapshot.nativePlaybackStepCount = nativePlaybackStepCount;
+    snapshot.transportPlaying = transportPlaying;
+    snapshot.lastReportedGlobalStep = lastReportedGlobalStep;
+    snapshot.nativePlaybackRows = nativePlaybackRows;
+    snapshot.channels = channels;
+    snapshot.sources = sources;
+    snapshot.sourceChannelMutes = sourceChannelMutes;
+    snapshot.generated = generated;
+    snapshot.activeSourceIndicesCallCount = activeSourceIndicesCallCount;
+    snapshot.randomCallCount = randomCallCount;
+    return snapshot;
+}
+
+const Channel& KickSnareHatEngine::channelAt (int channel) const
+{
+    return channels[static_cast<size_t> (clampChannel (channel))];
+}
+
+const Cell& KickSnareHatEngine::sourceCellAt (int source, int channel, int step) const
+{
+    return sources[static_cast<size_t> (clampSource (source))][static_cast<size_t> (clampChannel (channel))]
+                  [static_cast<size_t> (clampStep (step))];
+}
+
+const Cell& KickSnareHatEngine::generatedCellAt (int channel, int step) const
+{
+    return generated[static_cast<size_t> (clampChannel (channel))][static_cast<size_t> (clampStep (step))];
+}
+
+const NativePlaybackRow& KickSnareHatEngine::nativePlaybackRowAt (int step) const
+{
+    return nativePlaybackRows[static_cast<size_t> (clampInt (step, 0, nativePlaybackStepCount - 1))];
+}
+
+bool KickSnareHatEngine::sourceChannelMutedAt (int source, int channel) const
+{
+    return isSourceChannelMuted (source, channel);
+}
+
+void KickSnareHatEngine::setTransportStateForTests (int transportPlayingIn, std::optional<int> lastReportedGlobalStepIn)
+{
+    transportPlaying = transportPlayingIn;
+    lastReportedGlobalStep = lastReportedGlobalStepIn;
+}
+
+void KickSnareHatEngine::setPlaybackStateForTests (int currentStepIn, int playingStepOneBasedIn)
+{
+    currentStep = clampInt (currentStepIn, 0, stepCount - 1);
+    playingStepOneBased = clampInt (playingStepOneBasedIn, 0, stepCount);
+}
+
+void KickSnareHatEngine::clearAllForTests()
+{
+    for (auto& source : sources)
+        source = makeEmptySourcePattern();
+
+    reset();
+}
+
+void KickSnareHatEngine::setGeneratedCellSourceStepForTests (int channel, int step, int sourceStep)
+{
+    generated[static_cast<size_t> (clampChannel (channel))][static_cast<size_t> (clampStep (step))].sourceStep =
+        clampStep (sourceStep);
 }
 
 void KickSnareHatEngine::initChannels()
@@ -809,198 +875,6 @@ nlohmann::json KickSnareHatEngine::snapshot() const
         { "sourceChannelMutes", sourceChannelMutes },
         { "generated", generatedOut }
     };
-}
-
-nlohmann::json KickSnareHatEngine::serialize() const
-{
-    nlohmann::json sourcesOut = nlohmann::json::array();
-
-    for (const auto& source : sources)
-    {
-        nlohmann::json channelsJson = nlohmann::json::array();
-
-        for (const auto& channel : source)
-        {
-            nlohmann::json stepsJson = nlohmann::json::array();
-
-            for (const auto& cell : channel)
-                stepsJson.push_back (cellToJson (cell));
-
-            channelsJson.push_back (stepsJson);
-        }
-
-        sourcesOut.push_back (channelsJson);
-    }
-
-    nlohmann::json channelsOut = nlohmann::json::array();
-
-    for (const auto& channel : channels)
-    {
-        channelsOut.push_back ({
-            { "label", channel.label },
-            { "note", channel.note },
-            { "lock", channel.lock },
-            { "loopLength", channel.loopLength },
-            { "playbackMode", playbackModeToString (channel.playbackMode) }
-        });
-    }
-
-    nlohmann::json mutesOut = nlohmann::json::array();
-
-    for (const auto& muteRow : sourceChannelMutes)
-    {
-        nlohmann::json row = nlohmann::json::array();
-
-        for (bool muted : muteRow)
-            row.push_back (muted ? 1 : 0);
-
-        mutesOut.push_back (row);
-    }
-
-    return {
-        { "stepCount", stepCount },
-        { "channelCount", channelCount },
-        { "refreshSteps", refreshSteps },
-        { "generationMode", std::string { generationModeToString (generationMode) } },
-        { "staticSource", staticSource },
-        { "rate", rate },
-        { "tempo", tempo },
-        { "swing", swing },
-        { "velocityHumanize", velocityHumanize },
-        { "timingHumanize", timingHumanize },
-        { "deviceActive", deviceActive ? 1 : 0 },
-        { "phaseOffsetBeats", phaseOffsetBeats },
-        { "channels", channelsOut },
-        { "sourceChannelMutes", mutesOut },
-        { "sources", sourcesOut }
-    };
-}
-
-void KickSnareHatEngine::deserialize (const nlohmann::json& stateIn)
-{
-    const auto state = normalizeIncomingState (stateIn);
-
-    if (state.is_null())
-        return;
-
-    if (state.contains ("stepCount"))
-        stepCount = clampInt (state["stepCount"].get<int>(), 1, Constants::maxSteps);
-
-    if (state.contains ("channelCount"))
-        channelCount = clampInt (state["channelCount"].get<int>(), 1, Constants::maxChannels);
-
-    if (state.contains ("refreshSteps"))
-        refreshSteps = clampInt (state["refreshSteps"].get<int>(), 1, stepCount);
-
-    refreshSteps = clampInt (refreshSteps, 1, stepCount);
-
-    for (auto& channel : channels)
-        channel.loopLength = clampInt (channel.loopLength, 1, stepCount);
-
-    generationMode = generationModeFromJson (state, generationMode);
-
-    if (state.contains ("staticSource"))
-        staticSource = clampInt (state["staticSource"].get<int>(), 0, Constants::sourceCount - 1);
-
-    if (state.contains ("rate"))
-    {
-        rate = Constants::normalizeRate (state["rate"].get<std::string>());
-        updateStepIntervalMs();
-    }
-
-    if (state.contains ("tempo"))
-    {
-        tempo = std::clamp (state["tempo"].get<double>(), 20.0, 300.0);
-        updateStepIntervalMs();
-    }
-
-    if (state.contains ("swing"))
-        swing = clampInt (state["swing"].get<int>(), 0, 100);
-
-    if (state.contains ("velocityHumanize"))
-        velocityHumanize = clampInt (state["velocityHumanize"].get<int>(), 0, 100);
-
-    if (state.contains ("timingHumanize"))
-        timingHumanize = clampInt (state["timingHumanize"].get<int>(), 0, 100);
-
-    if (state.contains ("deviceActive"))
-    {
-        if (state["deviceActive"].is_boolean())
-            deviceActive = state["deviceActive"].get<bool>();
-        else
-            deviceActive = state["deviceActive"].get<int>() != 0;
-    }
-
-    phaseOffsetBeats = state.contains ("phaseOffsetBeats") ? state["phaseOffsetBeats"].get<double>() : 0.0;
-
-    if (state.contains ("channels"))
-    {
-        const auto& channelsIn = state["channels"];
-        const int count = std::min (Constants::maxChannels, static_cast<int> (channelsIn.size()));
-
-        for (int channel = 0; channel < count; ++channel)
-        {
-            const auto& incoming = channelsIn[static_cast<size_t> (channel)];
-
-            if (incoming.contains ("label"))
-                channels[static_cast<size_t> (channel)].label = incoming["label"].get<std::string>();
-
-            if (incoming.contains ("note"))
-                channels[static_cast<size_t> (channel)].note = clampInt (incoming["note"].get<int>(), 0, 127);
-
-            if (incoming.contains ("lock"))
-                channels[static_cast<size_t> (channel)].lock =
-                    clampInt (incoming["lock"].get<int>(), -1, Constants::sourceCount - 1);
-
-            if (incoming.contains ("loopLength"))
-                channels[static_cast<size_t> (channel)].loopLength =
-                    clampInt (incoming["loopLength"].get<int>(), 1, stepCount);
-
-            if (incoming.contains ("playbackMode"))
-                channels[static_cast<size_t> (channel)].playbackMode =
-                    normalizePlaybackMode (incoming["playbackMode"].get<std::string>());
-        }
-    }
-
-    if (state.contains ("sources"))
-    {
-        const auto& sourcesIn = state["sources"];
-        const int sourceCountIn = std::min (Constants::sourceCount, static_cast<int> (sourcesIn.size()));
-
-        for (int source = 0; source < sourceCountIn; ++source)
-        {
-            const auto& channelsIn = sourcesIn[static_cast<size_t> (source)];
-            const int channelCountIn = std::min (Constants::maxChannels, static_cast<int> (channelsIn.size()));
-
-            for (int channel = 0; channel < channelCountIn; ++channel)
-            {
-                const auto& stepsIn = channelsIn[static_cast<size_t> (channel)];
-                const int stepCountIn = std::min (Constants::maxSteps, static_cast<int> (stepsIn.size()));
-
-                for (int step = 0; step < stepCountIn; ++step)
-                    sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] =
-                        cloneCell (stepsIn[static_cast<size_t> (step)].get<Cell>());
-            }
-        }
-    }
-
-    if (state.contains ("sourceChannelMutes"))
-    {
-        const auto& mutesIn = state["sourceChannelMutes"];
-        const int sourceCountIn = std::min (Constants::sourceCount, static_cast<int> (mutesIn.size()));
-
-        for (int source = 0; source < sourceCountIn; ++source)
-        {
-            const auto& row = mutesIn[static_cast<size_t> (source)];
-            const int channelCountIn = std::min (Constants::maxChannels, static_cast<int> (row.size()));
-
-            for (int channel = 0; channel < channelCountIn; ++channel)
-                sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] =
-                    row[static_cast<size_t> (channel)].get<int>() != 0;
-        }
-    }
-
-    resetPlayback (false);
 }
 
 nlohmann::json KickSnareHatEngine::serializeForPersistence() const

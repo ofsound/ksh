@@ -262,7 +262,7 @@ TEST_CASE ("plugin processor initializes with playable default pattern", "[proce
     PluginProcessor processor;
 
     REQUIRE (processor.getEngine().nativePlaybackActive());
-    REQUIRE (processor.getEngine().sources[0][0][0].enabled);
+    REQUIRE (processor.getEngine().sourceCellAt (0, 0, 0).enabled);
 }
 
 TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")

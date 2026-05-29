@@ -220,7 +220,7 @@ void PluginProcessor::handleAsyncUpdate()
         {
             const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
 
-            if (bpm > 0.0 && std::abs (engine.tempo - bpm) > 0.01)
+            if (bpm > 0.0 && std::abs (engine.getTempo() - bpm) > 0.01)
                 engine.setTempo (bpm);
         }
 
@@ -576,34 +576,34 @@ void PluginProcessor::applyMacroParametersToEngineLocked()
                                         static_cast<int> (ksh::Constants::rates.size()) - 1);
     const auto rate = ksh::Constants::rates[static_cast<size_t> (rateIndex)];
 
-    if (engine.rate != rate)
+    if (engine.getRate() != rate)
         engine.setRate (rate);
 
     const auto swing = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "swing"))), 0, 100);
 
-    if (engine.swing != swing)
+    if (engine.getSwing() != swing)
         engine.setSwing (swing);
 
     const auto velocityHumanize =
         ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "velocity_humanize"))), 0, 100);
 
-    if (engine.velocityHumanize != velocityHumanize)
+    if (engine.getVelocityHumanize() != velocityHumanize)
         engine.setVelocityHumanize (velocityHumanize);
 
     const auto timingHumanize =
         ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "timing_humanize"))), 0, 100);
 
-    if (engine.timingHumanize != timingHumanize)
+    if (engine.getTimingHumanize() != timingHumanize)
         engine.setTimingHumanize (timingHumanize);
 
     const bool deviceActive = parameterValue (parameters, "device_active") >= 0.5f;
 
-    if (engine.deviceActive != deviceActive)
+    if (engine.isDeviceActive() != deviceActive)
         engine.setDeviceActive (deviceActive);
 
     const auto phaseOffsetBeats = static_cast<double> (parameterValue (parameters, "phase_offset_beats"));
 
-    if (std::abs (engine.phaseOffsetBeats - phaseOffsetBeats) > 0.000001)
+    if (std::abs (engine.getPhaseOffsetBeats() - phaseOffsetBeats) > 0.000001)
         engine.setPhaseOffsetBeats (phaseOffsetBeats);
 }
 
@@ -611,12 +611,12 @@ void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
 {
     const auto previousSuppression = suppressParameterCallbacks.exchange (true, std::memory_order_acq_rel);
 
-    setParameterValue (parameters, "rate", static_cast<float> (rateIndexForValue (engine.rate)), notifyHost);
-    setParameterValue (parameters, "swing", static_cast<float> (engine.swing), notifyHost);
-    setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.velocityHumanize), notifyHost);
-    setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.timingHumanize), notifyHost);
-    setParameterValue (parameters, "device_active", engine.deviceActive ? 1.0f : 0.0f, notifyHost);
-    setParameterValue (parameters, "phase_offset_beats", static_cast<float> (engine.phaseOffsetBeats), notifyHost);
+    setParameterValue (parameters, "rate", static_cast<float> (rateIndexForValue (engine.getRate())), notifyHost);
+    setParameterValue (parameters, "swing", static_cast<float> (engine.getSwing()), notifyHost);
+    setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.getVelocityHumanize()), notifyHost);
+    setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.getTimingHumanize()), notifyHost);
+    setParameterValue (parameters, "device_active", engine.isDeviceActive() ? 1.0f : 0.0f, notifyHost);
+    setParameterValue (parameters, "phase_offset_beats", static_cast<float> (engine.getPhaseOffsetBeats()), notifyHost);
 
     suppressParameterCallbacks.store (previousSuppression, std::memory_order_release);
 }

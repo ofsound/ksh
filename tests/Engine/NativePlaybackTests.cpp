@@ -134,12 +134,12 @@ TEST_CASE ("native playback rows use least common cycle period", "[engine][nativ
 
     REQUIRE (built.stepCount == 6);
     requireNativeRow (rows[0], concatNativeRows (
-                                        nativeHitRow (fixture.engine.channels[0].note, 100, 100, 1, 0.0, 1, 1, 1, 1),
-                                        nativeHitRow (fixture.engine.channels[1].note, 90, 100, 1, 0.0, 2, 1, 1, 1)));
+                                        nativeHitRow (fixture.engine.channelAt (0).note, 100, 100, 1, 0.0, 1, 1, 1, 1),
+                                        nativeHitRow (fixture.engine.channelAt (1).note, 90, 100, 1, 0.0, 2, 1, 1, 1)));
     requireNativeRow (rows[1], {});
-    requireNativeRow (rows[2], nativeHitRow (fixture.engine.channels[0].note, 100, 100, 1, 0.0, 1, 1, 1, 1));
-    requireNativeRow (rows[3], nativeHitRow (fixture.engine.channels[1].note, 90, 100, 1, 0.0, 2, 1, 1, 1));
-    requireNativeRow (rows[4], nativeHitRow (fixture.engine.channels[0].note, 100, 100, 1, 0.0, 1, 1, 1, 1));
+    requireNativeRow (rows[2], nativeHitRow (fixture.engine.channelAt (0).note, 100, 100, 1, 0.0, 1, 1, 1, 1));
+    requireNativeRow (rows[3], nativeHitRow (fixture.engine.channelAt (1).note, 90, 100, 1, 0.0, 2, 1, 1, 1));
+    requireNativeRow (rows[4], nativeHitRow (fixture.engine.channelAt (0).note, 100, 100, 1, 0.0, 1, 1, 1, 1));
     requireNativeRow (rows[5], {});
 }
 
@@ -171,10 +171,10 @@ TEST_CASE ("native playback rows evaluate probability once per roll step", "[eng
     fixture.engine.setCell (0, 0, 0, true, 100, 50, 1, 0, false, 4);
     fixture.setRandomValues ({ 0.0 });
 
-    fixture.engine.randomCallCount = 0;
+    fixture.engine.resetRandomCallCountForTests();
     [[maybe_unused]] const auto built = fixture.engine.buildNativePlaybackRows();
 
-    REQUIRE (fixture.engine.randomCallCount == 16);
+    REQUIRE (fixture.engine.randomCallCountForTests() == 16);
 }
 
 TEST_CASE ("native playback rows evaluate cycle before probability", "[engine][native]")
@@ -186,11 +186,11 @@ TEST_CASE ("native playback rows evaluate cycle before probability", "[engine][n
     fixture.engine.setCell (0, 0, 0, true, 100, 50, 2);
     fixture.setRandomValues ({ 0.0 });
 
-    fixture.engine.randomCallCount = 0;
+    fixture.engine.resetRandomCallCountForTests();
     const auto built = fixture.engine.buildNativePlaybackRows();
 
     REQUIRE (built.stepCount == 32);
-    REQUIRE (fixture.engine.randomCallCount == 16);
+    REQUIRE (fixture.engine.randomCallCountForTests() == 16);
 }
 
 TEST_CASE ("native playback rows preroll velocity humanize", "[engine][native]")
@@ -293,7 +293,7 @@ TEST_CASE ("native playback rows include note hit metadata", "[engine][native]")
     fixture.engine.setChannelCount (1);
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
     fixture.engine.generateWindow (0, 1, true);
-    fixture.engine.generated[0][0].sourceStep = 3;
+    fixture.engine.setGeneratedCellSourceStepForTests (0, 0, 3);
 
     const auto built = fixture.engine.buildNativePlaybackRows();
     const auto& rows = built.rows;
@@ -400,8 +400,8 @@ TEST_CASE ("native playback refreshes generated window on transport boundary", "
     fixture.setRandomValues ({ 0.0 });
     fixture.engine.generateWindow (4, 4, true);
 
-    REQUIRE (fixture.engine.generated[0][4].source == 0);
-    REQUIRE (fixture.engine.generated[0][4].velocity == 44);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).source == 0);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).velocity == 44);
 
     fixture.notes.clear();
     fixture.setRandomValues ({ 0.0, 0.99, 0.0 });
@@ -413,13 +413,13 @@ TEST_CASE ("native playback refreshes generated window on transport boundary", "
 
     REQUIRE (fixture.engine.nativePlaybackActive());
     REQUIRE (fixture.notes.empty());
-    REQUIRE (fixture.engine.generated[0][4].source == 3);
-    REQUIRE (fixture.engine.generated[0][4].velocity == 99);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).velocity == 99);
     fixture.engine.syncNativePlaybackTable();
-    requireNativeRow (fixture.engine.nativePlaybackRows[4], nativeHitRow (36, 99, 100, 1, 0.0, 1, 5, 4, 5));
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (4), nativeHitRow (36, 99, 100, 1, 0.0, 1, 5, 4, 5));
 
     fixture.engine.transportPosition (1.01, true);
-    REQUIRE (fixture.engine.generated[0][4].source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).source == 3);
 }
 
 TEST_CASE ("native playback keeps early humanized refresh boundary hit readable", "[engine][native]")
@@ -443,9 +443,9 @@ TEST_CASE ("native playback keeps early humanized refresh boundary hit readable"
     fixture.engine.transportPosition (1.0, true);
 
     fixture.engine.syncNativePlaybackTable();
-    REQUIRE (fixture.engine.nativePlaybackStepCount == 128);
-    requireNativeRow (fixture.engine.nativePlaybackRows[3], {});
-    requireNativeRow (fixture.engine.nativePlaybackRows[4], nativeHitRow (36, 100, 100, 1, 0.0, 1, 5, 1, 5));
+    REQUIRE (fixture.engine.getNativePlaybackStepCount() == 128);
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (3), {});
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (4), nativeHitRow (36, 100, 100, 1, 0.0, 1, 5, 1, 5));
 }
 
 TEST_CASE ("timing humanize change keeps next hit readable during playback", "[engine][native]")
@@ -458,16 +458,15 @@ TEST_CASE ("timing humanize change keeps next hit readable during playback", "[e
     fixture.engine.setTempo (120.0);
     fixture.engine.setGenerationMode (GenerationMode::staticSource);
     fixture.engine.setCell (0, 0, 5, true, 100, 100, 1);
-    fixture.engine.transportPlaying = 1;
-    fixture.engine.lastReportedGlobalStep = 4;
+    fixture.engine.setTransportStateForTests (1, 4);
     fixture.setRandomValues ({ 0.0 });
 
     fixture.engine.setTimingHumanize (1);
 
     fixture.engine.syncNativePlaybackTable();
-    REQUIRE (fixture.engine.nativePlaybackStepCount == 128);
-    requireNativeRow (fixture.engine.nativePlaybackRows[4], {});
-    requireNativeRow (fixture.engine.nativePlaybackRows[5], nativeHitRow (36, 100, 100, 1, 0.0, 1, 6, 1, 6));
+    REQUIRE (fixture.engine.getNativePlaybackStepCount() == 128);
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (4), {});
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (5), nativeHitRow (36, 100, 100, 1, 0.0, 1, 6, 1, 6));
 }
 
 TEST_CASE ("timing humanize refresh one does not queue future hits from current row", "[engine][native]")
@@ -489,7 +488,7 @@ TEST_CASE ("timing humanize refresh one does not queue future hits from current 
     fixture.engine.transportPosition (0.0, true);
 
     fixture.engine.syncNativePlaybackTable();
-    REQUIRE (fixture.engine.nativePlaybackStepCount == 256);
-    requireNativeRow (fixture.engine.nativePlaybackRows[0], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
-    requireNativeRow (fixture.engine.nativePlaybackRows[1], nativeHitRow (36, 100, 100, 1, 0.0, 1, 2, 1, 2));
+    REQUIRE (fixture.engine.getNativePlaybackStepCount() == 256);
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (0), nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
+    requireNativeRow (fixture.engine.nativePlaybackRowAt (1), nativeHitRow (36, 100, 100, 1, 0.0, 1, 2, 1, 2));
 }

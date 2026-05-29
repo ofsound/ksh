@@ -16,8 +16,8 @@ TEST_CASE ("dispatchEngineCommand sets steps and channels", "[engine][bridge]")
     REQUIRE (dispatchEngineCommand (fixture.engine, "steps", { 8 }));
     REQUIRE (dispatchEngineCommand (fixture.engine, "channels", { 4 }));
 
-    REQUIRE (fixture.engine.stepCount == 8);
-    REQUIRE (fixture.engine.channelCount == 4);
+    REQUIRE (fixture.engine.getStepCount() == 8);
+    REQUIRE (fixture.engine.getChannelCount() == 4);
 }
 
 TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][bridge]")
@@ -31,8 +31,8 @@ TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][br
                                     "cell",
                                     { 1, 2, 5, 1, 90, 100, 1 }));
 
-    REQUIRE (fixture.engine.sources[0][1][4].enabled);
-    REQUIRE (fixture.engine.sources[0][1][4].velocity == 90);
+    REQUIRE (fixture.engine.sourceCellAt (0, 1, 4).enabled);
+    REQUIRE (fixture.engine.sourceCellAt (0, 1, 4).velocity == 90);
 }
 
 TEST_CASE ("dispatchEngineCommand rejects unknown selector", "[engine][bridge]")
@@ -46,10 +46,10 @@ TEST_CASE ("dispatchEngineCommand resets playback window", "[engine][bridge]")
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setCell (0, 0, 3, true, 80, 100, 1);
-    fixture.engine.playingStepOneBased = 5;
+    fixture.engine.setPlaybackStateForTests (0, 5);
 
     REQUIRE (dispatchEngineCommand (fixture.engine, "reset", {}));
-    REQUIRE (fixture.engine.currentStep == 0);
-    REQUIRE (fixture.engine.playingStepOneBased == 0);
-    REQUIRE (fixture.engine.sources[0][0][3].enabled);
+    REQUIRE (fixture.engine.getCurrentStep() == 0);
+    REQUIRE (fixture.engine.getPlayingStepOneBased() == 0);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 3).enabled);
 }

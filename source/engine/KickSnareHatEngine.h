@@ -30,11 +30,71 @@ struct EngineCallbacks
     std::function<void (const MidiNoteEvent&)> emitNote;
 };
 
+struct EngineStateSnapshot
+{
+    int stepCount = 16;
+    int channelCount = Constants::defaultChannelCount;
+    int refreshSteps = 1;
+    GenerationMode generationMode = GenerationMode::staticSource;
+    int staticSource = 0;
+    std::string rate = std::string { Constants::defaultRate };
+    double tempo = 120.0;
+    double stepIntervalMs = 125.0;
+    int swing = 0;
+    int velocityHumanize = 0;
+    int timingHumanize = 0;
+    bool deviceActive = true;
+    int currentStep = 0;
+    double phaseOffsetBeats = 0.0;
+    int playingStepOneBased = 0;
+    int nativePlaybackStepCount = 16;
+    int transportPlaying = 0;
+    std::optional<int> lastReportedGlobalStep;
+    NativePlaybackTable nativePlaybackRows;
+    std::array<Channel, Constants::maxChannels> channels {};
+    std::array<SourcePattern, Constants::sourceCount> sources {};
+    std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
+    GeneratedPattern generated {};
+    int activeSourceIndicesCallCount = 0;
+    int randomCallCount = 0;
+};
+
 class KickSnareHatEngine
 {
 public:
     explicit KickSnareHatEngine (EngineCallbacks callbacks = {});
 
+    [[nodiscard]] EngineStateSnapshot stateSnapshot() const;
+    [[nodiscard]] int getStepCount() const { return stepCount; }
+    [[nodiscard]] int getChannelCount() const { return channelCount; }
+    [[nodiscard]] int getRefreshSteps() const { return refreshSteps; }
+    [[nodiscard]] GenerationMode getGenerationMode() const { return generationMode; }
+    [[nodiscard]] int getStaticSource() const { return staticSource; }
+    [[nodiscard]] std::string_view getRate() const { return rate; }
+    [[nodiscard]] double getTempo() const { return tempo; }
+    [[nodiscard]] int getSwing() const { return swing; }
+    [[nodiscard]] int getVelocityHumanize() const { return velocityHumanize; }
+    [[nodiscard]] int getTimingHumanize() const { return timingHumanize; }
+    [[nodiscard]] bool isDeviceActive() const { return deviceActive; }
+    [[nodiscard]] double getPhaseOffsetBeats() const { return phaseOffsetBeats; }
+    [[nodiscard]] int getCurrentStep() const { return currentStep; }
+    [[nodiscard]] int getPlayingStepOneBased() const { return playingStepOneBased; }
+    [[nodiscard]] int getNativePlaybackStepCount() const { return nativePlaybackStepCount; }
+    [[nodiscard]] const Channel& channelAt (int channel) const;
+    [[nodiscard]] const Cell& sourceCellAt (int source, int channel, int step) const;
+    [[nodiscard]] const Cell& generatedCellAt (int channel, int step) const;
+    [[nodiscard]] const NativePlaybackRow& nativePlaybackRowAt (int step) const;
+    [[nodiscard]] bool sourceChannelMutedAt (int source, int channel) const;
+    [[nodiscard]] int activeSourceIndicesCallCountForTests() const { return activeSourceIndicesCallCount; }
+    void resetActiveSourceIndicesCallCountForTests() const { activeSourceIndicesCallCount = 0; }
+    [[nodiscard]] int randomCallCountForTests() const { return randomCallCount; }
+    void resetRandomCallCountForTests() const { randomCallCount = 0; }
+    void setTransportStateForTests (int transportPlayingIn, std::optional<int> lastReportedGlobalStepIn);
+    void setPlaybackStateForTests (int currentStepIn, int playingStepOneBasedIn);
+    void clearAllForTests();
+    void setGeneratedCellSourceStepForTests (int channel, int step, int sourceStep);
+
+private:
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 1;
@@ -62,7 +122,10 @@ public:
 
     /** Test hook: incremented on each {@link activeSourceIndices} call. */
     mutable int activeSourceIndicesCallCount = 0;
+    /** Test hook: incremented on each RNG draw. */
+    mutable int randomCallCount = 0;
 
+public:
     void setStepCount (int count);
     void setChannelCount (int count);
     void setRefreshSteps (int count);
@@ -114,8 +177,6 @@ public:
     [[nodiscard]] int pickRandomSource (const std::vector<int>* active = nullptr);
 
     [[nodiscard]] nlohmann::json snapshot() const;
-    [[nodiscard]] nlohmann::json serialize() const;
-    void deserialize (const nlohmann::json& state);
     [[nodiscard]] nlohmann::json serializeForPersistence() const;
     [[nodiscard]] bool deserializeForPersistence (const nlohmann::json& state);
 
@@ -138,9 +199,6 @@ public:
     [[nodiscard]] double beatsPerStep() const;
     void transportPosition (double songBeats, bool isPlaying);
     void syncNativePlaybackTable();
-
-    /** Test hook: incremented on each RNG draw. */
-    mutable int randomCallCount = 0;
 
     [[nodiscard]] static int mod (int value, int divisor);
 

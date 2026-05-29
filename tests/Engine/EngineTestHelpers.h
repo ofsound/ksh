@@ -9,17 +9,7 @@ namespace ksh::test
 
 inline void clearAll (KickSnareHatEngine& engine)
 {
-    for (int source = 0; source < Constants::sourceCount; ++source)
-    {
-        for (int channel = 0; channel < Constants::maxChannels; ++channel)
-        {
-            for (int step = 0; step < Constants::maxSteps; ++step)
-                engine.sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] =
-                    defaultCell();
-        }
-    }
-
-    engine.reset();
+    engine.clearAllForTests();
 }
 
 struct EngineFixture

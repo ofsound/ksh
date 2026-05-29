@@ -20,12 +20,12 @@ TEST_CASE ("stack mode matches one source across window", "[engine][generation]"
     fixture.engine.generateWindow (0, 4, true);
 
     for (int step = 0; step < 4; ++step)
-        REQUIRE (fixture.engine.generated[0][static_cast<size_t> (step)].source == 1);
+        REQUIRE (fixture.engine.generatedCellAt (0, step).source == 1);
 
-    REQUIRE_FALSE (fixture.engine.generated[0][0].enabled);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 10);
-    REQUIRE (fixture.engine.generated[0][1].enabled);
-    REQUIRE (fixture.engine.generated[0][1].velocity == 20);
+    REQUIRE_FALSE (fixture.engine.generatedCellAt (0, 0).enabled);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 10);
+    REQUIRE (fixture.engine.generatedCellAt (0, 1).enabled);
+    REQUIRE (fixture.engine.generatedCellAt (0, 1).velocity == 20);
 }
 
 TEST_CASE ("stack mode uses one source for all lanes on step", "[engine][generation]")
@@ -37,12 +37,12 @@ TEST_CASE ("stack mode uses one source for all lanes on step", "[engine][generat
     fixture.engine.setCell (3, 0, 0, true, 111, 100, 1);
     fixture.engine.setCell (3, 1, 0, true, 88, 100, 1);
     fixture.setRandomValues ({ 0.76 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 3);
-    REQUIRE (fixture.engine.generated[1][0].source == 3);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 111);
-    REQUIRE (fixture.engine.generated[1][0].velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (1, 0).source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 111);
+    REQUIRE (fixture.engine.generatedCellAt (1, 0).velocity == 88);
 }
 
 TEST_CASE ("per_channel mode can choose different sources", "[engine][generation]")
@@ -54,10 +54,10 @@ TEST_CASE ("per_channel mode can choose different sources", "[engine][generation
     fixture.engine.setCell (0, 0, 0, true, 70, 100, 1);
     fixture.engine.setCell (3, 1, 0, true, 90, 100, 1);
     fixture.setRandomValues ({ 0.0, 0.76 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 0);
-    REQUIRE (fixture.engine.generated[1][0].source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+    REQUIRE (fixture.engine.generatedCellAt (1, 0).source == 3);
 }
 
 TEST_CASE ("static mode uses selected source", "[engine][generation]")
@@ -71,12 +71,12 @@ TEST_CASE ("static mode uses selected source", "[engine][generation]")
     fixture.engine.setCell (0, 0, 0, true, 40, 100, 1);
     fixture.engine.setCell (2, 0, 0, true, 70, 100, 1);
     fixture.engine.setCell (2, 1, 0, true, 90, 100, 1);
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 2);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 70);
-    REQUIRE (fixture.engine.generated[1][0].source == 2);
-    REQUIRE (fixture.engine.generated[1][0].velocity == 90);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 2);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 70);
+    REQUIRE (fixture.engine.generatedCellAt (1, 0).source == 2);
+    REQUIRE (fixture.engine.generatedCellAt (1, 0).velocity == 90);
 }
 
 TEST_CASE ("random source ignores empty sources", "[engine][generation]")
@@ -87,10 +87,10 @@ TEST_CASE ("random source ignores empty sources", "[engine][generation]")
     fixture.engine.setGenerationMode (GenerationMode::stack);
     fixture.engine.setCell (0, 0, 0, true, 55, 100, 1);
     fixture.setRandomValues ({ 0.99 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 0);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 55);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 55);
 }
 
 TEST_CASE ("inactive channel content does not make source active", "[engine][generation]")
@@ -102,10 +102,10 @@ TEST_CASE ("inactive channel content does not make source active", "[engine][gen
     fixture.engine.setCell (0, 0, 0, true, 55, 100, 1);
     fixture.engine.setCell (1, 1, 0, true, 99, 100, 1);
     fixture.setRandomValues ({ 0.99 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 0);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 55);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 55);
 }
 
 TEST_CASE ("random source uses only populated source when others empty", "[engine][generation]")
@@ -116,10 +116,10 @@ TEST_CASE ("random source uses only populated source when others empty", "[engin
     fixture.engine.setGenerationMode (GenerationMode::perChannel);
     fixture.engine.setCell (2, 0, 0, true, 66, 100, 1);
     fixture.setRandomValues ({ 0.0, 0.99 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 2);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 66);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 2);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 66);
 }
 
 TEST_CASE ("source channel mute suppresses generated output", "[engine][generation]")
@@ -131,11 +131,11 @@ TEST_CASE ("source channel mute suppresses generated output", "[engine][generati
     fixture.engine.setCell (0, 0, 0, true, 77, 100, 1);
     fixture.engine.setSourceChannelMute (0, 0, true);
     fixture.setRandomValues ({ 0.0 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 0);
-    REQUIRE_FALSE (fixture.engine.generated[0][0].enabled);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 100);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+    REQUIRE_FALSE (fixture.engine.generatedCellAt (0, 0).enabled);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 100);
 }
 
 TEST_CASE ("muted source channel does not make source active", "[engine][generation]")
@@ -148,10 +148,10 @@ TEST_CASE ("muted source channel does not make source active", "[engine][generat
     fixture.engine.setCell (1, 0, 0, true, 88, 100, 1);
     fixture.engine.setSourceChannelMute (1, 0, true);
     fixture.setRandomValues ({ 0.99 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 0);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 55);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 55);
 }
 
 TEST_CASE ("source channel reset clears cells and mute", "[engine][generation]")
@@ -166,13 +166,13 @@ TEST_CASE ("source channel reset clears cells and mute", "[engine][generation]")
     fixture.engine.setSourceChannelMute (0, 0, true);
     fixture.engine.resetSourceChannel (0, 0);
 
-    REQUIRE_FALSE (fixture.engine.sourceChannelMutes[0][0]);
-    REQUIRE (fixture.engine.channels[0].loopLength == 8);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][0].enabled);
-    REQUIRE (fixture.engine.sources[0][0][0].velocity == 100);
-    REQUIRE (fixture.engine.sources[0][0][0].probability == 100);
-    REQUIRE (fixture.engine.sources[0][0][0].cycle == 1);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][1].enabled);
+    REQUIRE_FALSE (fixture.engine.sourceChannelMutedAt (0, 0));
+    REQUIRE (fixture.engine.channelAt (0).loopLength == 8);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).enabled);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).velocity == 100);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).probability == 100);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycle == 1);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 1).enabled);
 }
 
 TEST_CASE ("channel loop length wraps source step lookup", "[engine][generation]")
@@ -190,14 +190,14 @@ TEST_CASE ("channel loop length wraps source step lookup", "[engine][generation]
     fixture.engine.setCell (0, 0, 3, true, 99, 100, 1);
     fixture.engine.generateWindow (0, 8, true);
 
-    REQUIRE (fixture.engine.generated[0][0].velocity == 10);
-    REQUIRE (fixture.engine.generated[0][1].velocity == 20);
-    REQUIRE (fixture.engine.generated[0][2].velocity == 30);
-    REQUIRE (fixture.engine.generated[0][3].velocity == 10);
-    REQUIRE (fixture.engine.generated[0][4].velocity == 20);
-    REQUIRE (fixture.engine.generated[0][5].velocity == 30);
-    REQUIRE (fixture.engine.generated[0][6].velocity == 10);
-    REQUIRE (fixture.engine.generated[0][7].velocity == 20);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 10);
+    REQUIRE (fixture.engine.generatedCellAt (0, 1).velocity == 20);
+    REQUIRE (fixture.engine.generatedCellAt (0, 2).velocity == 30);
+    REQUIRE (fixture.engine.generatedCellAt (0, 3).velocity == 10);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).velocity == 20);
+    REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 30);
+    REQUIRE (fixture.engine.generatedCellAt (0, 6).velocity == 10);
+    REQUIRE (fixture.engine.generatedCellAt (0, 7).velocity == 20);
 }
 
 TEST_CASE ("channel loop length refreshes all wrapped generated cells", "[engine][generation]")
@@ -216,13 +216,13 @@ TEST_CASE ("channel loop length refreshes all wrapped generated cells", "[engine
 
     fixture.engine.setCellVelocity (0, 0, 0, 88);
 
-    REQUIRE (fixture.engine.generated[0][0].velocity == 88);
-    REQUIRE (fixture.engine.generated[0][3].velocity == 88);
-    REQUIRE (fixture.engine.generated[0][6].velocity == 88);
-    REQUIRE (fixture.engine.generated[0][1].velocity == 20);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 3).velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 6).velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 1).velocity == 20);
 
     fixture.engine.setCellVelocity (0, 0, 5, 44);
-    REQUIRE (fixture.engine.generated[0][5].velocity == 30);
+    REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 30);
 }
 
 TEST_CASE ("channel loop length clamps to step count", "[engine][generation]")
@@ -233,10 +233,10 @@ TEST_CASE ("channel loop length clamps to step count", "[engine][generation]")
     fixture.engine.setChannelLoopLength (0, 12);
     fixture.engine.setStepCount (8);
 
-    REQUIRE (fixture.engine.channels[0].loopLength == 8);
+    REQUIRE (fixture.engine.channelAt (0).loopLength == 8);
 
     fixture.engine.setStepCount (16);
-    REQUIRE (fixture.engine.channels[0].loopLength == 8);
+    REQUIRE (fixture.engine.channelAt (0).loopLength == 8);
 }
 
 TEST_CASE ("trailing cells do not make source active", "[engine][generation]")
@@ -260,10 +260,10 @@ TEST_CASE ("channel lock overrides random source", "[engine][generation]")
     fixture.engine.setChannelLock (0, 2);
     fixture.engine.setCell (2, 0, 0, true, 101, 100, 1);
     fixture.setRandomValues ({ 0.0 });
-    fixture.engine.generateWindow (0, fixture.engine.stepCount, true);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 2);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 101);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 2);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 101);
 }
 
 TEST_CASE ("cell edit does not re-roll generated sources", "[engine][generation]")
@@ -279,13 +279,13 @@ TEST_CASE ("cell edit does not re-roll generated sources", "[engine][generation]
     fixture.engine.generateWindow (0, 4, true);
 
     for (int step = 0; step < 4; ++step)
-        REQUIRE (fixture.engine.generated[0][static_cast<size_t> (step)].source == 2);
+        REQUIRE (fixture.engine.generatedCellAt (0, step).source == 2);
 
     fixture.setRandomValues ({ 0.0 });
     fixture.engine.setCellVelocity (0, 0, 0, 77);
 
     for (int step = 0; step < 4; ++step)
-        REQUIRE (fixture.engine.generated[0][static_cast<size_t> (step)].source == 2);
+        REQUIRE (fixture.engine.generatedCellAt (0, step).source == 2);
 }
 
 TEST_CASE ("cell edit only mutates generated when source matches", "[engine][generation]")
@@ -300,21 +300,21 @@ TEST_CASE ("cell edit only mutates generated when source matches", "[engine][gen
     fixture.setRandomValues ({ 0.99 });
     fixture.engine.generateWindow (0, 4, true);
 
-    REQUIRE (fixture.engine.generated[0][0].velocity == 90);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 90);
 
     fixture.engine.setCellVelocity (2, 0, 0, 33);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 33);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 33);
 
     fixture.engine.setCellVelocity (0, 0, 0, 7);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 33);
-    REQUIRE (fixture.engine.sources[0][0][0].velocity == 7);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 33);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).velocity == 7);
 
     fixture.engine.setCellEnabled (0, 0, 0, false);
-    REQUIRE (fixture.engine.generated[0][0].enabled);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][0].enabled);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).enabled);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).enabled);
 
     fixture.engine.setCellEnabled (2, 0, 0, false);
-    REQUIRE_FALSE (fixture.engine.generated[0][0].enabled);
+    REQUIRE_FALSE (fixture.engine.generatedCellAt (0, 0).enabled);
 }
 
 TEST_CASE ("channel lock routes source edits to generated", "[engine][generation]")
@@ -329,13 +329,13 @@ TEST_CASE ("channel lock routes source edits to generated", "[engine][generation
     fixture.setRandomValues ({ 0.0 });
     fixture.engine.generateWindow (0, 2, true);
 
-    REQUIRE (fixture.engine.generated[0][0].source == 1);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 1);
 
     fixture.engine.setCellVelocity (1, 0, 0, 99);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 99);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 99);
 
     fixture.engine.setCellVelocity (2, 0, 0, 5);
-    REQUIRE (fixture.engine.generated[0][0].velocity == 99);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 99);
 }
 
 TEST_CASE ("generateWindow scans active sources once", "[engine][generation]")
@@ -350,10 +350,10 @@ TEST_CASE ("generateWindow scans active sources once", "[engine][generation]")
     fixture.engine.setCell (2, 2, 2, true, 100, 100, 1);
     fixture.engine.setCell (3, 3, 3, true, 110, 100, 1);
 
-    fixture.engine.activeSourceIndicesCallCount = 0;
+    fixture.engine.resetActiveSourceIndicesCallCountForTests();
     fixture.engine.generateWindow (0, 16, true);
 
-    REQUIRE (fixture.engine.activeSourceIndicesCallCount == 1);
+    REQUIRE (fixture.engine.activeSourceIndicesCallCountForTests() == 1);
 }
 
 TEST_CASE ("cell edits reach steps beyond sixteen", "[engine][generation]")
@@ -366,25 +366,25 @@ TEST_CASE ("cell edits reach steps beyond sixteen", "[engine][generation]")
     fixture.engine.setCell (0, 0, 31, true, 123, 100, 1);
     fixture.engine.setCell (0, 0, 20, true, 77, 50, 1);
 
-    REQUIRE (fixture.engine.sources[0][0][31].enabled);
-    REQUIRE (fixture.engine.sources[0][0][31].velocity == 123);
-    REQUIRE (fixture.engine.sources[0][0][20].enabled);
-    REQUIRE (fixture.engine.sources[0][0][20].velocity == 77);
-    REQUIRE (fixture.engine.sources[0][0][20].probability == 50);
-    REQUIRE (fixture.engine.sources[0][0][20].cycle == 1);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 31).enabled);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 31).velocity == 123);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 20).enabled);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 20).velocity == 77);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 20).probability == 50);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 20).cycle == 1);
 
     fixture.engine.setCellVelocity (0, 0, 28, 64);
-    REQUIRE (fixture.engine.sources[0][0][28].velocity == 64);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 28).velocity == 64);
 
     fixture.engine.setCellEnabled (0, 0, 24, true);
-    REQUIRE (fixture.engine.sources[0][0][24].enabled);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 24).enabled);
 
     fixture.engine.setCellCycle (0, 0, 17, 4);
-    REQUIRE (fixture.engine.sources[0][0][17].probability == 100);
-    REQUIRE (fixture.engine.sources[0][0][17].cycle == 4);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 17).probability == 100);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 17).cycle == 4);
 
-    REQUIRE_FALSE (fixture.engine.sources[0][0][15].enabled);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][16].enabled);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 15).enabled);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 16).enabled);
 }
 
 TEST_CASE ("cycle offset clamps to cycle range", "[engine][generation]")
@@ -394,16 +394,16 @@ TEST_CASE ("cycle offset clamps to cycle range", "[engine][generation]")
     fixture.engine.setStepCount (8);
     fixture.engine.setChannelCount (1);
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 9);
-    REQUIRE (fixture.engine.sources[0][0][0].cycleOffset == 3);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 3);
 
     fixture.engine.setCellCycleOffset (0, 0, 0, 2);
-    REQUIRE (fixture.engine.sources[0][0][0].cycleOffset == 2);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 2);
 
     fixture.engine.setCellCycle (0, 0, 0, 2);
-    REQUIRE (fixture.engine.sources[0][0][0].cycleOffset == 1);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 1);
 
     fixture.engine.setCellCycle (0, 0, 0, 1);
-    REQUIRE (fixture.engine.sources[0][0][0].cycleOffset == 0);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 0);
 }
 
 TEST_CASE ("cycle inversion clears when cycle is one", "[engine][generation]")
@@ -413,11 +413,11 @@ TEST_CASE ("cycle inversion clears when cycle is one", "[engine][generation]")
     fixture.engine.setStepCount (8);
     fixture.engine.setChannelCount (1);
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0, true);
-    REQUIRE (fixture.engine.sources[0][0][0].cycleInverted);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 
     fixture.engine.setCellCycle (0, 0, 0, 1);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][0].cycleInverted);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 
     fixture.engine.setCellCycleInverted (0, 0, 0, true);
-    REQUIRE_FALSE (fixture.engine.sources[0][0][0].cycleInverted);
+    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 }
