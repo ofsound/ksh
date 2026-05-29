@@ -51,9 +51,6 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    ksh::KickSnareHatEngine& getEngine() { return engine; }
-    const ksh::KickSnareHatEngine& getEngine() const { return engine; }
-
     ksh::MidiPlaybackRunner& getMidiPlayback() { return midiPlayback; }
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
     const juce::AudioProcessorValueTreeState& getValueTreeState() const { return parameters; }
@@ -69,6 +66,8 @@ public:
 
     [[nodiscard]] nlohmann::json enginePersistenceState();
     [[nodiscard]] nlohmann::json enginePreviewState();
+    [[nodiscard]] ksh::EngineStateSnapshot engineStateSnapshot();
+    [[nodiscard]] ksh::PlaybackSnapshot enginePlaybackSnapshot();
     [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
 
     using EditorResizeCallback = std::function<void (int, int)>;

@@ -105,13 +105,16 @@ void MidiPlaybackRunner::prepare (double sampleRateIn)
     reset();
 }
 
-void MidiPlaybackRunner::reset()
+void MidiPlaybackRunner::reset (bool clearAuditions)
 {
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
     pendingNoteOffCount = 0;
     resetCycleCounters();
     rngState = 0x12345678u;
+
+    if (! clearAuditions)
+        return;
 
     MidiNoteEvent drained;
 

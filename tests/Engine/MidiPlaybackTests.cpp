@@ -260,22 +260,23 @@ TEST_CASE ("midi playback survives velocity humanize", "[engine][transport]")
 TEST_CASE ("plugin processor initializes with playable default pattern", "[processor][transport]")
 {
     PluginProcessor processor;
+    const auto engine = processor.engineStateSnapshot();
 
-    REQUIRE (processor.getEngine().nativePlaybackActive());
-    REQUIRE (processor.getEngine().sourceCellAt (0, 0, 0).enabled);
+    REQUIRE (engine.deviceActive);
+    REQUIRE (engine.sources[0][0][0].enabled);
 }
 
 TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")
 {
     PluginProcessor processor;
     processor.prepareToPlay (44100.0, 512);
-    processor.getEngine().setVelocityHumanize (10);
-    REQUIRE (processor.getEngine().nativePlaybackActive());
+    REQUIRE (processor.dispatchUiEngineCommand ("velocity_humanize", { 10 }));
+    REQUIRE (processor.engineStateSnapshot().deviceActive);
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runPlaybackBlock (runner, processor.getEngine().makePlaybackSnapshot(), 0.0, 120.0, true, 512);
+    const auto result = runPlaybackBlock (runner, processor.enginePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) >= 1);
 }

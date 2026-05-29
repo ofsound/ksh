@@ -42,7 +42,7 @@ class MidiPlaybackRunner
 {
 public:
     void prepare (double sampleRateIn);
-    void reset();
+    void reset (bool clearAuditions = true);
     void queueAuditionNote (const MidiNoteEvent& note);
 
     MidiPlaybackResult processBlock (const PlaybackSnapshot& snapshot,

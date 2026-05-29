@@ -59,11 +59,10 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 
 void configureSnarePattern (PluginProcessor& plugin)
 {
-    auto& engine = plugin.getEngine();
-    engine.setStepCount (16);
-    engine.setChannelCount (2);
-    engine.setChannelNote (1, 38);
-    engine.setCell (0, 1, 4, true, 90, 100, 1);
+    REQUIRE (plugin.dispatchUiEngineCommand ("steps", { 16 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("channels", { 2 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("channel_note", { 2, 38 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 2, 5, 1, 90, 100, 1 }));
 }
 } // namespace
 
@@ -110,12 +109,12 @@ TEST_CASE ("plugin state roundtrips through getStateInformation", "[plugin][pers
     PluginProcessor restored;
     setPluginState (restored, saved);
 
-    const auto& engine = restored.getEngine();
-    REQUIRE (engine.getStepCount() == 16);
-    REQUIRE (engine.getChannelCount() == 2);
-    REQUIRE (engine.channelAt (1).note == 38);
-    REQUIRE (engine.sourceCellAt (0, 1, 4).enabled);
-    REQUIRE (engine.sourceCellAt (0, 1, 4).velocity == 90);
+    const auto engine = restored.engineStateSnapshot();
+    REQUIRE (engine.stepCount == 16);
+    REQUIRE (engine.channelCount == 2);
+    REQUIRE (engine.channels[1].note == 38);
+    REQUIRE (engine.sources[0][1][4].enabled);
+    REQUIRE (engine.sources[0][1][4].velocity == 90);
 }
 
 TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistence]")
@@ -131,10 +130,10 @@ TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistenc
     MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto blockStartBeat = 4.0 * restored.getEngine().beatsPerStep();
+    const auto snapshot = restored.enginePlaybackSnapshot();
+    const auto blockStartBeat = 4.0 * snapshot.beatsPerStep;
     juce::MidiBuffer midi;
-    [[maybe_unused]] const auto result =
-        runner.processBlock (restored.getEngine().makePlaybackSnapshot(), blockStartBeat, 120.0, true, 512, midi);
+    [[maybe_unused]] const auto result = runner.processBlock (snapshot, blockStartBeat, 120.0, true, 512, midi);
 
     REQUIRE (countNoteOns (midi) == 1);
     REQUIRE (containsNoteOn (midi, 38));
@@ -170,8 +169,9 @@ TEST_CASE ("plugin state restore works off the message thread", "[plugin][persis
         std::rethrow_exception (error);
 
     REQUIRE (restoredState.getSize() > 0);
-    REQUIRE (restored.getEngine().getChannelCount() == 2);
-    REQUIRE (restored.getEngine().sourceCellAt (0, 1, 4).enabled);
+    const auto engine = restored.engineStateSnapshot();
+    REQUIRE (engine.channelCount == 2);
+    REQUIRE (engine.sources[0][1][4].enabled);
 }
 
 TEST_CASE ("plugin state save flushes pending host macro parameter changes", "[plugin][persistence]")
@@ -196,8 +196,8 @@ TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")
     configureSnarePattern (plugin);
 
     setPluginStateText (plugin, "not json");
-    REQUIRE (plugin.getEngine().sourceCellAt (0, 1, 4).enabled);
+    REQUIRE (plugin.engineStateSnapshot().sources[0][1][4].enabled);
 
     setPluginStateText (plugin, R"({"v":1,"stepCount":8,"channelCount":2,"cells":})");
-    REQUIRE (plugin.getEngine().sourceCellAt (0, 1, 4).enabled);
+    REQUIRE (plugin.engineStateSnapshot().sources[0][1][4].enabled);
 }

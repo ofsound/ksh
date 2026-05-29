@@ -371,7 +371,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         return;
 
     if (playbackResetRequested.exchange (false, std::memory_order_acquire))
-        midiPlayback.reset();
+        midiPlayback.reset (false);
 
     double ppqPosition = 0.0;
     double bpm = snapshot->tempo;
@@ -520,6 +520,36 @@ nlohmann::json PluginProcessor::enginePreviewState()
     }
 
     return engine.snapshot();
+}
+
+ksh::EngineStateSnapshot PluginProcessor::engineStateSnapshot()
+{
+    std::scoped_lock lock { engineMutex };
+
+    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+    {
+        applyMacroParametersToEngineLocked();
+
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+            publishPlaybackSnapshotLocked();
+    }
+
+    return engine.stateSnapshot();
+}
+
+ksh::PlaybackSnapshot PluginProcessor::enginePlaybackSnapshot()
+{
+    std::scoped_lock lock { engineMutex };
+
+    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+    {
+        applyMacroParametersToEngineLocked();
+
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+            publishPlaybackSnapshotLocked();
+    }
+
+    return engine.makePlaybackSnapshot();
 }
 
 bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
