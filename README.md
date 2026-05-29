@@ -1,57 +1,69 @@
-![PAMPLEJUCE](assets/images/pamplejuce.png)
-[![](https://github.com/sudara/pamplejuce/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/sudara/pamplejuce/actions)
+# KSH
 
-Pamplejuce is a ~~template~~ lifestyle for creating and building JUCE plugins in 2026.
+KSH by ofsound is a JUCE 8 MIDI effect plugin port of a Max for Live prototype. It uses the Pamplejuce CMake layout, a pure C++ engine in `source/engine/`, and a Svelte/Vite WebView UI in `ui/`.
 
-Out-of-the-box, it:
+## Formats
 
-1. Runs C++23
-2. Uses JUCE 8.x as a git submodule (tracking develop).
-3. Uses CPM for dependency management.
-3. Relies on CMake 3.25 and higher for cross-platform building.
-4. Has [Catch2](https://github.com/catchorg/Catch2) v3.7.1 for the test framework and runner.
-5. Includes a `Tests` target and a `Benchmarks` target with examples to get started quickly.
-6. Has [Melatonin Inspector](https://github.com/sudara/melatonin_inspector) installed as a JUCE module to help relieve headaches when building plugin UI.
+- Logic: load the AU in a MIDI FX slot before the instrument.
+- Ableton Live: use the VST3. Live does not expose AU MIDI-out, and third-party MIDI generators need to be routed from an instrument slot track into another MIDI track.
+- Builds currently target Standalone, AU, VST3, AUv3, and CLAP through JUCE/Pamplejuce.
 
-It also has integration with GitHub Actions, specifically:
+## Build
 
-1. Building and testing cross-platform (linux, macOS, Windows) binaries
-2. Running tests and benchmarks in CI
-3. Running [pluginval](http://github.com/tracktion/pluginval) 1.x against the binaries for plugin validation
-4. Config for [installing Intel IPP](https://www.intel.com/content/www/us/en/developer/tools/oneapi/ipp.html)
-5. [Code signing and notarization on macOS](https://melatonin.dev/blog/how-to-code-sign-and-notarize-macos-audio-plugins-in-ci/)
-6. [Windows code signing via Azure Trusted Signing](https://melatonin.dev/blog/code-signing-on-windows-with-azure-trusted-signing/)
+```sh
+git submodule update --init --recursive
+cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build Builds
+./Builds/Tests
+```
 
-It also contains:
+The build copies plugin formats into the local macOS plugin folders when `COPY_PLUGIN_AFTER_BUILD` is enabled.
 
-1. A `.gitignore` for all platforms.
-2. A `.clang-format` file for keeping code tidy.
-3. A `VERSION` file that will propagate through JUCE and your app.
-4. A ton of useful comments and options around the CMake config.
+For WebView hot reload in a Debug plugin:
 
-## How does this all work at a high level?
+```sh
+cd ui
+npm install
+npm run dev
+```
 
-Check out the [official Pamplejuce documentation](https://melatonin.dev/manuals/pamplejuce/how-does-this-all-work/).
+Production UI assets are bundled into `assets/webview/ui.zip` by:
 
-[![Arc - 2024-10-01 51@2x](https://github.com/user-attachments/assets/01d19d2d-fbac-481f-8cec-e9325b2abe57)](https://melatonin.dev/manuals/pamplejuce/how-does-this-all-work/)
+```sh
+cd ui
+npm run build
+```
 
-## Setting up for YOUR project
+`cmake --build Builds` runs the UI build automatically when UI sources change.
 
-This is a template repo!
+## Architecture
 
-That means you can click "[Use this template](https://github.com/sudara/pamplejuce/generate)" here or at the top of the page to get your own copy (not fork) of the repo. Then you can make it private or keep it public, up to you.
+- `KickSnareHatEngine` owns pattern state, source generation, persistence, and preview state.
+- The processor publishes immutable `PlaybackSnapshot` objects to the audio thread through `RealtimeMailbox`.
+- `processBlock` never locks or touches mutable engine state. It evaluates MIDI live from the current snapshot with fixed storage and a realtime-safe RNG in `MidiPlaybackRunner`.
+- Audio-to-UI note hits are sent through a lock-free FIFO and drained on the message thread by a timer.
+- Host-automatable macro controls are APVTS parameters: rate, swing, velocity humanize, timing humanize, device active, and phase offset.
+- Grid/source pattern state is custom `v:1` JSON, not APVTS parameters.
+- Persistence accepts one strict JSON format. Legacy Max/M4L wrapper and chunk formats are intentionally rejected.
+- UI, engine, and persistence use channel naming (`channelCount`, `channels`), not lane naming.
 
-Then check out the [documentation](https://melatonin.dev/manuals/pamplejuce/setting-your-project-up/) so you know what to tweak.
+See:
 
-**Using an AI coding agent?** The included `CLAUDE.md` / `AGENTS.md` has a first-time setup wizard — just ask your agent to set up the project and it will walk you through naming, CI configuration, and code signing.
+- [docs/ui-sync.md](docs/ui-sync.md)
+- [docs/native-playback.md](docs/native-playback.md)
+- [docs/port-plan.md](docs/port-plan.md)
 
-> [!NOTE]
-> Tests will immediately run and fail (go red) until you [set up code signing](https://melatonin.dev/manuals/pamplejuce/getting-started/code-signing/).
+## Verification
 
-## Having Issues?
+After changes to `source/`, `ui/`, plugin CMake, or CMakeLists:
 
-Thanks to everyone who has contributed to the repository. 
+```sh
+cmake --build Builds
+./Builds/Tests
+```
 
-This repository covers a _lot_ of ground. JUCE itself has a lot of surface area. It's a group effort to maintain the garden and keep things nice!
+Reconfigure first if CMake files changed:
 
-If something isn't just working out of the box — *it's probably not just you* — others are running into the problem, too, I promise. Check out [the official docs](https://melatonin.dev/manuals/pamplejuce), then please do [open an issue](https://github.com/sudara/pamplejuce/issues/new)!
+```sh
+cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
+```

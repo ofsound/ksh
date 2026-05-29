@@ -1,49 +1,60 @@
-# Native playback (JUCE port)
+# MIDI playback
 
-Port of M4L `docs/native-timing.md`. The engine precomputes MIDI hits into a **native playback table**; Phase 3 will consume this table from `processBlock`. Phase 2 implements table generation only.
+KSH playback is snapshot based. The message/host side publishes immutable `PlaybackSnapshot` objects, and `processBlock` evaluates MIDI from the current snapshot without touching mutable engine state.
 
 ## Responsibilities
 
 | Layer | Role |
 | --- | --- |
-| `KickSnareHatEngine` | Builds `nativePlaybackRows`, `nativePlaybackStepCount`, handles `transportPosition` for refresh-window generation and table rebuilds |
-| `processBlock` (Phase 3) | Step edges → lookup `nativePlaybackRows` → emit MIDI + collect `note_hit` |
-| Svelte UI (Phase 5+) | Flash cells on `note_hit` |
+| `KickSnareHatEngine` | Owns pattern/generation state and builds `PlaybackSnapshot` |
+| `PluginProcessor` | Publishes snapshots, reports host tempo/transport to the message thread, and calls `MidiPlaybackRunner` from `processBlock` |
+| `MidiPlaybackRunner` | Realtime-safe MIDI evaluation and note scheduling |
+| `KshUiBridge` / Svelte | Drains message-thread events and flashes UI cells |
 
-## Playback table
+## Realtime Rules
 
-`buildNativePlaybackRows()` fills one sparse row per native playback index. Row count is `stepCount × cyclePeriod`, capped at **2048** rows (`nativePlaybackSupported()` false above that).
+`MidiPlaybackRunner::processBlock` must stay allocation-free and lock-free. It uses fixed-size storage for pending note-offs, cycle counters, and note-hit metadata. Audition notes are passed through a bounded lock-free queue.
 
-Each hit is a `NativeHit` (9 fields, see `KshNativePlayback.h`):
+The audio thread may:
 
-| Field | Use |
-| --- | --- |
-| pitch | MIDI note |
-| velocity | MIDI velocity |
-| durationMs | Note length |
-| midiChannel | Fixed channel 1 |
-| delayMs | Swing / timing humanize delay within the step |
-| uiChannel | 1-based lane for UI flash |
-| uiGeneratedStep | Generated grid step |
-| uiSource | 1-based source pattern |
-| uiSourceStep | Source grid step |
+- Read the current `PlaybackSnapshot`
+- Read host playhead data
+- Write MIDI into the host-provided `MidiBuffer`
+- Enqueue fixed-size note-hit records for the UI
+- Store atomics that ask the message thread to update engine generation/tempo
 
-Swing, timing/velocity humanize, probability, cycles, roll, and playback modes are resolved at table build time (matching M4L).
+The audio thread must not:
 
-## Transport (engine side)
+- Lock `engineStateMutex`
+- Mutate `KickSnareHatEngine`
+- Build JSON or strings
+- Call WebView/JUCE UI APIs
+- Allocate containers or grow buffers
 
-`transportPosition(beats, isPlaying)`:
+## Step Evaluation
 
-- Updates playhead / refresh-window generation (`prepareStepForPlayback`)
-- Rebuilds native table via `syncNativePlaybackTable()`
-- Does **not** emit MIDI (patch/`processBlock` owns output in M4L/JUCE respectively)
+For each emitted global step, playback resolves:
+
+- channel playback mode: normal, reverse, boomerang
+- generated cell lookup
+- cycle gate and cycle offset/inversion
+- probability
+- velocity humanize
+- swing and timing humanize
+- rolls
+- note-on and note-off scheduling
+- note-hit metadata for UI flashes
+
+The runner uses a small realtime-safe RNG for probability and humanize decisions.
+
+## Legacy Native Rows
+
+The engine still has `buildNativePlaybackRows()` tests because those rows are useful for preserving M4L behavior expectations. The audio thread does not consume a precomputed native playback table; it evaluates from `PlaybackSnapshot` live.
 
 ## Tests
 
-`tests/Engine/NativePlaybackTests.cpp` — table output, playback modes, transport table sync.
-
-Run:
-
 ```sh
 ./Builds/Tests "[engine][native]"
+./Builds/Tests "[engine][transport]"
+./Builds/Tests
 ```

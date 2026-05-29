@@ -1,44 +1,48 @@
-# UI and engine sync contract (JUCE port)
+# UI and engine sync contract
 
-Ported from M4L Kick Snare Hat. The **C++ engine is the source of truth**. Svelte mirrors state; it does not persist independently.
+The C++ engine is the source of truth. Svelte mirrors engine state and sends commands; it does not persist an independent model.
 
-For native transport playback design, see `port-plan.md` Phase 2–3 (equivalent of M4L `docs/native-timing.md`).
+## Engine to UI
 
-## Engine → UI events
-
-| Event | Payload | When |
+| Event | Payload | Thread |
 | --- | --- | --- |
-| `engine_state` | Compact `v:1` JSON (globals, channels, sparse source cells, mutes) | Load, reset, restore, `sync_all`, bulk edits |
-| `preview` | Generated grid + dimensions | After generation/table rebuild |
-| `current_step` | 1-based step index | Editor open + transport playing |
-| `note_hit` | channel, generatedStep, source, sourceStep | Each MIDI hit (UI flash) |
-| Status selectors | e.g. `steps 16`, `mode stack` | Incremental setter feedback |
+| `engine_state` | Strict `v:1` JSON: globals, channels, source cells, mutes | Message |
+| `preview` | Generated grid + dimensions | Message |
+| `current_step` | 1-based step index, 0 when stopped | Message |
+| `note_hit` | `channel`, `generatedStep`, `source`, `sourceStep` | Message |
+| `status` | Incremental selector + args, e.g. `steps 16` | Message |
 
-Legacy M4L saves may include `nativeTiming`; ignore on load.
+The audio thread never emits WebView events. It enqueues note-hit metadata into a lock-free FIFO, stores transport/tempo reports in atomics, and sets a pending-work flag. A message-thread timer drains that work and calls the bridge.
 
-## UI → engine commands
+## UI to Engine
 
-Same vocabulary as M4L Max messages (1-based indexes at the boundary):
+Commands use JSON `{ selector, args }` through `kshSendCommand`. Indexes crossing the JS/C++ boundary are 1-based for M4L message compatibility.
 
 - Globals: `steps`, `channels`, `refresh_steps`, `mode`, `rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `phase_offset_beats`, `static_source`
 - Channel: `channel_label`, `channel_note`, `channel_lock`, `channel_loop_length`, `channel_playback_mode`, `channel_audition`
-- Source grid: `cell`, `cell_enabled`, `cell_velocity`, …, `source_channel_mute`, `source_channel_reset`
+- Source grid: `cell`, `cell_enabled`, `cell_velocity`, `cell_probability`, `cell_cycle`, `cell_cycle_offset`, `cell_cycle_inverted`, `cell_roll`
+- Source/channel utilities: `source_channel_mute`, `source_channel_reset`
 - Sync: `sync_all`, `request_state`, `reset`
-- Transport (internal): driven by processor, not WebView
 
-## Compact vs editor
+Message/host-side commands mutate the engine, then publish a new immutable playback snapshot only if `playbackSnapshotVersion()` changed. Metadata-only edits such as `channel_label` do not reset audio playback.
 
-- **Compact** — globals + generated preview; flashes on `note_hit` (channel + generated step).
-- **Editor** — full source grid, lane controls, phase, device on/off; flashes source-layer cell on `note_hit` (channel, source, sourceStep).
+## State Shape
 
-Editor cell edits are optimistic: update local state, then send `cell` to engine.
+Use channel naming in UI state:
 
-## Naming
+- `channelCount`
+- `channels`
+- `selectedChannel`
+- `MAX_CHANNELS`
 
-Engine/API/persistence use **channel**. UI labels may say **Lane**.
+The persisted JSON also uses `channelCount` and `channels`. Legacy UI `laneCount`/`lanes` naming should not come back.
 
-## JUCE bridge (Phase 5)
+## Compact vs Editor
 
-- UI → C++: `kshSendCommand(JSON.stringify({ selector, args }))` via `@juce` `getNativeFunction`
-- C++ → UI: `emitEventIfBrowserIsVisible` — `engine_state`, `preview`, `current_step`, `note_hit`, `status`
-- Helpers: `ui/src/lib/kshBridge.js`; dispatch in `source/engine/KshEngineCommands.cpp`
+- Compact view shows the generated preview and flashes generated cells from `note_hit`.
+- Editor view shows the source grid and channel controls; source cells flash using `source` + `sourceStep`.
+- Cell edits are optimistic in the UI, then sent to the engine as `cell` or focused cell setter commands.
+
+## Persistence
+
+The bridge syncs direct `v:1` JSON only. Legacy M4L wrapper/chunk formats are rejected by persistence parsing.

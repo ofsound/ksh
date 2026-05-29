@@ -135,7 +135,11 @@ JUCE plugins have two main threads:
 To communicate between them:
 - **Simple values**: Use `std::atomic` or JUCE's `AudioParameterFloat`/`AudioParameterBool` (which are atomic under the hood)
 - **Larger data**: Use a lock-free queue (e.g. `moodycamel::ReaderWriterQueue`) to pass data from message → audio thread
-- **Audio → UI updates**: Use `juce::AsyncUpdater` or `juce::Timer` on the message thread to poll state — never call UI code from the audio thread
+- **Playback state**: Message/host threads mutate `KickSnareHatEngine`, then publish an immutable `PlaybackSnapshot` through `RealtimeMailbox`. `processBlock` reads only that snapshot.
+- **Audio → UI updates**: Use fixed-size atomics/FIFOs drained by a message-thread `juce::Timer`; never call UI code, `triggerAsyncUpdate()`, JSON/string builders, or engine mutation from the audio thread.
+- **Engine locking**: `engineStateMutex` is only for message/host-thread access. The audio thread must never take it.
+
+Host-automatable macro controls live in APVTS (`rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `phase_offset_beats`). Pattern/grid state stays in strict `v:1` JSON using `channelCount` and `channels`; do not reintroduce legacy M4L wrapper/chunk persistence or UI `lane` naming.
 
 ## Realtime Safety
 
