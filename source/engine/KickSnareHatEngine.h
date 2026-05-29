@@ -123,7 +123,13 @@ public:
 
     [[nodiscard]] int nativePlaybackPeriod() const;
     [[nodiscard]] bool nativePlaybackSupported() const;
-    [[nodiscard]] bool nativePlaybackActive() const;
+    [[nodiscard]] bool nativePlaybackActive() const { return deviceActive; }
+
+    /** Immutable view for the audio thread. Built on the message thread. */
+    [[nodiscard]] PlaybackSnapshot makePlaybackSnapshot() const;
+
+    /** Bumped whenever playback-affecting state changes; lets owners publish only on change. */
+    [[nodiscard]] unsigned long playbackSnapshotVersion() const { return playbackSnapshotVersion_; }
     [[nodiscard]] int playbackStepForChannel (int channel, int playbackIndex) const;
     [[nodiscard]] NativePlaybackBuild buildNativePlaybackRows (
         const std::optional<TransportProtection>& transportProtection = std::nullopt);
@@ -146,6 +152,7 @@ private:
     mutable size_t testRandomIndex = 0;
     bool previewDirty = false;
     bool nativeTransportRefreshInProgress = false;
+    unsigned long playbackSnapshotVersion_ = 0;
 
     void initChannels();
     void initSources();

@@ -32,6 +32,13 @@ PluginProcessor::PluginProcessor()
        engine (makeEngineCallbacks())
 {
     initializeDefaultPattern();
+    publishPlaybackSnapshot();
+}
+
+void PluginProcessor::publishPlaybackSnapshot()
+{
+    playbackMailbox.publish (engine.makePlaybackSnapshot());
+    lastPublishedSnapshotVersion = engine.playbackSnapshotVersion();
 }
 
 ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
@@ -58,11 +65,36 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    for (const auto& hit : pendingNoteHitsForUi)
-        uiBridge.emitNoteHit (hit);
+    // Everything here runs on the message thread, the sole owner of the engine. The audio thread
+    // only reads published snapshots, so no lock is required.
 
-    pendingNoteHitsForUi.clear();
-    uiBridge.pollTransportUi();
+    // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
+    if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
+    {
+        const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
+
+        if (bpm > 0.0 && std::abs (engine.tempo - bpm) > 0.01)
+            engine.setTempo (bpm);
+    }
+
+    // Advance generative regeneration from the transport position reported by the audio thread.
+    if (transportReportPending.exchange (false, std::memory_order_acquire))
+    {
+        const auto ppq = reportedPpq.load (std::memory_order_relaxed);
+        const auto playing = reportedPlaying.load (std::memory_order_relaxed);
+        engine.transportPosition (ppq, playing);
+    }
+
+    // Hand the audio thread a fresh snapshot only when the playback table actually changed.
+    if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+        publishPlaybackSnapshot();
+
+    playbackMailbox.drainRetired();
+
+    ksh::NativeHit hit;
+
+    while (noteHitsForUi.try_dequeue (hit))
+        uiBridge.emitNoteHit (hit);
 }
 
 PluginProcessor::~PluginProcessor() = default;
@@ -136,6 +168,7 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     midiPlayback.prepare (sampleRate);
+    publishPlaybackSnapshot();
 }
 
 void PluginProcessor::releaseResources()
@@ -172,13 +205,22 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
-    const juce::ScopedLock lock (engineLock);
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
     const auto numSamples = buffer.getNumSamples();
+
+    // Read-only immutable view built on the message thread. No engine access on the audio thread.
+    const auto* snapshot = playbackMailbox.current();
+
+    if (snapshot == nullptr)
+        return;
+
+    if (playbackResetRequested.exchange (false, std::memory_order_acquire))
+        midiPlayback.reset();
+
     double ppqPosition = 0.0;
-    double bpm = engine.tempo;
+    double bpm = snapshot->tempo;
     bool isPlaying = false;
 
     if (const auto* playHead = getPlayHead())
@@ -195,15 +237,42 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
-    const auto playback = midiPlayback.processBlock (engine, ppqPosition, bpm, isPlaying, numSamples);
+    const auto playback = midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples);
     midiMessages.addEvents (playback.midi, 0, numSamples, 0);
 
-    if (! playback.noteHits.empty())
+    currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
+
+    bool notify = false;
+
+    // Wake the message thread to advance generation on step changes and play/stop transitions.
+    const bool stepChanged = playback.currentStepOneBased != lastReportedStepForRegen;
+    lastReportedStepForRegen = playback.currentStepOneBased;
+
+    if (playback.playing != wasPlayingForRegen || (playback.playing && stepChanged))
     {
-        recentNoteHits = playback.noteHits;
-        pendingNoteHitsForUi = playback.noteHits;
-        triggerAsyncUpdate();
+        reportedPpq.store (ppqPosition, std::memory_order_relaxed);
+        reportedPlaying.store (playback.playing, std::memory_order_relaxed);
+        transportReportPending.store (true, std::memory_order_release);
+        notify = true;
     }
+
+    wasPlayingForRegen = playback.playing;
+
+    // Defer host tempo changes to the message thread (engine mutation + UI emit are not RT-safe).
+    if (isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - bpm) > 0.01)
+    {
+        pendingHostBpm.store (bpm, std::memory_order_relaxed);
+        hostBpmChangePending.store (true, std::memory_order_release);
+        notify = true;
+    }
+
+    bool pushedHit = false;
+
+    for (const auto& hit : playback.noteHits)
+        pushedHit = noteHitsForUi.try_enqueue (hit) || pushedHit;
+
+    if (pushedHit || notify)
+        triggerAsyncUpdate();
 }
 
 //==============================================================================
@@ -226,8 +295,7 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    const juce::ScopedLock lock (engineLock);
-
+    // Called on the message thread, the sole engine owner.
     if (data == nullptr || sizeInBytes <= 0)
         return;
 
@@ -240,9 +308,15 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! engine.deserializeForPersistence (*payload))
         return;
 
-    recentNoteHits.clear();
-    pendingNoteHitsForUi.clear();
-    midiPlayback.reset();
+    ksh::NativeHit drained;
+
+    while (noteHitsForUi.try_dequeue (drained))
+    {
+    }
+
+    currentStepForUi.store (0, std::memory_order_relaxed);
+    requestPlaybackReset();
+    publishPlaybackSnapshot();
     uiBridge.syncAll();
 }
 

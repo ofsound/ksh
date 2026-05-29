@@ -258,7 +258,7 @@ void KickSnareHatEngine::setRate (std::string_view rateIn)
 {
     rate = Constants::normalizeRate (rateIn);
     updateStepIntervalMs();
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("rate " + rate);
 }
 
@@ -269,42 +269,42 @@ void KickSnareHatEngine::setTempo (double bpm)
 
     tempo = std::clamp (bpm, 20.0, 300.0);
     updateStepIntervalMs();
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("tempo " + std::to_string (static_cast<int> (tempo)));
 }
 
 void KickSnareHatEngine::setSwing (int amount)
 {
     swing = clampInt (amount, 0, 100);
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("swing " + std::to_string (swing));
 }
 
 void KickSnareHatEngine::setVelocityHumanize (int amount)
 {
     velocityHumanize = clampInt (amount, 0, 100);
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("velocity_humanize " + std::to_string (velocityHumanize));
 }
 
 void KickSnareHatEngine::setTimingHumanize (int amount)
 {
     timingHumanize = clampInt (amount, 0, 100);
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("timing_humanize " + std::to_string (timingHumanize));
 }
 
 void KickSnareHatEngine::setDeviceActive (bool active)
 {
     deviceActive = active;
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status (std::string { "device_active " } + (deviceActive ? "1" : "0"));
 }
 
 void KickSnareHatEngine::setPhaseOffsetBeats (double beats)
 {
     phaseOffsetBeats = std::isnan (beats) ? 0.0 : beats;
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("phase_offset_beats " + std::to_string (phaseOffsetBeats));
 }
 
@@ -319,7 +319,7 @@ void KickSnareHatEngine::setChannelNote (int channel, int note)
 {
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].note = clampInt (note, 0, 127);
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("channel_note " + std::to_string (channel + 1) + " " + std::to_string (channels[static_cast<size_t> (channel)].note));
 }
 
@@ -347,7 +347,7 @@ void KickSnareHatEngine::setChannelPlaybackMode (int channel, PlaybackMode mode)
 {
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].playbackMode = mode;
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
     status ("channel_playback_mode " + std::to_string (channel + 1) + " " + playbackModeToString (mode));
 }
 
@@ -716,7 +716,7 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
 void KickSnareHatEngine::markPreviewDirty (bool forceEmit)
 {
     previewDirty = true;
-    syncNativePlaybackTable();
+    ++playbackSnapshotVersion_;
 
     if (forceEmit)
         flushPreview();

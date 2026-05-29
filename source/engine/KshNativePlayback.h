@@ -1,7 +1,9 @@
 #pragma once
 
 #include "KshConstants.h"
+#include "KshTypes.h"
 
+#include <array>
 #include <vector>
 
 namespace ksh
@@ -82,6 +84,24 @@ struct NativePlaybackBuild
 {
     NativePlaybackTable rows;
     int stepCount = 0;
+};
+
+/** Immutable, realtime-safe view of everything the audio thread needs to evaluate steps live.
+    Built on the message thread and handed to the audio thread via a lock-free mailbox. */
+struct PlaybackSnapshot
+{
+    GeneratedPattern generated {};
+    std::array<Channel, Constants::maxChannels> channels {};
+    int stepCount = 16;
+    int channelCount = Constants::defaultChannelCount;
+    double beatsPerStep = 0.25;
+    double phaseOffsetBeats = 0.0;
+    double tempo = 120.0;
+    double stepIntervalMs = 125.0;
+    int swing = 0;
+    int velocityHumanize = 0;
+    int timingHumanize = 0;
+    bool deviceActive = true;
 };
 
 } // namespace ksh

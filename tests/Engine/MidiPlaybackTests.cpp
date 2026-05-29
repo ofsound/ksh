@@ -51,7 +51,7 @@ TEST_CASE ("midi playback emits kick on first transport step", "[engine][transpo
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) == 1);
     REQUIRE (containsNoteOn (result.midi, 36));
@@ -67,7 +67,7 @@ TEST_CASE ("midi playback does not emit while stopped", "[engine][transport]")
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, false, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, false, 512);
 
     REQUIRE (countNoteOns (result.midi) == 0);
     REQUIRE (result.noteHits.empty());
@@ -83,7 +83,7 @@ TEST_CASE ("audition note emits while transport stopped", "[engine][transport]")
 
     runner.queueAuditionNote ({ 42, 100, 1, 100, 0.0 });
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, false, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, false, 512);
 
     REQUIRE (countNoteOns (result.midi) == 1);
     REQUIRE (containsNoteOn (result.midi, 42));
@@ -99,7 +99,7 @@ TEST_CASE ("midi playback does not emit when device inactive", "[engine][transpo
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) == 0);
 }
@@ -121,11 +121,12 @@ TEST_CASE ("midi playback does not emit on transport jump", "[engine][transport]
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    [[maybe_unused]] const auto first = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
-    const auto jumped = runner.processBlock (fixture.engine, 0.75, 120.0, true, 512);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto first = runner.processBlock (snapshot, 0.0, 120.0, true, 512);
+    const auto jumped = runner.processBlock (snapshot, 0.75, 120.0, true, 512);
 
     REQUIRE (countNoteOns (jumped.midi) == 0);
-    REQUIRE (fixture.engine.playingStepOneBased == 4);
+    REQUIRE (jumped.currentStepOneBased == 4);
 }
 
 TEST_CASE ("midi playback advances one step per sixteenth at 120 bpm", "[engine][transport]")
@@ -144,11 +145,12 @@ TEST_CASE ("midi playback advances one step per sixteenth at 120 bpm", "[engine]
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    [[maybe_unused]] const auto step0 = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
-    const auto step1 = runner.processBlock (fixture.engine, 0.25, 120.0, true, 512);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto step0 = runner.processBlock (snapshot, 0.0, 120.0, true, 512);
+    const auto step1 = runner.processBlock (snapshot, 0.25, 120.0, true, 512);
 
     REQUIRE (countNoteOns (step1.midi) == 1);
-    REQUIRE (fixture.engine.playingStepOneBased == 2);
+    REQUIRE (step1.currentStepOneBased == 2);
 }
 
 TEST_CASE ("midi playback applies swing delay within block", "[engine][transport]")
@@ -168,8 +170,9 @@ TEST_CASE ("midi playback applies swing delay within block", "[engine][transport
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    [[maybe_unused]] const auto step0 = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
-    const auto step1 = runner.processBlock (fixture.engine, 0.25, 120.0, true, 512);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto step0 = runner.processBlock (snapshot, 0.0, 120.0, true, 512);
+    const auto step1 = runner.processBlock (snapshot, 0.25, 120.0, true, 512);
 
     int noteOnSample = -1;
 
@@ -210,12 +213,12 @@ TEST_CASE ("transport position does not fire while stopped", "[engine][transport
     fixture.engine.transportPosition (0.0, false);
     fixture.engine.transportPosition (0.25, false);
 
-    const auto result = runner.processBlock (fixture.engine, 0.25, 120.0, false, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.25, 120.0, false, 512);
 
     REQUIRE (countNoteOns (result.midi) == 0);
 }
 
-TEST_CASE ("midi playback survives humanized native table expansion", "[engine][transport]")
+TEST_CASE ("midi playback survives velocity humanize", "[engine][transport]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -227,16 +230,13 @@ TEST_CASE ("midi playback survives humanized native table expansion", "[engine][
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
     fixture.engine.generateWindow (0, 16, true);
     fixture.engine.setVelocityHumanize (1);
-    fixture.engine.syncNativePlaybackTable();
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) == 1);
-    REQUIRE (fixture.engine.nativePlaybackRows.size()
-             == static_cast<size_t> (fixture.engine.nativePlaybackStepCount));
 }
 
 TEST_CASE ("plugin processor initializes with playable default pattern", "[processor][transport]")
@@ -257,12 +257,12 @@ TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (processor.getEngine(), 0.0, 120.0, true, 512);
+    const auto result = runner.processBlock (processor.getEngine().makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) >= 1);
 }
 
-TEST_CASE ("midi playback stays active when humanize caps variation period", "[engine][transport]")
+TEST_CASE ("midi playback stays active with velocity humanize", "[engine][transport]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -272,15 +272,13 @@ TEST_CASE ("midi playback stays active when humanize caps variation period", "[e
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 9);
     fixture.engine.generateWindow (0, 32, true);
     fixture.engine.setVelocityHumanize (10);
-    fixture.engine.syncNativePlaybackTable();
 
     REQUIRE (fixture.engine.nativePlaybackActive());
-    REQUIRE (fixture.engine.nativePlaybackStepCount > 0);
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
-    const auto result = runner.processBlock (fixture.engine, 0.0, 120.0, true, 512);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) >= 1);
 }

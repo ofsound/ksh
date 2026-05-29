@@ -1,11 +1,14 @@
 #pragma once
 
 #include "KshUiBridge.h"
+#include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
 #include "engine/KshMidiPlayback.h"
 
+#include <atomic>
 #include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <readerwriterqueue.h>
 
 #if (MSVC)
 #include "ipps.h"
@@ -47,9 +50,13 @@ public:
     ksh::KickSnareHatEngine& getEngine() { return engine; }
     const ksh::KickSnareHatEngine& getEngine() const { return engine; }
 
-    juce::CriticalSection& getEngineLock() { return engineLock; }
-
     ksh::MidiPlaybackRunner& getMidiPlayback() { return midiPlayback; }
+
+    /** Message thread: rebuild the immutable playback snapshot and hand it to the audio thread. */
+    void publishPlaybackSnapshot();
+
+    /** Message thread: ask the audio thread to flush pending playback state on its next block. */
+    void requestPlaybackReset() { playbackResetRequested.store (true, std::memory_order_release); }
 
     KshUiBridge& getUiBridge() { return uiBridge; }
     const KshUiBridge& getUiBridge() const { return uiBridge; }
@@ -58,7 +65,8 @@ public:
     void setEditorResizeCallback (EditorResizeCallback callback);
     void requestEditorSize (int width, int height);
 
-    const std::vector<ksh::NativeHit>& getRecentNoteHits() const { return recentNoteHits; }
+    /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
+    int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
 
 private:
     static BusesProperties createBusesProperties();
@@ -69,10 +77,28 @@ private:
     KshUiBridge uiBridge;
     ksh::KickSnareHatEngine engine;
     ksh::MidiPlaybackRunner midiPlayback;
-    std::vector<ksh::NativeHit> recentNoteHits;
-    std::vector<ksh::NativeHit> pendingNoteHitsForUi;
+
+    // Message thread builds the engine + snapshot; the audio thread only reads the published snapshot.
+    RealtimeMailbox<ksh::PlaybackSnapshot> playbackMailbox;
+    unsigned long lastPublishedSnapshotVersion = 0; // message-thread only
+
+    // Audio -> message-thread handoff (drained in handleAsyncUpdate / polled by the editor).
+    moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
+    std::atomic<int> currentStepForUi { 0 };
+    std::atomic<double> pendingHostBpm { 0.0 };
+    std::atomic<bool> hostBpmChangePending { false };
+
+    // Audio thread reports its transport position so the message thread can advance generation.
+    std::atomic<double> reportedPpq { 0.0 };
+    std::atomic<bool> reportedPlaying { false };
+    std::atomic<bool> transportReportPending { false };
+    std::atomic<bool> playbackResetRequested { false };
+
+    // Audio-thread-only state for deciding when to wake the message thread.
+    int lastReportedStepForRegen = 0;
+    bool wasPlayingForRegen = false;
+
     EditorResizeCallback editorResizeCallback;
-    juce::CriticalSection engineLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

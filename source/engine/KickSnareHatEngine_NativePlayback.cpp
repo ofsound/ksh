@@ -70,19 +70,7 @@ int KickSnareHatEngine::nativePlaybackPeriod() const
 
 bool KickSnareHatEngine::nativePlaybackSupported() const
 {
-    return nativePlaybackPeriod() > 0;
-}
-
-bool KickSnareHatEngine::nativePlaybackActive() const
-{
-    if (! deviceActive)
-        return false;
-
-    if (nativePlaybackPeriod() > 0)
-        return true;
-
-    return nativePlaybackStepCount > 0
-           && nativePlaybackRows.size() == static_cast<size_t> (nativePlaybackStepCount);
+    return deviceActive;
 }
 
 int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) const
@@ -288,6 +276,24 @@ void KickSnareHatEngine::commitNativePlaybackBuild (NativePlaybackBuild build)
 {
     nativePlaybackStepCount = build.stepCount;
     nativePlaybackRows = std::move (build.rows);
+}
+
+PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
+{
+    PlaybackSnapshot snapshot;
+    snapshot.generated = generated;
+    snapshot.channels = channels;
+    snapshot.stepCount = stepCount;
+    snapshot.channelCount = channelCount;
+    snapshot.beatsPerStep = beatsPerStep();
+    snapshot.phaseOffsetBeats = phaseOffsetBeats;
+    snapshot.tempo = tempo;
+    snapshot.stepIntervalMs = stepIntervalMs;
+    snapshot.swing = swing;
+    snapshot.velocityHumanize = velocityHumanize;
+    snapshot.timingHumanize = timingHumanize;
+    snapshot.deviceActive = deviceActive;
+    return snapshot;
 }
 
 int KickSnareHatEngine::currentNativePlaybackStep() const

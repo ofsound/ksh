@@ -415,6 +415,7 @@ TEST_CASE ("native playback refreshes generated window on transport boundary", "
     REQUIRE (fixture.notes.empty());
     REQUIRE (fixture.engine.generated[0][4].source == 3);
     REQUIRE (fixture.engine.generated[0][4].velocity == 99);
+    fixture.engine.syncNativePlaybackTable();
     requireNativeRow (fixture.engine.nativePlaybackRows[4], nativeHitRow (36, 99, 100, 1, 0.0, 1, 5, 4, 5));
 
     fixture.engine.transportPosition (1.01, true);
@@ -441,6 +442,7 @@ TEST_CASE ("native playback keeps early humanized refresh boundary hit readable"
     fixture.engine.transportPosition (0.75, true);
     fixture.engine.transportPosition (1.0, true);
 
+    fixture.engine.syncNativePlaybackTable();
     REQUIRE (fixture.engine.nativePlaybackStepCount == 128);
     requireNativeRow (fixture.engine.nativePlaybackRows[3], {});
     requireNativeRow (fixture.engine.nativePlaybackRows[4], nativeHitRow (36, 100, 100, 1, 0.0, 1, 5, 1, 5));
@@ -462,6 +464,7 @@ TEST_CASE ("timing humanize change keeps next hit readable during playback", "[e
 
     fixture.engine.setTimingHumanize (1);
 
+    fixture.engine.syncNativePlaybackTable();
     REQUIRE (fixture.engine.nativePlaybackStepCount == 128);
     requireNativeRow (fixture.engine.nativePlaybackRows[4], {});
     requireNativeRow (fixture.engine.nativePlaybackRows[5], nativeHitRow (36, 100, 100, 1, 0.0, 1, 6, 1, 6));
@@ -485,6 +488,7 @@ TEST_CASE ("timing humanize refresh one does not queue future hits from current 
     fixture.setRandomValues ({ 0.0 });
     fixture.engine.transportPosition (0.0, true);
 
+    fixture.engine.syncNativePlaybackTable();
     REQUIRE (fixture.engine.nativePlaybackStepCount == 256);
     requireNativeRow (fixture.engine.nativePlaybackRows[0], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
     requireNativeRow (fixture.engine.nativePlaybackRows[1], nativeHitRow (36, 100, 100, 1, 0.0, 1, 2, 1, 2));

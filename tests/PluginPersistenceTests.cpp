@@ -133,7 +133,7 @@ TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistenc
     runner.prepare (44100.0);
 
     const auto blockStartBeat = 4.0 * restored.getEngine().beatsPerStep();
-    const auto result = runner.processBlock (restored.getEngine(), blockStartBeat, 120.0, true, 512);
+    const auto result = runner.processBlock (restored.getEngine().makePlaybackSnapshot(), blockStartBeat, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) == 1);
     REQUIRE (containsNoteOn (result.midi, 38));

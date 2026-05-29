@@ -134,10 +134,14 @@ target_compile_definitions(SharedCode
 # Shared engine dependencies
 CPMAddPackage("gh:nlohmann/json@3.11.3")
 
+# Lock-free SPSC queue for realtime-safe audio -> message thread handoff
+CPMAddPackage("gh:cameron314/readerwriterqueue@1.0.6")
+
 target_link_libraries(SharedCode
     INTERFACE
     Assets
     nlohmann_json::nlohmann_json
+    readerwriterqueue
     juce_audio_utils
     juce_audio_processors
     juce_dsp

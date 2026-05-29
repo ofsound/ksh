@@ -6,12 +6,96 @@ namespace ksh
 {
 namespace
 {
-int clampSample (int sample, int numSamples)
+constexpr double kTimingHumanizeNativeScale = 0.2;
+constexpr double kRollNoteDurationScale = 0.9;
+
+int mod (int value, int divisor)
 {
-    if (numSamples <= 0)
+    if (divisor <= 0)
         return 0;
 
-    return std::clamp (sample, 0, numSamples - 1);
+    const auto result = value % divisor;
+    return result < 0 ? result + divisor : result;
+}
+
+int globalStepForBeats (double songBeats, const PlaybackSnapshot& snapshot)
+{
+    if (std::isnan (songBeats))
+        songBeats = 0.0;
+
+    const double beatsPerStep = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
+    return static_cast<int> (std::floor ((songBeats - snapshot.phaseOffsetBeats + 0.000000001) / beatsPerStep));
+}
+
+int stepOneBased (int globalStep, int stepCount)
+{
+    if (stepCount <= 0)
+        return 0;
+
+    return mod (globalStep, stepCount) + 1;
+}
+
+bool cycleGateMatches (int count, int cycle, int cycleOffset, bool cycleInverted)
+{
+    const bool matches = count % cycle == cycleOffset;
+    return cycleInverted ? ! matches : matches;
+}
+
+size_t cycleCounterIndex (int source, int channel, int sourceStep)
+{
+    return static_cast<size_t> (source) * Constants::maxChannels * Constants::maxSteps
+         + static_cast<size_t> (channel) * Constants::maxSteps
+         + static_cast<size_t> (sourceStep);
+}
+
+int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int playbackIndex)
+{
+    channel = clampInt (channel, 0, Constants::maxChannels - 1);
+    const int loopLength = clampInt (snapshot.channels[static_cast<size_t> (channel)].loopLength,
+                                     1,
+                                     snapshot.stepCount);
+    const auto mode = snapshot.channels[static_cast<size_t> (channel)].playbackMode;
+    playbackIndex = static_cast<int> (std::floor (static_cast<double> (playbackIndex)));
+
+    if (mode == PlaybackMode::reverse)
+    {
+        const int activeIndex = mod (playbackIndex, loopLength);
+        return loopLength - 1 - activeIndex;
+    }
+
+    if (mode == PlaybackMode::boomerang)
+    {
+        const int activeIndex = mod (playbackIndex, loopLength * 2);
+        return activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex;
+    }
+
+    return mod (playbackIndex, snapshot.stepCount);
+}
+
+double swingDelayMsForStep (const PlaybackSnapshot& snapshot, int step)
+{
+    return step % 2 == 1
+               ? snapshot.stepIntervalMs * 0.5 * (static_cast<double> (snapshot.swing) / 100.0)
+               : 0.0;
+}
+
+double timingHumanizeRangeMs (const PlaybackSnapshot& snapshot)
+{
+    return snapshot.stepIntervalMs * kTimingHumanizeNativeScale
+           * (static_cast<double> (snapshot.timingHumanize) / 100.0);
+}
+
+int rollNoteDurationMs (const PlaybackSnapshot& snapshot, int roll)
+{
+    roll = clampInt (roll, 1, Constants::maxRoll);
+
+    if (roll <= 1)
+        return Constants::defaultNoteDurationMs;
+
+    const double subdivisionMs = snapshot.stepIntervalMs / static_cast<double> (roll);
+    return std::max (1,
+                     std::min (Constants::defaultNoteDurationMs,
+                               static_cast<int> (std::floor (subdivisionMs * kRollNoteDurationScale))));
 }
 } // namespace
 
@@ -26,9 +110,16 @@ void MidiPlaybackRunner::reset()
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
     pendingNoteOffs.clear();
+    resetCycleCounters();
+    rngState = 0x12345678u;
 
     const juce::ScopedLock lock (auditionLock);
     pendingAudition = std::nullopt;
+}
+
+void MidiPlaybackRunner::resetCycleCounters()
+{
+    cycleCounters.fill (0);
 }
 
 void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
@@ -42,7 +133,15 @@ void MidiPlaybackRunner::clearPending()
     pendingNoteOffs.clear();
 }
 
-int MidiPlaybackRunner::sampleOffsetForGlobalStep (const KickSnareHatEngine& engine,
+double MidiPlaybackRunner::nextRandomUnit()
+{
+    rngState ^= rngState << 13;
+    rngState ^= rngState >> 17;
+    rngState ^= rngState << 5;
+    return static_cast<double> (rngState) / static_cast<double> (UINT32_MAX);
+}
+
+int MidiPlaybackRunner::sampleOffsetForGlobalStep (const PlaybackSnapshot& snapshot,
                                                    double blockStartPpq,
                                                    double bpm,
                                                    int globalStep,
@@ -51,11 +150,129 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const KickSnareHatEngine& eng
     if (bpm <= 0.0 || numSamples <= 0)
         return 0;
 
-    const double stepStartBeat = engine.phaseOffsetBeats + static_cast<double> (globalStep) * engine.beatsPerStep();
+    const double stepStartBeat = snapshot.phaseOffsetBeats + static_cast<double> (globalStep) * snapshot.beatsPerStep;
     const double samplesPerBeat = sampleRate * 60.0 / bpm;
     const int sampleOffset = static_cast<int> (std::llround ((stepStartBeat - blockStartPpq) * samplesPerBeat));
 
-    return clampSample (sampleOffset, numSamples);
+    if (numSamples <= 0)
+        return 0;
+
+    return std::clamp (sampleOffset, 0, numSamples - 1);
+}
+
+void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
+                                      int numSamples,
+                                      const NativeHit& hit,
+                                      MidiPlaybackResult& result)
+{
+    const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
+    const int onSample = std::clamp (stepSampleOffset + delaySamples, 0, std::max (0, numSamples - 1));
+    const int durationSamples =
+        std::max (1, static_cast<int> (std::llround (static_cast<double> (hit.durationMs) * sampleRate / 1000.0)));
+    const int offSample = onSample + durationSamples;
+
+    result.midi.addEvent (juce::MidiMessage::noteOn (hit.midiChannel, hit.pitch,
+                                                     static_cast<juce::uint8> (std::clamp (hit.velocity, 1, 127))),
+                          onSample);
+    result.noteHits.push_back (hit);
+
+    if (offSample < numSamples)
+    {
+        result.midi.addEvent (juce::MidiMessage::noteOff (hit.midiChannel, hit.pitch), offSample);
+    }
+    else
+    {
+        pendingNoteOffs.push_back ({ offSample, hit.midiChannel, hit.pitch });
+    }
+}
+
+void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
+                                             int globalStep,
+                                             int stepSampleOffset,
+                                             int numSamples,
+                                             MidiPlaybackResult& result)
+{
+    if (! snapshot.deviceActive || snapshot.stepCount <= 0 || snapshot.channelCount <= 0)
+        return;
+
+    const int rowStep = mod (globalStep, snapshot.stepCount);
+
+    for (int channel = 0; channel < snapshot.channelCount; ++channel)
+    {
+        const int playbackStep = playbackStepForChannel (snapshot, channel, globalStep);
+        const auto& cell = snapshot.generated[static_cast<size_t> (channel)][static_cast<size_t> (playbackStep)];
+
+        if (! cell.enabled)
+            continue;
+
+        const int cycle = clampInt (cell.cycle, 1, 64);
+        const int cycleOffset = clampInt (cell.cycleOffset, 0, cycle - 1);
+        const bool cycleInverted = cycle > 1 && cell.cycleInverted;
+
+        if (cycle > 1)
+        {
+            const auto index = cycleCounterIndex (cell.source, channel, cell.sourceStep);
+
+            if (index >= cycleCounters.size())
+                continue;
+
+            const int count = static_cast<int> (cycleCounters[index]++);
+            if (! cycleGateMatches (count, cycle, cycleOffset, cycleInverted))
+                continue;
+        }
+
+        const int probability = clampInt (cell.probability, 0, 100);
+
+        if (probability <= 0)
+            continue;
+
+        if (probability < 100 && ! (nextRandomUnit() * 100.0 < static_cast<double> (probability)))
+            continue;
+
+        int velocity = clampInt (cell.velocity, 1, 127);
+
+        if (snapshot.velocityHumanize > 0)
+        {
+            const double range = static_cast<double> (velocity)
+                                 * (static_cast<double> (snapshot.velocityHumanize) / 100.0);
+            velocity = clampInt (static_cast<int> (std::lround (static_cast<double> (velocity)
+                                                                 + (nextRandomUnit() * 2.0 - 1.0) * range)),
+                                 1,
+                                 127);
+        }
+
+        const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
+        const int noteDurationMs = rollNoteDurationMs (snapshot, roll);
+        const double baseDelayMs = swingDelayMsForStep (snapshot, rowStep);
+        const double timingRange = timingHumanizeRangeMs (snapshot);
+        const double timingOffsetMs = timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : 0.0;
+        const int pitch = snapshot.channels[static_cast<size_t> (channel)].note;
+
+        for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
+        {
+            double delayMs = 0.0;
+
+            if (rollIndex == 0)
+                delayMs = std::max (0.0, baseDelayMs + timingOffsetMs);
+            else
+                delayMs = (static_cast<double> (rollIndex) / static_cast<double> (roll)) * snapshot.stepIntervalMs;
+
+            scheduleHit (stepSampleOffset,
+                         numSamples,
+                         NativeHit {
+                             pitch,
+                             velocity,
+                             noteDurationMs,
+                             Constants::defaultMidiChannel,
+                             delayMs,
+                             channel + 1,
+                             playbackStep + 1,
+                             cell.source + 1,
+                             cell.sourceStep + 1
+                         },
+                         result);
+        }
+    }
 }
 
 void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
@@ -70,7 +287,7 @@ void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& m
         return;
 
     const int delaySamples = static_cast<int> (std::llround (note->delayMs * sampleRate / 1000.0));
-    const int onSample = clampSample (delaySamples, numSamples);
+    const int onSample = std::clamp (delaySamples, 0, std::max (0, numSamples - 1));
     const int durationSamples =
         std::max (1, static_cast<int> (std::llround (static_cast<double> (note->durationMs) * sampleRate / 1000.0)));
     const int offSample = onSample + durationSamples;
@@ -101,7 +318,7 @@ void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer&
         if (pending.sampleOffset < numSamples)
         {
             midi.addEvent (juce::MidiMessage::noteOff (pending.midiChannel, pending.pitch),
-                           clampSample (pending.sampleOffset, numSamples));
+                           std::clamp (pending.sampleOffset, 0, std::max (0, numSamples - 1)));
         }
         else
         {
@@ -112,50 +329,7 @@ void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer&
     pendingNoteOffs.swap (remaining);
 }
 
-void MidiPlaybackRunner::emitNativeRow (KickSnareHatEngine& engine,
-                                        int globalStep,
-                                        int stepSampleOffset,
-                                        int numSamples,
-                                        MidiPlaybackResult& result)
-{
-    juce::ignoreUnused (globalStep);
-
-    if (! engine.nativePlaybackActive())
-        return;
-
-    const int nativeLength = engine.nativePlaybackStepCount > 0 ? engine.nativePlaybackStepCount : engine.stepCount;
-    const int nativeStep = KickSnareHatEngine::mod (globalStep, nativeLength);
-
-    if (nativeStep < 0 || nativeStep >= static_cast<int> (engine.nativePlaybackRows.size()))
-        return;
-
-    const NativePlaybackRow row = engine.nativePlaybackRows[static_cast<size_t> (nativeStep)];
-
-    for (const auto& hit : row)
-    {
-        const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
-        const int onSample = clampSample (stepSampleOffset + delaySamples, numSamples);
-        const int durationSamples =
-            std::max (1, static_cast<int> (std::llround (static_cast<double> (hit.durationMs) * sampleRate / 1000.0)));
-        const int offSample = onSample + durationSamples;
-
-        result.midi.addEvent (juce::MidiMessage::noteOn (hit.midiChannel, hit.pitch,
-                                                         static_cast<juce::uint8> (std::clamp (hit.velocity, 1, 127))),
-                              onSample);
-        result.noteHits.push_back (hit);
-
-        if (offSample < numSamples)
-        {
-            result.midi.addEvent (juce::MidiMessage::noteOff (hit.midiChannel, hit.pitch), offSample);
-        }
-        else
-        {
-            pendingNoteOffs.push_back ({ offSample, hit.midiChannel, hit.pitch });
-        }
-    }
-}
-
-MidiPlaybackResult MidiPlaybackRunner::processBlock (KickSnareHatEngine& engine,
+MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& snapshot,
                                                      double ppqPosition,
                                                      double bpm,
                                                      bool isPlaying,
@@ -169,26 +343,27 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (KickSnareHatEngine& engine,
     flushPendingNoteOffs (numSamples, result.midi);
     flushAuditionNotes (numSamples, result.midi);
 
-    if (! isPlaying || ! engine.deviceActive || bpm <= 0.0)
+    if (! isPlaying || ! snapshot.deviceActive || bpm <= 0.0)
     {
         if (wasPlaying)
+        {
             clearPending();
+            resetCycleCounters();
+        }
 
         wasPlaying = false;
         lastEmittedGlobalStep = std::nullopt;
-        engine.transportPosition (ppqPosition, false);
         return result;
     }
 
-    if (std::abs (engine.tempo - bpm) > 0.01)
-        engine.setTempo (bpm);
-
     const double blockEndPpq = ppqPosition + (static_cast<double> (numSamples) / sampleRate) * (bpm / 60.0);
 
-    engine.transportPosition (ppqPosition, true);
+    const int globalStepStart = globalStepForBeats (ppqPosition, snapshot);
+    const int globalStepEnd = globalStepForBeats (blockEndPpq, snapshot);
 
-    const int globalStepStart = engine.globalStepForBeats (ppqPosition);
-    const int globalStepEnd = engine.globalStepForBeats (blockEndPpq);
+    result.playing = true;
+    result.latestGlobalStep = globalStepStart;
+    result.currentStepOneBased = stepOneBased (globalStepStart, snapshot.stepCount);
 
     if (! wasPlaying)
     {
@@ -204,6 +379,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (KickSnareHatEngine& engine,
         if (discontinuity)
         {
             clearPending();
+            resetCycleCounters();
             lastEmittedGlobalStep = globalStepStart;
             return result;
         }
@@ -213,9 +389,10 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (KickSnareHatEngine& engine,
 
     for (int globalStep = firstStep; globalStep <= globalStepEnd; ++globalStep)
     {
-        const int stepSample = sampleOffsetForGlobalStep (engine, ppqPosition, bpm, globalStep, numSamples);
-        emitNativeRow (engine, globalStep, stepSample, numSamples, result);
+        const int stepSample = sampleOffsetForGlobalStep (snapshot, ppqPosition, bpm, globalStep, numSamples);
+        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, result);
         lastEmittedGlobalStep = globalStep;
+        result.latestGlobalStep = globalStep;
     }
 
     return result;

@@ -57,8 +57,7 @@ TEST_CASE ("processor engine setVelocityHumanize does not crash", "[plugin][brid
 
     plugin.getEngine().setVelocityHumanize (1);
 
-    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
-             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+    REQUIRE (plugin.getEngine().nativePlaybackActive());
 }
 
 TEST_CASE ("ui bridge humanize commands rebuild native playback safely", "[plugin][bridge]")
@@ -68,13 +67,10 @@ TEST_CASE ("ui bridge humanize commands rebuild native playback safely", "[plugi
     plugin.getEngine().generateWindow (0, plugin.getEngine().stepCount, true);
 
     REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
-    REQUIRE (plugin.getEngine().nativePlaybackStepCount > plugin.getEngine().stepCount);
-    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
-             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+    REQUIRE (plugin.getEngine().nativePlaybackActive());
 
     REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"timing_humanize","args":[1]})"));
-    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
-             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+    REQUIRE (plugin.getEngine().nativePlaybackActive());
 }
 
 TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]")
@@ -90,8 +86,7 @@ TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]
     juce::MidiBuffer midi;
     plugin.processBlock (buffer, midi);
 
-    REQUIRE (plugin.getEngine().nativePlaybackRows.size()
-             == static_cast<size_t> (plugin.getEngine().nativePlaybackStepCount));
+    REQUIRE (plugin.getEngine().nativePlaybackActive());
 }
 
 TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")

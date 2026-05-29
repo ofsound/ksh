@@ -131,7 +131,7 @@ void KshUiBridge::emitCurrentStep (int stepOneBased)
 
 void KshUiBridge::pollTransportUi()
 {
-    const int step = engine().playingStepOneBased;
+    const int step = processor.getCurrentStepForUi();
 
     if (step > 0)
         emitCurrentStep (step);
@@ -185,22 +185,17 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
     if (selector == "export_generated_bars")
         return false;
 
-    processor.suspendProcessing (true);
-
-    bool ok = false;
-
-    {
-        const juce::ScopedLock engineLock (processor.getEngineLock());
-        ok = ksh::dispatchEngineCommand (engine(), selector, args);
-
-        if (ok && selector != "channel_audition")
-            processor.getMidiPlayback().reset();
-    }
-
-    processor.suspendProcessing (false);
+    // Message thread owns the engine: apply the edit, then hand the audio thread a new snapshot.
+    const bool ok = ksh::dispatchEngineCommand (engine(), selector, args);
 
     if (! ok)
         return false;
+
+    if (selector != "channel_audition")
+    {
+        processor.requestPlaybackReset();
+        processor.publishPlaybackSnapshot();
+    }
 
     if (selector == "reset")
     {
