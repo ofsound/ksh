@@ -171,10 +171,10 @@ TEST_CASE ("native playback rows evaluate probability once per roll step", "[eng
     fixture.engine.setCell (0, 0, 0, true, 100, 50, 1, 0, false, 4);
     fixture.setRandomValues ({ 0.0 });
 
-    fixture.engine.resetRandomCallCountForTests();
+    test::EngineTestPeer::resetRandomCallCount (fixture.engine);
     [[maybe_unused]] const auto built = fixture.engine.buildNativePlaybackRows();
 
-    REQUIRE (fixture.engine.randomCallCountForTests() == 16);
+    REQUIRE (test::EngineTestPeer::randomCallCount (fixture.engine) == 16);
 }
 
 TEST_CASE ("native playback rows evaluate cycle before probability", "[engine][native]")
@@ -186,11 +186,11 @@ TEST_CASE ("native playback rows evaluate cycle before probability", "[engine][n
     fixture.engine.setCell (0, 0, 0, true, 100, 50, 2);
     fixture.setRandomValues ({ 0.0 });
 
-    fixture.engine.resetRandomCallCountForTests();
+    test::EngineTestPeer::resetRandomCallCount (fixture.engine);
     const auto built = fixture.engine.buildNativePlaybackRows();
 
     REQUIRE (built.stepCount == 32);
-    REQUIRE (fixture.engine.randomCallCountForTests() == 16);
+    REQUIRE (test::EngineTestPeer::randomCallCount (fixture.engine) == 16);
 }
 
 TEST_CASE ("native playback rows preroll velocity humanize", "[engine][native]")
@@ -293,7 +293,7 @@ TEST_CASE ("native playback rows include note hit metadata", "[engine][native]")
     fixture.engine.setChannelCount (1);
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
     fixture.engine.generateWindow (0, 1, true);
-    fixture.engine.setGeneratedCellSourceStepForTests (0, 0, 3);
+    test::EngineTestPeer::setGeneratedCellSourceStep (fixture.engine, 0, 0, 3);
 
     const auto built = fixture.engine.buildNativePlaybackRows();
     const auto& rows = built.rows;
@@ -458,7 +458,7 @@ TEST_CASE ("timing humanize change keeps next hit readable during playback", "[e
     fixture.engine.setTempo (120.0);
     fixture.engine.setGenerationMode (GenerationMode::staticSource);
     fixture.engine.setCell (0, 0, 5, true, 100, 100, 1);
-    fixture.engine.setTransportStateForTests (1, 4);
+    test::EngineTestPeer::setTransportState (fixture.engine, 1, 4);
     fixture.setRandomValues ({ 0.0 });
 
     fixture.engine.setTimingHumanize (1);

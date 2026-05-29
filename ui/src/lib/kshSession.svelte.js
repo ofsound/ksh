@@ -2,7 +2,7 @@ import {
   COMPACT_HEIGHT,
   COMPACT_WIDTH,
   DEFAULT_CHANNEL_LABELS,
-  MAX_LANES,
+  MAX_CHANNELS,
   MAX_STEPS,
   NOTE_HIT_FLASH_MS,
   SOURCE_COUNT,
@@ -45,7 +45,7 @@ export const session = $state({
   editorNoteFlashes: {},
   playingStep: 0,
   selectedSource: 0,
-  selectedLane: 0,
+  selectedChannel: 0,
   selectedStep: 0,
   dcColors: 1,
   sourceLayerMode: "velocity",
@@ -59,20 +59,20 @@ let teardownHandlers = [];
 function bumpState() {
   session.kshState = {
     ...session.kshState,
-    lanes: session.kshState.lanes.map((lane) => ({ ...lane })),
+    channels: session.kshState.channels.map((channel) => ({ ...channel })),
     sources: session.kshState.sources.map((source) =>
-      source.map((lane) => lane.map((cell) => ({ ...cell })))
+      source.map((channel) => channel.map((cell) => ({ ...cell })))
     ),
     sourceChannelMutes: session.kshState.sourceChannelMutes.map((row) => [...row]),
   };
 }
 
-function compactFlashKey(lane, step) {
-  return `${lane}:${step}`;
+function compactFlashKey(channel, step) {
+  return `${channel}:${step}`;
 }
 
-function editorFlashKey(source, lane, step) {
-  return `${source}:${lane}:${step}`;
+function editorFlashKey(source, channel, step) {
+  return `${source}:${channel}:${step}`;
 }
 
 function scheduleFlashClear(key, store, delayMs) {
@@ -86,24 +86,24 @@ function scheduleFlashClear(key, store, delayMs) {
       return;
     }
 
-    const [source, lane, step] = key.split(":").map(Number);
+    const [source, channel, step] = key.split(":").map(Number);
     const sourceRow = session.editorNoteFlashes[source];
-    if (!sourceRow?.[lane]?.[step]) {
+    if (!sourceRow?.[channel]?.[step]) {
       return;
     }
 
     const next = { ...session.editorNoteFlashes };
     next[source] = { ...next[source] };
-    next[source][lane] = { ...next[source][lane] };
-    delete next[source][lane][step];
+    next[source][channel] = { ...next[source][channel] };
+    delete next[source][channel][step];
     session.editorNoteFlashes = next;
   }, delayMs + 5);
 }
 
 function handleCompactNoteHit(payload) {
-  const lane = clamp(Number(payload?.channel ?? 0), 1, MAX_LANES) - 1;
+  const channel = clamp(Number(payload?.channel ?? 0), 1, MAX_CHANNELS) - 1;
   const step = clamp(Number(payload?.generatedStep ?? 0), 1, MAX_STEPS) - 1;
-  const key = compactFlashKey(lane, step);
+  const key = compactFlashKey(channel, step);
   session.compactNoteFlashes = {
     ...session.compactNoteFlashes,
     [key]: Date.now() + NOTE_HIT_FLASH_MS,
@@ -113,17 +113,17 @@ function handleCompactNoteHit(payload) {
 
 function handleEditorNoteHit(payload) {
   const source = clamp(Number(payload?.source ?? 0), 1, SOURCE_COUNT) - 1;
-  const lane = clamp(Number(payload?.channel ?? 0), 1, MAX_LANES) - 1;
+  const channel = clamp(Number(payload?.channel ?? 0), 1, MAX_CHANNELS) - 1;
   const step = clamp(Number(payload?.sourceStep ?? 0), 1, MAX_STEPS) - 1;
-  const key = editorFlashKey(source, lane, step);
+  const key = editorFlashKey(source, channel, step);
   const until = Date.now() + NOTE_HIT_FLASH_MS;
 
   session.editorNoteFlashes = {
     ...session.editorNoteFlashes,
     [source]: {
       ...(session.editorNoteFlashes[source] ?? {}),
-      [lane]: {
-        ...((session.editorNoteFlashes[source] ?? {})[lane] ?? {}),
+      [channel]: {
+        ...((session.editorNoteFlashes[source] ?? {})[channel] ?? {}),
         [step]: until,
       },
     },
@@ -139,22 +139,22 @@ function handleNoteHit(payload) {
   }
 }
 
-export function isCompactFlashing(lane, step) {
-  const until = session.compactNoteFlashes[compactFlashKey(lane, step)];
+export function isCompactFlashing(channel, step) {
+  const until = session.compactNoteFlashes[compactFlashKey(channel, step)];
   return until !== undefined && until > Date.now();
 }
 
-export function isEditorFlashing(source, lane, step) {
-  const until = session.editorNoteFlashes[source]?.[lane]?.[step];
+export function isEditorFlashing(source, channel, step) {
+  const until = session.editorNoteFlashes[source]?.[channel]?.[step];
   return until !== undefined && until > Date.now();
 }
 
-export async function sendCell(source, lane, step) {
-  const cell = session.kshState.sources[source][lane][step];
+export async function sendCell(source, channel, step) {
+  const cell = session.kshState.sources[source][channel][step];
   bumpState();
   await sendCommand("cell", [
     source + 1,
-    lane + 1,
+    channel + 1,
     step + 1,
     cell.enabled,
     cell.velocity,
@@ -166,37 +166,37 @@ export async function sendCell(source, lane, step) {
   ]);
 }
 
-export async function sendLane(lane) {
-  const row = session.kshState.lanes[lane];
-  await sendCommand("channel_label", [lane + 1, row.label]);
-  await sendCommand("channel_note", [lane + 1, row.note]);
+export async function sendChannel(channel) {
+  const row = session.kshState.channels[channel];
+  await sendCommand("channel_label", [channel + 1, row.label]);
+  await sendCommand("channel_note", [channel + 1, row.note]);
   if (row.lock < 0) {
-    await sendCommand("channel_lock", [lane + 1, "random"]);
+    await sendCommand("channel_lock", [channel + 1, "random"]);
   } else {
-    await sendCommand("channel_lock", [lane + 1, row.lock + 1]);
+    await sendCommand("channel_lock", [channel + 1, row.lock + 1]);
   }
 }
 
-export async function sendChannelPlaybackMode(lane) {
-  await sendCommand("channel_playback_mode", [lane + 1, session.kshState.lanes[lane].playbackMode]);
+export async function sendChannelPlaybackMode(channel) {
+  await sendCommand("channel_playback_mode", [channel + 1, session.kshState.channels[channel].playbackMode]);
 }
 
-export async function sendSourceChannelMute(source, lane) {
+export async function sendSourceChannelMute(source, channel) {
   await sendCommand("source_channel_mute", [
     source + 1,
-    lane + 1,
-    session.kshState.sourceChannelMutes[source][lane],
+    channel + 1,
+    session.kshState.sourceChannelMutes[source][channel],
   ]);
 }
 
-export function setSelectedLane(lane) {
-  setSelectedCell(lane, session.selectedStep);
+export function setSelectedChannel(channel) {
+  setSelectedCell(channel, session.selectedStep);
 }
 
-export function setSelectedCell(lane, step) {
-  session.selectedLane = clamp(lane, 0, MAX_LANES - 1);
+export function setSelectedCell(channel, step) {
+  session.selectedChannel = clamp(channel, 0, MAX_CHANNELS - 1);
   const loopLength = clamp(
-    session.kshState.lanes[session.selectedLane]?.loopLength ?? session.kshState.stepCount,
+    session.kshState.channels[session.selectedChannel]?.loopLength ?? session.kshState.stepCount,
     1,
     session.kshState.stepCount
   );
@@ -210,10 +210,10 @@ export async function selectSource(source) {
   await sendCommand("static_source", [session.selectedSource + 1]);
 }
 
-export async function sendChannelLoopLength(lane) {
+export async function sendChannelLoopLength(channel) {
   await sendCommand("channel_loop_length", [
-    lane + 1,
-    session.kshState.lanes[lane].loopLength,
+    channel + 1,
+    session.kshState.channels[channel].loopLength,
   ]);
 }
 
@@ -224,8 +224,8 @@ export async function setHeaderValue(id, value) {
   if (id === "steps" && state.stepCount !== next) {
     state.stepCount = next;
     state.refreshSteps = clamp(state.refreshSteps, 1, next);
-    for (let lane = 0; lane < MAX_LANES; lane += 1) {
-      state.lanes[lane].loopLength = clamp(state.lanes[lane].loopLength, 1, next);
+    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+      state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, next);
     }
     bumpState();
     await sendCommand("steps", [next]);
@@ -271,57 +271,57 @@ export async function setHeaderValue(id, value) {
   }
 }
 
-export async function setRowLoopLength(lane, value) {
+export async function setRowLoopLength(channel, value) {
   const next = clamp(value, 1, session.kshState.stepCount);
-  if (session.kshState.lanes[lane].loopLength === next) {
+  if (session.kshState.channels[channel].loopLength === next) {
     return;
   }
 
-  session.kshState.lanes[lane].loopLength = next;
-  if (session.selectedLane === lane && session.selectedStep >= next) {
+  session.kshState.channels[channel].loopLength = next;
+  if (session.selectedChannel === channel && session.selectedStep >= next) {
     session.selectedStep = next - 1;
   }
   bumpState();
-  await sendChannelLoopLength(lane);
+  await sendChannelLoopLength(channel);
 }
 
-export async function setLaneLabel(lane, text) {
+export async function setChannelLabel(channel, text) {
   const trimmed = String(text ?? "").trim();
-  session.kshState.lanes[lane].label = trimmed || DEFAULT_CHANNEL_LABELS[lane] || String(lane + 1);
+  session.kshState.channels[channel].label = trimmed || DEFAULT_CHANNEL_LABELS[channel] || String(channel + 1);
   bumpState();
-  await sendCommand("channel_label", [lane + 1, session.kshState.lanes[lane].label]);
+  await sendCommand("channel_label", [channel + 1, session.kshState.channels[channel].label]);
 }
 
-export async function resetSourceChannelRow(source, lane) {
-  session.kshState.sourceChannelMutes[source][lane] = 0;
-  session.kshState.lanes[lane].loopLength = session.kshState.stepCount;
+export async function resetSourceChannelRow(source, channel) {
+  session.kshState.sourceChannelMutes[source][channel] = 0;
+  session.kshState.channels[channel].loopLength = session.kshState.stepCount;
 
   for (let step = 0; step < MAX_STEPS; step += 1) {
-    session.kshState.sources[source][lane][step] = defaultCell();
+    session.kshState.sources[source][channel][step] = defaultCell();
   }
 
   bumpState();
-  await sendCommand("source_channel_reset", [source + 1, lane + 1]);
+  await sendCommand("source_channel_reset", [source + 1, channel + 1]);
 }
 
-export async function sendCellsForLane(source, lane, steps) {
+export async function sendCellsForChannel(source, channel, steps) {
   for (const step of steps) {
-    await sendCell(source, lane, step);
+    await sendCell(source, channel, step);
   }
   bumpState();
 }
 
-export async function adjustLaneNote(lane, delta) {
-  session.kshState.lanes[lane].note = clamp(session.kshState.lanes[lane].note + delta, 0, 127);
+export async function adjustChannelNote(channel, delta) {
+  session.kshState.channels[channel].note = clamp(session.kshState.channels[channel].note + delta, 0, 127);
   bumpState();
-  await sendCommand("channel_note", [lane + 1, session.kshState.lanes[lane].note]);
+  await sendCommand("channel_note", [channel + 1, session.kshState.channels[channel].note]);
 }
 
-export async function toggleCell(source, lane, step) {
-  const cell = session.kshState.sources[source][lane][step];
+export async function toggleCell(source, channel, step) {
+  const cell = session.kshState.sources[source][channel][step];
   cell.enabled = cell.enabled ? 0 : 1;
   bumpState();
-  await sendCell(source, lane, step);
+  await sendCell(source, channel, step);
 }
 
 export async function cycleMode() {
@@ -342,62 +342,62 @@ export async function toggleDeviceActive() {
   await sendCommand("device_active", [session.kshState.deviceActive]);
 }
 
-export async function auditionLane(lane) {
-  await sendCommand("channel_audition", [lane + 1]);
+export async function auditionChannel(channel) {
+  await sendCommand("channel_audition", [channel + 1]);
 }
 
-export async function incrementLaneNote(lane) {
-  await adjustLaneNote(lane, 1);
+export async function incrementChannelNote(channel) {
+  await adjustChannelNote(channel, 1);
 }
 
-export async function cycleLaneLock(lane) {
-  session.kshState.lanes[lane].lock += 1;
-  if (session.kshState.lanes[lane].lock >= SOURCE_COUNT) {
-    session.kshState.lanes[lane].lock = -1;
+export async function cycleChannelLock(channel) {
+  session.kshState.channels[channel].lock += 1;
+  if (session.kshState.channels[channel].lock >= SOURCE_COUNT) {
+    session.kshState.channels[channel].lock = -1;
   }
   bumpState();
-  await sendLane(lane);
+  await sendChannel(channel);
 }
 
-export async function cycleLanePlaybackMode(lane) {
-  session.kshState.lanes[lane].playbackMode = nextPlaybackMode(
-    session.kshState.lanes[lane].playbackMode
+export async function cycleChannelPlaybackMode(channel) {
+  session.kshState.channels[channel].playbackMode = nextPlaybackMode(
+    session.kshState.channels[channel].playbackMode
   );
   bumpState();
-  await sendChannelPlaybackMode(lane);
+  await sendChannelPlaybackMode(channel);
 }
 
-export async function setSourceChannelMute(source, lane, muted) {
-  session.kshState.sourceChannelMutes[source][lane] = muted ? 1 : 0;
+export async function setSourceChannelMute(source, channel, muted) {
+  session.kshState.sourceChannelMutes[source][channel] = muted ? 1 : 0;
   bumpState();
-  await sendSourceChannelMute(source, lane);
+  await sendSourceChannelMute(source, channel);
 }
 
-export async function toggleLaneMute(source, lane) {
-  await setSourceChannelMute(source, lane, !session.kshState.sourceChannelMutes[source][lane]);
+export async function toggleChannelMute(source, channel) {
+  await setSourceChannelMute(source, channel, !session.kshState.sourceChannelMutes[source][channel]);
 }
 
-export async function shiftLaneRow(lane, direction) {
-  const steps = shiftSourceChannelRow(session.kshState, session.selectedSource, lane, direction);
+export async function shiftChannelRow(channel, direction) {
+  const steps = shiftSourceChannelRow(session.kshState, session.selectedSource, channel, direction);
   bumpState();
   for (const step of steps) {
-    await sendCell(session.selectedSource, lane, step);
+    await sendCell(session.selectedSource, channel, step);
   }
 }
 
 export async function shiftPattern(direction) {
-  for (let lane = 0; lane < session.kshState.laneCount; lane += 1) {
-    await shiftLaneRow(lane, direction);
+  for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
+    await shiftChannelRow(channel, direction);
   }
 }
 
 export async function clearPattern() {
   clearSourcePattern(session.kshState, session.selectedSource);
   bumpState();
-  for (let lane = 0; lane < session.kshState.laneCount; lane += 1) {
-    await sendCommand("source_channel_reset", [session.selectedSource + 1, lane + 1]);
-    await sendCommand("channel_lock", [lane + 1, "random"]);
-    await sendChannelPlaybackMode(lane);
+  for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
+    await sendCommand("source_channel_reset", [session.selectedSource + 1, channel + 1]);
+    await sendCommand("channel_lock", [channel + 1, "random"]);
+    await sendChannelPlaybackMode(channel);
   }
 }
 

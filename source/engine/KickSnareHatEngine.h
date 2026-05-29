@@ -12,6 +12,10 @@
 
 namespace ksh
 {
+namespace test
+{
+struct EngineTestPeer;
+}
 
 struct MidiNoteEvent
 {
@@ -85,16 +89,21 @@ public:
     [[nodiscard]] const Cell& generatedCellAt (int channel, int step) const;
     [[nodiscard]] const NativePlaybackRow& nativePlaybackRowAt (int step) const;
     [[nodiscard]] bool sourceChannelMutedAt (int source, int channel) const;
-    [[nodiscard]] int activeSourceIndicesCallCountForTests() const { return activeSourceIndicesCallCount; }
-    void resetActiveSourceIndicesCallCountForTests() const { activeSourceIndicesCallCount = 0; }
-    [[nodiscard]] int randomCallCountForTests() const { return randomCallCount; }
-    void resetRandomCallCountForTests() const { randomCallCount = 0; }
-    void setTransportStateForTests (int transportPlayingIn, std::optional<int> lastReportedGlobalStepIn);
-    void setPlaybackStateForTests (int currentStepIn, int playingStepOneBasedIn);
-    void clearAllForTests();
-    void setGeneratedCellSourceStepForTests (int channel, int step, int sourceStep);
 
 private:
+    friend struct test::EngineTestPeer;
+
+    struct ActiveSourceList
+    {
+        std::array<int, Constants::sourceCount> values {};
+        int count = 0;
+
+        void add (int source) { values[static_cast<size_t> (count++)] = source; }
+        [[nodiscard]] bool empty() const { return count == 0; }
+        [[nodiscard]] size_t size() const { return static_cast<size_t> (count); }
+        [[nodiscard]] int operator[] (size_t index) const { return values[index]; }
+    };
+
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 1;
@@ -173,8 +182,6 @@ public:
     void resetPlayback (bool emitStatus = true);
 
     [[nodiscard]] bool isSourceEmpty (int sourceIndex) const;
-    [[nodiscard]] std::vector<int> activeSourceIndices() const;
-    [[nodiscard]] int pickRandomSource (const std::vector<int>* active = nullptr);
 
     [[nodiscard]] nlohmann::json snapshot() const;
     [[nodiscard]] nlohmann::json serializeForPersistence() const;
@@ -202,8 +209,6 @@ public:
 
     [[nodiscard]] static int mod (int value, int divisor);
 
-    void setRandomValuesForTests (std::vector<double> values);
-
 private:
     EngineCallbacks callbacks;
     mutable std::vector<double> testRandomValues;
@@ -219,6 +224,8 @@ private:
     void markPreviewDirty (bool forceEmit);
     void flushPreview();
 
+    [[nodiscard]] ActiveSourceList activeSourceIndices() const;
+    [[nodiscard]] int pickRandomSource (const ActiveSourceList* active = nullptr);
     [[nodiscard]] Cell generatedCellFromSource (int source, int channel, int step) const;
     [[nodiscard]] const Cell* generatedCellForSourceEdit (int source, int channel, int step) const;
     void refreshGeneratedCellsForSourceEdit (int source, int channel, int sourceStep);

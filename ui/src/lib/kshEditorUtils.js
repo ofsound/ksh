@@ -1,5 +1,5 @@
 import {
-  MAX_LANES,
+  MAX_CHANNELS,
   MAX_STEPS,
   RATES,
   SOURCE_COUNT,
@@ -14,7 +14,7 @@ export const EDITOR_MIN_WIDTH = 1160;
 export const MAIN_TOP = 68;
 export const FOOTER_H = 28;
 
-export const DC_LANE_COLORS = [
+export const DC_CHANNEL_COLORS = [
   [0.86, 0.25, 0.28],
   [0.93, 0.55, 0.36],
   [0.82, 0.66, 0.4],
@@ -25,7 +25,7 @@ export const DC_LANE_COLORS = [
   [0.65, 0.43, 0.23],
 ];
 
-export const DC_LANE_COLORS_LIGHT = [
+export const DC_CHANNEL_COLORS_LIGHT = [
   [0.96, 0.35, 0.38],
   [1.0, 0.65, 0.46],
   [0.92, 0.76, 0.5],
@@ -43,16 +43,16 @@ export function rgbaToCss([r, g, b], alpha = 1) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
-export function laneColor(lane, light = false, dcColors = true) {
+export function channelColor(channel, light = false, dcColors = true) {
   if (!dcColors) {
     return light ? "#94c9f7" : "#f59e38";
   }
 
-  const palette = light ? DC_LANE_COLORS_LIGHT : DC_LANE_COLORS;
-  return rgbaToCss(palette[lane % palette.length]);
+  const palette = light ? DC_CHANNEL_COLORS_LIGHT : DC_CHANNEL_COLORS;
+  return rgbaToCss(palette[channel % palette.length]);
 }
 
-export function mutedLaneColor(colorCss) {
+export function mutedChannelColor(colorCss) {
   return colorCss.replace(/rgba\((\d+),\s*(\d+),\s*(\d+),/, (_, r, g, b) => {
     const gray = (Number(r) + Number(g) + Number(b)) / 3;
     const mix = (channel) => Math.round(gray * 0.56 + Number(channel) * 0.12);
@@ -64,13 +64,13 @@ export function editorDimensions(state) {
   const gridW = state.stepCount * GRID_CELL_W;
   const width = Math.max(EDITOR_MIN_WIDTH, 280 + gridW);
   const sourceGridY0 = MAIN_TOP + 12 + 22 + 32;
-  const height = sourceGridY0 + state.laneCount * GRID_CELL_H + 18 + 8 + FOOTER_H;
+  const height = sourceGridY0 + state.channelCount * GRID_CELL_H + 18 + 8 + FOOTER_H;
   return { width, height };
 }
 
 export function generationModeLabel(mode) {
   if (mode === "per_channel") {
-    return "Per Lane";
+    return "Per Channel";
   }
   if (mode === "static") {
     return "Static";
@@ -149,12 +149,12 @@ export function cycleOffsetLabel(value) {
   return String(parsed + 1);
 }
 
-export function loopLengthForLane(state, lane) {
-  return clamp(state.lanes[lane]?.loopLength ?? state.stepCount, 1, state.stepCount);
+export function loopLengthForChannel(state, channel) {
+  return clamp(state.channels[channel]?.loopLength ?? state.stepCount, 1, state.stepCount);
 }
 
-export function isStepBeyondLoopLength(state, lane, step) {
-  return step >= loopLengthForLane(state, lane);
+export function isStepBeyondLoopLength(state, channel, step) {
+  return step >= loopLengthForChannel(state, channel);
 }
 
 /** @returns {"top_left"|"bottom_right"} */
@@ -206,12 +206,12 @@ export function lockLabel(lock) {
   return String(lock + 1);
 }
 
-export function shiftSourceChannelRow(state, source, lane, direction) {
+export function shiftSourceChannelRow(state, source, channel, direction) {
   if (state.stepCount <= 1) {
     return [];
   }
 
-  const row = state.sources[source][lane];
+  const row = state.sources[source][channel];
   const shifted = [];
 
   for (let step = 0; step < state.stepCount; step += 1) {
@@ -232,17 +232,17 @@ export function shiftSourceChannelRow(state, source, lane, direction) {
 export function clearSourcePattern(state, source) {
   const affected = [];
 
-  for (let lane = 0; lane < state.laneCount; lane += 1) {
-    state.sourceChannelMutes[source][lane] = 0;
-    state.lanes[lane].loopLength = state.stepCount;
-    state.lanes[lane].lock = -1;
-    state.lanes[lane].playbackMode = "normal";
+  for (let channel = 0; channel < state.channelCount; channel += 1) {
+    state.sourceChannelMutes[source][channel] = 0;
+    state.channels[channel].loopLength = state.stepCount;
+    state.channels[channel].lock = -1;
+    state.channels[channel].playbackMode = "normal";
 
     for (let step = 0; step < MAX_STEPS; step += 1) {
-      state.sources[source][lane][step] = defaultCell();
+      state.sources[source][channel][step] = defaultCell();
     }
 
-    affected.push(lane);
+    affected.push(channel);
   }
 
   return affected;

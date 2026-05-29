@@ -176,32 +176,6 @@ bool KickSnareHatEngine::sourceChannelMutedAt (int source, int channel) const
     return isSourceChannelMuted (source, channel);
 }
 
-void KickSnareHatEngine::setTransportStateForTests (int transportPlayingIn, std::optional<int> lastReportedGlobalStepIn)
-{
-    transportPlaying = transportPlayingIn;
-    lastReportedGlobalStep = lastReportedGlobalStepIn;
-}
-
-void KickSnareHatEngine::setPlaybackStateForTests (int currentStepIn, int playingStepOneBasedIn)
-{
-    currentStep = clampInt (currentStepIn, 0, stepCount - 1);
-    playingStepOneBased = clampInt (playingStepOneBasedIn, 0, stepCount);
-}
-
-void KickSnareHatEngine::clearAllForTests()
-{
-    for (auto& source : sources)
-        source = makeEmptySourcePattern();
-
-    reset();
-}
-
-void KickSnareHatEngine::setGeneratedCellSourceStepForTests (int channel, int step, int sourceStep)
-{
-    generated[static_cast<size_t> (clampChannel (channel))][static_cast<size_t> (clampStep (step))].sourceStep =
-        clampStep (sourceStep);
-}
-
 void KickSnareHatEngine::initChannels()
 {
     for (int i = 0; i < Constants::maxChannels; ++i)
@@ -215,12 +189,6 @@ void KickSnareHatEngine::initSources()
 
     for (auto& mutes : sourceChannelMutes)
         mutes.fill (false);
-}
-
-void KickSnareHatEngine::setRandomValuesForTests (std::vector<double> values)
-{
-    testRandomValues = std::move (values);
-    testRandomIndex = 0;
 }
 
 double KickSnareHatEngine::nextRandom() const
@@ -641,29 +609,25 @@ bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const
     return true;
 }
 
-std::vector<int> KickSnareHatEngine::activeSourceIndices() const
+KickSnareHatEngine::ActiveSourceList KickSnareHatEngine::activeSourceIndices() const
 {
     ++activeSourceIndicesCallCount;
 
-    std::vector<int> indices;
+    ActiveSourceList indices;
 
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
         if (! isSourceEmpty (source))
-            indices.push_back (source);
+            indices.add (source);
     }
 
     return indices;
 }
 
-int KickSnareHatEngine::pickRandomSource (const std::vector<int>* active)
+int KickSnareHatEngine::pickRandomSource (const ActiveSourceList* active)
 {
-    std::vector<int> activeSources;
-
-    if (active != nullptr)
-        activeSources = *active;
-    else
-        activeSources = activeSourceIndices();
+    ActiveSourceList computedActiveSources;
+    const ActiveSourceList& activeSources = active != nullptr ? *active : (computedActiveSources = activeSourceIndices());
 
     if (activeSources.empty())
         return 0;
@@ -679,7 +643,7 @@ void KickSnareHatEngine::generateWindow (int startStep, int length, bool forceEm
     startStep = clampInt (startStep, 0, stepCount - 1);
     length = clampInt (length, 1, stepCount);
 
-    std::vector<int> activeSources;
+    ActiveSourceList activeSources;
     int stackSource = -1;
 
     if (generationMode == GenerationMode::perChannel)
@@ -728,7 +692,7 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
     startStep = clampInt (startStep, 0, stepCount - 1);
     length = clampInt (length, 1, stepCount);
 
-    std::vector<int> activeSources;
+    ActiveSourceList activeSources;
     int initialStackSource = -1;
 
     if (generationMode != GenerationMode::staticSource)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineTestPeer.h"
+
 #include <engine/KickSnareHatEngine.h>
 
 #include <vector>
@@ -9,7 +11,7 @@ namespace ksh::test
 
 inline void clearAll (KickSnareHatEngine& engine)
 {
-    engine.clearAllForTests();
+    EngineTestPeer::clearAll (engine);
 }
 
 struct EngineFixture
@@ -29,7 +31,7 @@ struct EngineFixture
     {
         randomValues = std::move (values);
         randomIndex = 0;
-        engine.setRandomValuesForTests (randomValues);
+        EngineTestPeer::setRandomValues (engine, randomValues);
     }
 
     void clearAll()
@@ -57,7 +59,7 @@ private:
         };
 
         engine = KickSnareHatEngine { callbacks };
-        engine.setRandomValuesForTests (randomValues);
+        EngineTestPeer::setRandomValues (engine, randomValues);
     }
 
     double nextRandom() const

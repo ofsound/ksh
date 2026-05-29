@@ -8,11 +8,11 @@
     editorDimensions,
     generationModeLabel,
     isStepBeyondLoopLength,
-    laneColor,
+    channelColor,
     lockLabel,
-    loopLengthForLane,
+    loopLengthForChannel,
     modifierLayerMode,
-    mutedLaneColor,
+    mutedChannelColor,
     normalizeSourceLayerMode,
     playbackModeLabel,
     phaseOffsetMs,
@@ -32,31 +32,31 @@
     stepFromGridX,
     toggleCellOnRelease,
   } from "../lib/kshEditorInteractions.js";
-  import { LANE_RENAME_MS, MAX_STEPS, SOURCE_COUNT } from "../lib/kshConstants.js";
+  import { CHANNEL_RENAME_MS, MAX_STEPS, SOURCE_COUNT } from "../lib/kshConstants.js";
   import {
-    adjustLaneNote,
-    auditionLane,
+    adjustChannelNote,
+    auditionChannel,
     clearPattern,
     closeEditor,
-    cycleLaneLock,
-    cycleLanePlaybackMode,
+    cycleChannelLock,
+    cycleChannelPlaybackMode,
     cycleMode,
     cycleRateCommand,
     cycleSourceLayerMode,
-    incrementLaneNote,
+    incrementChannelNote,
     isEditorFlashing,
     resetSourceChannelRow,
     selectSource,
     sendCell,
-    sendCellsForLane,
+    sendCellsForChannel,
     setSourceChannelMute,
     session,
     setHeaderValue,
-    setLaneLabel,
+    setChannelLabel,
     setRowLoopLength,
     setSelectedCell,
     setSourceLayerMode,
-    shiftLaneRow,
+    shiftChannelRow,
     shiftPattern,
     toggleDcColors,
     toggleDeviceActive,
@@ -69,15 +69,15 @@
   /** @type {{ source: number, paintMuted: number, touched: Record<number, boolean> } | null} */
   let muteDrag = $state(null);
   let hoverLayerMode = $state(null);
-  let editingLane = $state(-1);
+  let editingChannel = $state(-1);
   let labelDraft = $state("");
-  let laneRenameTap = $state({ lane: -1, at: 0 });
-  let sourceRowResetTap = $state({ lane: -1, at: 0 });
-  let cycleCellTap = $state({ source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" });
-  let lastAudition = $state({ lane: -1, at: 0 });
+  let channelRenameTap = $state({ channel: -1, at: 0 });
+  let sourceRowResetTap = $state({ channel: -1, at: 0 });
+  let cycleCellTap = $state({ source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" });
+  let lastAudition = $state({ channel: -1, at: 0 });
 
   const dims = $derived(editorDimensions(session.kshState));
-  const laneRows = $derived(Array.from({ length: session.kshState.laneCount }, (_, lane) => lane));
+  const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
   );
@@ -89,13 +89,13 @@
     return gridEl?.getBoundingClientRect().left ?? 0;
   }
 
-  function cellStyle(lane, step) {
+  function cellStyle(channel, step) {
     const source = session.selectedSource;
-    const cell = session.kshState.sources[source][lane][step];
-    const muted = session.kshState.sourceChannelMutes[source][lane];
+    const cell = session.kshState.sources[source][channel][step];
+    const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
-    const beyondLoop = isStepBeyondLoopLength(session.kshState, lane, step);
-    const flashing = isEditorFlashing(source, lane, step);
+    const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
+    const flashing = isEditorFlashing(source, channel, step);
 
     if (flashing) {
       return "background:#dbdee5;color:#1a1c21;";
@@ -112,11 +112,11 @@
       return "background:#242930;color:#5c636b;opacity:0.55;";
     }
 
-    let color = laneColor(lane, false, session.dcColors);
-    let lightColor = laneColor(lane, true, session.dcColors);
+    let color = channelColor(channel, false, session.dcColors);
+    let lightColor = channelColor(channel, true, session.dcColors);
     if (muted) {
-      color = mutedLaneColor(color);
-      lightColor = mutedLaneColor(lightColor);
+      color = mutedChannelColor(color);
+      lightColor = mutedChannelColor(lightColor);
     }
 
     if (!cell.enabled) {
@@ -141,11 +141,11 @@
     return `background:linear-gradient(to top, ${color} ${Math.round(fill * 100)}%, rgba(26,28,33,0.85) ${Math.round(fill * 100)}%);color:#dbdee5;`;
   }
 
-  function cellClass(lane, step) {
+  function cellClass(channel, step) {
     const beyondSteps = step >= session.kshState.stepCount;
-    const beyondLoop = isStepBeyondLoopLength(session.kshState, lane, step);
+    const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
     const selected =
-      session.selectedLane === lane &&
+      session.selectedChannel === channel &&
       session.selectedStep === step &&
       !beyondSteps &&
       !beyondLoop;
@@ -158,8 +158,8 @@
     ].join(" ");
   }
 
-  function cellLabel(lane, step) {
-    const cell = session.kshState.sources[session.selectedSource][lane][step];
+  function cellLabel(channel, step) {
+    const cell = session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled) {
       return "";
     }
@@ -169,8 +169,8 @@
     return String(sourceLayerValue(cell, effectiveLayerMode));
   }
 
-  function cyclePrimaryLabel(lane, step) {
-    const cell = session.kshState.sources[session.selectedSource][lane][step];
+  function cyclePrimaryLabel(channel, step) {
+    const cell = session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled || effectiveLayerMode !== "cycle") {
       return "";
     }
@@ -178,9 +178,9 @@
     return `${cell.cycleInverted ? "!" : ""}${value}`;
   }
 
-  function loopLengthClass(lane) {
-    const shortened = loopLengthForLane(session.kshState, lane) < session.kshState.stepCount;
-    if (loopDrag?.lane === lane) {
+  function loopLengthClass(channel) {
+    const shortened = loopLengthForChannel(session.kshState, channel) < session.kshState.stepCount;
+    if (loopDrag?.channel === channel) {
       return "text-ksh-amber";
     }
     if (shortened) {
@@ -189,8 +189,8 @@
     return "text-ksh-blue";
   }
 
-  function isCellInteractive(lane, step) {
-    return step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, lane, step);
+  function isCellInteractive(channel, step) {
+    return step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, channel, step);
   }
 
   function stepLabelClass(step) {
@@ -219,37 +219,37 @@
     headerDrag = null;
   }
 
-  function cycleCellMatches(source, lane, step, valueMode) {
+  function cycleCellMatches(source, channel, step, valueMode) {
     return (
       cycleCellTap.source === source &&
-      cycleCellTap.lane === lane &&
+      cycleCellTap.channel === channel &&
       cycleCellTap.step === step &&
       cycleCellTap.valueMode === valueMode &&
-      Date.now() - cycleCellTap.at <= LANE_RENAME_MS &&
+      Date.now() - cycleCellTap.at <= CHANNEL_RENAME_MS &&
       cycleCellTap.wasEnabled
     );
   }
 
-  function handleCycleCellDoubleClick(source, lane, step, valueMode) {
-    if (valueMode !== "cycle" || !cycleCellMatches(source, lane, step, valueMode)) {
+  function handleCycleCellDoubleClick(source, channel, step, valueMode) {
+    if (valueMode !== "cycle" || !cycleCellMatches(source, channel, step, valueMode)) {
       return false;
     }
 
-    const cell = session.kshState.sources[source][lane][step];
+    const cell = session.kshState.sources[source][channel][step];
     if (cell.cycle <= 1) {
-      cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
+      cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
       return false;
     }
 
     cell.enabled = 1;
     cell.cycleInverted = cell.cycleInverted ? 0 : 1;
-    sendCell(source, lane, step);
-    cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
+    sendCell(source, channel, step);
+    cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
     return true;
   }
 
-  function onCellPointerDown(event, lane, step) {
-    if (!isCellInteractive(lane, step)) {
+  function onCellPointerDown(event, channel, step) {
+    if (!isCellInteractive(channel, step)) {
       return;
     }
 
@@ -265,15 +265,15 @@
         : null;
     const valueMode = valueModeForCellInteraction(layerMode, triangle);
 
-    if (handleCycleCellDoubleClick(source, lane, step, valueMode)) {
+    if (handleCycleCellDoubleClick(source, channel, step, valueMode)) {
       return;
     }
 
-    const cell = session.kshState.sources[source][lane][step];
+    const cell = session.kshState.sources[source][channel][step];
 
     cellDrag = createCellDrag(
       source,
-      lane,
+      channel,
       step,
       cell,
       layerMode,
@@ -281,7 +281,7 @@
       event.clientX,
       event.clientY
     );
-    setSelectedCell(lane, step);
+    setSelectedCell(channel, step);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -306,9 +306,9 @@
         cellDrag.step,
         toStep
       );
-      setSelectedCell(cellDrag.lane, toStep);
+      setSelectedCell(cellDrag.channel, toStep);
       if (changed.length > 0) {
-        await sendCellsForLane(session.selectedSource, cellDrag.lane, changed);
+        await sendCellsForChannel(session.selectedSource, cellDrag.channel, changed);
       }
       return;
     }
@@ -321,7 +321,7 @@
         event.clientY
       );
       if (changed) {
-        await sendCell(session.selectedSource, cellDrag.lane, cellDrag.step);
+        await sendCell(session.selectedSource, cellDrag.channel, cellDrag.step);
       }
     }
   }
@@ -333,36 +333,36 @@
 
     if (!cellDrag.moved) {
       const source = session.selectedSource;
-      const cell = session.kshState.sources[source][cellDrag.lane][cellDrag.step];
+      const cell = session.kshState.sources[source][cellDrag.channel][cellDrag.step];
       const wasEnabled = cell.enabled ? 1 : 0;
 
       if (cellDrag.valueMode === "cycle" && wasEnabled && cell.cycle > 1) {
         cycleCellTap = {
           source,
-          lane: cellDrag.lane,
+          channel: cellDrag.channel,
           step: cellDrag.step,
           at: Date.now(),
           wasEnabled: 1,
           valueMode: "cycle",
         };
       } else {
-        cycleCellTap = { source: -1, lane: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
+        cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
       }
 
       toggleCellOnRelease(session.kshState, source, cellDrag);
-      await sendCell(source, cellDrag.lane, cellDrag.step);
+      await sendCell(source, cellDrag.channel, cellDrag.step);
     }
 
     cellDrag = null;
   }
 
-  function beginLoopDrag(lane, clientY, event) {
+  function beginLoopDrag(channel, clientY, event) {
     loopDrag = {
-      lane,
+      channel,
       startY: clientY,
-      startValue: session.kshState.lanes[lane].loopLength,
+      startValue: session.kshState.channels[channel].loopLength,
     };
-    setSelectedCell(lane, session.selectedStep);
+    setSelectedCell(channel, session.selectedStep);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -370,59 +370,59 @@
     if (!loopDrag) {
       return;
     }
-    setRowLoopLength(loopDrag.lane, loopDragNextValue(loopDrag, clientY));
+    setRowLoopLength(loopDrag.channel, loopDragNextValue(loopDrag, clientY));
   }
 
   function endLoopDrag() {
     loopDrag = null;
   }
 
-  function laneFromMuteDrag(clientX, clientY) {
+  function channelFromMuteDrag(clientX, clientY) {
     const el = document.elementFromPoint(clientX, clientY);
-    const row = el?.closest("[data-lane-row]");
+    const row = el?.closest("[data-channel-row]");
     if (!row) {
       return -1;
     }
-    return Number.parseInt(row.getAttribute("data-lane-row") ?? "-1", 10);
+    return Number.parseInt(row.getAttribute("data-channel-row") ?? "-1", 10);
   }
 
-  function applyMuteDragForLane(lane) {
-    if (!muteDrag || lane < 0 || muteDrag.touched[lane]) {
+  function applyMuteDragForChannel(channel) {
+    if (!muteDrag || channel < 0 || muteDrag.touched[channel]) {
       return;
     }
 
     muteDrag = {
       ...muteDrag,
-      touched: { ...muteDrag.touched, [lane]: true },
+      touched: { ...muteDrag.touched, [channel]: true },
     };
-    setSelectedCell(lane, session.selectedStep);
+    setSelectedCell(channel, session.selectedStep);
 
-    if (session.kshState.sourceChannelMutes[muteDrag.source][lane] === muteDrag.paintMuted) {
+    if (session.kshState.sourceChannelMutes[muteDrag.source][channel] === muteDrag.paintMuted) {
       return;
     }
 
-    session.kshState.sourceChannelMutes[muteDrag.source][lane] = muteDrag.paintMuted;
-    setSourceChannelMute(muteDrag.source, lane, muteDrag.paintMuted);
+    session.kshState.sourceChannelMutes[muteDrag.source][channel] = muteDrag.paintMuted;
+    setSourceChannelMute(muteDrag.source, channel, muteDrag.paintMuted);
   }
 
-  function onMutePointerDown(lane, event) {
+  function onMutePointerDown(channel, event) {
     const now = Date.now();
     const source = session.selectedSource;
 
-    if (sourceRowResetTap.lane === lane && now - sourceRowResetTap.at <= LANE_RENAME_MS) {
-      sourceRowResetTap = { lane: -1, at: 0 };
+    if (sourceRowResetTap.channel === channel && now - sourceRowResetTap.at <= CHANNEL_RENAME_MS) {
+      sourceRowResetTap = { channel: -1, at: 0 };
       muteDrag = null;
-      resetSourceChannelRow(source, lane);
+      resetSourceChannelRow(source, channel);
       return;
     }
 
-    sourceRowResetTap = { lane, at: now };
+    sourceRowResetTap = { channel, at: now };
     muteDrag = {
       source,
-      paintMuted: session.kshState.sourceChannelMutes[source][lane] ? 0 : 1,
+      paintMuted: session.kshState.sourceChannelMutes[source][channel] ? 0 : 1,
       touched: {},
     };
-    applyMuteDragForLane(lane);
+    applyMuteDragForChannel(channel);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -430,51 +430,51 @@
     if (!muteDrag || (event.buttons & 1) === 0) {
       return;
     }
-    applyMuteDragForLane(laneFromMuteDrag(event.clientX, event.clientY));
+    applyMuteDragForChannel(channelFromMuteDrag(event.clientX, event.clientY));
   }
 
   function endMuteDrag() {
     muteDrag = null;
   }
 
-  function auditionLaneOnce(lane, keepEditor = false) {
+  function auditionChannelOnce(channel, keepEditor = false) {
     const now = Date.now();
-    if (lastAudition.lane === lane && now - lastAudition.at < 60) {
+    if (lastAudition.channel === channel && now - lastAudition.at < 60) {
       return;
     }
-    lastAudition = { lane, at: now };
-    if (!keepEditor && editingLane >= 0) {
-      editingLane = -1;
+    lastAudition = { channel, at: now };
+    if (!keepEditor && editingChannel >= 0) {
+      editingChannel = -1;
     }
-    auditionLane(lane);
+    auditionChannel(channel);
   }
 
-  function onLabelClick(lane) {
+  function onLabelClick(channel) {
     const now = Date.now();
-    const isRenameTap = laneRenameTap.lane === lane && now - laneRenameTap.at <= LANE_RENAME_MS;
+    const isRenameTap = channelRenameTap.channel === channel && now - channelRenameTap.at <= CHANNEL_RENAME_MS;
 
-    auditionLaneOnce(lane, isRenameTap);
+    auditionChannelOnce(channel, isRenameTap);
 
     if (isRenameTap) {
-      laneRenameTap = { lane: -1, at: 0 };
-      editingLane = lane;
-      labelDraft = session.kshState.lanes[lane]?.label ?? String(lane + 1);
+      channelRenameTap = { channel: -1, at: 0 };
+      editingChannel = channel;
+      labelDraft = session.kshState.channels[channel]?.label ?? String(channel + 1);
       return;
     }
 
-    laneRenameTap = { lane, at: now };
+    channelRenameTap = { channel, at: now };
   }
 
   function commitLabelEdit() {
-    if (editingLane < 0) {
+    if (editingChannel < 0) {
       return;
     }
-    setLaneLabel(editingLane, labelDraft);
-    editingLane = -1;
+    setChannelLabel(editingChannel, labelDraft);
+    editingChannel = -1;
   }
 
   function cancelLabelEdit() {
-    editingLane = -1;
+    editingChannel = -1;
   }
 
   function onEditorKeyDown(event) {
@@ -624,10 +624,10 @@
       </div>
     </div>
 
-    {#each laneRows as lane (lane)}
-      <div class="flex items-center py-0.5" data-lane-row={lane}>
+    {#each channelRows as channel (channel)}
+      <div class="flex items-center py-0.5" data-channel-row={channel}>
         <div class="flex w-[210px] shrink-0 items-center gap-1 pr-2 text-[11px]">
-          {#if editingLane === lane}
+          {#if editingChannel === channel}
             <input
               class="w-8 rounded border border-ksh-amber bg-ksh-off px-1 text-[11px] text-ksh-text outline-none"
               bind:value={labelDraft}
@@ -641,8 +641,8 @@
               onblur={commitLabelEdit}
             />
           {:else}
-            <button type="button" class="w-8 text-left text-ksh-text" onclick={() => onLabelClick(lane)}>
-              {session.kshState.lanes[lane]?.label ?? lane + 1}
+            <button type="button" class="w-8 text-left text-ksh-text" onclick={() => onLabelClick(channel)}>
+              {session.kshState.channels[channel]?.label ?? channel + 1}
             </button>
           {/if}
           <button
@@ -650,45 +650,45 @@
             class="w-6 text-ksh-blue"
             onclick={(event) => {
               if (event.shiftKey) {
-                adjustLaneNote(lane, -1);
+                adjustChannelNote(channel, -1);
               } else {
-                incrementLaneNote(lane);
+                incrementChannelNote(channel);
               }
             }}
           >
-            {session.kshState.lanes[lane]?.note ?? 36}
+            {session.kshState.channels[channel]?.note ?? 36}
           </button>
           <button
             type="button"
-            class={`w-8 text-center ${loopLengthClass(lane)}`}
-            onpointerdown={(event) => beginLoopDrag(lane, event.clientY, event)}
+            class={`w-8 text-center ${loopLengthClass(channel)}`}
+            onpointerdown={(event) => beginLoopDrag(channel, event.clientY, event)}
             onpointermove={(event) => {
-              if (loopDrag?.lane === lane) {
+              if (loopDrag?.channel === channel) {
                 moveLoopDrag(event.clientY);
               }
             }}
             onpointerup={endLoopDrag}
             onpointercancel={endLoopDrag}
           >
-            L{session.kshState.lanes[lane]?.loopLength ?? 16}
+            L{session.kshState.channels[channel]?.loopLength ?? 16}
           </button>
-          <button type="button" class="w-6 text-center text-ksh-blue" onclick={() => cycleLaneLock(lane)}>
-            {lockLabel(session.kshState.lanes[lane]?.lock ?? -1)}
+          <button type="button" class="w-6 text-center text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
+            {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
           </button>
           <button
             type="button"
             class="w-5 text-center text-ksh-amber"
-            onclick={() => cycleLanePlaybackMode(lane)}
+            onclick={() => cycleChannelPlaybackMode(channel)}
           >
-            {playbackModeLabel(session.kshState.lanes[lane]?.playbackMode ?? "normal")}
+            {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
           </button>
-          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftLaneRow(lane, -1)}>◀</button>
-          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftLaneRow(lane, 1)}>▶</button>
+          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftChannelRow(channel, -1)}>◀</button>
+          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftChannelRow(channel, 1)}>▶</button>
           <button
             type="button"
-            class={`h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][lane] ? "border-ksh-muted bg-ksh-muted" : "border-ksh-stroke-soft bg-transparent"}`}
-            aria-label="Mute lane"
-            onpointerdown={(event) => onMutePointerDown(lane, event)}
+            class={`h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-muted bg-ksh-muted" : "border-ksh-stroke-soft bg-transparent"}`}
+            aria-label="Mute channel"
+            onpointerdown={(event) => onMutePointerDown(channel, event)}
             onpointermove={onMutePointerMove}
             onpointerup={endMuteDrag}
             onpointercancel={endMuteDrag}
@@ -699,34 +699,34 @@
           {#each Array.from({ length: MAX_STEPS }, (_, step) => step) as step (step)}
             <button
               type="button"
-              class={cellClass(lane, step)}
-              style={`width:${GRID_CELL_W}px;height:${GRID_CELL_H}px;${cellStyle(lane, step)}`}
-              disabled={!isCellInteractive(lane, step)}
-              onpointerdown={(event) => onCellPointerDown(event, lane, step)}
+              class={cellClass(channel, step)}
+              style={`width:${GRID_CELL_W}px;height:${GRID_CELL_H}px;${cellStyle(channel, step)}`}
+              disabled={!isCellInteractive(channel, step)}
+              onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={onCellPointerUp}
             >
-              {#if effectiveLayerMode === "cycle" && isCellInteractive(lane, step)}
+              {#if effectiveLayerMode === "cycle" && isCellInteractive(channel, step)}
                 <span class="pointer-events-none absolute left-1 top-1 text-[8px] leading-none">
-                  {cyclePrimaryLabel(lane, step)}
+                  {cyclePrimaryLabel(channel, step)}
                 </span>
-                {#if session.kshState.sources[session.selectedSource][lane][step].enabled}
+                {#if session.kshState.sources[session.selectedSource][channel][step].enabled}
                   <span class="pointer-events-none absolute bottom-1 right-1 text-[8px] leading-none">
-                    {cycleOffsetLabel(session.kshState.sources[session.selectedSource][lane][step].cycleOffset)}
+                    {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                   </span>
                 {/if}
                 <span class="cell-cycle-divider pointer-events-none absolute inset-0" aria-hidden="true"></span>
-              {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, lane, step) && session.kshState.sources[session.selectedSource][lane][step].enabled}
+              {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
-                  {cyclePrimaryLabel(lane, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][lane][step].cycleOffset)}
+                  {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
-              {:else if isStepBeyondLoopLength(session.kshState, lane, step) && session.kshState.sources[session.selectedSource][lane][step].enabled}
+              {:else if isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
-                  {cellLabel(lane, step)}
+                  {cellLabel(channel, step)}
                 </span>
               {:else}
-                {cellLabel(lane, step)}
+                {cellLabel(channel, step)}
               {/if}
             </button>
           {/each}
@@ -740,7 +740,7 @@
       Compact
     </button>
     <span class="text-ksh-muted">
-      Source {session.selectedSource + 1} · {session.kshState.laneCount} lane(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
+      Source {session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
     </span>
   </footer>
 </div>

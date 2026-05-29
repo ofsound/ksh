@@ -19,6 +19,7 @@
 
 class PluginProcessor : public juce::AudioProcessor,
                         private juce::AsyncUpdater,
+                        private juce::Timer,
                         private juce::AudioProcessorValueTreeState::Listener
 {
 public:
@@ -51,15 +52,8 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    ksh::MidiPlaybackRunner& getMidiPlayback() { return midiPlayback; }
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
     const juce::AudioProcessorValueTreeState& getValueTreeState() const { return parameters; }
-
-    /** Non-audio thread: rebuild the immutable playback snapshot and hand it to the audio thread. */
-    void publishPlaybackSnapshot();
-
-    /** Message thread: ask the audio thread to flush pending playback state on its next block. */
-    void requestPlaybackReset() { playbackResetRequested.store (true, std::memory_order_release); }
 
     KshUiBridge& getUiBridge() { return uiBridge; }
     const KshUiBridge& getUiBridge() const { return uiBridge; }
@@ -83,8 +77,13 @@ private:
     void initializeDefaultPattern();
     ksh::EngineCallbacks makeEngineCallbacks();
     void handleAsyncUpdate() override;
+    void timerCallback() override;
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void publishPlaybackSnapshot();
     void publishPlaybackSnapshotLocked();
+    void requestPlaybackReset() { playbackResetRequested.store (true, std::memory_order_release); }
+    void applyPendingMacroParametersLocked();
+    void publishPlaybackSnapshotIfChangedLocked();
     void addMacroParameterListeners();
     void removeMacroParameterListeners();
     void applyMacroParametersToEngineLocked();
@@ -94,7 +93,9 @@ private:
     KshUiBridge uiBridge;
     ksh::KickSnareHatEngine engine;
     ksh::MidiPlaybackRunner midiPlayback;
-    mutable std::mutex engineMutex;
+
+    // Protects message-thread/host-thread engine mutation. The audio thread never takes this lock.
+    mutable std::mutex engineStateMutex;
     std::atomic<bool> suppressEngineCallbacks { false };
 
     // Message thread builds the engine + snapshot; the audio thread only reads the published snapshot.
@@ -111,6 +112,7 @@ private:
     std::atomic<double> reportedPpq { 0.0 };
     std::atomic<bool> reportedPlaying { false };
     std::atomic<bool> transportReportPending { false };
+    std::atomic<bool> messageThreadWorkPending { false };
     std::atomic<bool> playbackResetRequested { false };
     std::atomic<bool> fullUiSyncPending { false };
     std::atomic<bool> macroParametersDirty { false };

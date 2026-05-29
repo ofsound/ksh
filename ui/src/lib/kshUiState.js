@@ -2,7 +2,7 @@ import {
   DEFAULT_CHANNEL_COUNT,
   DEFAULT_CHANNEL_LABELS,
   DEFAULT_CHANNEL_NOTES,
-  MAX_LANES,
+  MAX_CHANNELS,
   MAX_STEPS,
   SOURCE_COUNT,
   clamp,
@@ -39,18 +39,18 @@ export function cloneCell(cell) {
 
 export function makeEmptySources() {
   return Array.from({ length: SOURCE_COUNT }, () =>
-    Array.from({ length: MAX_LANES }, () =>
+    Array.from({ length: MAX_CHANNELS }, () =>
       Array.from({ length: MAX_STEPS }, () => defaultCell())
     )
   );
 }
 
 export function makeSourceChannelMutes() {
-  return Array.from({ length: SOURCE_COUNT }, () => Array(MAX_LANES).fill(0));
+  return Array.from({ length: SOURCE_COUNT }, () => Array(MAX_CHANNELS).fill(0));
 }
 
 export function makeDefaultKshState() {
-  const lanes = Array.from({ length: MAX_LANES }, (_, index) => ({
+  const channels = Array.from({ length: MAX_CHANNELS }, (_, index) => ({
     label: DEFAULT_CHANNEL_LABELS[index] ?? String(index + 1),
     note: DEFAULT_CHANNEL_NOTES[index] ?? 36 + index,
     lock: -1,
@@ -60,7 +60,7 @@ export function makeDefaultKshState() {
 
   return {
     stepCount: 16,
-    laneCount: DEFAULT_CHANNEL_COUNT,
+    channelCount: DEFAULT_CHANNEL_COUNT,
     refreshSteps: 1,
     generationMode: "static",
     staticSource: 0,
@@ -71,7 +71,7 @@ export function makeDefaultKshState() {
     deviceActive: 1,
     tempo: 120,
     phaseOffsetBeats: 0,
-    lanes,
+    channels,
     sources: makeEmptySources(),
     sourceChannelMutes: makeSourceChannelMutes(),
   };
@@ -86,7 +86,7 @@ function applyPersistencePayload(state, payload) {
   }
 
   state.stepCount = clamp(payload.stepCount, 1, MAX_STEPS);
-  state.laneCount = clamp(payload.channelCount, 1, MAX_LANES);
+  state.channelCount = clamp(payload.channelCount, 1, MAX_CHANNELS);
   state.refreshSteps = clamp(payload.refreshSteps, 1, state.stepCount);
   state.generationMode =
     payload.generationMode === "per_channel" || payload.generationMode === "static"
@@ -108,7 +108,7 @@ function applyPersistencePayload(state, payload) {
   }
 
   for (let source = 0; source < SOURCE_COUNT; source += 1) {
-    for (let channel = 0; channel < MAX_LANES; channel += 1) {
+    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
       for (let step = 0; step < MAX_STEPS; step += 1) {
         state.sources[source][channel][step] = defaultCell();
       }
@@ -116,25 +116,25 @@ function applyPersistencePayload(state, payload) {
   }
 
   const channelsIn = payload.channels ?? [];
-  for (let channel = 0; channel < MAX_LANES; channel += 1) {
+  for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
     if (channelsIn[channel]) {
       const row = channelsIn[channel];
-      state.lanes[channel].label = String(row[0] ?? state.lanes[channel].label);
-      state.lanes[channel].note = clamp(row[1], 0, 127);
-      state.lanes[channel].lock = clamp(row[2], -1, SOURCE_COUNT - 1);
-      state.lanes[channel].loopLength = clamp(row[3], 1, state.stepCount);
+      state.channels[channel].label = String(row[0] ?? state.channels[channel].label);
+      state.channels[channel].note = clamp(row[1], 0, 127);
+      state.channels[channel].lock = clamp(row[2], -1, SOURCE_COUNT - 1);
+      state.channels[channel].loopLength = clamp(row[3], 1, state.stepCount);
       if (row[4] !== undefined) {
-        state.lanes[channel].playbackMode = normalizePlaybackMode(row[4]);
+        state.channels[channel].playbackMode = normalizePlaybackMode(row[4]);
       }
     }
-    state.lanes[channel].loopLength = clamp(state.lanes[channel].loopLength, 1, state.stepCount);
+    state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
   }
 
   state.sourceChannelMutes = makeSourceChannelMutes();
   const mutesIn = payload.sourceChannelMutes ?? [];
   for (let source = 0; source < SOURCE_COUNT; source += 1) {
     const muteRow = mutesIn[source] ?? [];
-    for (let channel = 0; channel < MAX_LANES; channel += 1) {
+    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
       state.sourceChannelMutes[source][channel] = muteRow[channel] ? 1 : 0;
     }
   }
@@ -153,7 +153,7 @@ function applyPersistencePayload(state, payload) {
       source < 0 ||
       source >= SOURCE_COUNT ||
       channel < 0 ||
-      channel >= MAX_LANES ||
+      channel >= MAX_CHANNELS ||
       step < 0 ||
       step >= MAX_STEPS
     ) {
@@ -189,12 +189,12 @@ export function applyStatusMessage(state, selector, args = []) {
     case "steps":
       state.stepCount = clamp(values[0], 1, MAX_STEPS);
       state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
-      for (let lane = 0; lane < MAX_LANES; lane += 1) {
-        state.lanes[lane].loopLength = clamp(state.lanes[lane].loopLength, 1, state.stepCount);
+      for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+        state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
       }
       break;
     case "channels":
-      state.laneCount = clamp(values[0], 1, MAX_LANES);
+      state.channelCount = clamp(values[0], 1, MAX_CHANNELS);
       break;
     case "refresh_steps":
       state.refreshSteps = clamp(values[0], 1, state.stepCount);

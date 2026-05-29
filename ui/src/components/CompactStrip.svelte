@@ -2,7 +2,7 @@
   import {
     COMPACT_HEIGHT,
     COMPACT_WIDTH,
-    MAX_LANES,
+    MAX_CHANNELS,
     MAX_STEPS,
   } from "../lib/kshConstants.js";
   import {
@@ -11,10 +11,10 @@
     session,
   } from "../lib/kshSession.svelte.js";
 
-  const previewLanes = $derived(Math.min(MAX_LANES, session.kshState.laneCount));
+  const previewChannels = $derived(Math.min(MAX_CHANNELS, session.kshState.channelCount));
 
-  function cellFill(lane, step) {
-    if (isCompactFlashing(lane, step)) {
+  function cellFill(channel, step) {
+    if (isCompactFlashing(channel, step)) {
       return "bg-ksh-text";
     }
 
@@ -23,7 +23,7 @@
       return "bg-ksh-inactive-step";
     }
 
-    const cell = session.previewData?.generated?.[lane]?.[step];
+    const cell = session.previewData?.generated?.[channel]?.[step];
     if (cell?.enabled) {
       return "bg-ksh-blue";
     }
@@ -54,15 +54,15 @@
     {/if}
 
     <div class="flex flex-col gap-0">
-      {#each Array.from({ length: previewLanes }, (_, lane) => lane) as lane (lane)}
+      {#each Array.from({ length: previewChannels }, (_, channel) => channel) as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">
           <span class="w-8 shrink-0 text-right text-[9px] text-ksh-muted">
-            {session.kshState.lanes[lane]?.label ?? lane + 1}
+            {session.kshState.channels[channel]?.label ?? channel + 1}
           </span>
           <div class="flex">
             {#each Array.from({ length: MAX_STEPS }, (_, step) => step) as step (step)}
               <div
-                class={`mr-[3px] h-[15px] w-[15px] rounded-sm ${cellFill(lane, step)}`}
+                class={`mr-[3px] h-[15px] w-[15px] rounded-sm ${cellFill(channel, step)}`}
                 aria-hidden="true"
               ></div>
             {/each}

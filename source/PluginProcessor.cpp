@@ -162,11 +162,12 @@ PluginProcessor::PluginProcessor()
     syncMacroParametersFromEngineLocked (false);
     addMacroParameterListeners();
     publishPlaybackSnapshot();
+    startTimerHz (120);
 }
 
 void PluginProcessor::publishPlaybackSnapshot()
 {
-    std::scoped_lock lock { engineMutex };
+    std::scoped_lock lock { engineStateMutex };
     publishPlaybackSnapshotLocked();
 }
 
@@ -174,6 +175,18 @@ void PluginProcessor::publishPlaybackSnapshotLocked()
 {
     playbackMailbox.publish (engine.makePlaybackSnapshot());
     lastPublishedSnapshotVersion = engine.playbackSnapshotVersion();
+}
+
+void PluginProcessor::applyPendingMacroParametersLocked()
+{
+    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
+        applyMacroParametersToEngineLocked();
+}
+
+void PluginProcessor::publishPlaybackSnapshotIfChangedLocked()
+{
+    if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+        publishPlaybackSnapshotLocked();
 }
 
 ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
@@ -210,10 +223,9 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
 void PluginProcessor::handleAsyncUpdate()
 {
     {
-        std::scoped_lock lock { engineMutex };
+        std::scoped_lock lock { engineStateMutex };
 
-        if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-            applyMacroParametersToEngineLocked();
+        applyPendingMacroParametersLocked();
 
         // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
         if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
@@ -232,9 +244,7 @@ void PluginProcessor::handleAsyncUpdate()
             engine.transportPosition (ppq, playing);
         }
 
-        // Hand the audio thread a fresh snapshot only when playback-affecting state changed.
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
+        publishPlaybackSnapshotIfChangedLocked();
     }
 
     playbackMailbox.drainRetired();
@@ -250,7 +260,15 @@ void PluginProcessor::handleAsyncUpdate()
 
 PluginProcessor::~PluginProcessor()
 {
+    stopTimer();
+    cancelPendingUpdate();
     removeMacroParameterListeners();
+}
+
+void PluginProcessor::timerCallback()
+{
+    if (messageThreadWorkPending.exchange (false, std::memory_order_acquire))
+        handleAsyncUpdate();
 }
 
 //==============================================================================
@@ -425,7 +443,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         pushedHit = noteHitsForUi.try_enqueue (playback.noteHits[i]) || pushedHit;
 
     if (pushedHit || notify)
-        triggerAsyncUpdate();
+        messageThreadWorkPending.store (true, std::memory_order_release);
 }
 
 //==============================================================================
@@ -458,7 +476,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     {
-        std::scoped_lock lock { engineMutex };
+        std::scoped_lock lock { engineStateMutex };
         const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
 
         try
@@ -494,67 +512,43 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 
 nlohmann::json PluginProcessor::enginePersistenceState()
 {
-    std::scoped_lock lock { engineMutex };
-
-    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-    {
-        applyMacroParametersToEngineLocked();
-
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
-    }
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    publishPlaybackSnapshotIfChangedLocked();
 
     return engine.serializeForPersistence();
 }
 
 nlohmann::json PluginProcessor::enginePreviewState()
 {
-    std::scoped_lock lock { engineMutex };
-
-    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-    {
-        applyMacroParametersToEngineLocked();
-
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
-    }
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    publishPlaybackSnapshotIfChangedLocked();
 
     return engine.snapshot();
 }
 
 ksh::EngineStateSnapshot PluginProcessor::engineStateSnapshot()
 {
-    std::scoped_lock lock { engineMutex };
-
-    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-    {
-        applyMacroParametersToEngineLocked();
-
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
-    }
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    publishPlaybackSnapshotIfChangedLocked();
 
     return engine.stateSnapshot();
 }
 
 ksh::PlaybackSnapshot PluginProcessor::enginePlaybackSnapshot()
 {
-    std::scoped_lock lock { engineMutex };
-
-    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-    {
-        applyMacroParametersToEngineLocked();
-
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
-    }
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    publishPlaybackSnapshotIfChangedLocked();
 
     return engine.makePlaybackSnapshot();
 }
 
 bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
 {
-    std::scoped_lock lock { engineMutex };
+    std::scoped_lock lock { engineStateMutex };
 
     const bool ok = ksh::dispatchEngineCommand (engine, selector, args);
 
@@ -566,8 +560,11 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
         if (isMacroParameterID (selector))
             syncMacroParametersFromEngineLocked (true);
 
-        requestPlaybackReset();
-        publishPlaybackSnapshotLocked();
+        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+        {
+            requestPlaybackReset();
+            publishPlaybackSnapshotLocked();
+        }
     }
 
     return true;
@@ -584,7 +581,7 @@ void PluginProcessor::parameterChanged (const juce::String& parameterID, float n
         return;
 
     macroParametersDirty.store (true, std::memory_order_release);
-    triggerAsyncUpdate();
+    messageThreadWorkPending.store (true, std::memory_order_release);
 }
 
 void PluginProcessor::addMacroParameterListeners()

@@ -28,7 +28,7 @@ TEST_CASE ("stack mode matches one source across window", "[engine][generation]"
     REQUIRE (fixture.engine.generatedCellAt (0, 1).velocity == 20);
 }
 
-TEST_CASE ("stack mode uses one source for all lanes on step", "[engine][generation]")
+TEST_CASE ("stack mode uses one source for all channels on step", "[engine][generation]")
 {
     EngineFixture fixture { { 0.76 } };
     fixture.clearAll();
@@ -248,7 +248,25 @@ TEST_CASE ("trailing cells do not make source active", "[engine][generation]")
     fixture.engine.setChannelLoopLength (0, 3);
     fixture.engine.setCell (0, 0, 5, true, 99, 100, 1);
 
-    REQUIRE (fixture.engine.activeSourceIndices().empty());
+    REQUIRE (test::EngineTestPeer::activeSourceIndicesEmpty (fixture.engine));
+}
+
+TEST_CASE ("playback snapshot version ignores metadata labels and tracks playback edits", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+
+    const auto initialVersion = fixture.engine.playbackSnapshotVersion();
+
+    fixture.engine.setChannelLabel (0, "Kick");
+    REQUIRE (fixture.engine.playbackSnapshotVersion() == initialVersion);
+
+    fixture.engine.setChannelNote (0, 42);
+    REQUIRE (fixture.engine.playbackSnapshotVersion() == initialVersion + 1);
+
+    const auto noteVersion = fixture.engine.playbackSnapshotVersion();
+    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::reverse);
+    REQUIRE (fixture.engine.playbackSnapshotVersion() == noteVersion + 1);
 }
 
 TEST_CASE ("channel lock overrides random source", "[engine][generation]")
@@ -350,10 +368,10 @@ TEST_CASE ("generateWindow scans active sources once", "[engine][generation]")
     fixture.engine.setCell (2, 2, 2, true, 100, 100, 1);
     fixture.engine.setCell (3, 3, 3, true, 110, 100, 1);
 
-    fixture.engine.resetActiveSourceIndicesCallCountForTests();
+    test::EngineTestPeer::resetActiveSourceIndicesCallCount (fixture.engine);
     fixture.engine.generateWindow (0, 16, true);
 
-    REQUIRE (fixture.engine.activeSourceIndicesCallCountForTests() == 1);
+    REQUIRE (test::EngineTestPeer::activeSourceIndicesCallCount (fixture.engine) == 1);
 }
 
 TEST_CASE ("cell edits reach steps beyond sixteen", "[engine][generation]")

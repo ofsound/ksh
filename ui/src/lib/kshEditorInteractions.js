@@ -95,10 +95,10 @@ export function loopDragNextValue(drag, clientY) {
   return drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE);
 }
 
-export function createCellDrag(source, lane, step, cell, layerMode, valueMode, clientX, clientY) {
+export function createCellDrag(source, channel, step, cell, layerMode, valueMode, clientX, clientY) {
   return {
     source,
-    lane,
+    channel,
     step,
     startX: clientX,
     startY: clientY,
@@ -177,12 +177,12 @@ export function applySourcePaintRange(state, source, drag, fromStep, toStep) {
 
   const lo = Math.min(fromStep, toStep);
   let hi = Math.max(fromStep, toStep);
-  const loopLength = clamp(state.lanes[drag.lane].loopLength, 1, state.stepCount);
+  const loopLength = clamp(state.channels[drag.channel].loopLength, 1, state.stepCount);
   hi = Math.min(hi, loopLength - 1);
   const changedSteps = [];
 
   for (let step = lo; step <= hi; step += 1) {
-    const cell = state.sources[source][drag.lane][step];
+    const cell = state.sources[source][drag.channel][step];
     if (drag.paintEnabled) {
       if (applyPaintCellProperties(cell, drag.paintCell)) {
         changedSteps.push(step);
@@ -202,7 +202,7 @@ export function applySourceValueDrag(state, source, drag, clientY) {
   }
 
   drag.moved = true;
-  const cell = state.sources[source][drag.lane][drag.step];
+  const cell = state.sources[source][drag.channel][drag.step];
   const enabledChanged = !cell.enabled;
   if (!cell.enabled) {
     cell.enabled = 1;
@@ -279,7 +279,7 @@ export function applySourceValueDrag(state, source, drag, clientY) {
 }
 
 export function toggleCellOnRelease(state, source, drag) {
-  const cell = state.sources[source][drag.lane][drag.step];
+  const cell = state.sources[source][drag.channel][drag.step];
   cell.enabled = cell.enabled ? 0 : 1;
   return cell.enabled === 0 ? null : drag;
 }

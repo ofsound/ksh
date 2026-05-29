@@ -46,7 +46,7 @@ TEST_CASE ("dispatchEngineCommand resets playback window", "[engine][bridge]")
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setCell (0, 0, 3, true, 80, 100, 1);
-    fixture.engine.setPlaybackStateForTests (0, 5);
+    test::EngineTestPeer::setPlaybackState (fixture.engine, 0, 5);
 
     REQUIRE (dispatchEngineCommand (fixture.engine, "reset", {}));
     REQUIRE (fixture.engine.getCurrentStep() == 0);
