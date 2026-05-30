@@ -677,10 +677,10 @@
 
     {#each channelRows as channel (channel)}
       <div class="flex items-center py-0.5" data-channel-row={channel}>
-        <div class="flex shrink-0 items-center gap-1 pr-2 text-[11px] font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
+        <div class="flex shrink-0 items-center gap-1 pr-2 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           {#if editingChannel === channel}
             <input
-              class="rounded border border-ksh-amber bg-ksh-off px-1 text-[11px] text-ksh-text outline-none"
+              class="rounded border border-ksh-amber bg-ksh-off px-1 text-[13px] text-ksh-text outline-none"
               style={`width:${CHANNEL_LABEL_W}px`}
               bind:value={labelDraft}
               onkeydown={(event) => {
@@ -695,7 +695,7 @@
           {:else}
             <button
               type="button"
-              class="channel-label shrink-0 truncate text-left text-ksh-text"
+              class="channel-label shrink-0 truncate text-left text-[13px] text-ksh-text"
               style={`width:${CHANNEL_LABEL_W}px`}
               onclick={() => onLabelClick(channel)}
             >
@@ -704,7 +704,7 @@
           {/if}
           <button
             type="button"
-            class="w-6 text-ksh-blue"
+            class="w-6 text-[13px] text-ksh-blue"
             onclick={(event) => {
               if (event.shiftKey) {
                 adjustChannelNote(channel, -1);
@@ -715,12 +715,12 @@
           >
             {session.kshState.channels[channel]?.note ?? 36}
           </button>
-          <button type="button" class="w-6 text-center text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
+          <button type="button" class="w-6 text-center text-[13px] text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
             {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
           </button>
           <button
             type="button"
-            class={`w-8 text-center ${loopLengthClass(channel)}`}
+            class={`w-8 text-center text-[13px] ${loopLengthClass(channel)}`}
             onpointerdown={(event) => beginLoopDrag(channel, event.clientY, event)}
             onpointermove={(event) => {
               if (loopDrag?.channel === channel) {
@@ -734,7 +734,7 @@
           </button>
           <button
             type="button"
-            class="w-5 text-center text-ksh-amber"
+            class="w-5 text-center text-[13px] text-ksh-amber"
             onclick={() => cycleChannelPlaybackMode(channel)}
           >
             {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
