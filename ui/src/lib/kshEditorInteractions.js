@@ -4,8 +4,6 @@ import {
   MAX_CYCLE,
   MAX_ROLL,
   MAX_STEPS,
-  PHASE_EARLY_MS_MAX,
-  PHASE_EARLY_MS_MIN,
   PROBABILITY_DRAG_SCALE,
   ROLL_DRAG_SCALE,
   SOURCE_PAINT_DRAG_THRESHOLD,
@@ -17,8 +15,6 @@ import {
   GRID_CELL_W,
   normalizeSourceLayerMode,
   normalizeSourceValueMode,
-  phaseOffsetBeatsFromMs,
-  phaseOffsetMs,
 } from "./kshEditorUtils.js";
 import { cloneCell } from "./kshUiState.js";
 
@@ -43,9 +39,6 @@ export function headerValueForState(state, id) {
   if (id === "refresh") {
     return state.refreshSteps;
   }
-  if (id === "phase_early_ms") {
-    return phaseOffsetMs(state.phaseOffsetBeats, state.tempo);
-  }
   if (id === "swing") {
     return state.swing;
   }
@@ -59,9 +52,6 @@ export function headerValueForState(state, id) {
 }
 
 export function headerValueMin(id) {
-  if (id === "phase_early_ms") {
-    return PHASE_EARLY_MS_MIN;
-  }
   if (id === "swing" || id === "velocity_humanize" || id === "timing_humanize") {
     return 0;
   }
@@ -74,9 +64,6 @@ export function headerValueMax(state, id) {
   }
   if (id === "refresh") {
     return state.stepCount;
-  }
-  if (id === "phase_early_ms") {
-    return PHASE_EARLY_MS_MAX;
   }
   return 100;
 }
@@ -282,9 +269,4 @@ export function toggleCellOnRelease(state, source, drag) {
   const cell = state.sources[source][drag.channel][drag.step];
   cell.enabled = cell.enabled ? 0 : 1;
   return cell.enabled === 0 ? null : drag;
-}
-
-export function applyPhaseMsToState(state, ms) {
-  const clamped = clamp(ms, PHASE_EARLY_MS_MIN, PHASE_EARLY_MS_MAX);
-  state.phaseOffsetBeats = phaseOffsetBeatsFromMs(clamped, state.tempo);
 }

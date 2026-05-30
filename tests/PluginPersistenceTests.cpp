@@ -79,7 +79,7 @@ TEST_CASE ("parsePersistencePayload accepts v1 JSON", "[plugin][persistence]")
 TEST_CASE ("parsePersistencePayload rejects M4L pattern wrapper", "[plugin][persistence]")
 {
     const std::string wrapped =
-        R"({"ksh_pattern_data":[{"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"phaseOffsetBeats":0,"channels":[["Kick",36,-1,16,"normal"],["Snare",38,-1,16,"normal"]],"sourceChannelMutes":[[0,0],[0,0],[0,0],[0,0]],"cells":[]}]})";
+        R"({"ksh_pattern_data":[{"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"channels":[["Kick",36,-1,16,"normal"],["Snare",38,-1,16,"normal"]],"sourceChannelMutes":[[0,0],[0,0],[0,0],[0,0]],"cells":[]}]})";
 
     const auto parsed = parsePersistencePayload (wrapped);
 
@@ -89,7 +89,7 @@ TEST_CASE ("parsePersistencePayload rejects M4L pattern wrapper", "[plugin][pers
 TEST_CASE ("parsePersistencePayload rejects chunked M4L atoms", "[plugin][persistence]")
 {
     const std::string payload =
-        R"({"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"phaseOffsetBeats":0,"channels":[["Kick",36,-1,16,"normal"]],"sourceChannelMutes":[[0],[0],[0],[0]],"cells":[]})";
+        R"({"v":1,"stepCount":8,"channelCount":2,"refreshSteps":4,"generationMode":"static","staticSource":0,"rate":"16n","tempo":120,"swing":0,"velocityHumanize":0,"timingHumanize":0,"deviceActive":1,"channels":[["Kick",36,-1,16,"normal"]],"sourceChannelMutes":[[0],[0],[0],[0]],"cells":[]})";
     const nlohmann::json atoms = nlohmann::json::array ({
         "ksh_json_chunks_v1",
         juce::URL::addEscapeChars (payload, true).toStdString()

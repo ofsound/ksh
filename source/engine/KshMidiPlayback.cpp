@@ -24,7 +24,7 @@ int globalStepForBeats (double songBeats, const PlaybackSnapshot& snapshot)
         songBeats = 0.0;
 
     const double beatsPerStep = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
-    return static_cast<int> (std::floor ((songBeats - snapshot.phaseOffsetBeats + 0.000000001) / beatsPerStep));
+    return static_cast<int> (std::floor ((songBeats + 0.000000001) / beatsPerStep));
 }
 
 int stepOneBased (int globalStep, int stepCount)
@@ -157,7 +157,7 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const PlaybackSnapshot& snaps
     if (bpm <= 0.0 || numSamples <= 0)
         return 0;
 
-    const double stepStartBeat = snapshot.phaseOffsetBeats + static_cast<double> (globalStep) * snapshot.beatsPerStep;
+    const double stepStartBeat = static_cast<double> (globalStep) * snapshot.beatsPerStep;
     const double samplesPerBeat = sampleRate * 60.0 / bpm;
     const int sampleOffset = static_cast<int> (std::llround ((stepStartBeat - blockStartPpq) * samplesPerBeat));
 

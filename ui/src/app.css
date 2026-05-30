@@ -16,12 +16,32 @@
 }
 
 @layer base {
+  *,
+  *::before,
+  *::after {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+
   html,
   body,
   #app {
     min-height: 100vh;
-    user-select: none;
     background: #292e35;
+  }
+
+  button:not(.channel-label):not(:disabled),
+  [role="button"]:not(.channel-label):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
   }
 }
 
@@ -31,7 +51,7 @@
   }
 
   .header-label {
-    @apply mb-1 block text-[9px] font-semibold leading-none text-ksh-muted;
+    @apply mb-1 block cursor-default text-[9px] font-semibold leading-none text-ksh-muted;
   }
 
   .header-button {

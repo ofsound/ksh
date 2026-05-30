@@ -139,7 +139,7 @@ To communicate between them:
 - **Audio → UI updates**: Use fixed-size atomics/FIFOs drained by a message-thread `juce::Timer`; never call UI code, `triggerAsyncUpdate()`, JSON/string builders, or engine mutation from the audio thread.
 - **Engine locking**: `engineStateMutex` is only for message/host-thread access. The audio thread must never take it.
 
-Host-automatable macro controls live in APVTS (`rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `phase_offset_beats`). Pattern/grid state stays in strict `v:1` JSON using `channelCount` and `channels`; do not reintroduce legacy M4L wrapper/chunk persistence or UI `lane` naming.
+Host-automatable macro controls live in APVTS (`rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`). Pattern/grid state stays in strict `v:1` JSON using `channelCount` and `channels`; do not reintroduce legacy M4L wrapper/chunk persistence or UI `lane` naming.
 
 ## Realtime Safety
 

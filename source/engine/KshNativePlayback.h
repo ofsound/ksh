@@ -95,7 +95,6 @@ struct PlaybackSnapshot
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     double beatsPerStep = 0.25;
-    double phaseOffsetBeats = 0.0;
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
     int swing = 0;

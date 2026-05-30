@@ -187,12 +187,6 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
-    if (selector == "phase_offset_beats")
-    {
-        engine.setPhaseOffsetBeats (argDouble (args, 0, engine.getPhaseOffsetBeats()));
-        return true;
-    }
-
     if (selector == "channel_label")
     {
         engine.setChannelLabel (zeroBased (argInt (args, 0, 1)), joinArgsFrom (args, 1));

@@ -9,7 +9,7 @@ TEST_CASE ("Constants match M4L device limits", "[engine][foundation]")
 {
     REQUIRE (Constants::maxSteps == 32);
     REQUIRE (Constants::maxChannels == 8);
-    REQUIRE (Constants::sourceCount == 4);
+    REQUIRE (Constants::sourceCount == 8);
     REQUIRE (Constants::defaultChannelCount == 8);
     REQUIRE (Constants::maxRoll == 8);
     REQUIRE (Constants::nativeHitFieldCount == 9);

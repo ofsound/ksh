@@ -18,7 +18,7 @@ The audio thread never emits WebView events. It enqueues note-hit metadata into 
 
 Commands use JSON `{ selector, args }` through `kshSendCommand`. Indexes crossing the JS/C++ boundary are 1-based for M4L message compatibility.
 
-- Globals: `steps`, `channels`, `refresh_steps`, `mode`, `rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `phase_offset_beats`, `static_source`
+- Globals: `steps`, `channels`, `refresh_steps`, `mode`, `rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `static_source`
 - Channel: `channel_label`, `channel_note`, `channel_lock`, `channel_loop_length`, `channel_playback_mode`, `channel_audition`
 - Source grid: `cell`, `cell_enabled`, `cell_velocity`, `cell_probability`, `cell_cycle`, `cell_cycle_offset`, `cell_cycle_inverted`, `cell_roll`
 - Source/channel utilities: `source_channel_mute`, `source_channel_reset`

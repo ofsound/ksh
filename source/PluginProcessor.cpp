@@ -12,13 +12,12 @@
 
 namespace
 {
-constexpr std::array<std::string_view, 6> kMacroParameterIDs {{
+constexpr std::array<std::string_view, 5> kMacroParameterIDs {{
     "rate",
     "swing",
     "velocity_humanize",
     "timing_humanize",
-    "device_active",
-    "phase_offset_beats"
+    "device_active"
 }};
 
 bool isMacroParameterID (std::string_view id)
@@ -130,12 +129,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
 
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         ParameterID { "device_active", 1 }, "Device Active", true));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        ParameterID { "phase_offset_beats", 1 },
-        "Phase Offset",
-        juce::NormalisableRange<float> { -1.0f, 1.0f, 0.0001f },
-        0.0f));
 
     return { params.begin(), params.end() };
 }
@@ -625,11 +618,6 @@ void PluginProcessor::applyMacroParametersToEngineLocked()
 
     if (engine.isDeviceActive() != deviceActive)
         engine.setDeviceActive (deviceActive);
-
-    const auto phaseOffsetBeats = static_cast<double> (parameterValue (parameters, "phase_offset_beats"));
-
-    if (std::abs (engine.getPhaseOffsetBeats() - phaseOffsetBeats) > 0.000001)
-        engine.setPhaseOffsetBeats (phaseOffsetBeats);
 }
 
 void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
@@ -641,7 +629,6 @@ void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
     setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.getVelocityHumanize()), notifyHost);
     setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.getTimingHumanize()), notifyHost);
     setParameterValue (parameters, "device_active", engine.isDeviceActive() ? 1.0f : 0.0f, notifyHost);
-    setParameterValue (parameters, "phase_offset_beats", static_cast<float> (engine.getPhaseOffsetBeats()), notifyHost);
 
     suppressParameterCallbacks.store (previousSuppression, std::memory_order_release);
 }

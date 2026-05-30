@@ -19,7 +19,6 @@
     mutedChannelColor,
     normalizeSourceLayerMode,
     playbackModeLabel,
-    phaseOffsetMs,
     resolveCellTriangle,
     sourceLayerLabel,
     sourceLayerValue,
@@ -618,15 +617,6 @@
     <div class="ml-auto flex items-center">
       <div class="header-section">
         <HeaderValueDrag
-          id="phase_early_ms"
-          label="Phase"
-          value={phaseOffsetMs(session.kshState.phaseOffsetBeats, session.kshState.tempo)}
-          active={headerDrag?.id === "phase_early_ms"}
-          onBegin={beginHeaderDrag}
-          onMove={moveHeaderDrag}
-          onEnd={endHeaderDrag}
-        />
-        <HeaderValueDrag
           id="swing"
           label="Swing"
           value={session.kshState.swing}
@@ -717,7 +707,7 @@
           {:else}
             <button
               type="button"
-              class="shrink-0 truncate text-left text-ksh-text"
+              class="channel-label shrink-0 truncate text-left text-ksh-text"
               style={`width:${CHANNEL_LABEL_W}px`}
               onclick={() => onLabelClick(channel)}
             >

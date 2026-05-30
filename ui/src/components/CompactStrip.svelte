@@ -48,7 +48,7 @@
       {#each Array.from({ length: previewChannels }, (_, channel) => channel) as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">
           <span
-            class="shrink-0 truncate text-left text-[9px] text-ksh-muted"
+            class="channel-label shrink-0 truncate text-left text-[9px] text-ksh-muted"
             style={`width:${CHANNEL_LABEL_W}px`}
           >
             {session.kshState.channels[channel]?.label ?? channel + 1}

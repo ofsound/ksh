@@ -16,7 +16,7 @@ export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
 export const STEP_LABEL_H = 18;
 export const GRID_ROW_H = GRID_CELL_H + 4;
-export const EDITOR_MIN_WIDTH = 1192;
+export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 724;
 export const MAIN_TOP = 68;
 export const HELPER_FOOTER_H = 24;
@@ -341,23 +341,6 @@ export function nextStepCount(current) {
     return options[0];
   }
   return options[index + 1];
-}
-
-export function phaseOffsetMs(phaseOffsetBeats, tempo) {
-  let bpm = Number.parseFloat(String(tempo));
-  if (Number.isNaN(bpm) || bpm <= 0) {
-    bpm = 120;
-  }
-  return Math.round(-phaseOffsetBeats * 60000 / bpm);
-}
-
-export function phaseOffsetBeatsFromMs(msEarly, tempo) {
-  let bpm = Number.parseFloat(String(tempo));
-  if (Number.isNaN(bpm) || bpm <= 0) {
-    bpm = 120;
-  }
-  const clamped = clamp(msEarly, -80, 80);
-  return -clamped * bpm / 60000;
 }
 
 export function modifierLayerMode(metaKey, shiftKey, altKey) {

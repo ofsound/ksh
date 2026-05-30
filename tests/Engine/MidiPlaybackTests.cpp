@@ -204,18 +204,6 @@ TEST_CASE ("midi playback applies swing delay within block", "[engine][transport
     REQUIRE (noteOnSample > 0);
 }
 
-TEST_CASE ("phase offset shifts step boundary earlier", "[engine][transport]")
-{
-    EngineFixture fixture;
-    fixture.clearAll();
-    fixture.engine.setStepCount (4);
-    fixture.engine.setTempo (120.0);
-    fixture.engine.setPhaseOffsetBeats (-0.2);
-
-    REQUIRE (fixture.engine.globalStepForBeats (0.05) == 1);
-    REQUIRE (fixture.engine.globalStepForBeats (0.0) == 0);
-}
-
 TEST_CASE ("transport position does not fire while stopped", "[engine][transport]")
 {
     EngineFixture fixture;

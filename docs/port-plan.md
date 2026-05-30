@@ -83,7 +83,6 @@ Host-automatable macro controls live in APVTS:
 - `velocity_humanize`
 - `timing_humanize`
 - `device_active`
-- `phase_offset_beats`
 
 Pattern/grid data stays in custom JSON state. Do not model the step grid as thousands of APVTS parameters.
 

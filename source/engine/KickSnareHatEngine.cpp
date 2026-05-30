@@ -135,7 +135,6 @@ EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;
     snapshot.currentStep = currentStep;
-    snapshot.phaseOffsetBeats = phaseOffsetBeats;
     snapshot.playingStepOneBased = playingStepOneBased;
     snapshot.nativePlaybackStepCount = nativePlaybackStepCount;
     snapshot.transportPlaying = transportPlaying;
@@ -333,13 +332,6 @@ void KickSnareHatEngine::setDeviceActive (bool active)
     deviceActive = active;
     ++playbackSnapshotVersion_;
     status (std::string { "device_active " } + (deviceActive ? "1" : "0"));
-}
-
-void KickSnareHatEngine::setPhaseOffsetBeats (double beats)
-{
-    phaseOffsetBeats = std::isnan (beats) ? 0.0 : beats;
-    ++playbackSnapshotVersion_;
-    status ("phase_offset_beats " + std::to_string (phaseOffsetBeats));
 }
 
 void KickSnareHatEngine::setChannelLabel (int channel, std::string_view label)
@@ -833,7 +825,6 @@ nlohmann::json KickSnareHatEngine::snapshot() const
         { "swing", swing },
         { "velocityHumanize", velocityHumanize },
         { "timingHumanize", timingHumanize },
-        { "phaseOffsetBeats", phaseOffsetBeats },
         { "currentStep", currentStep + 1 },
         { "channels", channelsOut },
         { "sourceChannelMutes", sourceChannelMutes },
@@ -917,7 +908,6 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         { "velocityHumanize", velocityHumanize },
         { "timingHumanize", timingHumanize },
         { "deviceActive", deviceActive ? 1 : 0 },
-        { "phaseOffsetBeats", phaseOffsetBeats },
         { "channels", channelsOut },
         { "sourceChannelMutes", mutes },
         { "cells", cells }
@@ -945,7 +935,6 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
     else
         deviceActive = state["deviceActive"].get<int>() != 0;
 
-    phaseOffsetBeats = state.value ("phaseOffsetBeats", 0.0);
     updateStepIntervalMs();
 
     for (auto& source : sources)
@@ -971,14 +960,26 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
             clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
     }
 
+    for (auto& mutes : sourceChannelMutes)
+        for (auto& muted : mutes)
+            muted = false;
+
     const auto& mutesIn = state["sourceChannelMutes"];
 
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
+        if (source >= static_cast<int> (mutesIn.size()))
+            continue;
+
+        const auto& muteRow = mutesIn[static_cast<size_t> (source)];
+
         for (int channel = 0; channel < channelCount; ++channel)
         {
+            if (channel >= static_cast<int> (muteRow.size()))
+                continue;
+
             sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] =
-                mutesIn[static_cast<size_t> (source)][static_cast<size_t> (channel)].get<int>() != 0;
+                muteRow[static_cast<size_t> (channel)].get<int>() != 0;
         }
     }
 

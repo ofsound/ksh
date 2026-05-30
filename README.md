@@ -42,7 +42,7 @@ npm run build
 - The processor publishes immutable `PlaybackSnapshot` objects to the audio thread through `RealtimeMailbox`.
 - `processBlock` never locks or touches mutable engine state. It evaluates MIDI live from the current snapshot with fixed storage and a realtime-safe RNG in `MidiPlaybackRunner`.
 - Audio-to-UI note hits are sent through a lock-free FIFO and drained on the message thread by a timer.
-- Host-automatable macro controls are APVTS parameters: rate, swing, velocity humanize, timing humanize, device active, and phase offset.
+- Host-automatable macro controls are APVTS parameters: rate, swing, velocity humanize, timing humanize, and device active.
 - Grid/source pattern state is custom `v:1` JSON, not APVTS parameters.
 - Persistence accepts one strict JSON format. Legacy Max/M4L wrapper and chunk formats are intentionally rejected.
 - UI, engine, and persistence use channel naming (`channelCount`, `channels`), not lane naming.

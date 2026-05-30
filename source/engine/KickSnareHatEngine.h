@@ -49,7 +49,6 @@ struct EngineStateSnapshot
     int timingHumanize = 0;
     bool deviceActive = true;
     int currentStep = 0;
-    double phaseOffsetBeats = 0.0;
     int playingStepOneBased = 0;
     int nativePlaybackStepCount = 16;
     int transportPlaying = 0;
@@ -80,7 +79,6 @@ public:
     [[nodiscard]] int getVelocityHumanize() const { return velocityHumanize; }
     [[nodiscard]] int getTimingHumanize() const { return timingHumanize; }
     [[nodiscard]] bool isDeviceActive() const { return deviceActive; }
-    [[nodiscard]] double getPhaseOffsetBeats() const { return phaseOffsetBeats; }
     [[nodiscard]] int getCurrentStep() const { return currentStep; }
     [[nodiscard]] int getPlayingStepOneBased() const { return playingStepOneBased; }
     [[nodiscard]] int getNativePlaybackStepCount() const { return nativePlaybackStepCount; }
@@ -117,7 +115,6 @@ private:
     int timingHumanize = 0;
     bool deviceActive = true;
     int currentStep = 0;
-    double phaseOffsetBeats = 0.0;
     int playingStepOneBased = 0;
     int nativePlaybackStepCount = 16;
     int transportPlaying = 0;
@@ -146,7 +143,6 @@ public:
     void setVelocityHumanize (int amount);
     void setTimingHumanize (int amount);
     void setDeviceActive (bool active);
-    void setPhaseOffsetBeats (double beats);
 
     void setChannelLabel (int channel, std::string_view label);
     void setChannelNote (int channel, int note);

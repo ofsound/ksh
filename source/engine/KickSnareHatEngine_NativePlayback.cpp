@@ -286,7 +286,6 @@ PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
     snapshot.stepCount = stepCount;
     snapshot.channelCount = channelCount;
     snapshot.beatsPerStep = beatsPerStep();
-    snapshot.phaseOffsetBeats = phaseOffsetBeats;
     snapshot.tempo = tempo;
     snapshot.stepIntervalMs = stepIntervalMs;
     snapshot.swing = swing;
@@ -326,7 +325,7 @@ int KickSnareHatEngine::globalStepForBeats (double songBeats) const
     if (std::isnan (songBeats))
         songBeats = 0.0;
 
-    return static_cast<int> (std::floor ((songBeats - phaseOffsetBeats + 0.000000001) / beatsPerStep()));
+    return static_cast<int> (std::floor ((songBeats + 0.000000001) / beatsPerStep()));
 }
 
 void KickSnareHatEngine::reportTransportStep (int globalStep)

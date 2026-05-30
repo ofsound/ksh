@@ -70,7 +70,6 @@ export function makeDefaultKshState() {
     timingHumanize: 0,
     deviceActive: 1,
     tempo: 120,
-    phaseOffsetBeats: 0,
     channels,
     sources: makeEmptySources(),
     sourceChannelMutes: makeSourceChannelMutes(),
@@ -101,7 +100,6 @@ function applyPersistencePayload(state, payload) {
     state.deviceActive = toggleValue(payload.deviceActive);
   }
   state.tempo = Math.max(20, Math.min(300, Number.parseFloat(payload.tempo) || 120));
-  state.phaseOffsetBeats = Number.parseFloat(payload.phaseOffsetBeats) || 0;
 
   if (!state.sources) {
     state.sources = makeEmptySources();
@@ -222,9 +220,6 @@ export function applyStatusMessage(state, selector, args = []) {
       break;
     case "device_active":
       state.deviceActive = toggleValue(values[0]);
-      break;
-    case "phase_offset_beats":
-      state.phaseOffsetBeats = Number.parseFloat(values[0]) || 0;
       break;
     case "tempo":
       state.tempo = Math.max(20, Math.min(300, Number.parseFloat(values[0]) || 120));

@@ -7,7 +7,6 @@ import {
   clamp,
 } from "./kshConstants.js";
 import {
-  applyPhaseMsToState,
   clampHeaderValue,
 } from "./kshEditorInteractions.js";
 import {
@@ -63,6 +62,20 @@ function beginPreviewSuppression() {
 
 function endPreviewSuppression() {
   previewSuppressionDepth = Math.max(0, previewSuppressionDepth - 1);
+}
+
+function bumpOptimisticPreview() {
+  session.previewData = applyRecomposedPreview(session.kshState, session.previewData);
+}
+
+async function withPreviewSuppressed(task) {
+  beginPreviewSuppression();
+
+  try {
+    await task();
+  } finally {
+    endPreviewSuppression();
+  }
 }
 
 function bumpState() {
@@ -257,13 +270,6 @@ export async function setHeaderValue(id, value) {
     return;
   }
 
-  if (id === "phase_early_ms") {
-    applyPhaseMsToState(state, next);
-    bumpState();
-    await sendCommand("phase_offset_beats", [state.phaseOffsetBeats]);
-    return;
-  }
-
   if (id === "swing" && state.swing !== next) {
     state.swing = next;
     bumpState();
@@ -395,9 +401,13 @@ export async function shiftChannelRow(channel, direction) {
   const source = session.selectedSource;
   const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
   bumpState();
-  for (const step of steps) {
-    await sendCellCommand(source, channel, step);
-  }
+  bumpOptimisticPreview();
+
+  await withPreviewSuppressed(async () => {
+    for (const step of steps) {
+      await sendCellCommand(source, channel, step);
+    }
+  });
 }
 
 export async function shiftPattern(direction) {
@@ -412,33 +422,32 @@ export async function shiftPattern(direction) {
   }
 
   bumpState();
+  bumpOptimisticPreview();
 
-  for (const row of shifted) {
-    for (const step of row.steps) {
-      await sendCellCommand(source, row.channel, step);
+  await withPreviewSuppressed(async () => {
+    for (const row of shifted) {
+      for (const step of row.steps) {
+        await sendCellCommand(source, row.channel, step);
+      }
     }
-  }
+  });
 }
 
 export async function clearPattern() {
   const source = session.selectedSource;
   const { channelCount } = session.kshState;
 
-  beginPreviewSuppression();
+  clearSourcePattern(session.kshState, source);
+  bumpState();
+  bumpOptimisticPreview();
 
-  try {
-    clearSourcePattern(session.kshState, source);
-    bumpState();
-    session.previewData = applyRecomposedPreview(session.kshState, session.previewData);
-
+  await withPreviewSuppressed(async () => {
     for (let channel = 0; channel < channelCount; channel += 1) {
       await sendCommand("source_channel_reset", [source + 1, channel + 1]);
       await sendCommand("channel_lock", [channel + 1, "random"]);
       await sendChannelPlaybackMode(channel);
     }
-  } finally {
-    endPreviewSuppression();
-  }
+  });
 }
 
 export async function resizeForCurrentView() {
