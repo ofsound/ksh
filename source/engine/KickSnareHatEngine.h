@@ -206,6 +206,7 @@ public:
     [[nodiscard]] double beatsPerStep() const;
     void transportPosition (double songBeats, bool isPlaying);
     void syncNativePlaybackTable();
+    void flushPreview();
 
     [[nodiscard]] static int mod (int value, int divisor);
 
@@ -222,7 +223,6 @@ private:
     double nextRandom() const;
     void status (const std::string& message);
     void markPreviewDirty (bool forceEmit);
-    void flushPreview();
 
     [[nodiscard]] ActiveSourceList activeSourceIndices() const;
     [[nodiscard]] int pickRandomSource (const ActiveSourceList* active = nullptr);

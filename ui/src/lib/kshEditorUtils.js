@@ -11,10 +11,51 @@ import { cloneCell, defaultCell } from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
 export const GRID_CELL_H = 44;
-export const EDITOR_MIN_WIDTH = 1160;
+export const GRID_GUTTER_PX = 12;
+export const CHANNEL_LABEL_W = 64;
+export const GRID_SIDEBAR_W = 242;
+export const STEP_LABEL_H = 18;
+export const GRID_ROW_H = GRID_CELL_H + 4;
+export const EDITOR_MIN_WIDTH = 1192;
+export const PLUGIN_MIN_HEIGHT = 724;
 export const MAIN_TOP = 68;
-export const FOOTER_H = 28;
-export const COMBINED_GAP = 8;
+export const HELPER_FOOTER_H = 24;
+
+export function gridBodyHeight(channelCount) {
+  return STEP_LABEL_H + channelCount * GRID_ROW_H;
+}
+
+export function gridAreaHeight(editorHeight) {
+  return editorHeight - MAIN_TOP;
+}
+
+/** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
+export function gridCellPadding(channelCount, editorHeight) {
+  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount);
+  return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
+}
+
+/** Top spacer; step labels sit between this and the first cell row. */
+export function gridTopPadding(channelCount, editorHeight) {
+  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount);
+  return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+}
+
+export const COMPACT_ROW_H = 18;
+
+export function compactPanelHeight() {
+  return COMPACT_HEIGHT + HELPER_FOOTER_H;
+}
+
+export function compactPreviewHeight(channelCount) {
+  return channelCount * COMPACT_ROW_H;
+}
+
+/** Vertically center the generated preview grid between the divider and plugin bottom. */
+export function compactPreviewPadding(channelCount) {
+  const slack = compactPanelHeight() - compactPreviewHeight(channelCount);
+  return Math.max(0, Math.floor(slack / 2));
+}
 
 export const DC_CHANNEL_COLORS = [
   [0.86, 0.25, 0.28],
@@ -45,13 +86,36 @@ export function rgbaToCss([r, g, b], alpha = 1) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
-export function channelColor(channel, light = false, dcColors = true) {
+function mixRgb([r, g, b], [targetR, targetG, targetB], amount) {
+  const keep = 1 - amount;
+  return [
+    r * keep + targetR * amount,
+    g * keep + targetG * amount,
+    b * keep + targetB * amount,
+  ];
+}
+
+function channelColorRgb(channel, light = false, dcColors = true) {
   if (!dcColors) {
-    return light ? "#94c9f7" : "#f59e38";
+    return light ? [1.0, 0.66, 0.46] : [0.93, 0.55, 0.22];
   }
 
   const palette = light ? DC_CHANNEL_COLORS_LIGHT : DC_CHANNEL_COLORS;
-  return rgbaToCss(palette[channel % palette.length]);
+  return palette[channel % palette.length];
+}
+
+export function channelColor(channel, light = false, dcColors = true) {
+  return rgbaToCss(channelColorRgb(channel, light, dcColors));
+}
+
+export function channelToneColor(channel, tone = "light", dcColors = true) {
+  if (tone === "dark") {
+    return rgbaToCss(mixRgb(channelColorRgb(channel, false, dcColors), [0, 0, 0], 0.18));
+  }
+  if (tone === "divider") {
+    return rgbaToCss(mixRgb(channelColorRgb(channel, false, dcColors), [0, 0, 0], 0.08), 0.72);
+  }
+  return rgbaToCss(channelColorRgb(channel, true, dcColors));
 }
 
 export function mutedChannelColor(colorCss) {
@@ -64,9 +128,9 @@ export function mutedChannelColor(colorCss) {
 
 export function editorDimensions(state) {
   const gridW = state.stepCount * GRID_CELL_W;
-  const width = Math.max(EDITOR_MIN_WIDTH, 280 + gridW);
-  const sourceGridY0 = MAIN_TOP + 12 + 22 + 32;
-  const height = sourceGridY0 + state.channelCount * GRID_CELL_H + 18 + 8 + FOOTER_H;
+  const width = Math.max(EDITOR_MIN_WIDTH, 312 + gridW);
+  const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
+  const height = Math.max(MAIN_TOP + gridBodyHeight(state.channelCount), minEditorHeight);
   return { width, height };
 }
 
@@ -76,7 +140,7 @@ export function combinedDimensions(state) {
   const editor = editorDimensions(state);
   return {
     width: editor.width,
-    height: editor.height + COMBINED_GAP + COMPACT_HEIGHT,
+    height: editor.height + compactPanelHeight(),
   };
 }
 
@@ -208,7 +272,7 @@ export function sourceLayerLabel(mode) {
   if (layer === "roll") {
     return "Roll";
   }
-  return "Vel";
+  return "Velocity";
 }
 
 export function lockLabel(lock) {

@@ -1,10 +1,10 @@
 <script>
+  import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
   import {
-    COMPACT_HEIGHT,
-    MAX_CHANNELS,
-    MAX_STEPS,
-  } from "../lib/kshConstants.js";
-  import { editorDimensions } from "../lib/kshEditorUtils.js";
+    CHANNEL_LABEL_W,
+    compactPreviewPadding,
+    editorDimensions,
+  } from "../lib/kshEditorUtils.js";
   import {
     isCompactFlashing,
     session,
@@ -12,6 +12,7 @@
 
   const previewChannels = $derived(Math.min(MAX_CHANNELS, session.kshState.channelCount));
   const dims = $derived(editorDimensions(session.kshState));
+  const previewPad = $derived(compactPreviewPadding(previewChannels));
 
   function cellFill(channel, step) {
     if (isCompactFlashing(channel, step)) {
@@ -28,25 +29,28 @@
       return "bg-ksh-blue";
     }
 
-    return "bg-ksh-off";
+    return step % 4 === 0 ? "bg-ksh-off-dark" : "bg-ksh-off";
   }
 </script>
 
 <div
-  class="compact-strip flex overflow-hidden rounded-md border border-ksh-stroke-soft bg-ksh-bg text-ksh-text"
-  style={`width: ${dims.width}px; height: ${COMPACT_HEIGHT}px;`}
+  class="compact-strip relative h-full overflow-hidden text-ksh-text"
+  style={`width:${dims.width}px;`}
 >
-  <section class="min-w-0 flex-1 overflow-hidden py-[18px] pl-[50px] pr-3">
-    {#if session.bridgeError}
-      <p class="mb-2 text-xs text-red-400">{session.bridgeError}</p>
-    {:else if !session.ready}
-      <p class="text-xs text-ksh-muted">Loading…</p>
-    {/if}
+  {#if session.bridgeError}
+    <p class="absolute left-3 top-2 z-10 text-xs text-red-400">{session.bridgeError}</p>
+  {:else if !session.ready}
+    <p class="absolute left-3 top-2 z-10 text-xs text-ksh-muted">Loading…</p>
+  {/if}
 
+  <section class="px-3" style={`padding-top:${previewPad}px;`}>
     <div class="flex flex-col gap-0">
       {#each Array.from({ length: previewChannels }, (_, channel) => channel) as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">
-          <span class="w-8 shrink-0 text-right text-[9px] text-ksh-muted">
+          <span
+            class="shrink-0 truncate text-left text-[9px] text-ksh-muted"
+            style={`width:${CHANNEL_LABEL_W}px`}
+          >
             {session.kshState.channels[channel]?.label ?? channel + 1}
           </span>
           <div class="flex">

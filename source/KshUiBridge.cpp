@@ -186,12 +186,6 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return true;
     }
 
-    if (selector == "source_channel_reset")
-    {
-        emitEngineState();
-        return true;
-    }
-
     emitPreview (processor.enginePreviewState());
     return true;
 }

@@ -422,6 +422,37 @@ TEST_CASE ("native playback refreshes generated window on transport boundary", "
     REQUIRE (fixture.engine.generatedCellAt (0, 4).source == 3);
 }
 
+TEST_CASE ("native playback flushes refreshed generated preview", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setRefreshSteps (4);
+    fixture.engine.setGenerationMode (GenerationMode::stack);
+    fixture.engine.setCell (0, 0, 4, true, 44, 100, 1);
+    fixture.engine.setCell (3, 0, 4, true, 99, 100, 1);
+    fixture.setRandomValues ({ 0.0 });
+    fixture.engine.generateWindow (4, 4, true);
+    fixture.previews.clear();
+
+    fixture.setRandomValues ({ 0.0, 0.99, 0.0 });
+    fixture.engine.transportPosition (0.0, true);
+    fixture.engine.transportPosition (0.25, true);
+    fixture.engine.transportPosition (0.5, true);
+    fixture.engine.transportPosition (0.75, true);
+    fixture.engine.transportPosition (1.0, true);
+
+    REQUIRE (fixture.previews.empty());
+
+    fixture.engine.flushPreview();
+
+    REQUIRE (fixture.previews.size() == 1);
+    REQUIRE (fixture.previews.back()["generated"][0][4]["source"] == 4);
+    REQUIRE (fixture.previews.back()["generated"][0][4]["velocity"] == 99);
+}
+
 TEST_CASE ("native playback keeps early humanized refresh boundary hit readable", "[engine][native]")
 {
     EngineFixture fixture;

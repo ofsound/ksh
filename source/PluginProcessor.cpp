@@ -245,6 +245,7 @@ void PluginProcessor::handleAsyncUpdate()
         }
 
         publishPlaybackSnapshotIfChangedLocked();
+        engine.flushPreview();
     }
 
     playbackMailbox.drainRetired();

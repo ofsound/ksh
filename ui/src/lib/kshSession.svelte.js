@@ -20,6 +20,9 @@ import {
   shiftSourceChannelRow,
 } from "./kshEditorUtils.js";
 import {
+  applyRecomposedPreview,
+} from "./kshPreviewUtils.js";
+import {
   onBackendEvent,
   parseBackendJson,
   sendCommand,
@@ -52,6 +55,15 @@ export const session = $state({
 let sessionStarted = false;
 /** @type {Array<() => void>} */
 let teardownHandlers = [];
+let previewSuppressionDepth = 0;
+
+function beginPreviewSuppression() {
+  previewSuppressionDepth += 1;
+}
+
+function endPreviewSuppression() {
+  previewSuppressionDepth = Math.max(0, previewSuppressionDepth - 1);
+}
 
 function bumpState() {
   session.kshState = {
@@ -145,10 +157,9 @@ export function isEditorFlashing(source, channel, step) {
   return until !== undefined && until > Date.now();
 }
 
-export async function sendCell(source, channel, step) {
+function cellCommandArgs(source, channel, step) {
   const cell = session.kshState.sources[source][channel][step];
-  bumpState();
-  await sendCommand("cell", [
+  return [
     source + 1,
     channel + 1,
     step + 1,
@@ -159,7 +170,16 @@ export async function sendCell(source, channel, step) {
     cell.cycleOffset,
     cell.cycleInverted,
     cell.roll,
-  ]);
+  ];
+}
+
+function sendCellCommand(source, channel, step) {
+  return sendCommand("cell", cellCommandArgs(source, channel, step));
+}
+
+export async function sendCell(source, channel, step) {
+  bumpState();
+  await sendCellCommand(source, channel, step);
 }
 
 export async function sendChannel(channel) {
@@ -299,10 +319,10 @@ export async function resetSourceChannelRow(source, channel) {
 }
 
 export async function sendCellsForChannel(source, channel, steps) {
-  for (const step of steps) {
-    await sendCell(source, channel, step);
-  }
   bumpState();
+  for (const step of steps) {
+    await sendCellCommand(source, channel, step);
+  }
 }
 
 export async function adjustChannelNote(channel, delta) {
@@ -372,26 +392,52 @@ export async function toggleChannelMute(source, channel) {
 }
 
 export async function shiftChannelRow(channel, direction) {
-  const steps = shiftSourceChannelRow(session.kshState, session.selectedSource, channel, direction);
+  const source = session.selectedSource;
+  const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
   bumpState();
   for (const step of steps) {
-    await sendCell(session.selectedSource, channel, step);
+    await sendCellCommand(source, channel, step);
   }
 }
 
 export async function shiftPattern(direction) {
+  const source = session.selectedSource;
+  const shifted = [];
+
   for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
-    await shiftChannelRow(channel, direction);
+    shifted.push({
+      channel,
+      steps: shiftSourceChannelRow(session.kshState, source, channel, direction),
+    });
+  }
+
+  bumpState();
+
+  for (const row of shifted) {
+    for (const step of row.steps) {
+      await sendCellCommand(source, row.channel, step);
+    }
   }
 }
 
 export async function clearPattern() {
-  clearSourcePattern(session.kshState, session.selectedSource);
-  bumpState();
-  for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
-    await sendCommand("source_channel_reset", [session.selectedSource + 1, channel + 1]);
-    await sendCommand("channel_lock", [channel + 1, "random"]);
-    await sendChannelPlaybackMode(channel);
+  const source = session.selectedSource;
+  const { channelCount } = session.kshState;
+
+  beginPreviewSuppression();
+
+  try {
+    clearSourcePattern(session.kshState, source);
+    bumpState();
+    session.previewData = applyRecomposedPreview(session.kshState, session.previewData);
+
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      await sendCommand("source_channel_reset", [source + 1, channel + 1]);
+      await sendCommand("channel_lock", [channel + 1, "random"]);
+      await sendChannelPlaybackMode(channel);
+    }
+  } finally {
+    endPreviewSuppression();
   }
 }
 
@@ -427,6 +473,10 @@ export function initKshSession() {
       bumpState();
     }),
     onBackendEvent("preview", (payload) => {
+      if (previewSuppressionDepth > 0) {
+        return;
+      }
+
       session.previewData = parseBackendJson(payload);
     }),
     onBackendEvent("note_hit", handleNoteHit),

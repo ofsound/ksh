@@ -19,6 +19,7 @@ struct EngineFixture
     std::vector<double> randomValues;
     std::vector<std::string> statuses;
     std::vector<MidiNoteEvent> notes;
+    std::vector<nlohmann::json> previews;
     KickSnareHatEngine engine { EngineCallbacks {} };
 
     explicit EngineFixture (std::vector<double> values = {})
@@ -39,6 +40,7 @@ struct EngineFixture
         ksh::test::clearAll (engine);
         statuses.clear();
         notes.clear();
+        previews.clear();
         randomIndex = 0;
     }
 
@@ -56,6 +58,10 @@ private:
         callbacks.emitNote = [this] (const MidiNoteEvent& note)
         {
             notes.push_back (note);
+        };
+        callbacks.emitPreview = [this] (const nlohmann::json& preview)
+        {
+            previews.push_back (preview);
         };
 
         engine = KickSnareHatEngine { callbacks };

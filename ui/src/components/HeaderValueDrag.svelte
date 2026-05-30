@@ -3,6 +3,7 @@
     id,
     label,
     value,
+    suffix = "",
     active = false,
     onBegin = () => {},
     onMove = () => {},
@@ -26,8 +27,8 @@
   }
 </script>
 
-<div class="flex flex-col items-center">
-  <span class="text-[9px] text-ksh-muted">{label}</span>
+<div class="flex flex-col items-start">
+  <span class="header-label">{label}</span>
   <button
     type="button"
     class={`mt-0.5 min-w-[42px] rounded border px-1.5 py-0.5 text-[11px] ${active ? "border-ksh-amber text-ksh-amber" : "border-ksh-stroke-soft text-ksh-text"}`}
@@ -36,6 +37,6 @@
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
   >
-    {value}{label === "Swing" || label === "Vel" || label === "Time" ? "%" : ""}
+    {value}{suffix}
   </button>
 </div>

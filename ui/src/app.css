@@ -8,26 +8,37 @@
   --color-ksh-muted: #8c969e;
   --color-ksh-amber: #f59e38;
   --color-ksh-blue: #5ca8f2;
-  --color-ksh-off: #1a1c21;
+  --color-ksh-off: #1e2025;
+  --color-ksh-off-dark: #121212;
   --color-ksh-inactive-step: #242930;
+  --color-ksh-cell-border: #33373e;
+  --color-ksh-grid: #2c3036;
 }
 
 @layer base {
   html,
   body,
   #app {
-    @apply min-h-screen select-none bg-zinc-950;
+    min-height: 100vh;
+    user-select: none;
+    background: #292e35;
   }
 }
 
 @layer components {
-  .cell-cycle-divider {
-    background: linear-gradient(
-      to bottom left,
-      transparent calc(50% - 0.5px),
-      rgba(26, 28, 33, 0.55) calc(50% - 0.5px),
-      rgba(26, 28, 33, 0.55) calc(50% + 0.5px),
-      transparent calc(50% + 0.5px)
-    );
+  .header-section {
+    @apply flex items-start gap-2 border-l border-ksh-stroke-soft px-3;
+  }
+
+  .header-label {
+    @apply mb-1 block text-[9px] font-semibold leading-none text-ksh-muted;
+  }
+
+  .header-button {
+    @apply flex h-[28px] items-center justify-center rounded-sm px-2 text-[11px] font-semibold leading-none outline-none;
+  }
+
+  .header-icon-button {
+    @apply flex h-[24px] min-w-[20px] items-center justify-center rounded-sm px-1 text-[14px] font-semibold leading-none text-ksh-amber outline-none;
   }
 }

@@ -2,13 +2,17 @@
   import { onMount } from "svelte";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
   import {
+    CHANNEL_LABEL_W,
     GRID_CELL_H,
     GRID_CELL_W,
+    GRID_SIDEBAR_W,
     cycleOffsetLabel,
     editorDimensions,
     generationModeLabel,
+    gridCellPadding,
+    gridTopPadding,
     isStepBeyondLoopLength,
-    channelColor,
+    channelToneColor,
     lockLabel,
     loopLengthForChannel,
     modifierLayerMode,
@@ -76,6 +80,8 @@
   let lastAudition = $state({ channel: -1, at: 0 });
 
   const dims = $derived(editorDimensions(session.kshState));
+  const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height));
+  const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
@@ -111,49 +117,62 @@
       return "background:#242930;color:#5c636b;opacity:0.55;";
     }
 
-    let color = channelColor(channel, false, session.dcColors);
-    let lightColor = channelColor(channel, true, session.dcColors);
+    let lightColor = channelToneColor(channel, "light", session.dcColors);
+    let darkColor = channelToneColor(channel, "dark", session.dcColors);
+    let dividerColor = channelToneColor(channel, "divider", session.dcColors);
     if (muted) {
-      color = mutedChannelColor(color);
       lightColor = mutedChannelColor(lightColor);
+      darkColor = mutedChannelColor(darkColor);
+      dividerColor = mutedChannelColor(dividerColor);
     }
+    [lightColor, darkColor] = [darkColor, lightColor];
 
     if (!cell.enabled) {
       const downbeat = step % 4 === 0;
       return downbeat
-        ? "background:#1e2228;color:#8c969e;opacity:0.55;"
-        : "background:#1a1c21;color:#8c969e;opacity:0.55;";
+        ? "background:#121212;color:#8c969e;"
+        : "background:#1e2025;color:#8c969e;";
     }
 
     const layerValue = sourceLayerValue(cell, effectiveLayerMode);
-    const fill =
-      effectiveLayerMode === "velocity"
-        ? layerValue / 127
-        : effectiveLayerMode === "probability"
-          ? layerValue / 100
-          : Math.min(1, layerValue / 8);
-
-    if (effectiveLayerMode === "cycle" && cell.cycleInverted) {
-      return `background:linear-gradient(to top, ${lightColor} ${Math.round(fill * 100)}%, rgba(26,28,33,0.85) ${Math.round(fill * 100)}%);color:#dbdee5;`;
+    if (effectiveLayerMode === "cycle") {
+      const topLeft = cell.cycleInverted ? lightColor : darkColor;
+      const bottomRight = cell.cycleInverted ? darkColor : lightColor;
+      return `background:linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%);color:#090b0f;`;
     }
 
-    return `background:linear-gradient(to top, ${color} ${Math.round(fill * 100)}%, rgba(26,28,33,0.85) ${Math.round(fill * 100)}%);color:#dbdee5;`;
+    if (effectiveLayerMode === "roll") {
+      const partCount = Math.max(1, Math.round(layerValue));
+      const stops = Array.from({ length: partCount }, (_, part) => {
+        const start = (part * 100) / partCount;
+        const end = ((part + 1) * 100) / partCount;
+        const tone = part % 2 === 0 ? darkColor : lightColor;
+        return `${tone} ${start}%, ${tone} ${end}%`;
+      }).join(", ");
+      return `background:linear-gradient(to right, ${stops});color:#090b0f;`;
+    }
+
+    const fill = effectiveLayerMode === "velocity" ? layerValue / 127 : layerValue / 100;
+    const fillPercent = Math.round(fill * 100);
+
+    return `background:linear-gradient(to top, ${darkColor} 0%, ${darkColor} ${fillPercent}%, ${lightColor} ${fillPercent}%, ${lightColor} 100%);color:#090b0f;`;
   }
 
   function cellClass(channel, step) {
     const beyondSteps = step >= session.kshState.stepCount;
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
+    const cell = session.kshState.sources[session.selectedSource][channel][step];
     const selected =
       session.selectedChannel === channel &&
       session.selectedStep === step &&
       !beyondSteps &&
       !beyondLoop;
-    const cycleLayer = effectiveLayerMode === "cycle";
+    const cycleLayer = effectiveLayerMode === "cycle" && cell.enabled;
 
     return [
-      "relative mr-0 flex overflow-hidden rounded-sm border text-[9px]",
-      selected ? "border-ksh-text" : beyondLoop ? "border-ksh-stroke-soft/40" : "border-black/20",
-      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle" : "items-end justify-center",
+      "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
+      selected ? "border-ksh-text" : beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
+      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle text-[14px]" : "items-center justify-center text-[18px]",
     ].join(" ");
   }
 
@@ -487,6 +506,8 @@
       setSourceLayerMode("cycle");
     } else if (event.key === "3") {
       setSourceLayerMode("probability");
+    } else if (event.key === "4") {
+      setSourceLayerMode("roll");
     }
   }
 
@@ -516,7 +537,7 @@
 </script>
 
 <div
-  class="editor-view overflow-hidden rounded-md border border-ksh-stroke-soft bg-ksh-bg text-ksh-text"
+  class="editor-view flex shrink-0 flex-col overflow-hidden bg-ksh-bg text-ksh-text"
   role="application"
   aria-label="KSH pattern editor"
   style={`width:${dims.width}px;height:${dims.height}px;`}
@@ -527,106 +548,143 @@
     syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
   }}
 >
-  <header class="flex flex-wrap items-end gap-3 border-b border-ksh-stroke-soft px-3 py-2 text-[11px]">
-    <div class="flex items-center gap-1">
-      {#each Array.from({ length: SOURCE_COUNT }, (_, source) => source) as source (source)}
-        <button
-          type="button"
-          class={`rounded px-2 py-1 ${session.selectedSource === source ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
-          onclick={() => selectSource(source)}
-        >
-          {source + 1}
-        </button>
-      {/each}
+  <header class="flex h-[68px] shrink-0 items-center border-b border-ksh-stroke-soft px-3 text-[11px]">
+    <div class="header-section border-l-0 pl-0">
+      <div class="flex flex-col items-start">
+        <span class="header-label">Patterns</span>
+        <div class="flex gap-0.5">
+          {#each Array.from({ length: SOURCE_COUNT }, (_, source) => source) as source (source)}
+            <button
+              type="button"
+              class={`header-button w-8 ${session.selectedSource === source ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+              onclick={() => selectSource(source)}
+            >
+              {source + 1}
+            </button>
+          {/each}
+        </div>
+      </div>
     </div>
 
-    <HeaderValueDrag
-      id="steps"
-      label="Steps"
-      value={session.kshState.stepCount}
-      active={headerDrag?.id === "steps"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
-    <button
-      type="button"
-      class="rounded bg-ksh-panel2 px-2 py-1"
-      onclick={(event) => cycleRateCommand(event.shiftKey ? -1 : 1)}
-    >
-      {session.kshState.rate}
-    </button>
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={cycleMode}>
-      {generationModeLabel(session.kshState.generationMode)}
-    </button>
-    <HeaderValueDrag
-      id="refresh"
-      label="Ref"
-      value={session.kshState.refreshSteps}
-      active={headerDrag?.id === "refresh"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
+    <div class="header-section">
+      <HeaderValueDrag
+        id="steps"
+        label="Steps"
+        value={session.kshState.stepCount}
+        active={headerDrag?.id === "steps"}
+        onBegin={beginHeaderDrag}
+        onMove={moveHeaderDrag}
+        onEnd={endHeaderDrag}
+      />
+      <div class="flex flex-col items-start">
+        <span class="header-label">Step Value</span>
+        <button
+          type="button"
+          class="header-button min-w-[68px] bg-ksh-panel2 text-ksh-text"
+          onclick={(event) => cycleRateCommand(event.shiftKey ? -1 : 1)}
+        >
+          {session.kshState.rate}
+        </button>
+      </div>
+    </div>
 
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={() => shiftPattern(-1)}>◀</button>
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={() => shiftPattern(1)}>▶</button>
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={clearPattern}>Clear</button>
+    <div class="header-section">
+      <div class="flex flex-col items-start">
+        <span class="header-label">Random</span>
+        <button type="button" class="header-button min-w-[82px] bg-ksh-panel2 text-ksh-text" onclick={cycleMode}>
+          {generationModeLabel(session.kshState.generationMode)}
+        </button>
+      </div>
+      <HeaderValueDrag
+        id="refresh"
+        label="Rate"
+        value={session.kshState.refreshSteps}
+        active={headerDrag?.id === "refresh"}
+        onBegin={beginHeaderDrag}
+        onMove={moveHeaderDrag}
+        onEnd={endHeaderDrag}
+      />
+    </div>
 
-    <HeaderValueDrag
-      id="phase_early_ms"
-      label="Phase ms"
-      value={phaseOffsetMs(session.kshState.phaseOffsetBeats, session.kshState.tempo)}
-      active={headerDrag?.id === "phase_early_ms"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
-    <HeaderValueDrag
-      id="swing"
-      label="Swing"
-      value={session.kshState.swing}
-      active={headerDrag?.id === "swing"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
-    <HeaderValueDrag
-      id="velocity_humanize"
-      label="Vel"
-      value={session.kshState.velocityHumanize}
-      active={headerDrag?.id === "velocity_humanize"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
-    <HeaderValueDrag
-      id="timing_humanize"
-      label="Time"
-      value={session.kshState.timingHumanize}
-      active={headerDrag?.id === "timing_humanize"}
-      onBegin={beginHeaderDrag}
-      onMove={moveHeaderDrag}
-      onEnd={endHeaderDrag}
-    />
+    <div class="header-section">
+      <div class="flex items-center gap-3 pt-[15px]">
+        <span class="text-[13px] font-semibold text-ksh-text">Pattern:</span>
+        <button type="button" class="header-icon-button" onclick={() => shiftPattern(-1)}>◀</button>
+        <button type="button" class="header-icon-button" onclick={() => shiftPattern(1)}>▶</button>
+        <button type="button" class="header-icon-button text-[18px]" onclick={clearPattern}>×</button>
+      </div>
+    </div>
 
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={cycleSourceLayerMode}>
-      {sourceLayerLabel(session.sourceLayerMode)}
-    </button>
-    <button type="button" class="rounded bg-ksh-panel2 px-2 py-1" onclick={toggleDcColors}>
-      DC {session.dcColors ? "On" : "Off"}
-    </button>
-    <button
-      type="button"
-      class={`rounded px-2 py-1 ${session.kshState.deviceActive ? "bg-ksh-blue text-ksh-off" : "bg-ksh-panel2"}`}
-      onclick={toggleDeviceActive}
-    >
-      {session.kshState.deviceActive ? "ON" : "OFF"}
-    </button>
+    <div class="ml-auto flex items-center">
+      <div class="header-section">
+        <HeaderValueDrag
+          id="phase_early_ms"
+          label="Phase"
+          value={phaseOffsetMs(session.kshState.phaseOffsetBeats, session.kshState.tempo)}
+          active={headerDrag?.id === "phase_early_ms"}
+          onBegin={beginHeaderDrag}
+          onMove={moveHeaderDrag}
+          onEnd={endHeaderDrag}
+        />
+        <HeaderValueDrag
+          id="swing"
+          label="Swing"
+          value={session.kshState.swing}
+          active={headerDrag?.id === "swing"}
+          onBegin={beginHeaderDrag}
+          onMove={moveHeaderDrag}
+          onEnd={endHeaderDrag}
+        />
+        <HeaderValueDrag
+          id="velocity_humanize"
+          label="Vel %"
+          value={session.kshState.velocityHumanize}
+          active={headerDrag?.id === "velocity_humanize"}
+          onBegin={beginHeaderDrag}
+          onMove={moveHeaderDrag}
+          onEnd={endHeaderDrag}
+        />
+        <HeaderValueDrag
+          id="timing_humanize"
+          label="Time %"
+          value={session.kshState.timingHumanize}
+          active={headerDrag?.id === "timing_humanize"}
+          onBegin={beginHeaderDrag}
+          onMove={moveHeaderDrag}
+          onEnd={endHeaderDrag}
+        />
+      </div>
+
+      <div class="header-section">
+        <div class="flex flex-col items-start">
+          <span class="header-label">Layer</span>
+          <button type="button" class="header-button min-w-[76px] bg-ksh-panel2 text-ksh-text" onclick={cycleSourceLayerMode}>
+            {sourceLayerLabel(effectiveLayerMode)}
+          </button>
+        </div>
+      </div>
+
+      <div class="header-section pr-0">
+        <div class="flex gap-1 pt-[15px]">
+          <button type="button" class="header-button min-w-[54px] bg-ksh-amber text-ksh-off" onclick={toggleDcColors}>
+            DC
+          </button>
+          <button
+            type="button"
+            class={`header-button min-w-[54px] ${session.kshState.deviceActive ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+            onclick={toggleDeviceActive}
+          >
+            {session.kshState.deviceActive ? "ON" : "OFF"}
+          </button>
+        </div>
+      </div>
+    </div>
   </header>
 
-  <div class="px-3 pt-2">
-    <div class="flex items-center pl-[210px]">
+  <div class="bg-ksh-grid flex min-h-0 flex-1 flex-col overflow-hidden px-3">
+    <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
+    <div class="shrink-0">
+    <div class="flex items-center" style={`padding-left:${GRID_SIDEBAR_W}px`}>
       <div class="flex" bind:this={gridEl}>
       {#each stepCols as step (step)}
         <div
@@ -641,10 +699,11 @@
 
     {#each channelRows as channel (channel)}
       <div class="flex items-center py-0.5" data-channel-row={channel}>
-        <div class="flex w-[210px] shrink-0 items-center gap-1 pr-2 text-[11px]">
+        <div class="flex shrink-0 items-center gap-1 pr-2 text-[11px]" style={`width:${GRID_SIDEBAR_W}px`}>
           {#if editingChannel === channel}
             <input
-              class="w-8 rounded border border-ksh-amber bg-ksh-off px-1 text-[11px] text-ksh-text outline-none"
+              class="rounded border border-ksh-amber bg-ksh-off px-1 text-[11px] text-ksh-text outline-none"
+              style={`width:${CHANNEL_LABEL_W}px`}
               bind:value={labelDraft}
               onkeydown={(event) => {
                 if (event.key === "Enter") {
@@ -656,7 +715,12 @@
               onblur={commitLabelEdit}
             />
           {:else}
-            <button type="button" class="w-8 text-left text-ksh-text" onclick={() => onLabelClick(channel)}>
+            <button
+              type="button"
+              class="shrink-0 truncate text-left text-ksh-text"
+              style={`width:${CHANNEL_LABEL_W}px`}
+              onclick={() => onLabelClick(channel)}
+            >
               {session.kshState.channels[channel]?.label ?? channel + 1}
             </button>
           {/if}
@@ -722,16 +786,13 @@
               onpointerup={onCellPointerUp}
               onpointercancel={onCellPointerUp}
             >
-              {#if effectiveLayerMode === "cycle" && isCellInteractive(channel, step)}
-                <span class="pointer-events-none absolute left-1 top-1 text-[8px] leading-none">
+              {#if effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+                <span class="pointer-events-none absolute left-2 top-2 leading-none">
                   {cyclePrimaryLabel(channel, step)}
                 </span>
-                {#if session.kshState.sources[session.selectedSource][channel][step].enabled}
-                  <span class="pointer-events-none absolute bottom-1 right-1 text-[8px] leading-none">
-                    {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
-                  </span>
-                {/if}
-                <span class="cell-cycle-divider pointer-events-none absolute inset-0" aria-hidden="true"></span>
+                <span class="pointer-events-none absolute bottom-2 right-2 leading-none">
+                  {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
+                </span>
               {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
                   {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
@@ -748,11 +809,8 @@
         </div>
       </div>
     {/each}
+    </div>
+    <div class="shrink-0" style={`height:${gridBottomPad}px`} aria-hidden="true"></div>
   </div>
 
-  <footer class="flex items-center justify-end border-t border-ksh-stroke-soft px-3 py-1.5 text-[11px]">
-    <span class="text-ksh-muted">
-      Source {session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
-    </span>
-  </footer>
 </div>
