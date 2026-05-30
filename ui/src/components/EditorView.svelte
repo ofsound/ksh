@@ -35,7 +35,7 @@
     stepFromGridX,
     toggleCellOnRelease,
   } from "../lib/kshEditorInteractions.js";
-  import { CHANNEL_RENAME_MS, MAX_STEPS, SOURCE_COUNT } from "../lib/kshConstants.js";
+  import { CHANNEL_RENAME_MS, MAX_STEPS, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
   import {
     adjustChannelNote,
     auditionChannel,
@@ -68,7 +68,7 @@
   let headerDrag = $state(null);
   let cellDrag = $state(null);
   let loopDrag = $state(null);
-  /** @type {{ source: number, paintMuted: number, touched: Record<number, boolean> } | null} */
+  /** @type {{ source: number, lastChannel: number } | null} */
   let muteDrag = $state(null);
   let hoverLayerMode = $state(null);
   let editingChannel = $state(-1);
@@ -161,16 +161,11 @@
     const beyondSteps = step >= session.kshState.stepCount;
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
     const cell = session.kshState.sources[session.selectedSource][channel][step];
-    const selected =
-      session.selectedChannel === channel &&
-      session.selectedStep === step &&
-      !beyondSteps &&
-      !beyondLoop;
     const cycleLayer = effectiveLayerMode === "cycle" && cell.enabled;
 
     return [
       "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
-      selected ? "border-ksh-text" : beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
+      beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
       cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle text-[14px]" : "items-center justify-center text-[18px]",
     ].join(" ");
   }
@@ -404,29 +399,22 @@
   }
 
   function applyMuteDragForChannel(channel) {
-    if (!muteDrag || channel < 0 || muteDrag.touched[channel]) {
+    if (!muteDrag || channel < 0 || channel === muteDrag.lastChannel) {
       return;
     }
 
-    muteDrag = {
-      ...muteDrag,
-      touched: { ...muteDrag.touched, [channel]: true },
-    };
+    muteDrag = { ...muteDrag, lastChannel: channel };
     setSelectedCell(channel, session.selectedStep);
 
-    if (session.kshState.sourceChannelMutes[muteDrag.source][channel] === muteDrag.paintMuted) {
-      return;
-    }
-
-    session.kshState.sourceChannelMutes[muteDrag.source][channel] = muteDrag.paintMuted;
-    setSourceChannelMute(muteDrag.source, channel, muteDrag.paintMuted);
+    const muted = session.kshState.sourceChannelMutes[muteDrag.source][channel];
+    setSourceChannelMute(muteDrag.source, channel, !muted);
   }
 
   function onMutePointerDown(channel, event) {
     const now = Date.now();
     const source = session.selectedSource;
 
-    if (sourceRowResetTap.channel === channel && now - sourceRowResetTap.at <= CHANNEL_RENAME_MS) {
+    if (sourceRowResetTap.channel === channel && now - sourceRowResetTap.at <= SOURCE_ROW_RESET_MS) {
       sourceRowResetTap = { channel: -1, at: 0 };
       muteDrag = null;
       resetSourceChannelRow(source, channel);
@@ -434,11 +422,7 @@
     }
 
     sourceRowResetTap = { channel, at: now };
-    muteDrag = {
-      source,
-      paintMuted: session.kshState.sourceChannelMutes[source][channel] ? 0 : 1,
-      touched: {},
-    };
+    muteDrag = { source, lastChannel: -1 };
     applyMuteDragForChannel(channel);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -656,7 +640,11 @@
 
       <div class="header-section pr-0">
         <div class="flex gap-1 pt-[15px]">
-          <button type="button" class="header-button min-w-[54px] bg-ksh-amber text-ksh-off" onclick={toggleDcColors}>
+          <button
+            type="button"
+            class={`header-button min-w-[54px] ${session.dcColors ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+            onclick={toggleDcColors}
+          >
             DC
           </button>
           <button
@@ -689,7 +677,7 @@
 
     {#each channelRows as channel (channel)}
       <div class="flex items-center py-0.5" data-channel-row={channel}>
-        <div class="flex shrink-0 items-center gap-1 pr-2 text-[11px]" style={`width:${GRID_SIDEBAR_W}px`}>
+        <div class="flex shrink-0 items-center gap-1 pr-2 text-[11px] font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           {#if editingChannel === channel}
             <input
               class="rounded border border-ksh-amber bg-ksh-off px-1 text-[11px] text-ksh-text outline-none"
@@ -727,6 +715,9 @@
           >
             {session.kshState.channels[channel]?.note ?? 36}
           </button>
+          <button type="button" class="w-6 text-center text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
+            {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
+          </button>
           <button
             type="button"
             class={`w-8 text-center ${loopLengthClass(channel)}`}
@@ -741,9 +732,6 @@
           >
             L{session.kshState.channels[channel]?.loopLength ?? 16}
           </button>
-          <button type="button" class="w-6 text-center text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
-            {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
-          </button>
           <button
             type="button"
             class="w-5 text-center text-ksh-amber"
@@ -751,12 +739,27 @@
           >
             {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
           </button>
-          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftChannelRow(channel, -1)}>◀</button>
-          <button type="button" class="w-4 text-ksh-muted" onclick={() => shiftChannelRow(channel, 1)}>▶</button>
+          <div class="flex items-center">
+            <button
+              type="button"
+              class="w-5 text-[13px] leading-none text-ksh-amber"
+              onclick={() => shiftChannelRow(channel, -1)}
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              class="w-5 text-[13px] leading-none text-ksh-amber"
+              onclick={() => shiftChannelRow(channel, 1)}
+            >
+              ▶
+            </button>
+          </div>
           <button
             type="button"
-            class={`h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-muted bg-ksh-muted" : "border-ksh-stroke-soft bg-transparent"}`}
+            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-amber bg-transparent" : "border-ksh-amber bg-ksh-amber"}`}
             aria-label="Mute channel"
+            aria-pressed={session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
             onpointerdown={(event) => onMutePointerDown(channel, event)}
             onpointermove={onMutePointerMove}
             onpointerup={endMuteDrag}

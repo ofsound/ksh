@@ -7,6 +7,8 @@ export const COMPACT_HEIGHT = 176;
 export const EXPORT_BAR_VALUES = [1, 2, 4, 8, 16, 32];
 export const NOTE_HIT_FLASH_MS = 80;
 export const CHANNEL_RENAME_MS = 450;
+/** Max gap between mute-button taps to reset a channel row (tighter than rename). */
+export const SOURCE_ROW_RESET_MS = 220;
 
 export const MAX_ROLL = 8;
 export const MAX_CYCLE = 64;
