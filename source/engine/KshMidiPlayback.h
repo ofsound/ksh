@@ -63,7 +63,16 @@ private:
         int pitch = 0;
     };
 
+    struct PendingNoteOn
+    {
+        int sampleOffset = 0;
+        NativeHit hit {};
+    };
+
     static constexpr size_t maxPendingNoteOffs =
+        static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
+
+    static constexpr size_t maxPendingNoteOns =
         static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
 
     double sampleRate = 44100.0;
@@ -71,6 +80,8 @@ private:
     std::optional<int> lastEmittedGlobalStep;
     std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
     size_t pendingNoteOffCount = 0;
+    std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};
+    size_t pendingNoteOnCount = 0;
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
     uint32_t rngState = 0x12345678u;
 
@@ -94,9 +105,16 @@ private:
                       const NativeHit& hit,
                       juce::MidiBuffer& midiOut,
                       MidiPlaybackResult& result);
+    void emitHitAtSample (int onSample,
+                          int numSamples,
+                          const NativeHit& hit,
+                          juce::MidiBuffer& midiOut,
+                          MidiPlaybackResult& result);
+    void flushPendingNoteOns (int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result);
     void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
     void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi);
     void addPendingNoteOff (int sampleOffset, int midiChannel, int pitch);
+    void addPendingNoteOn (int sampleOffset, const NativeHit& hit);
 
     moodycamel::ReaderWriterQueue<MidiNoteEvent> pendingAuditions { 64 };
 };

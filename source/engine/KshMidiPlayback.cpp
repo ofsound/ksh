@@ -110,6 +110,7 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
     pendingNoteOffCount = 0;
+    pendingNoteOnCount = 0;
     resetCycleCounters();
     rngState = 0x12345678u;
 
@@ -136,6 +137,7 @@ void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
 void MidiPlaybackRunner::clearPending()
 {
     pendingNoteOffCount = 0;
+    pendingNoteOnCount = 0;
 }
 
 double MidiPlaybackRunner::nextRandomUnit()
@@ -165,14 +167,15 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const PlaybackSnapshot& snaps
     return std::clamp (sampleOffset, 0, numSamples - 1);
 }
 
-void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
-                                      int numSamples,
-                                      const NativeHit& hit,
-                                      juce::MidiBuffer& midiOut,
-                                      MidiPlaybackResult& result)
+void MidiPlaybackRunner::emitHitAtSample (int onSample,
+                                          int numSamples,
+                                          const NativeHit& hit,
+                                          juce::MidiBuffer& midiOut,
+                                          MidiPlaybackResult& result)
 {
-    const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
-    const int onSample = std::clamp (stepSampleOffset + delaySamples, 0, std::max (0, numSamples - 1));
+    if (onSample < 0 || onSample >= numSamples)
+        return;
+
     const int durationSamples =
         std::max (1, static_cast<int> (std::llround (static_cast<double> (hit.durationMs) * sampleRate / 1000.0)));
     const int offSample = onSample + durationSamples;
@@ -190,6 +193,24 @@ void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
     {
         addPendingNoteOff (offSample, hit.midiChannel, hit.pitch);
     }
+}
+
+void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
+                                      int numSamples,
+                                      const NativeHit& hit,
+                                      juce::MidiBuffer& midiOut,
+                                      MidiPlaybackResult& result)
+{
+    const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
+    const int onSample = std::max (0, stepSampleOffset + delaySamples);
+
+    if (onSample >= numSamples)
+    {
+        addPendingNoteOn (onSample, hit);
+        return;
+    }
+
+    emitHitAtSample (onSample, numSamples, hit, midiOut, result);
 }
 
 void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
@@ -291,6 +312,38 @@ void MidiPlaybackRunner::addPendingNoteOff (int sampleOffset, int midiChannel, i
     pendingNoteOffs[pendingNoteOffCount++] = { sampleOffset, midiChannel, pitch };
 }
 
+void MidiPlaybackRunner::addPendingNoteOn (int sampleOffset, const NativeHit& hit)
+{
+    if (pendingNoteOnCount >= pendingNoteOns.size())
+        return;
+
+    pendingNoteOns[pendingNoteOnCount++] = { sampleOffset, hit };
+}
+
+void MidiPlaybackRunner::flushPendingNoteOns (int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result)
+{
+    if (pendingNoteOnCount == 0)
+        return;
+
+    size_t writeIndex = 0;
+
+    for (size_t i = 0; i < pendingNoteOnCount; ++i)
+    {
+        const auto pending = pendingNoteOns[i];
+
+        if (pending.sampleOffset < numSamples)
+        {
+            emitHitAtSample (pending.sampleOffset, numSamples, pending.hit, midiOut, result);
+        }
+        else
+        {
+            pendingNoteOns[writeIndex++] = { pending.sampleOffset - numSamples, pending.hit };
+        }
+    }
+
+    pendingNoteOnCount = writeIndex;
+}
+
 void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
 {
     MidiNoteEvent note;
@@ -354,6 +407,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     if (numSamples <= 0)
         return result;
 
+    flushPendingNoteOns (numSamples, midiOut, result);
     flushPendingNoteOffs (numSamples, midiOut);
     flushAuditionNotes (numSamples, midiOut);
 

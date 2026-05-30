@@ -190,7 +190,7 @@ TEST_CASE ("midi playback applies swing delay within block", "[engine][transport
 
     const auto snapshot = fixture.engine.makePlaybackSnapshot();
     [[maybe_unused]] const auto step0 = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 512);
-    const auto step1 = runPlaybackBlock (runner, snapshot, 0.25, 120.0, true, 512);
+    const auto step1 = runPlaybackBlock (runner, snapshot, 0.25, 120.0, true, 4096);
 
     int noteOnSample = -1;
 
@@ -300,4 +300,59 @@ TEST_CASE ("midi playback stays active with velocity humanize", "[engine][transp
     const auto result = runPlaybackBlock (runner, fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
     REQUIRE (countNoteOns (result.midi) >= 1);
+}
+
+TEST_CASE ("midi playback emits evenly spaced roll hits across blocks", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (1);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, false, 2);
+    fixture.engine.generateWindow (0, 1, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    REQUIRE (snapshot.generated[0][0].roll == 2);
+
+    const auto withinBlock = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 4096);
+
+    std::vector<int> noteOnSamples;
+
+    for (const auto metadata : withinBlock.midi)
+    {
+        if (metadata.getMessage().isNoteOn())
+            noteOnSamples.push_back (metadata.samplePosition);
+    }
+
+    REQUIRE (noteOnSamples.size() == 2);
+
+    const int expectedSecondHit = static_cast<int> (std::llround (0.0625 * 44100.0));
+    REQUIRE (noteOnSamples[0] == 0);
+    REQUIRE (std::abs (noteOnSamples[1] - expectedSecondHit) <= 1);
+
+    runner.reset();
+    const auto block0 = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 512);
+    REQUIRE (countNoteOns (block0.midi) == 1);
+
+    const double beatsPerBlock = (512.0 / 44100.0) * (120.0 / 60.0);
+    double ppq = beatsPerBlock;
+    int deferredHits = 0;
+
+    for (int block = 1; block < 8; ++block)
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, ppq, 120.0, true, 512);
+        deferredHits += countNoteOns (result.midi);
+        ppq += beatsPerBlock;
+
+        if (deferredHits > 0)
+            break;
+    }
+
+    REQUIRE (deferredHits == 1);
 }
