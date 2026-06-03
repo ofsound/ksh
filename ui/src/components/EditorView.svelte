@@ -75,7 +75,6 @@
   let labelDraft = $state("");
   let channelRenameTap = $state({ channel: -1, at: 0 });
   let sourceRowResetTap = $state({ channel: -1, at: 0 });
-  let cycleCellTap = $state({ source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" });
   let lastAudition = $state({ channel: -1, at: 0 });
 
   const dims = $derived(editorDimensions(session.kshState));
@@ -231,33 +230,12 @@
     headerDrag = null;
   }
 
-  function cycleCellMatches(source, channel, step, valueMode) {
-    return (
-      cycleCellTap.source === source &&
-      cycleCellTap.channel === channel &&
-      cycleCellTap.step === step &&
-      cycleCellTap.valueMode === valueMode &&
-      Date.now() - cycleCellTap.at <= CHANNEL_RENAME_MS &&
-      cycleCellTap.wasEnabled
-    );
+  function hideCellAdjustmentCursor() {
+    document.documentElement.classList.add("ksh-hide-cursor");
   }
 
-  function handleCycleCellDoubleClick(source, channel, step, valueMode) {
-    if (valueMode !== "cycle" || !cycleCellMatches(source, channel, step, valueMode)) {
-      return false;
-    }
-
-    const cell = session.kshState.sources[source][channel][step];
-    if (cell.cycle <= 1) {
-      cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
-      return false;
-    }
-
-    cell.enabled = 1;
-    cell.cycleInverted = cell.cycleInverted ? 0 : 1;
-    sendCell(source, channel, step);
-    cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
-    return true;
+  function showCellAdjustmentCursor() {
+    document.documentElement.classList.remove("ksh-hide-cursor");
   }
 
   function onCellPointerDown(event, channel, step) {
@@ -277,10 +255,6 @@
         : null;
     const valueMode = valueModeForCellInteraction(layerMode, triangle);
 
-    if (handleCycleCellDoubleClick(source, channel, step, valueMode)) {
-      return;
-    }
-
     const cell = session.kshState.sources[source][channel][step];
 
     cellDrag = createCellDrag(
@@ -298,7 +272,11 @@
   }
 
   async function onCellPointerMove(event) {
-    if (!cellDrag || (event.buttons & 1) === 0) {
+    if (!cellDrag) {
+      return;
+    }
+    if ((event.buttons & 1) === 0) {
+      await onCellPointerUp();
       return;
     }
 
@@ -306,6 +284,9 @@
       const mode = resolveCellDragMode(cellDrag, event.clientX, event.clientY);
       if (mode) {
         cellDrag = { ...cellDrag, mode, moved: true };
+        if (mode === "value") {
+          hideCellAdjustmentCursor();
+        }
       }
     }
 
@@ -345,26 +326,11 @@
 
     if (!cellDrag.moved) {
       const source = session.selectedSource;
-      const cell = session.kshState.sources[source][cellDrag.channel][cellDrag.step];
-      const wasEnabled = cell.enabled ? 1 : 0;
-
-      if (cellDrag.valueMode === "cycle" && wasEnabled && cell.cycle > 1) {
-        cycleCellTap = {
-          source,
-          channel: cellDrag.channel,
-          step: cellDrag.step,
-          at: Date.now(),
-          wasEnabled: 1,
-          valueMode: "cycle",
-        };
-      } else {
-        cycleCellTap = { source: -1, channel: -1, step: -1, at: 0, wasEnabled: 0, valueMode: "" };
-      }
-
       toggleCellOnRelease(session.kshState, source, cellDrag);
       await sendCell(source, cellDrag.channel, cellDrag.step);
     }
 
+    showCellAdjustmentCursor();
     cellDrag = null;
   }
 
@@ -506,6 +472,7 @@
 
     const onBlur = () => {
       hoverLayerMode = null;
+      showCellAdjustmentCursor();
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -515,6 +482,7 @@
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      showCellAdjustmentCursor();
     };
   });
 </script>

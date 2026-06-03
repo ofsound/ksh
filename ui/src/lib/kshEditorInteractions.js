@@ -229,11 +229,36 @@ export function applySourceValueDrag(state, source, drag, clientY) {
   }
 
   const delta = drag.startY - clientY;
-  const nextValue = clamp(
+  let nextValue = clamp(
     startValue + quantizedDragOffset(delta, scale),
     minValue,
     maxValue
   );
+
+  if (valueMode === "cycle" && clientY - drag.startY > VELOCITY_DRAG_THRESHOLD) {
+    nextValue = clamp(
+      1 + quantizedDragOffset(clientY - drag.startY, scale),
+      minValue,
+      maxValue
+    );
+
+    let changed = false;
+
+    if (cell.cycle !== nextValue) {
+      cell.cycle = nextValue;
+      changed = true;
+    }
+    if (cell.cycleInverted !== 1) {
+      cell.cycleInverted = 1;
+      changed = true;
+    }
+    if (cell.cycleOffset > cell.cycle - 1) {
+      cell.cycleOffset = cell.cycle - 1;
+      changed = true;
+    }
+
+    return changed || enabledChanged;
+  }
 
   if (valueMode === "probability" && cell.probability !== nextValue) {
     cell.probability = nextValue;
@@ -248,9 +273,13 @@ export function applySourceValueDrag(state, source, drag, clientY) {
     if (cell.cycleOffset > cell.cycle - 1) {
       cell.cycleOffset = cell.cycle - 1;
     }
-    if (cell.cycle <= 1) {
+    if (delta > VELOCITY_DRAG_THRESHOLD) {
       cell.cycleInverted = 0;
     }
+    return true;
+  }
+  if (valueMode === "cycle" && delta > VELOCITY_DRAG_THRESHOLD && cell.cycleInverted !== 0) {
+    cell.cycleInverted = 0;
     return true;
   }
   if (valueMode === "roll" && cell.roll !== nextValue) {

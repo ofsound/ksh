@@ -126,7 +126,7 @@ struct CellDefaults
     out.probability = clampInt (probability, 0, 100);
     out.cycle = cycle;
     out.cycleOffset = clampInt (cycleOffset, 0, cycle - 1);
-    out.cycleInverted = cycle > 1 && cell.cycleInverted;
+    out.cycleInverted = cell.cycleInverted;
     out.roll = clampInt (roll, 1, Constants::maxRoll);
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;

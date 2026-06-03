@@ -207,9 +207,9 @@ NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
 
             const int cycle = clampInt (cell.cycle, 1, 64);
             const int cycleOffset = clampInt (cell.cycleOffset, 0, cycle - 1);
-            const bool cycleInverted = cycle > 1 && cell.cycleInverted;
+            const bool cycleInverted = cell.cycleInverted;
 
-            if (cycle > 1)
+            if (cycle > 1 || cycleInverted)
             {
                 const int sourceStep = cell.sourceStep;
                 const auto key = cycleKey (cell.source, channel, sourceStep);

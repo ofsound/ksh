@@ -88,6 +88,8 @@ private:
     void removeMacroParameterListeners();
     void applyMacroParametersToEngineLocked();
     void syncMacroParametersFromEngineLocked (bool notifyHost);
+    bool consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
+    void drainPendingMidiPatternSelectionsLocked();
 
     juce::AudioProcessorValueTreeState parameters;
     KshUiBridge uiBridge;
@@ -104,6 +106,7 @@ private:
 
     // Audio -> message-thread handoff (drained in handleAsyncUpdate / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
+    moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
@@ -121,6 +124,7 @@ private:
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;
     bool wasPlayingForRegen = false;
+    juce::MidiBuffer midiInputScratch;
 
     EditorResizeCallback editorResizeCallback;
 

@@ -49,6 +49,11 @@ int rateIndexForValue (std::string_view rate)
     return 4; // 16n
 }
 
+bool isMidiPatternSelectionNoteNumber (int noteNumber)
+{
+    return noteNumber >= 0 && noteNumber < ksh::Constants::sourceCount;
+}
+
 juce::StringArray rateChoices()
 {
     juce::StringArray choices;
@@ -219,6 +224,7 @@ void PluginProcessor::handleAsyncUpdate()
         std::scoped_lock lock { engineStateMutex };
 
         applyPendingMacroParametersLocked();
+        drainPendingMidiPatternSelectionsLocked();
 
         // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
         if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
@@ -334,6 +340,7 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     midiPlayback.prepare (sampleRate);
+    midiInputScratch.ensureSize (8192);
     publishPlaybackSnapshot();
 }
 
@@ -375,6 +382,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     buffer.clear();
 
     const auto numSamples = buffer.getNumSamples();
+    const bool midiPatternSelectionQueued = consumeMidiPatternSelectionInput (midiMessages);
 
     // Read-only immutable view built on the message thread. No engine access on the audio thread.
     const auto* snapshot = playbackMailbox.current();
@@ -407,7 +415,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
 
-    bool notify = false;
+    bool notify = midiPatternSelectionQueued;
 
     // Wake the message thread to advance generation on step changes and play/stop transitions.
     const bool stepChanged = playback.currentStepOneBased != lastReportedStepForRegen;
@@ -438,6 +446,56 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     if (pushedHit || notify)
         messageThreadWorkPending.store (true, std::memory_order_release);
+}
+
+bool PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
+{
+    bool shouldFilter = false;
+    bool queuedSelection = false;
+
+    for (const auto metadata : midiMessages)
+    {
+        const auto message = metadata.getMessage();
+
+        if (message.isNoteOn() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
+        {
+            [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (message.getNoteNumber());
+            queuedSelection = queuedSelection || queued;
+            shouldFilter = true;
+        }
+        else if (message.isNoteOff() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
+        {
+            shouldFilter = true;
+        }
+    }
+
+    if (! shouldFilter)
+        return queuedSelection;
+
+    midiInputScratch.clear();
+
+    for (const auto metadata : midiMessages)
+    {
+        const auto message = metadata.getMessage();
+
+        if ((message.isNoteOn() || message.isNoteOff()) && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
+            continue;
+
+        midiInputScratch.addEvent (metadata.data, metadata.numBytes, metadata.samplePosition);
+    }
+
+    midiMessages.swapWith (midiInputScratch);
+    midiInputScratch.clear();
+
+    return queuedSelection;
+}
+
+void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
+{
+    int source = 0;
+
+    while (pendingMidiPatternSelections.try_dequeue (source))
+        engine.setStaticSource (source);
 }
 
 //==============================================================================

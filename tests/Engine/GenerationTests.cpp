@@ -424,7 +424,7 @@ TEST_CASE ("cycle offset clamps to cycle range", "[engine][generation]")
     REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 0);
 }
 
-TEST_CASE ("cycle inversion clears when cycle is one", "[engine][generation]")
+TEST_CASE ("cycle inversion is allowed when cycle is one", "[engine][generation]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -434,8 +434,11 @@ TEST_CASE ("cycle inversion clears when cycle is one", "[engine][generation]")
     REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 
     fixture.engine.setCellCycle (0, 0, 0, 1);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
+
+    fixture.engine.setCellCycleInverted (0, 0, 0, false);
     REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 
     fixture.engine.setCellCycleInverted (0, 0, 0, true);
-    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
 }

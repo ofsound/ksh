@@ -43,6 +43,11 @@
     user-select: text;
     cursor: text;
   }
+
+  html.ksh-hide-cursor,
+  html.ksh-hide-cursor * {
+    cursor: none !important;
+  }
 }
 
 @layer components {

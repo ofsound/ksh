@@ -79,7 +79,7 @@ TEST_CASE ("cloneCell clamps and normalizes like ksh_constants.js", "[engine][fo
     REQUIRE (cell.source == 2);
 }
 
-TEST_CASE ("cloneCell clears cycle inversion when cycle is one", "[engine][foundation]")
+TEST_CASE ("cloneCell preserves cycle inversion when cycle is one", "[engine][foundation]")
 {
     Cell input;
     input.cycle = 1;
@@ -88,7 +88,7 @@ TEST_CASE ("cloneCell clears cycle inversion when cycle is one", "[engine][found
     const auto cell = cloneCell (input);
 
     REQUIRE (cell.cycle == 1);
-    REQUIRE_FALSE (cell.cycleInverted);
+    REQUIRE (cell.cycleInverted);
 }
 
 TEST_CASE ("Default channel uses M4L note map", "[engine][foundation]")

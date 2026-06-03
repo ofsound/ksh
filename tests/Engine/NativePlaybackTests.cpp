@@ -120,6 +120,21 @@ TEST_CASE ("native playback rows precompute cycle inversion", "[engine][native]"
     requireNativeRow (rows[3], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
 }
 
+TEST_CASE ("native playback rows treat inverted cycle one as muted", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (1);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, true);
+
+    const auto built = fixture.engine.buildNativePlaybackRows();
+    const auto& rows = built.rows;
+
+    REQUIRE (built.stepCount == 1);
+    requireNativeRow (rows[0], {});
+}
+
 TEST_CASE ("native playback rows use least common cycle period", "[engine][native]")
 {
     EngineFixture fixture;

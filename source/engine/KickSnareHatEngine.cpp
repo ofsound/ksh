@@ -30,7 +30,8 @@ int normalizeCycleOffset (int cycleOffset, int cycle)
 
 bool normalizeCycleInverted (bool cycleInverted, int cycle)
 {
-    return clampInt (cycle, 1, 64) > 1 && cycleInverted;
+    (void) cycle;
+    return cycleInverted;
 }
 
 int normalizeRoll (int roll)

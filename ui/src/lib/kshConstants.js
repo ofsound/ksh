@@ -18,8 +18,8 @@ export const SOURCE_PAINT_DRAG_THRESHOLD = 4;
 export const HEADER_VALUE_DRAG_SCALE = 4;
 export const VELOCITY_DRAG_SCALE = 2;
 export const PROBABILITY_DRAG_SCALE = 2;
-export const CYCLE_DRAG_SCALE = 4;
-export const ROLL_DRAG_SCALE = 4;
+export const CYCLE_DRAG_SCALE = 8;
+export const ROLL_DRAG_SCALE = 8;
 
 export const DEFAULT_CHANNEL_COUNT = 8;
 export const DEFAULT_CHANNEL_LABELS = ["1", "2", "3", "4", "5", "6", "7", "8"];

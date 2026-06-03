@@ -50,6 +50,19 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 
     return false;
 }
+
+bool containsNoteOff (const juce::MidiBuffer& midi, int pitch)
+{
+    for (const auto metadata : midi)
+    {
+        const auto& message = metadata.getMessage();
+
+        if (message.isNoteOff() && message.getNoteNumber() == pitch)
+            return true;
+    }
+
+    return false;
+}
 } // namespace
 
 TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge]")
@@ -183,4 +196,52 @@ TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")
     plugin.processBlock (buffer, midi);
 
     REQUIRE (containsNoteOn (midi, 42));
+}
+
+TEST_CASE ("incoming MIDI notes 0-7 select source patterns", "[plugin][bridge][midi-input]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { 5 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 0, static_cast<juce::uint8> (100)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 0));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 0);
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 7, static_cast<juce::uint8> (100)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 7));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 7);
+}
+
+TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve other MIDI", "[plugin][bridge][midi-input]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { 4 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOff (1, 0), 0);
+    midi.addEvent (juce::MidiMessage::noteOn (1, 64, static_cast<juce::uint8> (100)), 8);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOff (midi, 0));
+    REQUIRE (containsNoteOn (midi, 64));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 3);
 }
