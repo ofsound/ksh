@@ -581,6 +581,21 @@ void KickSnareHatEngine::resetSourceChannel (int source, int channel)
     status ("source_channel_reset " + std::to_string (source + 1) + " " + std::to_string (channel + 1));
 }
 
+void KickSnareHatEngine::copySourcePattern (int source, int destination)
+{
+    source = clampSource (source);
+    destination = clampSource (destination);
+
+    if (source == destination)
+        return;
+
+    sources[static_cast<size_t> (destination)] = sources[static_cast<size_t> (source)];
+    sourceChannelMutes[static_cast<size_t> (destination)] = sourceChannelMutes[static_cast<size_t> (source)];
+
+    recomposeWindow (0, stepCount, true);
+    status ("source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1));
+}
+
 bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const
 {
     sourceIndex = clampSource (sourceIndex);

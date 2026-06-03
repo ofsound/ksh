@@ -324,6 +324,22 @@ export function clearSourcePattern(state, source) {
   return affected;
 }
 
+export function copySourcePattern(state, source, destination) {
+  if (source === destination) {
+    return false;
+  }
+
+  for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+    state.sourceChannelMutes[destination][channel] = state.sourceChannelMutes[source][channel] ? 1 : 0;
+
+    for (let step = 0; step < MAX_STEPS; step += 1) {
+      state.sources[destination][channel][step] = cloneCell(state.sources[source][channel][step]);
+    }
+  }
+
+  return true;
+}
+
 export function cycleLayerMode(current) {
   const order = ["velocity", "probability", "cycle", "roll"];
   const index = order.indexOf(normalizeSourceLayerMode(current));

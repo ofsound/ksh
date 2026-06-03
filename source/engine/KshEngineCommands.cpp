@@ -237,6 +237,12 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "source_pattern_copy")
+    {
+        engine.copySourcePattern (zeroBased (argInt (args, 0, 1)), zeroBased (argInt (args, 1, 1)));
+        return true;
+    }
+
     if (selector == "cell")
     {
         engine.setCell (zeroBased (argInt (args, 0, 1)),

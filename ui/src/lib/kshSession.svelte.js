@@ -12,6 +12,7 @@ import {
 import {
   clearSourcePattern,
   combinedDimensions,
+  copySourcePattern,
   cycleGenerationMode,
   cycleLayerMode,
   cycleRate,
@@ -48,6 +49,7 @@ export const session = $state({
   selectedStep: 0,
   dcColors: 1,
   sourceLayerMode: "velocity",
+  patternCopySource: -1,
   sourceChannelSoloSource: -1,
   sourceChannelSoloChannel: -1,
   sourceChannelSoloRestoreMutes: null,
@@ -240,6 +242,36 @@ export async function selectSource(source) {
   session.kshState.staticSource = session.selectedSource;
   bumpState();
   await sendCommand("static_source", [session.selectedSource + 1]);
+}
+
+export function beginPatternCopy(source) {
+  session.patternCopySource = clamp(source, 0, SOURCE_COUNT - 1);
+}
+
+export function cancelPatternCopy() {
+  session.patternCopySource = -1;
+}
+
+export async function copyPatternToSource(destination) {
+  const source = session.patternCopySource;
+  destination = clamp(destination, 0, SOURCE_COUNT - 1);
+
+  if (source < 0 || source === destination) {
+    return;
+  }
+
+  if (!copySourcePattern(session.kshState, source, destination)) {
+    return;
+  }
+
+  session.patternCopySource = -1;
+  session.selectedSource = destination;
+  session.kshState.staticSource = destination;
+  bumpState();
+  bumpOptimisticPreview();
+
+  await sendCommand("source_pattern_copy", [source + 1, destination + 1]);
+  await sendCommand("static_source", [destination + 1]);
 }
 
 export async function sendChannelLoopLength(channel) {

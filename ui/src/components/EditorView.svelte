@@ -39,7 +39,10 @@
   import {
     adjustChannelNote,
     auditionChannel,
+    beginPatternCopy,
+    cancelPatternCopy,
     clearPattern,
+    copyPatternToSource,
     cycleChannelLock,
     cycleChannelPlaybackMode,
     cycleMode,
@@ -208,6 +211,35 @@
     return session.playingStep > 0 && step + 1 === session.playingStep
       ? "text-ksh-text"
       : "text-ksh-muted";
+  }
+
+  function sourceButtonClass(source) {
+    const selected = session.selectedSource === source;
+    const copySource = session.patternCopySource === source;
+
+    return [
+      "header-button w-8",
+      selected ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text",
+      copySource ? "ksh-pattern-copy-source" : "",
+    ].join(" ");
+  }
+
+  async function onSourceClick(event, source) {
+    if (event.shiftKey) {
+      if (session.patternCopySource === source) {
+        cancelPatternCopy();
+      } else {
+        beginPatternCopy(source);
+      }
+      return;
+    }
+
+    if (session.patternCopySource >= 0) {
+      await copyPatternToSource(source);
+      return;
+    }
+
+    await selectSource(source);
   }
 
   function beginHeaderDrag(id, clientY) {
@@ -458,7 +490,9 @@
   }
 
   function onEditorKeyDown(event) {
-    if (event.key === "1") {
+    if (event.key === "Escape") {
+      cancelPatternCopy();
+    } else if (event.key === "1") {
       setSourceLayerMode("velocity");
     } else if (event.key === "2") {
       setSourceLayerMode("cycle");
@@ -516,8 +550,10 @@
           {#each Array.from({ length: SOURCE_COUNT }, (_, source) => source) as source (source)}
             <button
               type="button"
-              class={`header-button w-8 ${session.selectedSource === source ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
-              onclick={() => selectSource(source)}
+              class={sourceButtonClass(source)}
+              aria-pressed={session.selectedSource === source ? "true" : "false"}
+              title={session.patternCopySource === source ? "Copy source selected" : "Shift-click to copy from this pattern"}
+              onclick={(event) => onSourceClick(event, source)}
             >
               {source + 1}
             </button>

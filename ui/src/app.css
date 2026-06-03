@@ -72,4 +72,24 @@
     color: #ffffff !important;
     text-shadow: 0 1px 2px rgb(0 0 0 / 0.45), 0 0 7px rgb(255 255 255 / 0.45);
   }
+
+  .ksh-pattern-copy-source {
+    position: relative;
+    box-shadow:
+      inset 0 0 0 1px #5ca8f2,
+      0 0 0 1px rgb(92 168 242 / 0.35),
+      0 0 10px rgb(92 168 242 / 0.42);
+    animation: ksh-pattern-copy-pulse 0.86s ease-in-out infinite;
+  }
+
+  @keyframes ksh-pattern-copy-pulse {
+    0%,
+    100% {
+      filter: brightness(1);
+    }
+
+    50% {
+      filter: brightness(1.42);
+    }
+  }
 }

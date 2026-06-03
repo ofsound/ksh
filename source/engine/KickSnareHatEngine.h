@@ -171,6 +171,7 @@ public:
 
     void setSourceChannelMute (int source, int channel, bool muted);
     void resetSourceChannel (int source, int channel);
+    void copySourcePattern (int source, int destination);
 
     void generateWindow (int startStep, int length, bool forceEmit = false);
     void recomposeWindow (int startStep, int length, bool forceEmit = false);

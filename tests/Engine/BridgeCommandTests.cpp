@@ -35,6 +35,34 @@ TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][br
     REQUIRE (fixture.engine.sourceCellAt (0, 1, 4).velocity == 90);
 }
 
+TEST_CASE ("dispatchEngineCommand copies source patterns with one-based args", "[engine][bridge]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (2);
+
+    fixture.engine.setCell (0, 1, 4, true, 91, 37, 4, 2, true, 3);
+    fixture.engine.setCell (1, 1, 4, true, 12, 100, 1, 0, false, 1);
+    fixture.engine.setSourceChannelMute (0, 1, true);
+    fixture.engine.setSourceChannelMute (1, 1, false);
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "source_pattern_copy", { 1, 2 }));
+
+    const auto copied = fixture.engine.sourceCellAt (1, 1, 4);
+    REQUIRE (copied.enabled);
+    REQUIRE (copied.velocity == 91);
+    REQUIRE (copied.probability == 37);
+    REQUIRE (copied.cycle == 4);
+    REQUIRE (copied.cycleOffset == 2);
+    REQUIRE (copied.cycleInverted);
+    REQUIRE (copied.roll == 3);
+    REQUIRE (fixture.engine.sourceChannelMutedAt (1, 1));
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "source_pattern_copy", { 2, 2 }));
+    REQUIRE (fixture.engine.sourceCellAt (1, 1, 4) == copied);
+}
+
 TEST_CASE ("dispatchEngineCommand rejects unknown selector", "[engine][bridge]")
 {
     EngineFixture fixture;
