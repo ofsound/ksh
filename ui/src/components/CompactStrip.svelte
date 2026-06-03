@@ -13,6 +13,8 @@
   const previewChannels = $derived(Math.min(MAX_CHANNELS, session.kshState.channelCount));
   const dims = $derived(editorDimensions(session.kshState));
   const previewPad = $derived(compactPreviewPadding(previewChannels));
+  const previewRows = $derived(Array.from({ length: previewChannels }, (_, channel) => channel));
+  const stepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
 
   function cellFill(channel, step) {
     if (isCompactFlashing(channel, step)) {
@@ -45,7 +47,7 @@
 
   <section class="px-3" style={`padding-top:${previewPad}px;`}>
     <div class="flex flex-col gap-0">
-      {#each Array.from({ length: previewChannels }, (_, channel) => channel) as channel (channel)}
+      {#each previewRows as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">
           <span
             class="channel-label shrink-0 truncate text-left text-[9px] text-ksh-muted"
@@ -54,7 +56,7 @@
             {session.kshState.channels[channel]?.label ?? channel + 1}
           </span>
           <div class="flex">
-            {#each Array.from({ length: MAX_STEPS }, (_, step) => step) as step (step)}
+            {#each stepCols as step (step)}
               <div
                 class={`mr-[3px] h-[15px] w-[15px] rounded-sm ${cellFill(channel, step)}`}
                 aria-hidden="true"

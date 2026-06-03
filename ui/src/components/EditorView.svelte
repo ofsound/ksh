@@ -87,9 +87,11 @@
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height));
   const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
+  const sourceButtons = $derived(Array.from({ length: SOURCE_COUNT }, (_, source) => source));
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
   );
+  const allStepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
   const effectiveLayerMode = $derived(
     normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
   );
@@ -547,7 +549,7 @@
       <div class="flex flex-col items-start">
         <span class="header-label">Patterns</span>
         <div class="flex gap-0.5">
-          {#each Array.from({ length: SOURCE_COUNT }, (_, source) => source) as source (source)}
+          {#each sourceButtons as source (source)}
             <button
               type="button"
               class={sourceButtonClass(source)}
@@ -821,7 +823,7 @@
         </div>
 
         <div class="flex">
-          {#each Array.from({ length: MAX_STEPS }, (_, step) => step) as step (step)}
+          {#each allStepCols as step (step)}
             <button
               type="button"
               class={cellClass(channel, step)}
