@@ -56,7 +56,11 @@ void KshUiBridge::emitJsonEvent (const juce::Identifier& eventId, const nlohmann
 
 void KshUiBridge::emitEngineState()
 {
-    emitJsonEvent ("engine_state", processor.enginePersistenceState());
+    auto state = processor.enginePersistenceState();
+    state["standaloneTransportAvailable"] = processor.hasStandaloneTransport() ? 1 : 0;
+    state["standaloneTransportPlaying"] = processor.isStandaloneTransportPlaying() ? 1 : 0;
+    state["standaloneTempo"] = processor.getStandaloneTempoBpm();
+    emitJsonEvent ("engine_state", state);
 }
 
 void KshUiBridge::emitPreview (const nlohmann::json& preview)
@@ -111,6 +115,9 @@ void KshUiBridge::emitCurrentStep (int stepOneBased)
 
     if (stepOneBased <= 0)
     {
+        if (lastEmittedStep != 0)
+            webView->emitEventIfBrowserIsVisible ("current_step", 0);
+
         lastEmittedStep = 0;
         return;
     }
@@ -125,9 +132,7 @@ void KshUiBridge::emitCurrentStep (int stepOneBased)
 void KshUiBridge::pollTransportUi()
 {
     const int step = processor.getCurrentStepForUi();
-
-    if (step > 0)
-        emitCurrentStep (step);
+    emitCurrentStep (step);
 }
 
 void KshUiBridge::syncAll()

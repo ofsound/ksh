@@ -70,6 +70,9 @@ export function makeDefaultKshState() {
     timingHumanize: 0,
     deviceActive: 1,
     tempo: 120,
+    standaloneTransportAvailable: 0,
+    standaloneTransportPlaying: 0,
+    standaloneTempo: 120,
     channels,
     sources: makeEmptySources(),
     sourceChannelMutes: makeSourceChannelMutes(),
@@ -100,6 +103,12 @@ function applyPersistencePayload(state, payload) {
     state.deviceActive = toggleValue(payload.deviceActive);
   }
   state.tempo = Math.max(20, Math.min(300, Number.parseFloat(payload.tempo) || 120));
+  state.standaloneTransportAvailable = payload.standaloneTransportAvailable ? 1 : 0;
+  state.standaloneTransportPlaying = payload.standaloneTransportPlaying ? 1 : 0;
+  state.standaloneTempo = Math.max(
+    20,
+    Math.min(300, Number.parseFloat(payload.standaloneTempo ?? state.tempo) || state.tempo)
+  );
 
   if (!state.sources) {
     state.sources = makeEmptySources();
@@ -223,6 +232,14 @@ export function applyStatusMessage(state, selector, args = []) {
       break;
     case "tempo":
       state.tempo = Math.max(20, Math.min(300, Number.parseFloat(values[0]) || 120));
+      state.standaloneTempo = state.tempo;
+      break;
+    case "standalone_transport_playing":
+      state.standaloneTransportPlaying = toggleValue(values[0]);
+      break;
+    case "standalone_tempo":
+      state.standaloneTempo = Math.max(20, Math.min(300, Number.parseFloat(values[0]) || 120));
+      state.tempo = state.standaloneTempo;
       break;
     default:
       break;

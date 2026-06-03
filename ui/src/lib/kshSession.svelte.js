@@ -362,6 +362,23 @@ export async function toggleDeviceActive() {
   await sendCommand("device_active", [session.kshState.deviceActive]);
 }
 
+export async function setStandaloneTransportPlaying(playing) {
+  session.kshState.standaloneTransportPlaying = playing ? 1 : 0;
+  if (!session.kshState.standaloneTransportPlaying) {
+    session.playingStep = 0;
+  }
+  bumpState();
+  await sendCommand("standalone_transport_playing", [session.kshState.standaloneTransportPlaying]);
+}
+
+export async function adjustStandaloneTempo(delta) {
+  const next = clamp(Math.round((session.kshState.standaloneTempo ?? session.kshState.tempo) + delta), 20, 300);
+  session.kshState.standaloneTempo = next;
+  session.kshState.tempo = next;
+  bumpState();
+  await sendCommand("standalone_tempo", [next]);
+}
+
 export async function auditionChannel(channel) {
   await sendCommand("channel_audition", [channel + 1]);
 }

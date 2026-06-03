@@ -97,6 +97,14 @@ void setParameterValue (juce::AudioProcessorValueTreeState& parameters,
 
     parameter->setValue (normalized);
 }
+
+double clampStandaloneTempoBpm (double bpm)
+{
+    if (std::isnan (bpm))
+        bpm = 120.0;
+
+    return std::clamp (bpm, 20.0, 300.0);
+}
 } // namespace
 
 PluginProcessor::BusesProperties PluginProcessor::createBusesProperties()
@@ -349,6 +357,66 @@ void PluginProcessor::releaseResources()
     midiPlayback.reset();
 }
 
+bool PluginProcessor::hasStandaloneTransport() const
+{
+    return wrapperType == wrapperType_Standalone;
+}
+
+void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
+{
+    if (! hasStandaloneTransport())
+        return;
+
+    const int nextPlaying = shouldPlay ? 1 : 0;
+    const int wasPlaying = standaloneTransportPlaying.exchange (nextPlaying, std::memory_order_relaxed);
+
+    if (nextPlaying != 0 && wasPlaying == 0)
+    {
+        standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
+        standaloneTransportResetRequested.store (1, std::memory_order_release);
+    }
+    else if (nextPlaying == 0 && wasPlaying != 0)
+    {
+        standaloneStopAllNotesRequested.store (1, std::memory_order_release);
+    }
+
+    currentStepForUi.store (nextPlaying != 0 ? currentStepForUi.load (std::memory_order_relaxed) : 0,
+                            std::memory_order_relaxed);
+    messageThreadWorkPending.store (true, std::memory_order_release);
+}
+
+bool PluginProcessor::isStandaloneTransportPlaying() const
+{
+    return standaloneTransportPlaying.load (std::memory_order_relaxed) != 0;
+}
+
+void PluginProcessor::setStandaloneTempoBpm (double bpm)
+{
+    if (! hasStandaloneTransport())
+        return;
+
+    {
+        std::scoped_lock lock { engineStateMutex };
+
+        bpm = clampStandaloneTempoBpm (bpm);
+
+        if (std::abs (engine.getTempo() - bpm) > 0.01)
+        {
+            engine.setTempo (bpm);
+            publishPlaybackSnapshotIfChangedLocked();
+        }
+    }
+
+    uiBridge.emitEngineState();
+}
+
+double PluginProcessor::getStandaloneTempoBpm()
+{
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    return clampStandaloneTempoBpm (engine.getTempo());
+}
+
 bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
   #if JucePlugin_IsMidiEffect
@@ -393,11 +461,26 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (playbackResetRequested.exchange (false, std::memory_order_acquire))
         midiPlayback.reset (false);
 
+    if (standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0)
+        midiPlayback.reset (false);
+
+    if (standaloneStopAllNotesRequested.exchange (0, std::memory_order_acquire) != 0)
+    {
+        for (int channel = 1; channel <= 16; ++channel)
+            midiMessages.addEvent (juce::MidiMessage::allNotesOff (channel), 0);
+    }
+
     double ppqPosition = 0.0;
     double bpm = snapshot->tempo;
     bool isPlaying = false;
 
-    if (const auto* playHead = getPlayHead())
+    if (hasStandaloneTransport())
+    {
+        ppqPosition = standaloneTransportPpqPosition.load (std::memory_order_relaxed);
+        bpm = clampStandaloneTempoBpm (snapshot->tempo);
+        isPlaying = isStandaloneTransportPlaying();
+    }
+    else if (const auto* playHead = getPlayHead())
     {
         if (const auto position = playHead->getPosition())
         {
@@ -412,6 +495,14 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
 
     const auto playback = midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages);
+
+    if (hasStandaloneTransport() && isPlaying && bpm > 0.0)
+    {
+        const double sampleRate = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;
+        const double blockEndPpq =
+            ppqPosition + (static_cast<double> (numSamples) / sampleRate) * (bpm / 60.0);
+        standaloneTransportPpqPosition.store (blockEndPpq, std::memory_order_relaxed);
+    }
 
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
 
@@ -600,6 +691,23 @@ ksh::PlaybackSnapshot PluginProcessor::enginePlaybackSnapshot()
 
 bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
 {
+    if (selector == "standalone_transport_playing")
+    {
+        const bool shouldPlay = args.is_array() && ! args.empty()
+                                    ? (args[0].is_boolean() ? args[0].get<bool>() : args[0].get<int>() != 0)
+                                    : false;
+        setStandaloneTransportPlaying (shouldPlay);
+        uiBridge.emitEngineState();
+        return hasStandaloneTransport();
+    }
+
+    if (selector == "standalone_tempo")
+    {
+        const double bpm = args.is_array() && ! args.empty() ? args[0].get<double>() : getStandaloneTempoBpm();
+        setStandaloneTempoBpm (bpm);
+        return hasStandaloneTransport();
+    }
+
     std::scoped_lock lock { engineStateMutex };
 
     const bool ok = ksh::dispatchEngineCommand (engine, selector, args);

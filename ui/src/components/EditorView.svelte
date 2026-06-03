@@ -58,8 +58,10 @@
     setRowLoopLength,
     setSelectedCell,
     setSourceLayerMode,
+    setStandaloneTransportPlaying,
     shiftChannelRow,
     shiftPattern,
+    adjustStandaloneTempo,
     toggleDcColors,
     toggleDeviceActive,
   } from "../lib/kshSession.svelte.js";
@@ -624,6 +626,45 @@
           </button>
         </div>
       </div>
+
+      {#if session.kshState.standaloneTransportAvailable}
+        <div class="header-section pr-0">
+          <div class="flex flex-col items-start">
+            <span class="header-label">Standalone</span>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                class={`header-button w-[38px] px-0 text-[12px] ${session.kshState.standaloneTransportPlaying ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+                title={session.kshState.standaloneTransportPlaying ? "Stop" : "Play"}
+                onclick={() => setStandaloneTransportPlaying(!session.kshState.standaloneTransportPlaying)}
+              >
+                {session.kshState.standaloneTransportPlaying ? "■" : "▶"}
+              </button>
+              <div class="flex h-[28px] items-center rounded-sm bg-ksh-panel2">
+                <button
+                  type="button"
+                  class="h-[28px] w-5 text-[12px] font-semibold text-ksh-blue"
+                  title="Tempo down"
+                  onclick={() => adjustStandaloneTempo(-1)}
+                >
+                  −
+                </button>
+                <span class="w-8 text-center text-[11px] font-semibold text-ksh-text">
+                  {session.kshState.standaloneTempo}
+                </span>
+                <button
+                  type="button"
+                  class="h-[28px] w-5 text-[12px] font-semibold text-ksh-blue"
+                  title="Tempo up"
+                  onclick={() => adjustStandaloneTempo(1)}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
     </div>
   </header>
 

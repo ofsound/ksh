@@ -70,6 +70,11 @@ public:
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
+    bool hasStandaloneTransport() const;
+    void setStandaloneTransportPlaying (bool shouldPlay);
+    bool isStandaloneTransportPlaying() const;
+    void setStandaloneTempoBpm (double bpm);
+    double getStandaloneTempoBpm();
 
 private:
     static BusesProperties createBusesProperties();
@@ -120,6 +125,10 @@ private:
     std::atomic<bool> fullUiSyncPending { false };
     std::atomic<bool> macroParametersDirty { false };
     std::atomic<bool> suppressParameterCallbacks { false };
+    std::atomic<int> standaloneTransportPlaying { 0 };
+    std::atomic<double> standaloneTransportPpqPosition { 0.0 };
+    std::atomic<int> standaloneTransportResetRequested { 0 };
+    std::atomic<int> standaloneStopAllNotesRequested { 0 };
 
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;
