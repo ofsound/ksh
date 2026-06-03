@@ -100,11 +100,6 @@
     const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
-    const flashing = isEditorFlashing(source, channel, step);
-
-    if (flashing) {
-      return "background:#dbdee5;color:#1a1c21;";
-    }
 
     if (beyondSteps) {
       return "background:#242930;color:#5c636b;";
@@ -163,10 +158,12 @@
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
     const cell = session.kshState.sources[session.selectedSource][channel][step];
     const cycleLayer = effectiveLayerMode === "cycle" && cell.enabled;
+    const flashing = isEditorFlashing(session.selectedSource, channel, step);
 
     return [
       "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
+      flashing ? "ksh-cell-text-flash" : "",
       cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle text-[14px]" : "items-center justify-center text-[18px]",
     ].join(" ");
   }

@@ -66,4 +66,10 @@
   .header-icon-button {
     @apply flex h-[24px] min-w-[20px] items-center justify-center rounded-sm px-1 text-[14px] font-semibold leading-none text-ksh-amber outline-none;
   }
+
+  .ksh-cell-text-flash,
+  .ksh-cell-text-flash * {
+    color: #ffffff !important;
+    text-shadow: 0 1px 2px rgb(0 0 0 / 0.45), 0 0 7px rgb(255 255 255 / 0.45);
+  }
 }
