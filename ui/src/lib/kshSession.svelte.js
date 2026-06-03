@@ -48,6 +48,9 @@ export const session = $state({
   selectedStep: 0,
   dcColors: 1,
   sourceLayerMode: "velocity",
+  sourceChannelSoloSource: -1,
+  sourceChannelSoloChannel: -1,
+  sourceChannelSoloRestoreMutes: null,
   bridgeError: "",
   ready: false,
 });
@@ -414,6 +417,65 @@ export async function toggleChannelMute(source, channel) {
   await setSourceChannelMute(source, channel, !session.kshState.sourceChannelMutes[source][channel]);
 }
 
+function clearSourceChannelSolo() {
+  session.sourceChannelSoloSource = -1;
+  session.sourceChannelSoloChannel = -1;
+  session.sourceChannelSoloRestoreMutes = null;
+}
+
+async function applySourceChannelMuteState(source, nextMutes) {
+  const previousMutes = session.kshState.sourceChannelMutes[source];
+  session.kshState.sourceChannelMutes[source] = nextMutes.map((muted) => muted ? 1 : 0);
+  bumpState();
+
+  for (let channel = 0; channel < nextMutes.length; channel += 1) {
+    if (previousMutes[channel] !== session.kshState.sourceChannelMutes[source][channel]) {
+      await sendSourceChannelMute(source, channel);
+    }
+  }
+}
+
+export async function toggleSourceChannelSolo(source, channel) {
+  source = clamp(source, 0, SOURCE_COUNT - 1);
+  channel = clamp(channel, 0, MAX_CHANNELS - 1);
+
+  if (
+    session.sourceChannelSoloSource === source &&
+    session.sourceChannelSoloChannel === channel &&
+    session.sourceChannelSoloRestoreMutes
+  ) {
+    const restoreMutes = [...session.sourceChannelSoloRestoreMutes];
+    clearSourceChannelSolo();
+    await applySourceChannelMuteState(source, restoreMutes);
+    return;
+  }
+
+  if (session.sourceChannelSoloSource >= 0 && session.sourceChannelSoloSource !== source) {
+    const restoreSource = session.sourceChannelSoloSource;
+    const restoreMutes = session.sourceChannelSoloRestoreMutes
+      ? [...session.sourceChannelSoloRestoreMutes]
+      : null;
+    clearSourceChannelSolo();
+
+    if (restoreMutes) {
+      await applySourceChannelMuteState(restoreSource, restoreMutes);
+    }
+  }
+
+  if (session.sourceChannelSoloSource !== source || !session.sourceChannelSoloRestoreMutes) {
+    session.sourceChannelSoloRestoreMutes = [...session.kshState.sourceChannelMutes[source]];
+  }
+
+  session.sourceChannelSoloSource = source;
+  session.sourceChannelSoloChannel = channel;
+
+  const channelCount = session.kshState.channelCount;
+  const nextMutes = session.kshState.sourceChannelMutes[source].map((muted, index) =>
+    index < channelCount ? (index === channel ? 0 : 1) : muted
+  );
+  await applySourceChannelMuteState(source, nextMutes);
+}
+
 export async function shiftChannelRow(channel, direction) {
   const source = session.selectedSource;
   const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
@@ -496,6 +558,7 @@ export function initKshSession() {
       const parsed = parseBackendJson(payload);
       applyEngineState(session.kshState, parsed);
       session.selectedSource = session.kshState.staticSource;
+      clearSourceChannelSolo();
       bumpState();
     }),
     onBackendEvent("preview", (payload) => {

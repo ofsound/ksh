@@ -64,6 +64,7 @@
     adjustStandaloneTempo,
     toggleDcColors,
     toggleDeviceActive,
+    toggleSourceChannelSolo,
   } from "../lib/kshSession.svelte.js";
 
   let gridEl = $state(null);
@@ -375,9 +376,18 @@
     setSourceChannelMute(muteDrag.source, channel, !muted);
   }
 
-  function onMutePointerDown(channel, event) {
+  async function onMutePointerDown(channel, event) {
     const now = Date.now();
     const source = session.selectedSource;
+
+    if (event.shiftKey) {
+      sourceRowResetTap = { channel: -1, at: 0 };
+      muteDrag = null;
+      setSelectedCell(channel, session.selectedStep);
+      event.preventDefault();
+      await toggleSourceChannelSolo(source, channel);
+      return;
+    }
 
     if (sourceRowResetTap.channel === channel && now - sourceRowResetTap.at <= SOURCE_ROW_RESET_MS) {
       sourceRowResetTap = { channel: -1, at: 0 };
@@ -766,6 +776,7 @@
             class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-amber bg-transparent" : "border-ksh-amber bg-ksh-amber"}`}
             aria-label="Mute channel"
             aria-pressed={session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
+            title="Shift-click to solo channel"
             onpointerdown={(event) => onMutePointerDown(channel, event)}
             onpointermove={onMutePointerMove}
             onpointerup={endMuteDrag}
