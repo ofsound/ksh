@@ -653,7 +653,7 @@
         </div>
       </div>
 
-      <div class="header-section pr-0">
+      <div class="header-section">
         <div class="flex gap-1 pt-[15px]">
           <button
             type="button"
