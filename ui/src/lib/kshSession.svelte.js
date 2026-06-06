@@ -16,6 +16,7 @@ import {
   cycleGenerationMode,
   cycleLayerMode,
   cycleRate,
+  normalizePatternViewScale,
   nextPlaybackMode,
   shiftSourceChannelRow,
 } from "./kshEditorUtils.js";
@@ -49,6 +50,7 @@ export const session = $state({
   selectedChannel: 0,
   selectedStep: 0,
   dcColors: 1,
+  patternViewScale: 1,
   sourceLayerMode: "velocity",
   patternCopySource: -1,
   sourceChannelSoloSource: -1,
@@ -562,8 +564,13 @@ export async function clearPattern() {
 }
 
 export async function resizeForCurrentView() {
-  const { width, height } = combinedDimensions(session.kshState);
+  const { width, height } = combinedDimensions(session.kshState, session.patternViewScale);
   await setViewSize(width, height);
+}
+
+export async function togglePatternViewScale() {
+  session.patternViewScale = normalizePatternViewScale(session.patternViewScale === 1.5 ? 1 : 1.5);
+  await resizeForCurrentView();
 }
 
 export function setSourceLayerMode(mode) {

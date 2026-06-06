@@ -11,7 +11,7 @@
   } from "../lib/kshSession.svelte.js";
 
   const previewChannels = $derived(Math.min(MAX_CHANNELS, session.kshState.channelCount));
-  const dims = $derived(editorDimensions(session.kshState));
+  const dims = $derived(editorDimensions(session.kshState, session.patternViewScale));
   const previewPad = $derived(compactPreviewPadding(previewChannels));
   const previewRows = $derived(Array.from({ length: previewChannels }, (_, channel) => channel));
   const stepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));

@@ -28,8 +28,8 @@ export function quantizedDragOffset(delta, scale, deadZone = VELOCITY_DRAG_THRES
   return sign * Math.round(activeDelta / scale);
 }
 
-export function stepFromGridX(clientX, gridLeft, stepCount) {
-  return clamp(Math.floor((clientX - gridLeft) / GRID_CELL_W), 0, stepCount - 1);
+export function stepFromGridX(clientX, gridLeft, stepCount, cellWidth = GRID_CELL_W) {
+  return clamp(Math.floor((clientX - gridLeft) / cellWidth), 0, stepCount - 1);
 }
 
 export function headerValueForState(state, id) {

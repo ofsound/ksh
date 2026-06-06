@@ -3,13 +3,14 @@
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
   import {
     CHANNEL_LABEL_W,
-    GRID_CELL_H,
-    GRID_CELL_W,
     GRID_SIDEBAR_W,
     cycleOffsetLabel,
     editorDimensions,
     generationModeLabel,
+    gridCellHeight,
     gridCellPadding,
+    gridCellWidth,
+    gridRowPaddingY,
     gridTopPadding,
     isStepBeyondLoopLength,
     channelToneColor,
@@ -67,6 +68,7 @@
     adjustStandaloneTempo,
     toggleDcColors,
     toggleDeviceActive,
+    togglePatternViewScale,
     toggleSourceChannelSolo,
   } from "../lib/kshSession.svelte.js";
 
@@ -83,9 +85,17 @@
   let sourceRowResetTap = $state({ channel: -1, at: 0 });
   let lastAudition = $state({ channel: -1, at: 0 });
 
-  const dims = $derived(editorDimensions(session.kshState));
-  const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height));
-  const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height));
+  const patternScale = $derived(session.patternViewScale);
+  const dims = $derived(editorDimensions(session.kshState, patternScale));
+  const gridCellW = $derived(gridCellWidth(patternScale));
+  const gridCellH = $derived(gridCellHeight(patternScale));
+  const gridRowPadY = $derived(gridRowPaddingY(patternScale));
+  const cellFontPx = $derived(Math.round(18 * patternScale));
+  const cycleCellFontPx = $derived(Math.round(14 * patternScale));
+  const smallCellFontPx = $derived(Math.round(9 * patternScale));
+  const cellInsetPx = $derived(Math.round(8 * patternScale));
+  const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale));
+  const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
   const sourceButtons = $derived(Array.from({ length: SOURCE_COUNT }, (_, source) => source));
   const stepCols = $derived(
@@ -170,7 +180,7 @@
       "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
       flashing ? "ksh-cell-text-flash" : "",
-      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle text-[14px]" : "items-center justify-center text-[18px]",
+      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle" : "items-center justify-center",
     ].join(" ");
   }
 
@@ -285,7 +295,7 @@
       modifierLayerMode(event.metaKey, event.shiftKey, event.altKey) ?? session.sourceLayerMode;
     const triangle =
       normalizeSourceLayerMode(layerMode) === "cycle"
-        ? resolveCellTriangle(localX, localY, GRID_CELL_W, GRID_CELL_H)
+        ? resolveCellTriangle(localX, localY, gridCellW, gridCellH)
         : null;
     const valueMode = valueModeForCellInteraction(layerMode, triangle);
 
@@ -325,7 +335,7 @@
     }
 
     if (cellDrag.mode === "paint") {
-      const toStep = stepFromGridX(event.clientX, gridLeft(), session.kshState.stepCount);
+      const toStep = stepFromGridX(event.clientX, gridLeft(), session.kshState.stepCount, gridCellW);
       const changed = applySourcePaintRange(
         session.kshState,
         session.selectedSource,
@@ -657,6 +667,13 @@
         <div class="flex gap-1 pt-[15px]">
           <button
             type="button"
+            class={`header-button min-w-[54px] ${session.patternViewScale === 1.5 ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+            onclick={togglePatternViewScale}
+          >
+            {session.patternViewScale === 1.5 ? "1.5x" : "1x"}
+          </button>
+          <button
+            type="button"
             class={`header-button min-w-[54px] ${session.dcColors ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
             onclick={toggleDcColors}
           >
@@ -721,7 +738,7 @@
       {#each stepCols as step (step)}
         <div
           class={`flex items-center justify-center text-[10px] ${stepLabelClass(step)}`}
-          style={`width:${GRID_CELL_W}px;height:18px;`}
+          style={`width:${gridCellW}px;height:18px;`}
         >
           {step + 1}
         </div>
@@ -730,7 +747,11 @@
     </div>
 
     {#each channelRows as channel (channel)}
-      <div class="flex items-center py-0.5" data-channel-row={channel}>
+      <div
+        class="flex items-center"
+        style={`padding-top:${gridRowPadY}px;padding-bottom:${gridRowPadY}px;`}
+        data-channel-row={channel}
+      >
         <div class="flex shrink-0 items-center gap-1 pr-2 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           {#if editingChannel === channel}
             <input
@@ -827,7 +848,7 @@
             <button
               type="button"
               class={cellClass(channel, step)}
-              style={`width:${GRID_CELL_W}px;height:${GRID_CELL_H}px;${cellStyle(channel, step)}`}
+              style={`width:${gridCellW}px;height:${gridCellH}px;font-size:${cellFontPx}px;${cellStyle(channel, step)}`}
               disabled={!isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
@@ -835,18 +856,30 @@
               onpointercancel={onCellPointerUp}
             >
               {#if effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span class="pointer-events-none absolute left-2 top-2 leading-none">
+                <span
+                  class="pointer-events-none absolute leading-none"
+                  style={`left:${cellInsetPx}px;top:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
+                >
                   {cyclePrimaryLabel(channel, step)}
                 </span>
-                <span class="pointer-events-none absolute bottom-2 right-2 leading-none">
+                <span
+                  class="pointer-events-none absolute leading-none"
+                  style={`right:${cellInsetPx}px;bottom:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
+                >
                   {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
               {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
+                <span
+                  class="pointer-events-none w-full text-center text-[#5c636b]"
+                  style={`font-size:${smallCellFontPx}px;`}
+                >
                   {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
               {:else if isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span class="pointer-events-none w-full text-center text-[9px] text-[#5c636b]">
+                <span
+                  class="pointer-events-none w-full text-center text-[#5c636b]"
+                  style={`font-size:${smallCellFontPx}px;`}
+                >
                   {cellLabel(channel, step)}
                 </span>
               {:else}

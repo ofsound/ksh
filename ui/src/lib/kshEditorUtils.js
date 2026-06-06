@@ -11,18 +11,42 @@ import { cloneCell, defaultCell } from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
 export const GRID_CELL_H = 44;
+export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
 export const STEP_LABEL_H = 18;
-export const GRID_ROW_H = GRID_CELL_H + 4;
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 724;
 export const MAIN_TOP = 68;
 export const HELPER_FOOTER_H = 24;
 
-export function gridBodyHeight(channelCount) {
-  return STEP_LABEL_H + channelCount * GRID_ROW_H;
+export function normalizePatternViewScale(scale) {
+  return Number(scale) === 1.5 ? 1.5 : 1;
+}
+
+export function gridCellWidth(scale = 1) {
+  return Math.round(GRID_CELL_W * normalizePatternViewScale(scale));
+}
+
+export function gridCellHeight(scale = 1) {
+  return Math.round(GRID_CELL_H * normalizePatternViewScale(scale));
+}
+
+export function gridRowGap(scale = 1) {
+  return Math.round(GRID_ROW_GAP * normalizePatternViewScale(scale));
+}
+
+export function gridRowHeight(scale = 1) {
+  return gridCellHeight(scale) + gridRowGap(scale);
+}
+
+export function gridRowPaddingY(scale = 1) {
+  return gridRowGap(scale) / 2;
+}
+
+export function gridBodyHeight(channelCount, scale = 1) {
+  return STEP_LABEL_H + channelCount * gridRowHeight(scale);
 }
 
 export function gridAreaHeight(editorHeight) {
@@ -30,14 +54,14 @@ export function gridAreaHeight(editorHeight) {
 }
 
 /** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
-export function gridCellPadding(channelCount, editorHeight) {
-  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount);
+export function gridCellPadding(channelCount, editorHeight, scale = 1) {
+  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
 
 /** Top spacer; step labels sit between this and the first cell row. */
-export function gridTopPadding(channelCount, editorHeight) {
-  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount);
+export function gridTopPadding(channelCount, editorHeight, scale = 1) {
+  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
   return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
 }
 
@@ -126,18 +150,18 @@ export function mutedChannelColor(colorCss) {
   });
 }
 
-export function editorDimensions(state) {
-  const gridW = state.stepCount * GRID_CELL_W;
+export function editorDimensions(state, scale = 1) {
+  const gridW = state.stepCount * gridCellWidth(scale);
   const width = Math.max(EDITOR_MIN_WIDTH, 312 + gridW);
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
-  const height = Math.max(MAIN_TOP + gridBodyHeight(state.channelCount), minEditorHeight);
+  const height = Math.max(MAIN_TOP + gridBodyHeight(state.channelCount, scale), minEditorHeight);
   return { width, height };
 }
 
 // The editor and the compact preview strip are stacked vertically and always
 // visible, so the plugin window must accommodate both plus the gap between them.
-export function combinedDimensions(state) {
-  const editor = editorDimensions(state);
+export function combinedDimensions(state, scale = 1) {
+  const editor = editorDimensions(state, scale);
   return {
     width: editor.width,
     height: editor.height + compactPanelHeight(),

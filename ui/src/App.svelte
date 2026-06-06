@@ -7,7 +7,7 @@
 
   onMount(() => initKshSession());
 
-  const dims = $derived(combinedDimensions(session.kshState));
+  const dims = $derived(combinedDimensions(session.kshState, session.patternViewScale));
 </script>
 
 <main class="bg-ksh-bg">
