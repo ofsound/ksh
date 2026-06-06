@@ -36,6 +36,7 @@ import {
   cloneCell,
   defaultCell,
   makeDefaultKshState,
+  resizeChannelLoopLengths,
 } from "./kshUiState.js";
 
 export const session = $state({
@@ -286,11 +287,10 @@ export async function setHeaderValue(id, value) {
   const state = session.kshState;
 
   if (id === "steps" && state.stepCount !== next) {
+    const previousStepCount = state.stepCount;
     state.stepCount = next;
     state.refreshSteps = clamp(state.refreshSteps, 1, next);
-    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
-      state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, next);
-    }
+    resizeChannelLoopLengths(state, next, previousStepCount);
     bumpState();
     await sendCommand("steps", [next]);
     await sendCommand("refresh_steps", [state.refreshSteps]);

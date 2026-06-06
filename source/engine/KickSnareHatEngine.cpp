@@ -247,12 +247,14 @@ void KickSnareHatEngine::updateStepIntervalMs()
 
 void KickSnareHatEngine::setStepCount (int count)
 {
+    const int previousStepCount = stepCount;
     stepCount = clampInt (count, 1, Constants::maxSteps);
     currentStep = mod (currentStep, stepCount);
     refreshSteps = clampInt (refreshSteps, 1, stepCount);
 
     for (auto& channel : channels)
-        channel.loopLength = clampInt (channel.loopLength, 1, stepCount);
+        channel.loopLength =
+            channel.loopLength == previousStepCount ? stepCount : clampInt (channel.loopLength, 1, stepCount);
 
     recomposeWindow (0, stepCount, true);
     status ("steps " + std::to_string (stepCount));

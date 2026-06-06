@@ -225,18 +225,21 @@ TEST_CASE ("channel loop length refreshes all wrapped generated cells", "[engine
     REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 30);
 }
 
-TEST_CASE ("channel loop length clamps to step count", "[engine][generation]")
+TEST_CASE ("channel loop length follows step count only when it matched the old step count", "[engine][generation]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (16);
-    fixture.engine.setChannelLoopLength (0, 12);
+    fixture.engine.setChannelLoopLength (0, 16);
+    fixture.engine.setChannelLoopLength (1, 6);
     fixture.engine.setStepCount (8);
 
     REQUIRE (fixture.engine.channelAt (0).loopLength == 8);
+    REQUIRE (fixture.engine.channelAt (1).loopLength == 6);
 
     fixture.engine.setStepCount (16);
-    REQUIRE (fixture.engine.channelAt (0).loopLength == 8);
+    REQUIRE (fixture.engine.channelAt (0).loopLength == 16);
+    REQUIRE (fixture.engine.channelAt (1).loopLength == 6);
 }
 
 TEST_CASE ("trailing cells do not make source active", "[engine][generation]")

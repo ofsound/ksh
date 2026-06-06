@@ -82,6 +82,14 @@ export function makeDefaultKshState() {
 /** Alias kept for existing imports. */
 export const makeDefaultCompactState = makeDefaultKshState;
 
+export function resizeChannelLoopLengths(state, nextStepCount, previousStepCount = state.stepCount) {
+  for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+    const loopLength = state.channels[channel].loopLength;
+    state.channels[channel].loopLength =
+      loopLength === previousStepCount ? nextStepCount : clamp(loopLength, 1, nextStepCount);
+  }
+}
+
 function applyPersistencePayload(state, payload) {
   if (!payload || payload.v !== 1) {
     return false;
@@ -194,12 +202,13 @@ export function applyStatusMessage(state, selector, args = []) {
 
   switch (selector) {
     case "steps":
+    {
+      const previousStepCount = state.stepCount;
       state.stepCount = clamp(values[0], 1, MAX_STEPS);
       state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
-      for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
-        state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
-      }
+      resizeChannelLoopLengths(state, state.stepCount, previousStepCount);
       break;
+    }
     case "channels":
       state.channelCount = clamp(values[0], 1, MAX_CHANNELS);
       break;
