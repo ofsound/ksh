@@ -57,6 +57,9 @@ The plugin editor is a JUCE 8 `WebBrowserComponent` ([overview](https://juce.com
 # Hot reload (Debug plugin loads http://localhost:5173)
 cd ui && npm install && npm run dev
 
+# Static Svelte diagnostics
+cd ui && npm run check
+
 # Production bundle → assets/webview/ui.zip (embedded via BinaryData)
 cd ui && npm run build
 ```
@@ -67,13 +70,26 @@ JUCE JS helpers: `JUCE/modules/juce_gui_extra/native/javascript/` (Vite alias `@
 
 Melatonin Inspector was removed — it only applies to native JUCE widgets, not WebView UIs.
 
+## Svelte 5 (`ui/`)
+
+All `.svelte` files use **runes mode** (Svelte 5). Cursor rule `.cursor/rules/svelte-ui.mdc` applies when editing `ui/**`.
+
+**Use:** `$props()`, `$state()`, `$derived` / `$derived.by`, `onclick` / `onpointerdown` (not `on:click`), callback props, keyed `{#each}` with stable ids, and `SvelteSet` / `SvelteMap` from `svelte/reactivity` when mutating collections in place.
+
+**Avoid:** Svelte 4 `export let`, `$:`, `<slot>` / `$$slots`, `on:event`, `createEventDispatcher`, stores for local component state, `svelte:component`, and unnecessary `$effect`. Prefer event handlers and `$derived`; use `$effect` only for browser/API side effects that cannot be modeled directly.
+
+**Svelte MCP:** When asked about Svelte or SvelteKit, call `list-sections` first, fetch all relevant docs with `get-documentation`, and run `svelte-autofixer` before finishing any Svelte code change. Do not generate a playground link for code written into this repo.
+
+**Before finishing any `ui/` change:** run `cd ui && npm run check`, then `cmake --build Builds` so all plugin formats embed a fresh `assets/webview/ui.zip`.
+
 ## Agent workflow (rebuild every time)
 
 After any change to `source/`, `CMakeLists.txt`, `ui/`, or plugin-related CMake modules:
 
 1. Reconfigure only if CMake changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
-2. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
-3. Fix compile errors before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
+2. If **`ui/`** changed: `cd ui && npm run check`
+3. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
+4. Fix compile/check warnings before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
 
 Run `./Builds/Tests` when test or processor behavior changes.
 

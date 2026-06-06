@@ -1,0 +1,44 @@
+---
+description: Svelte 5 runes conventions for the WebView UI
+globs: ui/**/*
+alwaysApply: false
+---
+
+# Svelte 5 UI (`ui/`)
+
+The plugin editor is Svelte **5 runes mode** (Vite + Tailwind). Match existing components and helpers in `ui/src/`.
+
+## Required patterns
+
+- **`$props()`** for component props. Use JSDoc when prop shapes are nontrivial.
+- **`$state()`** for local UI state such as dragging, editing, and transient view state.
+- **`$derived` / `$derived.by`** for values computed from props or state. Do not use `$:`.
+- **Events** use `onclick`, `onpointerdown`, etc. Do not use Svelte 4 `on:click` syntax.
+- **Communication** uses callback props or shared `.svelte.js` session functions, not `createEventDispatcher`.
+- **Collections** use `SvelteSet` / `SvelteMap` from `svelte/reactivity` when mutating in place.
+- **Lists** use keyed `{#each}` blocks with stable keys.
+
+## Avoid legacy Svelte 4
+
+Avoid `export let`, `$:`, `<slot>` / `$$slots`, `on:event`, stores for local component state, `svelte:component`, and unnecessary `$effect`.
+
+Prefer event handlers or `$derived` over `$effect`. Use `$effect` only for direct browser or external API side effects that cannot be represented cleanly as state or derived state.
+
+## Svelte MCP
+
+When doing Svelte work, use the Svelte MCP flow:
+
+1. `list-sections` first.
+2. `get-documentation` for all sections relevant to the task.
+3. `svelte-autofixer` before finishing any Svelte code change.
+
+Do not generate a playground link for code written into this repository.
+
+## Before marking UI work done
+
+1. `cd ui && npm run check` must pass with `--fail-on-warnings`.
+2. `cmake --build Builds` must run so all plugin formats embed a fresh `assets/webview/ui.zip`.
+
+## Bridge and sizing
+
+Native calls use `@juce` helpers. Keep frequent native return values small and scalar. Use the existing `setViewSize` bridge for editor resize requests, and keep UI-only view preferences out of engine persistence unless the feature explicitly needs saved state.
