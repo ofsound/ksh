@@ -33,6 +33,7 @@ void KshUiBridge::detachWebView()
 {
     webView = nullptr;
     lastEmittedStep = 0;
+    lastEmittedModifierMask = -1;
 }
 
 void KshUiBridge::emitJsonEvent (const juce::Identifier& eventId, const nlohmann::json& payload)
@@ -129,8 +130,33 @@ void KshUiBridge::emitCurrentStep (int stepOneBased)
     webView->emitEventIfBrowserIsVisible ("current_step", stepOneBased);
 }
 
+void KshUiBridge::pollModifierKeys()
+{
+    if (webView == nullptr)
+        return;
+
+    const auto modifiers = juce::ModifierKeys::getCurrentModifiersRealtime();
+    const auto shiftDown = modifiers.isShiftDown();
+    const auto altDown = modifiers.isAltDown();
+    const auto commandDown = modifiers.isCommandDown();
+    const int mask = (shiftDown ? 1 : 0) | (altDown ? 2 : 0) | (commandDown ? 4 : 0);
+
+    if (mask == lastEmittedModifierMask)
+        return;
+
+    lastEmittedModifierMask = mask;
+
+    auto payload = nlohmann::json::object();
+    payload["shiftKey"] = shiftDown;
+    payload["altKey"] = altDown;
+    payload["metaKey"] = commandDown;
+    emitJsonEvent ("modifier_keys", payload);
+}
+
 void KshUiBridge::pollTransportUi()
 {
+    pollModifierKeys();
+
     const int step = processor.getCurrentStepForUi();
     emitCurrentStep (step);
 }

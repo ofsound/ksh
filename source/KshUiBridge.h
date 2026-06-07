@@ -27,12 +27,14 @@ public:
     void emitStatus (const std::string& message);
     void emitNoteHit (const ksh::NativeHit& hit);
     void emitCurrentStep (int stepOneBased);
+    void pollModifierKeys();
     void pollTransportUi();
 
 private:
     PluginProcessor& processor;
     juce::Component::SafePointer<juce::WebBrowserComponent> webView;
     int lastEmittedStep = 0;
+    int lastEmittedModifierMask = -1;
 
     void emitJsonEvent (const juce::Identifier& eventId, const nlohmann::json& payload);
     void emitStatusSelector (const std::string& message);

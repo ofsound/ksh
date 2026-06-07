@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
     GRID_SIDEBAR_W,
@@ -516,6 +517,15 @@
     syncHoverLayerModeFromModifiers(modifiers.metaKey, modifiers.shiftKey, modifiers.altKey);
   }
 
+  function syncHoverLayerModeFromNativeModifiers(payload) {
+    const modifiers = parseBackendJson(payload);
+    syncHoverLayerModeFromModifiers(
+      Boolean(modifiers?.metaKey),
+      Boolean(modifiers?.shiftKey),
+      Boolean(modifiers?.altKey)
+    );
+  }
+
   function onEditorKeyDown(event) {
     if (event.key === "Escape") {
       cancelPatternCopy();
@@ -531,6 +541,8 @@
   }
 
   onMount(() => {
+    const removeModifierListener = onBackendEvent("modifier_keys", syncHoverLayerModeFromNativeModifiers);
+
     const onKeyDown = (event) => {
       syncHoverLayerModeFromKeyEvent(event);
       onEditorKeyDown(event);
@@ -549,6 +561,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
     return () => {
+      removeModifierListener();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

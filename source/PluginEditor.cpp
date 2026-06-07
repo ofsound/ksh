@@ -55,7 +55,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     setResizeLimits (1296, 724, 3200, 1400);
     setResizable (true, true);
     setSize (1296, 724);
-    startTimerHz (30);
+    startTimerHz (60);
 }
 
 PluginEditor::~PluginEditor()
