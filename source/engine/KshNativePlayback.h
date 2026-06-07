@@ -91,7 +91,11 @@ struct NativePlaybackBuild
 struct PlaybackSnapshot
 {
     GeneratedPattern generated {};
+    std::array<SourcePattern, Constants::sourceCount> sources {};
+    std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
     std::array<Channel, Constants::maxChannels> channels {};
+    GenerationMode generationMode = GenerationMode::staticSource;
+    int staticSource = 0;
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     double beatsPerStep = 0.25;

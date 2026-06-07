@@ -226,6 +226,28 @@ TEST_CASE ("incoming MIDI notes 0-7 select source patterns", "[plugin][bridge][m
     REQUIRE (plugin.engineStateSnapshot().staticSource == 7);
 }
 
+TEST_CASE ("incoming MIDI source selector affects beat one playback immediately", "[plugin][bridge][midi-input]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { 5 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 0, static_cast<juce::uint8> (100)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 0));
+    REQUIRE (containsNoteOn (midi, 36));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 0);
+}
+
 TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve other MIDI", "[plugin][bridge][midi-input]")
 {
     PluginProcessor plugin;

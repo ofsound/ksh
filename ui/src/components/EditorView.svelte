@@ -501,6 +501,21 @@
     hoverLayerMode = modifierLayerMode(metaKey, shiftKey, altKey);
   }
 
+  function modifierStateFromKeyEvent(event) {
+    const key = event.key;
+    const isKeyDown = event.type === "keydown";
+    return {
+      metaKey: key === "Meta" ? isKeyDown : event.metaKey,
+      shiftKey: key === "Shift" ? isKeyDown : event.shiftKey,
+      altKey: key === "Alt" ? isKeyDown : event.altKey,
+    };
+  }
+
+  function syncHoverLayerModeFromKeyEvent(event) {
+    const modifiers = modifierStateFromKeyEvent(event);
+    syncHoverLayerModeFromModifiers(modifiers.metaKey, modifiers.shiftKey, modifiers.altKey);
+  }
+
   function onEditorKeyDown(event) {
     if (event.key === "Escape") {
       cancelPatternCopy();
@@ -517,12 +532,12 @@
 
   onMount(() => {
     const onKeyDown = (event) => {
-      syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
+      syncHoverLayerModeFromKeyEvent(event);
       onEditorKeyDown(event);
     };
 
     const onKeyUp = (event) => {
-      syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
+      syncHoverLayerModeFromKeyEvent(event);
     };
 
     const onBlur = () => {

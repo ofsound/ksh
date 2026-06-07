@@ -92,4 +92,241 @@
       filter: brightness(1.42);
     }
   }
+
+  .preview-panel .compact-strip {
+    position: relative;
+    z-index: 10;
+  }
+
+  .preview-branding {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background:
+      linear-gradient(122deg, rgb(245 158 56 / 0.1) 0%, rgb(245 158 56 / 0) 29%),
+      linear-gradient(28deg, rgb(92 168 242 / 0) 0%, rgb(92 168 242 / 0.13) 68%, rgb(92 168 242 / 0) 100%),
+      repeating-linear-gradient(
+        90deg,
+        rgb(255 255 255 / 0.018) 0,
+        rgb(255 255 255 / 0.018) 1px,
+        transparent 1px,
+        transparent 42px
+      );
+  }
+
+  .preview-branding::before {
+    content: "";
+    position: absolute;
+    inset: 28px -120px auto auto;
+    width: 720px;
+    height: 132px;
+    transform: rotate(-9deg);
+    background:
+      linear-gradient(90deg, transparent 0%, rgb(245 158 56 / 0.42) 12%, transparent 13%),
+      linear-gradient(90deg, transparent 0%, rgb(92 168 242 / 0.36) 46%, transparent 47%),
+      linear-gradient(90deg, transparent 0%, rgb(232 92 117 / 0.32) 72%, transparent 73%);
+    opacity: 0.5;
+  }
+
+  .preview-branding::after {
+    content: "";
+    position: absolute;
+    right: 52px;
+    bottom: 38px;
+    width: 460px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(219 222 229 / 0.22), transparent);
+  }
+
+  .preview-branding-steps {
+    position: absolute;
+    right: 72px;
+    top: 62px;
+    display: flex;
+    gap: 7px;
+    transform: rotate(-5deg);
+  }
+
+  .preview-branding-steps span {
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgb(219 222 229 / 0.12);
+    border-radius: 2px;
+    background: rgb(18 18 18 / 0.42);
+    box-shadow: inset 0 -7px 0 rgb(92 168 242 / 0.28);
+  }
+
+  .preview-branding-steps span.is-downbeat {
+    border-color: rgb(245 158 56 / 0.45);
+    box-shadow:
+      inset 0 -12px 0 rgb(245 158 56 / 0.44),
+      0 0 14px rgb(245 158 56 / 0.14);
+  }
+
+  .preview-branding-lockup {
+    position: absolute;
+    right: 84px;
+    top: 102px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .preview-branding-maker {
+    padding-right: 6px;
+    color: rgb(219 222 229 / 0.64);
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+
+  .preview-branding-title {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+    color: #dbdee5;
+    font-size: 128px;
+    font-weight: 950;
+    line-height: 0.72;
+    letter-spacing: 0;
+    text-shadow: 0 7px 0 rgb(18 18 18 / 0.7), 0 0 28px rgb(92 168 242 / 0.16);
+  }
+
+  .preview-branding-title span:nth-child(1) {
+    color: #f59e38;
+  }
+
+  .preview-branding-title span:nth-child(2) {
+    color: #dbdee5;
+  }
+
+  .preview-branding-title span:nth-child(3) {
+    color: #5ca8f2;
+  }
+
+  .preview-branding-legend {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    padding-right: 7px;
+    color: rgb(219 222 229 / 0.46);
+    font-size: 12px;
+    font-weight: 750;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  .preview-branding-legend span {
+    border-top: 2px solid currentcolor;
+    padding-top: 5px;
+  }
+
+  .preview-branding-legend span:nth-child(1) {
+    color: rgb(245 158 56 / 0.72);
+  }
+
+  .preview-branding-legend span:nth-child(2) {
+    color: rgb(219 222 229 / 0.58);
+  }
+
+  .preview-branding-legend span:nth-child(3) {
+    color: rgb(92 168 242 / 0.72);
+  }
+
+  .preview-branding-drums {
+    position: absolute;
+    right: 440px;
+    top: 112px;
+    width: 210px;
+    height: 150px;
+    opacity: 0.78;
+  }
+
+  .drum-icon,
+  .drum-stick {
+    position: absolute;
+    display: block;
+  }
+
+  .drum-icon {
+    border: 3px solid rgb(219 222 229 / 0.28);
+    background: rgb(30 32 37 / 0.42);
+  }
+
+  .drum-icon::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border: 1px solid rgb(219 222 229 / 0.18);
+    border-radius: inherit;
+  }
+
+  .drum-icon-kick {
+    left: 54px;
+    top: 44px;
+    width: 86px;
+    height: 86px;
+    border-color: rgb(245 158 56 / 0.48);
+    border-radius: 999px;
+    box-shadow: inset 0 -18px 0 rgb(245 158 56 / 0.12);
+  }
+
+  .drum-icon-snare {
+    left: 0;
+    top: 72px;
+    width: 58px;
+    height: 36px;
+    border-color: rgb(219 222 229 / 0.36);
+    border-radius: 10px;
+    box-shadow: inset 0 -10px 0 rgb(219 222 229 / 0.08);
+  }
+
+  .drum-icon-hat {
+    right: 0;
+    top: 26px;
+    width: 82px;
+    height: 24px;
+    border-width: 2px;
+    border-color: rgb(92 168 242 / 0.55);
+    border-radius: 999px;
+    box-shadow: 0 20px 0 -7px rgb(92 168 242 / 0.32);
+  }
+
+  .drum-stick {
+    left: 86px;
+    top: 30px;
+    width: 96px;
+    height: 3px;
+    border-radius: 999px;
+    background: rgb(219 222 229 / 0.46);
+    transform-origin: left center;
+  }
+
+  .drum-stick-left {
+    transform: rotate(31deg);
+  }
+
+  .drum-stick-right {
+    transform: rotate(55deg);
+  }
+
+  @media (max-width: 920px) {
+    .preview-branding-lockup {
+      right: 42px;
+    }
+
+    .preview-branding-drums {
+      display: none;
+    }
+
+    .preview-branding-steps {
+      right: 40px;
+    }
+  }
 }

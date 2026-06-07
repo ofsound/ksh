@@ -282,7 +282,11 @@ PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
 {
     PlaybackSnapshot snapshot;
     snapshot.generated = generated;
+    snapshot.sources = sources;
+    snapshot.sourceChannelMutes = sourceChannelMutes;
     snapshot.channels = channels;
+    snapshot.generationMode = generationMode;
+    snapshot.staticSource = staticSource;
     snapshot.stepCount = stepCount;
     snapshot.channelCount = channelCount;
     snapshot.beatsPerStep = beatsPerStep();

@@ -188,6 +188,76 @@ TEST_CASE ("midi playback advances one step per sixteenth at 120 bpm", "[engine]
     REQUIRE (step1.currentStepOneBased == 2);
 }
 
+TEST_CASE ("midi playback does not emit next boundary at previous block end", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setStaticSource (4);
+    fixture.engine.setCell (4, 0, 1, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 1, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 4, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto block0 = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 6000);
+
+    REQUIRE (countNoteOns (block0.midi) == 0);
+
+    juce::MidiBuffer midi;
+    MidiPatternSelectionBlock selections;
+    selections.add (0, 0);
+    const auto block1 = runner.processBlock (snapshot, 0.25, 120.0, true, 6000, midi, selections);
+
+    REQUIRE (countNoteOns (midi) == 1);
+    REQUIRE (block1.noteHitCount == 1);
+    REQUIRE (block1.noteHits[0].uiSource == 1);
+    REQUIRE (block1.noteHits[0].uiSourceStep == 2);
+}
+
+TEST_CASE ("midi pattern selection suppresses queued old-pattern note-ons", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setStaticSource (4);
+    fixture.engine.setCell (4, 0, 0, true, 100, 100, 1, 0, false, 2);
+    fixture.engine.setCell (0, 0, 1, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 4, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto block0 = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 3000);
+    REQUIRE (countNoteOns (block0.midi) == 1);
+    REQUIRE (block0.noteHitCount == 1);
+    REQUIRE (block0.noteHits[0].uiSource == 5);
+
+    juce::MidiBuffer switchMidi;
+    MidiPatternSelectionBlock selections;
+    selections.add (0, 0);
+    const auto switchBlock = runner.processBlock (snapshot, 0.125, 120.0, true, 3000, switchMidi, selections);
+    REQUIRE (countNoteOns (switchMidi) == 0);
+    REQUIRE (switchBlock.noteHitCount == 0);
+
+    const auto nextBlock = runPlaybackBlock (runner, snapshot, 0.25, 120.0, true, 3000);
+    REQUIRE (countNoteOns (nextBlock.midi) == 1);
+    REQUIRE (nextBlock.noteHitCount == 1);
+    REQUIRE (nextBlock.noteHits[0].uiSource == 1);
+    REQUIRE (nextBlock.noteHits[0].uiSourceStep == 2);
+}
+
 TEST_CASE ("midi playback applies swing delay within block", "[engine][transport]")
 {
     EngineFixture fixture;

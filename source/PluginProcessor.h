@@ -93,7 +93,7 @@ private:
     void removeMacroParameterListeners();
     void applyMacroParametersToEngineLocked();
     void syncMacroParametersFromEngineLocked (bool notifyHost);
-    bool consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
+    ksh::MidiPatternSelectionBlock consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
     void drainPendingMidiPatternSelectionsLocked();
 
     juce::AudioProcessorValueTreeState parameters;

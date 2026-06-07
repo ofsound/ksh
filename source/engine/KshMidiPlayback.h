@@ -37,6 +37,38 @@ struct MidiPlaybackResult
     }
 };
 
+struct MidiPatternSelectionEvent
+{
+    int samplePosition = 0;
+    int source = 0;
+};
+
+struct MidiPatternSelectionBlock
+{
+    static constexpr size_t maxEvents = 128;
+
+    std::array<MidiPatternSelectionEvent, maxEvents> events {};
+    size_t count = 0;
+    bool dropped = false;
+
+    void clear()
+    {
+        count = 0;
+        dropped = false;
+    }
+
+    void add (int samplePosition, int source)
+    {
+        if (count >= events.size())
+        {
+            dropped = true;
+            return;
+        }
+
+        events[count++] = { samplePosition, source };
+    }
+};
+
 /** Audio-thread playback: evaluates {@link PlaybackSnapshot} live at each step boundary. */
 class MidiPlaybackRunner
 {
@@ -50,7 +82,8 @@ public:
                                      double bpm,
                                      bool isPlaying,
                                      int numSamples,
-                                     juce::MidiBuffer& midiOut);
+                                     juce::MidiBuffer& midiOut,
+                                     const MidiPatternSelectionBlock& patternSelections = {});
 
 private:
     static constexpr size_t cycleCounterSlots =
@@ -84,6 +117,7 @@ private:
     size_t pendingNoteOnCount = 0;
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
     uint32_t rngState = 0x12345678u;
+    int pendingStaticSourceOverride = -1;
 
     [[nodiscard]] int sampleOffsetForGlobalStep (const PlaybackSnapshot& snapshot,
                                                  double blockStartPpq,
@@ -92,14 +126,19 @@ private:
                                                  int numSamples) const;
 
     void clearPending();
+    void dropPendingNoteOnsAtOrAfter (int sampleOffset);
     void resetCycleCounters();
     [[nodiscard]] double nextRandomUnit();
+    [[nodiscard]] int staticSourceForStep (const PlaybackSnapshot& snapshot,
+                                           const MidiPatternSelectionBlock& patternSelections,
+                                           int stepSampleOffset);
     void evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                              int globalStep,
                              int stepSampleOffset,
                              int numSamples,
                              juce::MidiBuffer& midiOut,
-                             MidiPlaybackResult& result);
+                             MidiPlaybackResult& result,
+                             int staticSourceOverride);
     void scheduleHit (int stepSampleOffset,
                       int numSamples,
                       const NativeHit& hit,

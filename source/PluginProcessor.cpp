@@ -450,7 +450,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     buffer.clear();
 
     const auto numSamples = buffer.getNumSamples();
-    const bool midiPatternSelectionQueued = consumeMidiPatternSelectionInput (midiMessages);
+    const auto midiPatternSelections = consumeMidiPatternSelectionInput (midiMessages);
 
     // Read-only immutable view built on the message thread. No engine access on the audio thread.
     const auto* snapshot = playbackMailbox.current();
@@ -494,7 +494,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
-    const auto playback = midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages);
+    const auto playback =
+        midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages, midiPatternSelections);
 
     if (hasStandaloneTransport() && isPlaying && bpm > 0.0)
     {
@@ -506,7 +507,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
 
-    bool notify = midiPatternSelectionQueued;
+    bool notify = midiPatternSelections.count > 0;
 
     // Wake the message thread to advance generation on step changes and play/stop transitions.
     const bool stepChanged = playback.currentStepOneBased != lastReportedStepForRegen;
@@ -539,10 +540,10 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         messageThreadWorkPending.store (true, std::memory_order_release);
 }
 
-bool PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
+ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
 {
+    ksh::MidiPatternSelectionBlock selections;
     bool shouldFilter = false;
-    bool queuedSelection = false;
 
     for (const auto metadata : midiMessages)
     {
@@ -551,7 +552,7 @@ bool PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMe
         if (message.isNoteOn() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
         {
             [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (message.getNoteNumber());
-            queuedSelection = queuedSelection || queued;
+            selections.add (metadata.samplePosition, message.getNoteNumber());
             shouldFilter = true;
         }
         else if (message.isNoteOff() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
@@ -561,7 +562,7 @@ bool PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMe
     }
 
     if (! shouldFilter)
-        return queuedSelection;
+        return selections;
 
     midiInputScratch.clear();
 
@@ -578,7 +579,7 @@ bool PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMe
     midiMessages.swapWith (midiInputScratch);
     midiInputScratch.clear();
 
-    return queuedSelection;
+    return selections;
 }
 
 void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
