@@ -805,6 +805,11 @@ void PluginProcessor::setEditorResizeCallback (EditorResizeCallback callback)
     editorResizeCallback = std::move (callback);
 }
 
+void PluginProcessor::setPatternViewScale (double scale)
+{
+    patternViewScale = scale == 1.5 ? 1.5 : 1.0;
+}
+
 void PluginProcessor::requestEditorSize (int width, int height)
 {
     if (editorResizeCallback == nullptr)

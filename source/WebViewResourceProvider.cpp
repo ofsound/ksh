@@ -121,6 +121,9 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                                             {
                                                 if (args.size() >= 2)
                                                 {
+                                                    if (args.size() >= 3)
+                                                        processor.setPatternViewScale ((double) args[2]);
+
                                                     processor.requestEditorSize ((int) args[0], (int) args[1]);
                                                     complete (juce::var { true });
                                                     return;

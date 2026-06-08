@@ -62,12 +62,17 @@ export function syncAll() {
   return sendCommand("sync_all");
 }
 
-export function setViewSize(width, height) {
+export function setViewSize(width, height, patternViewScale) {
   if (!window.__JUCE__?.initialisationData?.__juce__functions?.includes("kshSetViewSize")) {
     return Promise.resolve(false);
   }
 
-  return getNativeFunction("kshSetViewSize")(width, height);
+  const native = getNativeFunction("kshSetViewSize");
+  if (patternViewScale === undefined) {
+    return native(width, height);
+  }
+
+  return native(width, height, patternViewScale);
 }
 
 /** Backend may emit parsed objects or { json: string } fallback. */

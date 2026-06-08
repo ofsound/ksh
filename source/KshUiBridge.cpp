@@ -61,6 +61,7 @@ void KshUiBridge::emitEngineState()
     state["standaloneTransportAvailable"] = processor.hasStandaloneTransport() ? 1 : 0;
     state["standaloneTransportPlaying"] = processor.isStandaloneTransportPlaying() ? 1 : 0;
     state["standaloneTempo"] = processor.getStandaloneTempoBpm();
+    state["patternViewScale"] = processor.getPatternViewScale();
     emitJsonEvent ("engine_state", state);
 }
 

@@ -76,6 +76,9 @@ public:
     void setStandaloneTempoBpm (double bpm);
     double getStandaloneTempoBpm();
 
+    void setPatternViewScale (double scale);
+    [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
+
 private:
     static BusesProperties createBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -136,6 +139,9 @@ private:
     juce::MidiBuffer midiInputScratch;
 
     EditorResizeCallback editorResizeCallback;
+
+    // Editor-only UI preference; not written to host project state.
+    double patternViewScale = 1.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

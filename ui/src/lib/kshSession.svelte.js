@@ -565,7 +565,7 @@ export async function clearPattern() {
 
 export async function resizeForCurrentView() {
   const { width, height } = combinedDimensions(session.kshState, session.patternViewScale);
-  await setViewSize(width, height);
+  await setViewSize(width, height, session.patternViewScale);
 }
 
 export async function togglePatternViewScale() {
@@ -596,6 +596,9 @@ export function initKshSession() {
     onBackendEvent("engine_state", (payload) => {
       const parsed = parseBackendJson(payload);
       applyEngineState(session.kshState, parsed);
+      if (parsed?.patternViewScale !== undefined) {
+        session.patternViewScale = normalizePatternViewScale(parsed.patternViewScale);
+      }
       session.selectedSource = session.kshState.staticSource;
       clearSourceChannelSolo();
       bumpState();
