@@ -45,7 +45,7 @@
     <p class="absolute left-3 top-2 z-10 text-xs text-ksh-muted">Loading…</p>
   {/if}
 
-  <section class="px-3" style={`padding-top:${previewPad}px;`}>
+  <section class="px-3" style={`padding-top:${previewPad}px;padding-bottom:${previewPad}px;`}>
     <div class="flex flex-col gap-0">
       {#each previewRows as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">

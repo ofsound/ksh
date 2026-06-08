@@ -7,6 +7,7 @@ export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
+export const GRID_CELL_LEFT_GAP = 8;
 export const STEP_LABEL_H = 18;
 export const STEP_LABEL_FONT_PX = 10;
 
@@ -14,7 +15,7 @@ export function stepLabelFontPx(scale = 1) {
   return Math.round(STEP_LABEL_FONT_PX * normalizePatternViewScale(scale));
 }
 export const EDITOR_MIN_WIDTH = 1328;
-export const PLUGIN_MIN_HEIGHT = 724;
+export const PLUGIN_MIN_HEIGHT = 748;
 export const MAIN_TOP = 68;
 export const HELPER_FOOTER_H = 24;
 
@@ -99,9 +100,9 @@ export function compactPreviewHeight(channelCount) {
   return channelCount * COMPACT_ROW_H;
 }
 
-/** Vertically center the generated preview grid between the divider and plugin bottom. */
+/** Equal top/bottom padding for the generated preview grid above the helper footer. */
 export function compactPreviewPadding(channelCount) {
-  const slack = compactPanelHeight() - compactPreviewHeight(channelCount);
+  const slack = COMPACT_HEIGHT - compactPreviewHeight(channelCount);
   return Math.max(0, Math.floor(slack / 2));
 }
 

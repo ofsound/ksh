@@ -4,6 +4,7 @@
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
+    GRID_CELL_LEFT_GAP,
     GRID_SIDEBAR_W,
     cycleOffsetLabel,
     editorDimensions,
@@ -763,7 +764,7 @@
   <div class="bg-ksh-grid flex min-h-0 flex-1 flex-col overflow-hidden px-3">
     <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
     <div class="shrink-0">
-    <div class="flex items-center" style={`padding-left:${GRID_SIDEBAR_W}px`}>
+    <div class="flex items-center" style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px`}>
       <div class="flex" bind:this={gridEl}>
       {#each stepCols as step (step)}
         <div
@@ -873,7 +874,7 @@
           ></button>
         </div>
 
-        <div class="flex">
+        <div class="flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
           {#each allStepCols as step (step)}
             <button
               type="button"
