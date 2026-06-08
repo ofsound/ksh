@@ -8,7 +8,11 @@ export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
 export const STEP_LABEL_H = 18;
-export const STEP_LABEL_FONT_PX = 15;
+export const STEP_LABEL_FONT_PX = 10;
+
+export function stepLabelFontPx(scale = 1) {
+  return Math.round(STEP_LABEL_FONT_PX * normalizePatternViewScale(scale));
+}
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 724;
 export const MAIN_TOP = 68;

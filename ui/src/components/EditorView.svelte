@@ -13,7 +13,7 @@
     gridCellWidth,
     gridRowPaddingY,
     gridTopPadding,
-    STEP_LABEL_FONT_PX,
+    stepLabelFontPx,
     isStepBeyondLoopLength,
     channelToneColor,
     lockLabel,
@@ -93,6 +93,7 @@
   const gridCellH = $derived(gridCellHeight(patternScale));
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
   const cellFontPx = $derived(Math.round(18 * patternScale));
+  const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
   const cycleCellFontPx = $derived(Math.round(14 * patternScale));
   const smallCellFontPx = $derived(Math.round(9 * patternScale));
   const cellInsetPx = $derived(Math.round(8 * patternScale));
@@ -767,7 +768,7 @@
       {#each stepCols as step (step)}
         <div
           class={`flex items-center justify-center leading-none ${stepLabelClass(step)}`}
-          style={`width:${gridCellW}px;height:18px;font-size:${STEP_LABEL_FONT_PX}px;`}
+          style={`width:${gridCellW}px;height:18px;font-size:${stepLabelFontSize}px;`}
         >
           {step + 1}
         </div>
