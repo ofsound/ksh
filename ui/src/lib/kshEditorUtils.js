@@ -1,4 +1,4 @@
-import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
+import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_CYCLE, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
 import {cloneCell, defaultCell} from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
@@ -274,6 +274,57 @@ export function cycleOffsetLabel(value) {
     return "1";
   }
   return String(parsed + 1);
+}
+
+/** @returns {number} signed index: negative = inverted (!N), positive = normal (N); zero is unused */
+export function cycleScrollIndex(cycle, cycleInverted) {
+  const magnitude = clamp(Number(cycle) || 1, 1, MAX_CYCLE);
+  return cycleInverted ? -magnitude : magnitude;
+}
+
+/** @returns {{ cycle: number, cycleInverted: number }} */
+export function cycleStateFromScrollIndex(index) {
+  const clamped = clamp(index, -MAX_CYCLE, MAX_CYCLE);
+  if (clamped <= -1) {
+    return { cycle: -clamped, cycleInverted: 1 };
+  }
+  if (clamped >= 1) {
+    return { cycle: clamped, cycleInverted: 0 };
+  }
+  return { cycle: 1, cycleInverted: 0 };
+}
+
+/** Step along ... !3, !2, !1, 1, 2, 3 ... skipping the unused zero slot. */
+export function stepCycleScrollIndex(index, steps) {
+  if (steps === 0) {
+    const state = cycleStateFromScrollIndex(index);
+    return cycleScrollIndex(state.cycle, state.cycleInverted);
+  }
+
+  let current = index;
+  const direction = steps > 0 ? 1 : -1;
+  let remaining = Math.abs(steps);
+
+  while (remaining > 0) {
+    if (direction > 0) {
+      if (current === -1) {
+        current = 1;
+      } else if (current >= MAX_CYCLE) {
+        break;
+      } else {
+        current += 1;
+      }
+    } else if (current === 1) {
+      current = -1;
+    } else if (current <= -MAX_CYCLE) {
+      break;
+    } else {
+      current -= 1;
+    }
+    remaining -= 1;
+  }
+
+  return current;
 }
 
 export function loopLengthForChannel(state, channel) {
