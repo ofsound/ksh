@@ -18,7 +18,12 @@ export function stepLabelFontPx(scale = 1) {
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
+export const STANDALONE_TRANSPORT_ROW_H = 44;
 export const HELPER_FOOTER_H = 24;
+
+export function standaloneTransportRowHeight(state) {
+  return state?.standaloneTransportAvailable ? STANDALONE_TRANSPORT_ROW_H : 0;
+}
 
 export function normalizePatternViewScale(scale) {
   return Number(scale) === 1.5 ? 1.5 : 1;
@@ -48,45 +53,45 @@ export function gridBodyHeight(channelCount, scale = 1) {
   return STEP_LABEL_H + STEP_LABEL_CELL_GAP + channelCount * gridRowHeight(scale);
 }
 
-export function gridAreaHeight(editorHeight) {
-  return editorHeight - MAIN_TOP;
+export function gridAreaHeight(editorHeight, state) {
+  return editorHeight - MAIN_TOP - standaloneTransportRowHeight(state);
 }
 
 /** Top spacer at 1x for a channel count; 1.5x keeps this gap below the header rule. */
-export function referenceTopPadding(channelCount) {
+export function referenceTopPadding(channelCount, state = null) {
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
-  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight);
-  const slack = gridAreaHeight(editorHeight) - oneXBodyHeight;
+  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
+  const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
   return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
 }
 
 /** Bottom spacer at 1x for a channel count; 1.5x keeps this gap above the compact strip. */
-export function referenceBottomPadding(channelCount) {
+export function referenceBottomPadding(channelCount, state = null) {
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
-  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight);
-  const slack = gridAreaHeight(editorHeight) - oneXBodyHeight;
+  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
+  const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
 
 /** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
-export function gridCellPadding(channelCount, editorHeight, scale = 1) {
-  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
+export function gridCellPadding(channelCount, editorHeight, scale = 1, state = null) {
+  const slack = gridAreaHeight(editorHeight, state) - gridBodyHeight(channelCount, scale);
   if (normalizePatternViewScale(scale) === 1.5) {
-    const top = gridTopPadding(channelCount, editorHeight, scale);
+    const top = gridTopPadding(channelCount, editorHeight, scale, state);
     const distributed = Math.max(0, slack - top);
-    return Math.max(referenceBottomPadding(channelCount), distributed);
+    return Math.max(referenceBottomPadding(channelCount, state), distributed);
   }
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
 
 /** Top spacer; step labels sit between this and the first cell row. */
-export function gridTopPadding(channelCount, editorHeight, scale = 1) {
-  const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
+export function gridTopPadding(channelCount, editorHeight, scale = 1, state = null) {
+  const slack = gridAreaHeight(editorHeight, state) - gridBodyHeight(channelCount, scale);
   const distributed = Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
   if (normalizePatternViewScale(scale) === 1.5) {
-    return Math.max(referenceTopPadding(channelCount), distributed);
+    return Math.max(referenceTopPadding(channelCount, state), distributed);
   }
   return distributed;
 }
@@ -178,9 +183,13 @@ export function editorDimensions(state, scale = 1) {
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const normalizedScale = normalizePatternViewScale(scale);
   const bodyHeight = gridBodyHeight(state.channelCount, normalizedScale);
-  let height = Math.max(MAIN_TOP + bodyHeight, minEditorHeight);
+  const standaloneRow = standaloneTransportRowHeight(state);
+  let height = Math.max(MAIN_TOP + bodyHeight, minEditorHeight) + standaloneRow;
   if (normalizedScale === 1.5) {
-    height = Math.max(height, MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount) + referenceBottomPadding(state.channelCount));
+    height = Math.max(
+      height,
+      MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount, state) + referenceBottomPadding(state.channelCount, state) + standaloneRow
+    );
   }
   return {width, height};
 }

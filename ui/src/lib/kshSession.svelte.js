@@ -416,6 +416,19 @@ export async function adjustStandaloneTempo(delta) {
   await sendCommand("standalone_tempo", [next]);
 }
 
+export async function setStandaloneTempoFromInput(event) {
+  const nextTempo = Number.parseFloat(event.currentTarget.value);
+  if (Number.isNaN(nextTempo)) {
+    return;
+  }
+
+  const next = clamp(Math.round(nextTempo), 20, 300);
+  session.kshState.standaloneTempo = next;
+  session.kshState.tempo = next;
+  bumpState();
+  await sendCommand("standalone_tempo", [next]);
+}
+
 export async function auditionChannel(channel) {
   await sendCommand("channel_audition", [channel + 1]);
 }

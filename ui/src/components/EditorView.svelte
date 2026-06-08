@@ -67,9 +67,9 @@
     setSelectedCell,
     setSourceLayerMode,
     setStandaloneTransportPlaying,
+    setStandaloneTempoFromInput,
     shiftChannelRow,
     shiftPattern,
-    adjustStandaloneTempo,
     toggleDcColors,
     toggleDeviceActive,
     togglePatternViewScale,
@@ -99,8 +99,8 @@
   const cycleCellFontPx = $derived(Math.round(14 * patternScale));
   const smallCellFontPx = $derived(Math.round(9 * patternScale));
   const cellInsetPx = $derived(Math.round(8 * patternScale));
-  const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale));
-  const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale));
+  const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
+  const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
   const sourceButtons = $derived(Array.from({ length: SOURCE_COUNT }, (_, source) => source));
   const stepCols = $derived(
@@ -586,6 +586,32 @@
     syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
   }}
 >
+  {#if session.kshState.standaloneTransportAvailable}
+    <div class="flex h-[44px] shrink-0 items-center justify-end gap-2 border-b border-ksh-stroke-soft px-3">
+      <button
+        type="button"
+        aria-label={session.kshState.standaloneTransportPlaying ? "Stop standalone transport" : "Start standalone transport"}
+        aria-pressed={Boolean(session.kshState.standaloneTransportPlaying)}
+        class={`header-button min-w-[64px] px-3 text-[12px] ${session.kshState.standaloneTransportPlaying ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+        onclick={() => setStandaloneTransportPlaying(!session.kshState.standaloneTransportPlaying)}
+      >
+        {session.kshState.standaloneTransportPlaying ? "Stop" : "Play"}
+      </button>
+      <label class="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-ksh-muted">
+        BPM
+        <input
+          type="number"
+          min="20"
+          max="300"
+          step="1"
+          value={Math.round(session.kshState.standaloneTempo)}
+          class="header-button h-[28px] w-[4.5rem] bg-ksh-panel2 px-2 text-center text-[11px] font-semibold text-ksh-text outline-none focus:ring-1 focus:ring-ksh-amber"
+          onchange={setStandaloneTempoFromInput}
+        />
+      </label>
+    </div>
+  {/if}
+
   <header class="flex h-[68px] shrink-0 items-center border-b border-ksh-stroke-soft px-3 text-[11px]">
     <div class="header-section border-l-0 pl-0">
       <div class="flex flex-col items-start">
@@ -720,45 +746,6 @@
           </button>
         </div>
       </div>
-
-      {#if session.kshState.standaloneTransportAvailable}
-        <div class="header-section pr-0">
-          <div class="flex flex-col items-start">
-            <span class="header-label">Standalone</span>
-            <div class="flex items-center gap-1">
-              <button
-                type="button"
-                class={`header-button w-[38px] px-0 text-[12px] ${session.kshState.standaloneTransportPlaying ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
-                title={session.kshState.standaloneTransportPlaying ? "Stop" : "Play"}
-                onclick={() => setStandaloneTransportPlaying(!session.kshState.standaloneTransportPlaying)}
-              >
-                {session.kshState.standaloneTransportPlaying ? "■" : "▶"}
-              </button>
-              <div class="flex h-[28px] items-center rounded-sm bg-ksh-panel2">
-                <button
-                  type="button"
-                  class="h-[28px] w-5 text-[12px] font-semibold text-ksh-blue"
-                  title="Tempo down"
-                  onclick={() => adjustStandaloneTempo(-1)}
-                >
-                  −
-                </button>
-                <span class="w-8 text-center text-[11px] font-semibold text-ksh-text">
-                  {session.kshState.standaloneTempo}
-                </span>
-                <button
-                  type="button"
-                  class="h-[28px] w-5 text-[12px] font-semibold text-ksh-blue"
-                  title="Tempo up"
-                  onclick={() => adjustStandaloneTempo(1)}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      {/if}
     </div>
   </header>
 

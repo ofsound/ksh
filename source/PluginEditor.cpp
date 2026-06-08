@@ -52,9 +52,12 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (fallbackLabel);
 #endif
 
+    constexpr int standaloneTransportRowHeight = 44;
+    const auto initialHeight = 756 + (processorRef.hasStandaloneTransport() ? standaloneTransportRowHeight : 0);
+
     setResizeLimits (1296, 756, 3200, 1400);
     setResizable (true, true);
-    setSize (1296, 756);
+    setSize (1296, initialHeight);
     startTimerHz (60);
 }
 
