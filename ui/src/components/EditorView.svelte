@@ -69,11 +69,18 @@
     setStandaloneTransportPlaying,
     setStandaloneTempoFromInput,
     shiftChannelRow,
+    beginEditGestureHistory,
+    cancelEditGestureHistory,
+    commitEditGestureHistory,
+    redoEdit,
+    redoStack,
     shiftPattern,
     toggleDcColors,
     toggleDeviceActive,
     togglePatternViewScale,
     toggleSourceChannelSolo,
+    undoEdit,
+    undoStack,
   } from "../lib/kshSession.svelte.js";
 
   let gridEl = $state(null);
@@ -259,7 +266,25 @@
     await selectSource(source);
   }
 
+  function headerHistoryLabel(id) {
+    switch (id) {
+      case "steps":
+        return "Change steps";
+      case "refresh":
+        return "Change refresh rate";
+      case "swing":
+        return "Change swing";
+      case "velocity_humanize":
+        return "Change velocity humanize";
+      case "timing_humanize":
+        return "Change timing humanize";
+      default:
+        return "Change value";
+    }
+  }
+
   function beginHeaderDrag(id, clientY) {
+    beginEditGestureHistory();
     headerDrag = {
       id,
       startY: clientY,
@@ -275,7 +300,10 @@
     setHeaderValue(headerDrag.id, next);
   }
 
-  function endHeaderDrag() {
+  async function endHeaderDrag() {
+    if (headerDrag) {
+      await commitEditGestureHistory(headerHistoryLabel(headerDrag.id));
+    }
     headerDrag = null;
   }
 
@@ -306,6 +334,7 @@
 
     const cell = session.kshState.sources[source][channel][step];
 
+    beginEditGestureHistory();
     cellDrag = createCellDrag(
       source,
       channel,
@@ -379,11 +408,13 @@
       await sendCell(source, cellDrag.channel, cellDrag.step);
     }
 
+    await commitEditGestureHistory("Edit cell");
     showCellAdjustmentCursor();
     cellDrag = null;
   }
 
   function beginLoopDrag(channel, clientY, event) {
+    beginEditGestureHistory();
     loopDrag = {
       channel,
       startY: clientY,
@@ -400,7 +431,10 @@
     setRowLoopLength(loopDrag.channel, loopDragNextValue(loopDrag, clientY));
   }
 
-  function endLoopDrag() {
+  async function endLoopDrag() {
+    if (loopDrag) {
+      await commitEditGestureHistory("Change loop length");
+    }
     loopDrag = null;
   }
 
@@ -446,6 +480,7 @@
     }
 
     sourceRowResetTap = { channel, at: now };
+    beginEditGestureHistory();
     muteDrag = { source, lastChannel: -1 };
     applyMuteDragForChannel(channel);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -458,8 +493,18 @@
     applyMuteDragForChannel(channelFromMuteDrag(event.clientX, event.clientY));
   }
 
-  function endMuteDrag() {
+  async function endMuteDrag() {
+    if (muteDrag) {
+      await commitEditGestureHistory("Change channel mute");
+    }
     muteDrag = null;
+  }
+
+  function historyButtonClass(enabled) {
+    return [
+      "header-history-button",
+      enabled ? "header-history-button-active" : "header-history-button-disabled",
+    ].join(" ");
   }
 
   function auditionChannelOnce(channel, keepEditor = false) {
@@ -531,8 +576,19 @@
   }
 
   function onEditorKeyDown(event) {
+    if (event.metaKey && !event.altKey && !event.ctrlKey && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redoEdit();
+      } else {
+        undoEdit();
+      }
+      return;
+    }
+
     if (event.key === "Escape") {
       cancelPatternCopy();
+      cancelEditGestureHistory();
     } else if (event.key === "1") {
       setSourceLayerMode("velocity");
     } else if (event.key === "2") {
@@ -678,6 +734,53 @@
         <button type="button" class="header-icon-button" onclick={() => shiftPattern(-1)}>◀</button>
         <button type="button" class="header-icon-button" onclick={() => shiftPattern(1)}>▶</button>
         <button type="button" class="header-icon-button text-[18px]" onclick={clearPattern}>×</button>
+      </div>
+    </div>
+
+    <div class="header-section header-history-section">
+      <div class="header-history-controls">
+        <button
+          type="button"
+          aria-label="Undo"
+          title="Undo"
+          disabled={undoStack.length === 0}
+          class={historyButtonClass(undoStack.length > 0)}
+          onclick={undoEdit}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h10a6 6 0 0 1 0 12h-2" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          aria-label="Redo"
+          title="Redo"
+          disabled={redoStack.length === 0}
+          class={historyButtonClass(redoStack.length > 0)}
+          onclick={redoEdit}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H10a6 6 0 0 0 0 12h2" />
+          </svg>
+        </button>
       </div>
     </div>
 

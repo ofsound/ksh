@@ -198,6 +198,18 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return true;
     }
 
+    if (selector == "apply_persistence")
+    {
+        if (! args.is_array() || args.empty() || ! args[0].is_object())
+            return false;
+
+        if (! processor.applyPersistenceFromUi (args[0]))
+            return false;
+
+        syncAll();
+        return true;
+    }
+
     if (selector == "request_state")
     {
         requestState();

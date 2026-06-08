@@ -63,6 +63,7 @@ public:
     [[nodiscard]] ksh::EngineStateSnapshot engineStateSnapshot();
     [[nodiscard]] ksh::PlaybackSnapshot enginePlaybackSnapshot();
     [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
+    [[nodiscard]] bool applyPersistenceFromUi (const nlohmann::json& state);
 
     using EditorResizeCallback = std::function<void (int, int)>;
     void setEditorResizeCallback (EditorResizeCallback callback);

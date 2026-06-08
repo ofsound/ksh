@@ -33,12 +33,21 @@ import {
 } from "./kshBridge.js";
 import {
   applyEngineState,
+  applyPersistencePayload,
   applyStatusMessage,
   cloneCell,
   defaultCell,
   makeDefaultKshState,
   resizeChannelLoopLengths,
+  serializePersistenceState,
 } from "./kshUiState.js";
+
+const historyLimit = 100;
+export const undoStack = $state([]);
+export const redoStack = $state([]);
+/** @type {ReturnType<typeof createHistorySnapshot> | null} */
+let gestureHistoryBefore = null;
+let historyApplying = false;
 
 export const session = $state({
   kshState: makeDefaultKshState(),
@@ -95,6 +104,115 @@ function bumpState() {
     ),
     sourceChannelMutes: session.kshState.sourceChannelMutes.map((row) => [...row]),
   };
+}
+
+function createHistorySnapshot() {
+  return serializePersistenceState(session.kshState);
+}
+
+function cloneHistorySnapshot(snapshot) {
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function snapshotsEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function assignHistorySnapshot(snapshot) {
+  applyPersistencePayload(session.kshState, snapshot);
+  session.selectedSource = session.kshState.staticSource;
+  clearSourceChannelSolo();
+  bumpState();
+  bumpOptimisticPreview();
+}
+
+export function clearEditHistory() {
+  undoStack.length = 0;
+  redoStack.length = 0;
+  gestureHistoryBefore = null;
+}
+
+function pushHistoryEntry(label, before, after) {
+  if (historyApplying || snapshotsEqual(before, after)) {
+    return;
+  }
+
+  undoStack.push({
+    label,
+    before: cloneHistorySnapshot(before),
+    after: cloneHistorySnapshot(after),
+  });
+
+  if (undoStack.length > historyLimit) {
+    undoStack.splice(0, undoStack.length - historyLimit);
+  }
+
+  redoStack.length = 0;
+}
+
+export async function commitEditHistory(label, mutation) {
+  const before = createHistorySnapshot();
+  await mutation();
+  pushHistoryEntry(label, before, createHistorySnapshot());
+}
+
+export function beginEditGestureHistory() {
+  if (!gestureHistoryBefore && !historyApplying) {
+    gestureHistoryBefore = createHistorySnapshot();
+  }
+}
+
+export function cancelEditGestureHistory() {
+  gestureHistoryBefore = null;
+}
+
+export async function commitEditGestureHistory(label) {
+  const before = gestureHistoryBefore;
+  gestureHistoryBefore = null;
+
+  if (!before || historyApplying) {
+    return;
+  }
+
+  pushHistoryEntry(label, before, createHistorySnapshot());
+}
+
+async function applyHistorySnapshot(snapshot) {
+  historyApplying = true;
+
+  try {
+    const previousStepCount = session.kshState.stepCount;
+    assignHistorySnapshot(snapshot);
+    await sendCommand("apply_persistence", [snapshot]);
+
+    if (snapshot.stepCount !== previousStepCount) {
+      await resizeForCurrentView();
+    }
+  } finally {
+    historyApplying = false;
+  }
+}
+
+export async function undoEdit() {
+  const entry = undoStack[undoStack.length - 1];
+  if (!entry) {
+    return;
+  }
+
+  undoStack.pop();
+  redoStack.push(entry);
+  await applyHistorySnapshot(entry.before);
+}
+
+export async function redoEdit() {
+  const entry = redoStack[redoStack.length - 1];
+  if (!entry) {
+    return;
+  }
+
+  redoStack.pop();
+  undoStack.push(entry);
+  await applyHistorySnapshot(entry.after);
 }
 
 function compactFlashKey(channel, step) {
@@ -263,18 +381,20 @@ export async function copyPatternToSource(destination) {
     return;
   }
 
-  if (!copySourcePattern(session.kshState, source, destination)) {
-    return;
-  }
+  await commitEditHistory("Copy pattern", async () => {
+    if (!copySourcePattern(session.kshState, source, destination)) {
+      return;
+    }
 
-  session.patternCopySource = -1;
-  session.selectedSource = destination;
-  session.kshState.staticSource = destination;
-  bumpState();
-  bumpOptimisticPreview();
+    session.patternCopySource = -1;
+    session.selectedSource = destination;
+    session.kshState.staticSource = destination;
+    bumpState();
+    bumpOptimisticPreview();
 
-  await sendCommand("source_pattern_copy", [source + 1, destination + 1]);
-  await sendCommand("static_source", [destination + 1]);
+    await sendCommand("source_pattern_copy", [source + 1, destination + 1]);
+    await sendCommand("static_source", [destination + 1]);
+  });
 }
 
 export async function sendChannelLoopLength(channel) {
@@ -343,22 +463,26 @@ export async function setRowLoopLength(channel, value) {
 }
 
 export async function setChannelLabel(channel, text) {
-  const trimmed = String(text ?? "").trim();
-  session.kshState.channels[channel].label = trimmed || DEFAULT_CHANNEL_LABELS[channel] || String(channel + 1);
-  bumpState();
-  await sendCommand("channel_label", [channel + 1, session.kshState.channels[channel].label]);
+  await commitEditHistory("Rename channel", async () => {
+    const trimmed = String(text ?? "").trim();
+    session.kshState.channels[channel].label = trimmed || DEFAULT_CHANNEL_LABELS[channel] || String(channel + 1);
+    bumpState();
+    await sendCommand("channel_label", [channel + 1, session.kshState.channels[channel].label]);
+  });
 }
 
 export async function resetSourceChannelRow(source, channel) {
-  session.kshState.sourceChannelMutes[source][channel] = 0;
-  session.kshState.channels[channel].loopLength = session.kshState.stepCount;
+  await commitEditHistory("Reset channel row", async () => {
+    session.kshState.sourceChannelMutes[source][channel] = 0;
+    session.kshState.channels[channel].loopLength = session.kshState.stepCount;
 
-  for (let step = 0; step < MAX_STEPS; step += 1) {
-    session.kshState.sources[source][channel][step] = defaultCell();
-  }
+    for (let step = 0; step < MAX_STEPS; step += 1) {
+      session.kshState.sources[source][channel][step] = defaultCell();
+    }
 
-  bumpState();
-  await sendCommand("source_channel_reset", [source + 1, channel + 1]);
+    bumpState();
+    await sendCommand("source_channel_reset", [source + 1, channel + 1]);
+  });
 }
 
 export async function sendCellsForChannel(source, channel, steps) {
@@ -369,9 +493,11 @@ export async function sendCellsForChannel(source, channel, steps) {
 }
 
 export async function adjustChannelNote(channel, delta) {
-  session.kshState.channels[channel].note = clamp(session.kshState.channels[channel].note + delta, 0, 127);
-  bumpState();
-  await sendCommand("channel_note", [channel + 1, session.kshState.channels[channel].note]);
+  await commitEditHistory("Change channel note", async () => {
+    session.kshState.channels[channel].note = clamp(session.kshState.channels[channel].note + delta, 0, 127);
+    bumpState();
+    await sendCommand("channel_note", [channel + 1, session.kshState.channels[channel].note]);
+  });
 }
 
 export async function toggleCell(source, channel, step) {
@@ -382,21 +508,27 @@ export async function toggleCell(source, channel, step) {
 }
 
 export async function cycleMode() {
-  cycleGenerationMode(session.kshState);
-  bumpState();
-  await sendCommand("mode", [session.kshState.generationMode]);
+  await commitEditHistory("Change generation mode", async () => {
+    cycleGenerationMode(session.kshState);
+    bumpState();
+    await sendCommand("mode", [session.kshState.generationMode]);
+  });
 }
 
 export async function cycleRateCommand(direction = 1) {
-  cycleRate(session.kshState, direction);
-  bumpState();
-  await sendCommand("rate", [session.kshState.rate]);
+  await commitEditHistory("Change step value", async () => {
+    cycleRate(session.kshState, direction);
+    bumpState();
+    await sendCommand("rate", [session.kshState.rate]);
+  });
 }
 
 export async function toggleDeviceActive() {
-  session.kshState.deviceActive = session.kshState.deviceActive ? 0 : 1;
-  bumpState();
-  await sendCommand("device_active", [session.kshState.deviceActive]);
+  await commitEditHistory("Toggle device", async () => {
+    session.kshState.deviceActive = session.kshState.deviceActive ? 0 : 1;
+    bumpState();
+    await sendCommand("device_active", [session.kshState.deviceActive]);
+  });
 }
 
 export async function setStandaloneTransportPlaying(playing) {
@@ -438,20 +570,24 @@ export async function incrementChannelNote(channel) {
 }
 
 export async function cycleChannelLock(channel) {
-  session.kshState.channels[channel].lock += 1;
-  if (session.kshState.channels[channel].lock >= SOURCE_COUNT) {
-    session.kshState.channels[channel].lock = -1;
-  }
-  bumpState();
-  await sendChannel(channel);
+  await commitEditHistory("Change channel lock", async () => {
+    session.kshState.channels[channel].lock += 1;
+    if (session.kshState.channels[channel].lock >= SOURCE_COUNT) {
+      session.kshState.channels[channel].lock = -1;
+    }
+    bumpState();
+    await sendChannel(channel);
+  });
 }
 
 export async function cycleChannelPlaybackMode(channel) {
-  session.kshState.channels[channel].playbackMode = nextPlaybackMode(
-    session.kshState.channels[channel].playbackMode
-  );
-  bumpState();
-  await sendChannelPlaybackMode(channel);
+  await commitEditHistory("Change playback mode", async () => {
+    session.kshState.channels[channel].playbackMode = nextPlaybackMode(
+      session.kshState.channels[channel].playbackMode
+    );
+    bumpState();
+    await sendChannelPlaybackMode(channel);
+  });
 }
 
 export async function setSourceChannelMute(source, channel, muted) {
@@ -486,93 +622,101 @@ export async function toggleSourceChannelSolo(source, channel) {
   source = clamp(source, 0, SOURCE_COUNT - 1);
   channel = clamp(channel, 0, MAX_CHANNELS - 1);
 
-  if (
-    session.sourceChannelSoloSource === source &&
-    session.sourceChannelSoloChannel === channel &&
-    session.sourceChannelSoloRestoreMutes
-  ) {
-    const restoreMutes = [...session.sourceChannelSoloRestoreMutes];
-    clearSourceChannelSolo();
-    await applySourceChannelMuteState(source, restoreMutes);
-    return;
-  }
-
-  if (session.sourceChannelSoloSource >= 0 && session.sourceChannelSoloSource !== source) {
-    const restoreSource = session.sourceChannelSoloSource;
-    const restoreMutes = session.sourceChannelSoloRestoreMutes
-      ? [...session.sourceChannelSoloRestoreMutes]
-      : null;
-    clearSourceChannelSolo();
-
-    if (restoreMutes) {
-      await applySourceChannelMuteState(restoreSource, restoreMutes);
+  await commitEditHistory("Toggle channel solo", async () => {
+    if (
+      session.sourceChannelSoloSource === source &&
+      session.sourceChannelSoloChannel === channel &&
+      session.sourceChannelSoloRestoreMutes
+    ) {
+      const restoreMutes = [...session.sourceChannelSoloRestoreMutes];
+      clearSourceChannelSolo();
+      await applySourceChannelMuteState(source, restoreMutes);
+      return;
     }
-  }
 
-  if (session.sourceChannelSoloSource !== source || !session.sourceChannelSoloRestoreMutes) {
-    session.sourceChannelSoloRestoreMutes = [...session.kshState.sourceChannelMutes[source]];
-  }
+    if (session.sourceChannelSoloSource >= 0 && session.sourceChannelSoloSource !== source) {
+      const restoreSource = session.sourceChannelSoloSource;
+      const restoreMutes = session.sourceChannelSoloRestoreMutes
+        ? [...session.sourceChannelSoloRestoreMutes]
+        : null;
+      clearSourceChannelSolo();
 
-  session.sourceChannelSoloSource = source;
-  session.sourceChannelSoloChannel = channel;
+      if (restoreMutes) {
+        await applySourceChannelMuteState(restoreSource, restoreMutes);
+      }
+    }
 
-  const channelCount = session.kshState.channelCount;
-  const nextMutes = session.kshState.sourceChannelMutes[source].map((muted, index) =>
-    index < channelCount ? (index === channel ? 0 : 1) : muted
-  );
-  await applySourceChannelMuteState(source, nextMutes);
+    if (session.sourceChannelSoloSource !== source || !session.sourceChannelSoloRestoreMutes) {
+      session.sourceChannelSoloRestoreMutes = [...session.kshState.sourceChannelMutes[source]];
+    }
+
+    session.sourceChannelSoloSource = source;
+    session.sourceChannelSoloChannel = channel;
+
+    const channelCount = session.kshState.channelCount;
+    const nextMutes = session.kshState.sourceChannelMutes[source].map((muted, index) =>
+      index < channelCount ? (index === channel ? 0 : 1) : muted
+    );
+    await applySourceChannelMuteState(source, nextMutes);
+  });
 }
 
 export async function shiftChannelRow(channel, direction) {
-  const source = session.selectedSource;
-  const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
-  bumpState();
-  bumpOptimisticPreview();
+  await commitEditHistory("Shift channel row", async () => {
+    const source = session.selectedSource;
+    const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
+    bumpState();
+    bumpOptimisticPreview();
 
-  await withPreviewSuppressed(async () => {
-    for (const step of steps) {
-      await sendCellCommand(source, channel, step);
-    }
+    await withPreviewSuppressed(async () => {
+      for (const step of steps) {
+        await sendCellCommand(source, channel, step);
+      }
+    });
   });
 }
 
 export async function shiftPattern(direction) {
-  const source = session.selectedSource;
-  const shifted = [];
+  await commitEditHistory("Shift pattern", async () => {
+    const source = session.selectedSource;
+    const shifted = [];
 
-  for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
-    shifted.push({
-      channel,
-      steps: shiftSourceChannelRow(session.kshState, source, channel, direction),
-    });
-  }
-
-  bumpState();
-  bumpOptimisticPreview();
-
-  await withPreviewSuppressed(async () => {
-    for (const row of shifted) {
-      for (const step of row.steps) {
-        await sendCellCommand(source, row.channel, step);
-      }
+    for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
+      shifted.push({
+        channel,
+        steps: shiftSourceChannelRow(session.kshState, source, channel, direction),
+      });
     }
+
+    bumpState();
+    bumpOptimisticPreview();
+
+    await withPreviewSuppressed(async () => {
+      for (const row of shifted) {
+        for (const step of row.steps) {
+          await sendCellCommand(source, row.channel, step);
+        }
+      }
+    });
   });
 }
 
 export async function clearPattern() {
-  const source = session.selectedSource;
-  const { channelCount } = session.kshState;
+  await commitEditHistory("Clear pattern", async () => {
+    const source = session.selectedSource;
+    const { channelCount } = session.kshState;
 
-  clearSourcePattern(session.kshState, source);
-  bumpState();
-  bumpOptimisticPreview();
+    clearSourcePattern(session.kshState, source);
+    bumpState();
+    bumpOptimisticPreview();
 
-  await withPreviewSuppressed(async () => {
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      await sendCommand("source_channel_reset", [source + 1, channel + 1]);
-      await sendCommand("channel_lock", [channel + 1, "random"]);
-      await sendChannelPlaybackMode(channel);
-    }
+    await withPreviewSuppressed(async () => {
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        await sendCommand("source_channel_reset", [source + 1, channel + 1]);
+        await sendCommand("channel_lock", [channel + 1, "random"]);
+        await sendChannelPlaybackMode(channel);
+      }
+    });
   });
 }
 
@@ -607,6 +751,10 @@ export function initKshSession() {
 
   teardownHandlers = [
     onBackendEvent("engine_state", (payload) => {
+      if (historyApplying) {
+        return;
+      }
+
       const parsed = parseBackendJson(payload);
       applyEngineState(session.kshState, parsed);
       if (parsed?.patternViewScale !== undefined) {

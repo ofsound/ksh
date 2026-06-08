@@ -690,6 +690,35 @@ ksh::PlaybackSnapshot PluginProcessor::enginePlaybackSnapshot()
     return engine.makePlaybackSnapshot();
 }
 
+bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
+{
+    if (! state.is_object())
+        return false;
+
+    std::scoped_lock lock { engineStateMutex };
+    const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
+
+    bool ok = false;
+
+    try
+    {
+        ok = engine.deserializeForPersistence (state);
+    }
+    catch (...)
+    {
+        ok = false;
+    }
+
+    suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+
+    if (! ok)
+        return false;
+
+    syncMacroParametersFromEngineLocked (false);
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
 bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
 {
     if (selector == "standalone_transport_playing")

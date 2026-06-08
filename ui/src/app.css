@@ -67,6 +67,30 @@
     @apply flex h-[24px] min-w-[20px] items-center justify-center rounded-sm px-1 text-[14px] font-semibold leading-none text-ksh-amber outline-none;
   }
 
+  .header-history-section {
+    @apply min-w-[5.5rem] items-center px-3 pt-[15px];
+  }
+
+  .header-history-controls {
+    @apply flex w-full items-center justify-between;
+  }
+
+  .header-history-button {
+    @apply flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-sm outline-none transition-colors;
+  }
+
+  .header-history-button svg {
+    @apply pointer-events-none h-[18px] w-[18px];
+  }
+
+  .header-history-button-active {
+    @apply cursor-pointer text-ksh-muted hover:text-ksh-amber;
+  }
+
+  .header-history-button-disabled {
+    @apply cursor-default text-ksh-stroke-soft;
+  }
+
   .ksh-cell-text-flash,
   .ksh-cell-text-flash * {
     color: #ffffff !important;

@@ -90,7 +90,67 @@ export function resizeChannelLoopLengths(state, nextStepCount, previousStepCount
   }
 }
 
-function applyPersistencePayload(state, payload) {
+export function serializePersistenceState(state) {
+  const cells = [];
+
+  for (let source = 0; source < SOURCE_COUNT; source += 1) {
+    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+      for (let step = 0; step < MAX_STEPS; step += 1) {
+        const cell = state.sources[source][channel][step];
+        if (
+          !cell.enabled &&
+          cell.velocity === 100 &&
+          cell.probability === 100 &&
+          cell.cycle === 1 &&
+          cell.cycleOffset === 0 &&
+          !cell.cycleInverted &&
+          cell.roll === 1
+        ) {
+          continue;
+        }
+
+        cells.push([
+          source,
+          channel,
+          step,
+          cell.enabled ? 1 : 0,
+          cell.velocity,
+          cell.probability,
+          cell.cycle,
+          cell.cycleOffset,
+          cell.cycleInverted ? 1 : 0,
+          cell.roll,
+        ]);
+      }
+    }
+  }
+
+  return {
+    v: 1,
+    stepCount: state.stepCount,
+    channelCount: state.channelCount,
+    refreshSteps: state.refreshSteps,
+    generationMode: state.generationMode,
+    staticSource: state.staticSource,
+    rate: state.rate,
+    tempo: state.tempo,
+    swing: state.swing,
+    velocityHumanize: state.velocityHumanize,
+    timingHumanize: state.timingHumanize,
+    deviceActive: state.deviceActive ? 1 : 0,
+    channels: state.channels.map((channel) => [
+      channel.label,
+      channel.note,
+      channel.lock,
+      channel.loopLength,
+      channel.playbackMode,
+    ]),
+    sourceChannelMutes: state.sourceChannelMutes.map((row) => row.map((muted) => (muted ? 1 : 0))),
+    cells,
+  };
+}
+
+export function applyPersistencePayload(state, payload) {
   if (!payload || payload.v !== 1) {
     return false;
   }
@@ -111,12 +171,18 @@ function applyPersistencePayload(state, payload) {
     state.deviceActive = toggleValue(payload.deviceActive);
   }
   state.tempo = Math.max(20, Math.min(300, Number.parseFloat(payload.tempo) || 120));
-  state.standaloneTransportAvailable = payload.standaloneTransportAvailable ? 1 : 0;
-  state.standaloneTransportPlaying = payload.standaloneTransportPlaying ? 1 : 0;
-  state.standaloneTempo = Math.max(
-    20,
-    Math.min(300, Number.parseFloat(payload.standaloneTempo ?? state.tempo) || state.tempo)
-  );
+  if (payload.standaloneTransportAvailable !== undefined) {
+    state.standaloneTransportAvailable = toggleValue(payload.standaloneTransportAvailable);
+  }
+  if (payload.standaloneTransportPlaying !== undefined) {
+    state.standaloneTransportPlaying = toggleValue(payload.standaloneTransportPlaying);
+  }
+  if (payload.standaloneTempo !== undefined) {
+    state.standaloneTempo = Math.max(
+      20,
+      Math.min(300, Number.parseFloat(payload.standaloneTempo) || state.tempo)
+    );
+  }
 
   if (!state.sources) {
     state.sources = makeEmptySources();
