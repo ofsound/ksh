@@ -14,6 +14,7 @@
     gridCellWidth,
     gridRowPaddingY,
     gridTopPadding,
+    STEP_LABEL_CELL_GAP,
     stepLabelFontPx,
     isStepBeyondLoopLength,
     channelToneColor,
@@ -764,7 +765,10 @@
   <div class="bg-ksh-grid flex min-h-0 flex-1 flex-col overflow-hidden px-3">
     <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
     <div class="shrink-0">
-    <div class="flex items-center" style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px`}>
+    <div
+      class="flex items-center"
+      style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
+    >
       <div class="flex" bind:this={gridEl}>
       {#each stepCols as step (step)}
         <div

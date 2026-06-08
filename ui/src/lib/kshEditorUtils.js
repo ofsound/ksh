@@ -9,13 +9,14 @@ export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
 export const GRID_CELL_LEFT_GAP = 8;
 export const STEP_LABEL_H = 18;
+export const STEP_LABEL_CELL_GAP = 8;
 export const STEP_LABEL_FONT_PX = 10;
 
 export function stepLabelFontPx(scale = 1) {
   return Math.round(STEP_LABEL_FONT_PX * normalizePatternViewScale(scale));
 }
 export const EDITOR_MIN_WIDTH = 1328;
-export const PLUGIN_MIN_HEIGHT = 748;
+export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
 export const HELPER_FOOTER_H = 24;
 
@@ -44,7 +45,7 @@ export function gridRowPaddingY(scale = 1) {
 }
 
 export function gridBodyHeight(channelCount, scale = 1) {
-  return STEP_LABEL_H + channelCount * gridRowHeight(scale);
+  return STEP_LABEL_H + STEP_LABEL_CELL_GAP + channelCount * gridRowHeight(scale);
 }
 
 export function gridAreaHeight(editorHeight) {
