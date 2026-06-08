@@ -59,12 +59,22 @@ export function referenceTopPadding(channelCount) {
   return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
 }
 
+/** Bottom spacer at 1x for a channel count; 1.5x keeps this gap above the compact strip. */
+export function referenceBottomPadding(channelCount) {
+  const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
+  const oneXBodyHeight = gridBodyHeight(channelCount, 1);
+  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight);
+  const slack = gridAreaHeight(editorHeight) - oneXBodyHeight;
+  return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
+}
+
 /** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
 export function gridCellPadding(channelCount, editorHeight, scale = 1) {
   const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
   if (normalizePatternViewScale(scale) === 1.5) {
     const top = gridTopPadding(channelCount, editorHeight, scale);
-    return Math.max(0, slack - top);
+    const distributed = Math.max(0, slack - top);
+    return Math.max(referenceBottomPadding(channelCount), distributed);
   }
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
@@ -168,7 +178,7 @@ export function editorDimensions(state, scale = 1) {
   const bodyHeight = gridBodyHeight(state.channelCount, normalizedScale);
   let height = Math.max(MAIN_TOP + bodyHeight, minEditorHeight);
   if (normalizedScale === 1.5) {
-    height = Math.max(height, MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount));
+    height = Math.max(height, MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount) + referenceBottomPadding(state.channelCount));
   }
   return {width, height};
 }
