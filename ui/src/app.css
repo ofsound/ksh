@@ -106,14 +106,7 @@
     overflow: hidden;
     background:
       linear-gradient(122deg, rgb(245 158 56 / 0.1) 0%, rgb(245 158 56 / 0) 29%),
-      linear-gradient(28deg, rgb(92 168 242 / 0) 0%, rgb(92 168 242 / 0.13) 68%, rgb(92 168 242 / 0) 100%),
-      repeating-linear-gradient(
-        90deg,
-        rgb(255 255 255 / 0.018) 0,
-        rgb(255 255 255 / 0.018) 1px,
-        transparent 1px,
-        transparent 42px
-      );
+      linear-gradient(28deg, rgb(92 168 242 / 0) 0%, rgb(92 168 242 / 0.13) 68%, rgb(92 168 242 / 0) 100%);
   }
 
   .preview-branding::before {
