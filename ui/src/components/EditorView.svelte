@@ -13,6 +13,7 @@
     gridCellWidth,
     gridRowPaddingY,
     gridTopPadding,
+    STEP_LABEL_FONT_PX,
     isStepBeyondLoopLength,
     channelToneColor,
     lockLabel,
@@ -765,8 +766,8 @@
       <div class="flex" bind:this={gridEl}>
       {#each stepCols as step (step)}
         <div
-          class={`flex items-center justify-center text-[10px] ${stepLabelClass(step)}`}
-          style={`width:${gridCellW}px;height:18px;`}
+          class={`flex items-center justify-center leading-none ${stepLabelClass(step)}`}
+          style={`width:${gridCellW}px;height:18px;font-size:${STEP_LABEL_FONT_PX}px;`}
         >
           {step + 1}
         </div>

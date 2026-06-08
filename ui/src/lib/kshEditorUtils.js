@@ -1,13 +1,5 @@
-import {
-  COMPACT_HEIGHT,
-  MAX_CHANNELS,
-  MAX_STEPS,
-  RATES,
-  SOURCE_COUNT,
-  clamp,
-  normalizePlaybackMode,
-} from "./kshConstants.js";
-import { cloneCell, defaultCell } from "./kshUiState.js";
+import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
+import {cloneCell, defaultCell} from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
 export const GRID_CELL_H = 44;
@@ -16,6 +8,7 @@ export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 242;
 export const STEP_LABEL_H = 18;
+export const STEP_LABEL_FONT_PX = 15;
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 724;
 export const MAIN_TOP = 68;
@@ -53,16 +46,33 @@ export function gridAreaHeight(editorHeight) {
   return editorHeight - MAIN_TOP;
 }
 
+/** Top spacer at 1x for a channel count; 1.5x keeps this gap below the header rule. */
+export function referenceTopPadding(channelCount) {
+  const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
+  const oneXBodyHeight = gridBodyHeight(channelCount, 1);
+  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight);
+  const slack = gridAreaHeight(editorHeight) - oneXBodyHeight;
+  return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+}
+
 /** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
 export function gridCellPadding(channelCount, editorHeight, scale = 1) {
   const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
+  if (normalizePatternViewScale(scale) === 1.5) {
+    const top = gridTopPadding(channelCount, editorHeight, scale);
+    return Math.max(0, slack - top);
+  }
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
 
 /** Top spacer; step labels sit between this and the first cell row. */
 export function gridTopPadding(channelCount, editorHeight, scale = 1) {
   const slack = gridAreaHeight(editorHeight) - gridBodyHeight(channelCount, scale);
-  return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+  const distributed = Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+  if (normalizePatternViewScale(scale) === 1.5) {
+    return Math.max(referenceTopPadding(channelCount), distributed);
+  }
+  return distributed;
 }
 
 export const COMPACT_ROW_H = 18;
@@ -112,11 +122,7 @@ export function rgbaToCss([r, g, b], alpha = 1) {
 
 function mixRgb([r, g, b], [targetR, targetG, targetB], amount) {
   const keep = 1 - amount;
-  return [
-    r * keep + targetR * amount,
-    g * keep + targetG * amount,
-    b * keep + targetB * amount,
-  ];
+  return [r * keep + targetR * amount, g * keep + targetG * amount, b * keep + targetB * amount];
 }
 
 function channelColorRgb(channel, light = false, dcColors = true) {
@@ -154,8 +160,13 @@ export function editorDimensions(state, scale = 1) {
   const gridW = state.stepCount * gridCellWidth(scale);
   const width = Math.max(EDITOR_MIN_WIDTH, 312 + gridW);
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
-  const height = Math.max(MAIN_TOP + gridBodyHeight(state.channelCount, scale), minEditorHeight);
-  return { width, height };
+  const normalizedScale = normalizePatternViewScale(scale);
+  const bodyHeight = gridBodyHeight(state.channelCount, normalizedScale);
+  let height = Math.max(MAIN_TOP + bodyHeight, minEditorHeight);
+  if (normalizedScale === 1.5) {
+    height = Math.max(height, MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount));
+  }
+  return {width, height};
 }
 
 // The editor and the compact preview strip are stacked vertically and always
@@ -315,10 +326,7 @@ export function shiftSourceChannelRow(state, source, channel, direction) {
   const shifted = [];
 
   for (let step = 0; step < state.stepCount; step += 1) {
-    const fromStep =
-      direction < 0
-        ? (step + 1) % state.stepCount
-        : (step - 1 + state.stepCount) % state.stepCount;
+    const fromStep = direction < 0 ? (step + 1) % state.stepCount : (step - 1 + state.stepCount) % state.stepCount;
     shifted[step] = cloneCell(row[fromStep]);
   }
 
@@ -326,7 +334,7 @@ export function shiftSourceChannelRow(state, source, channel, direction) {
     row[step] = shifted[step];
   }
 
-  return Array.from({ length: state.stepCount }, (_, step) => step);
+  return Array.from({length: state.stepCount}, (_, step) => step);
 }
 
 export function clearSourcePattern(state, source) {
