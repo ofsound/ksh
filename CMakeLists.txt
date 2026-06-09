@@ -79,6 +79,8 @@ clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
     CLAP_ID "${BUNDLE_ID}"
     CLAP_FEATURES midi-effect)
 
+include(IconBundleGuard)
+
 # Enable fast math, C++20 and a few other target defaults
 include(SharedCodeDefaults)
 
