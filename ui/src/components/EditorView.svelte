@@ -136,12 +136,20 @@
     return gridEl?.getBoundingClientRect().left ?? 0;
   }
 
+  function cellStyleFromBackground(background, color, extra = "") {
+    return `--cell-bg:${background};color:${color};${extra}`;
+  }
+
+  function activeCellBackground(background) {
+    return `linear-gradient(to bottom, color-mix(in srgb, var(--color-text) 18%, transparent) 0%, transparent 36%, color-mix(in srgb, var(--color-app) 18%, transparent) 100%), ${background}`;
+  }
+
   function cellStyle(channel, step) {
     const source = session.selectedSource;
     if (source === SILENT_SOURCE) {
       return step >= session.kshState.stepCount
-        ? "background:#242930;color:#5c636b;opacity:0.55;"
-        : "background:#121212;color:#8c969e;";
+        ? cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)", "opacity:0.55;")
+        : cellStyleFromBackground("var(--color-grid-off-strong)", "var(--color-text-muted)");
     }
 
     const cell = session.kshState.sources[source][channel][step];
@@ -150,14 +158,14 @@
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
 
     if (beyondSteps) {
-      return "background:#242930;color:#5c636b;";
+      return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)");
     }
 
     if (beyondLoop) {
       if (cell.enabled) {
-        return "background:#242930;color:#5c636b;";
+        return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)");
       }
-      return "background:#242930;color:#5c636b;opacity:0.55;";
+      return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)", "opacity:0.55;");
     }
 
     let lightColor = channelToneColor(channel, "light", session.dcColors);
@@ -173,15 +181,18 @@
     if (!cell.enabled) {
       const downbeat = step % 4 === 0;
       return downbeat
-        ? "background:#121212;color:#8c969e;"
-        : "background:#1e2025;color:#8c969e;";
+        ? cellStyleFromBackground("var(--color-grid-off-strong)", "var(--color-text-muted)")
+        : cellStyleFromBackground("var(--color-grid-off)", "var(--color-text-muted)");
     }
 
     const layerValue = sourceLayerValue(cell, effectiveLayerMode);
     if (effectiveLayerMode === "cycle") {
       const topLeft = cell.cycleInverted ? lightColor : darkColor;
       const bottomRight = cell.cycleInverted ? darkColor : lightColor;
-      return `background:linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%);color:#090b0f;`;
+      return cellStyleFromBackground(
+        activeCellBackground(`linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%)`),
+        "var(--color-text-inverse)"
+      );
     }
 
     if (effectiveLayerMode === "roll") {
@@ -192,13 +203,19 @@
         const tone = part % 2 === 0 ? darkColor : lightColor;
         return `${tone} ${start}%, ${tone} ${end}%`;
       }).join(", ");
-      return `background:linear-gradient(to right, ${stops});color:#090b0f;`;
+      return cellStyleFromBackground(
+        activeCellBackground(`linear-gradient(to right, ${stops})`),
+        "var(--color-text-inverse)"
+      );
     }
 
     const fill = effectiveLayerMode === "velocity" ? layerValue / 127 : layerValue / 100;
     const fillPercent = Math.round(fill * 100);
 
-    return `background:linear-gradient(to top, ${darkColor} 0%, ${darkColor} ${fillPercent}%, ${lightColor} ${fillPercent}%, ${lightColor} 100%);color:#090b0f;`;
+    return cellStyleFromBackground(
+      activeCellBackground(`linear-gradient(to top, ${darkColor} 0%, ${darkColor} ${fillPercent}%, ${lightColor} ${fillPercent}%, ${lightColor} 100%)`),
+      "var(--color-text-inverse)"
+    );
   }
 
   function cellClass(channel, step) {
@@ -208,10 +225,12 @@
     const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
     const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
+    const active = !silent && !beyondSteps && !beyondLoop && cell.enabled;
 
     return [
-      "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
-      beyondLoop ? "border-ksh-cell-border/40" : "border-ksh-cell-border",
+      "ksh-grid-cell relative mr-0 flex overflow-hidden border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
+      beyondLoop ? "border-grid-cell-border/40" : "border-grid-cell-border",
+      active ? "ksh-grid-cell-active" : "",
       flashing ? "ksh-cell-text-flash" : "",
       cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle" : "items-center justify-center",
     ].join(" ");
@@ -248,12 +267,12 @@
   function loopLengthClass(channel) {
     const shortened = loopLengthForChannel(session.kshState, channel) < session.kshState.stepCount;
     if (loopDrag?.channel === channel) {
-      return "text-ksh-amber";
+      return "text-accent";
     }
     if (shortened) {
-      return "text-ksh-amber";
+      return "text-accent";
     }
-    return "text-ksh-blue";
+    return "text-info";
   }
 
   function isCellInteractive(channel, step) {
@@ -262,8 +281,8 @@
 
   function stepLabelClass(step) {
     return session.playingStep > 0 && step + 1 === session.playingStep
-      ? "text-ksh-text"
-      : "text-ksh-muted";
+      ? "text-text"
+      : "text-text-muted";
   }
 
   function sourceButtonClass(source) {
@@ -272,7 +291,7 @@
 
     return [
       "pattern-slot-button",
-      selected ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text",
+      selected ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-control-secondary-text",
       copySource ? "ksh-pattern-copy-source" : "",
     ].join(" ");
   }
@@ -280,7 +299,7 @@
   function mutePatternClass() {
     return [
       "pattern-mute-button",
-      session.selectedSource === SILENT_SOURCE ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text",
+      session.selectedSource === SILENT_SOURCE ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-control-secondary-text",
     ].join(" ");
   }
 
@@ -733,7 +752,7 @@
 </script>
 
 <div
-  class="editor-view flex shrink-0 flex-col overflow-hidden bg-ksh-bg text-ksh-text"
+  class="editor-view flex shrink-0 flex-col overflow-hidden bg-app text-text"
   role="application"
   aria-label="KSH pattern editor"
   style={`width:${dims.width}px;height:${dims.height}px;`}
@@ -745,17 +764,17 @@
   }}
 >
   {#if session.kshState.standaloneTransportAvailable}
-    <div class="flex h-[44px] shrink-0 items-center justify-end gap-2 border-b border-ksh-stroke-soft px-3">
+    <div class="flex h-[44px] shrink-0 items-center justify-end gap-2 border-b border-border-subtle px-3">
       <button
         type="button"
         aria-label={session.kshState.standaloneTransportPlaying ? "Stop standalone transport" : "Start standalone transport"}
         aria-pressed={Boolean(session.kshState.standaloneTransportPlaying)}
-        class={`header-button min-w-[64px] px-3 text-[12px] ${session.kshState.standaloneTransportPlaying ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+        class={`header-button min-w-[64px] px-3 text-[12px] ${session.kshState.standaloneTransportPlaying ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-text"}`}
         onclick={() => setStandaloneTransportPlaying(!session.kshState.standaloneTransportPlaying)}
       >
         {session.kshState.standaloneTransportPlaying ? "Stop" : "Play"}
       </button>
-      <label class="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-ksh-muted">
+      <label class="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-text-muted">
         BPM
         <input
           type="number"
@@ -763,14 +782,14 @@
           max="300"
           step="1"
           value={Math.round(session.kshState.standaloneTempo)}
-          class="header-button h-[28px] w-[4.5rem] bg-ksh-panel2 px-2 text-center text-[11px] font-semibold text-ksh-text outline-none focus:ring-1 focus:ring-ksh-amber"
+          class="header-button h-[28px] w-[4.5rem] bg-control-secondary px-2 text-center text-[11px] font-semibold text-text outline-none focus:ring-1 focus:ring-focus-ring"
           onchange={setStandaloneTempoFromInput}
         />
       </label>
     </div>
   {/if}
 
-  <div class="project-row flex h-[86px] shrink-0 items-center justify-center border-b border-ksh-stroke-soft px-3">
+  <div class="project-row flex h-[86px] shrink-0 items-center justify-center border-b border-border-subtle px-3">
     <div class="project-bar flex min-w-0 flex-1 items-center gap-3">
     <div class="project-controls flex h-[40px] min-w-0 flex-1 items-center justify-start gap-2">
       <button
@@ -879,7 +898,7 @@
       </button>
     </div>
     <div class="pattern-bank flex shrink-0 items-center gap-3">
-      <span class="text-right text-[11px] font-extrabold text-ksh-text">Patterns:</span>
+      <span class="text-right text-[11px] font-extrabold text-text">Patterns:</span>
       <div class="grid grid-rows-2 gap-1.5">
         {#each sourceButtonRows as row, rowIndex (rowIndex)}
           <div class="flex gap-1.5">
@@ -916,7 +935,7 @@
     {/if}
   </div>
 
-  <header class="flex h-[68px] shrink-0 items-center border-b border-ksh-stroke-soft px-3 text-[11px]">
+  <header class="flex h-[68px] shrink-0 items-center border-b border-border-subtle px-3 text-[11px]">
     <div class="header-section border-l-0 pl-0">
       <HeaderValueDrag
         id="steps"
@@ -931,7 +950,7 @@
         <span class="header-label">Step Value</span>
         <button
           type="button"
-          class="header-button min-w-[68px] bg-ksh-panel2 text-ksh-text"
+          class="header-button min-w-[68px] bg-control-secondary text-text"
           onclick={(event) => cycleRateCommand(event.shiftKey ? -1 : 1)}
         >
           {session.kshState.rate}
@@ -942,7 +961,7 @@
     <div class="header-section">
       <div class="flex flex-col items-start">
         <span class="header-label">Random</span>
-        <button type="button" class="header-button min-w-[82px] bg-ksh-panel2 text-ksh-text" onclick={cycleMode}>
+        <button type="button" class="header-button min-w-[82px] bg-control-secondary text-text" onclick={cycleMode}>
           {generationModeLabel(session.kshState.generationMode)}
         </button>
       </div>
@@ -959,10 +978,10 @@
 
     <div class="header-section">
       <div class="flex items-center gap-3 pt-[15px]">
-        <span class="text-[13px] font-semibold text-ksh-text">Pattern:</span>
+        <span class="text-[13px] font-semibold text-text">Pattern:</span>
         <button
           type="button"
-          class={`header-icon-button ${session.patternRecordingEnabled ? "bg-ksh-amber text-ksh-off" : ""}`}
+          class={`header-icon-button ${session.patternRecordingEnabled ? "bg-accent-strong text-text-inverse" : ""}`}
           aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
           aria-pressed={Boolean(session.patternRecordingEnabled)}
           title={session.patternRecordingEnabled ? "Stop pattern recording" : "Record MIDI or ASDFGHJK into the selected pattern"}
@@ -1013,7 +1032,7 @@
       <div class="header-section">
         <div class="flex flex-col items-start">
           <span class="header-label">Layer</span>
-          <button type="button" class="header-button min-w-[76px] bg-ksh-panel2 text-ksh-text" onclick={cycleSourceLayerMode}>
+          <button type="button" class="header-button min-w-[76px] bg-control-secondary text-text" onclick={cycleSourceLayerMode}>
             {sourceLayerLabel(effectiveLayerMode)}
           </button>
         </div>
@@ -1023,14 +1042,14 @@
         <div class="flex gap-1 pt-[15px]">
           <button
             type="button"
-            class={`header-button min-w-[54px] ${session.patternViewScale === 1.5 ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+            class={`header-button min-w-[54px] ${session.patternViewScale === 1.5 ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-text"}`}
             onclick={togglePatternViewScale}
           >
             {session.patternViewScale === 1.5 ? "1.5x" : "1x"}
           </button>
           <button
             type="button"
-            class={`header-button min-w-[54px] ${session.dcColors ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
+            class={`header-button min-w-[54px] ${session.dcColors ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-text"}`}
             onclick={toggleDcColors}
           >
             DC
@@ -1040,7 +1059,7 @@
     </div>
   </header>
 
-  <div class="bg-ksh-grid flex min-h-0 flex-1 flex-col overflow-hidden px-3">
+  <div class="bg-grid-bg flex min-h-0 flex-1 flex-col overflow-hidden px-3">
     <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
     <div class="shrink-0">
     <div
@@ -1068,7 +1087,7 @@
         <div class="flex shrink-0 items-center gap-1 pr-2 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           {#if editingChannel === channel}
             <input
-              class="rounded border border-ksh-amber bg-ksh-off px-1 text-[13px] text-ksh-text outline-none"
+              class="rounded border border-accent bg-grid-off px-1 text-[13px] text-text outline-none"
               style={`width:${CHANNEL_LABEL_W}px`}
               bind:value={labelDraft}
               onkeydown={(event) => {
@@ -1083,7 +1102,7 @@
           {:else}
             <button
               type="button"
-              class="channel-label shrink-0 truncate text-left text-[13px] text-ksh-text"
+              class="channel-label shrink-0 truncate text-left text-[13px] text-text"
               style={`width:${CHANNEL_LABEL_W}px`}
               onclick={() => onLabelClick(channel)}
             >
@@ -1092,7 +1111,7 @@
           {/if}
           <button
             type="button"
-            class="w-6 text-[13px] text-ksh-blue"
+            class="w-6 text-[13px] text-info"
             onclick={(event) => {
               if (event.shiftKey) {
                 adjustChannelNote(channel, -1);
@@ -1103,7 +1122,7 @@
           >
             {session.kshState.channels[channel]?.note ?? 36}
           </button>
-          <button type="button" class="w-6 text-center text-[13px] text-ksh-blue" onclick={() => cycleChannelLock(channel)}>
+          <button type="button" class="w-6 text-center text-[13px] text-info" onclick={() => cycleChannelLock(channel)}>
             {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
           </button>
           <button
@@ -1122,7 +1141,7 @@
           </button>
           <button
             type="button"
-            class="w-5 text-center text-[13px] text-ksh-amber"
+            class="w-5 text-center text-[13px] text-accent"
             onclick={() => cycleChannelPlaybackMode(channel)}
           >
             {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
@@ -1143,7 +1162,7 @@
           <div class="flex items-center">
             <button
               type="button"
-              class="w-5 text-[13px] leading-none text-ksh-amber"
+              class="w-5 text-[13px] leading-none text-accent"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, -1)}
             >
@@ -1151,7 +1170,7 @@
             </button>
             <button
               type="button"
-              class="w-5 text-[13px] leading-none text-ksh-amber"
+              class="w-5 text-[13px] leading-none text-accent"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, 1)}
             >
@@ -1160,7 +1179,7 @@
           </div>
           <button
             type="button"
-            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-amber bg-transparent" : "border-ksh-amber bg-ksh-amber"} ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : ""}`}
+            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-accent bg-transparent" : "border-accent bg-accent-strong"} ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : ""}`}
             aria-label="Mute channel"
             aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
             disabled={session.selectedSource === SILENT_SOURCE}
@@ -1199,14 +1218,14 @@
                 </span>
               {:else if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
-                  class="pointer-events-none w-full text-center text-[#5c636b]"
+                  class="pointer-events-none w-full text-center text-text-faint"
                   style={`font-size:${smallCellFontPx}px;`}
                 >
                   {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
               {:else if session.selectedSource !== SILENT_SOURCE && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
-                  class="pointer-events-none w-full text-center text-[#5c636b]"
+                  class="pointer-events-none w-full text-center text-text-faint"
                   style={`font-size:${smallCellFontPx}px;`}
                 >
                   {cellLabel(channel, step)}

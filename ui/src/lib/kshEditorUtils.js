@@ -2,7 +2,7 @@ import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_CYCLE, MAX_STEPS, RATES, SOURCE_COUNT,
 import {cloneCell, defaultCell} from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
-export const GRID_CELL_H = 44;
+export const GRID_CELL_H = 50;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
@@ -118,69 +118,44 @@ export function compactPreviewPadding(channelCount) {
   return Math.max(0, Math.floor(slack / 2));
 }
 
-export const DC_CHANNEL_COLORS = [
-  [0.86, 0.25, 0.28],
-  [0.93, 0.55, 0.36],
-  [0.82, 0.66, 0.4],
-  [0.25, 0.68, 0.82],
-  [0.32, 0.72, 0.61],
-  [0.55, 0.72, 0.32],
-  [0.92, 0.68, 0.14],
-  [0.65, 0.43, 0.23],
-];
-
-export const DC_CHANNEL_COLORS_LIGHT = [
-  [0.96, 0.35, 0.38],
-  [1.0, 0.65, 0.46],
-  [0.92, 0.76, 0.5],
-  [0.35, 0.78, 0.92],
-  [0.42, 0.82, 0.71],
-  [0.65, 0.82, 0.42],
-  [1.0, 0.78, 0.24],
-  [0.75, 0.53, 0.33],
-];
-
-export function rgbaToCss([r, g, b], alpha = 1) {
-  const red = Math.round(r * 255);
-  const green = Math.round(g * 255);
-  const blue = Math.round(b * 255);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-}
-
-function mixRgb([r, g, b], [targetR, targetG, targetB], amount) {
-  const keep = 1 - amount;
-  return [r * keep + targetR * amount, g * keep + targetG * amount, b * keep + targetB * amount];
-}
-
-function channelColorRgb(channel, light = false, dcColors = true) {
+function channelColorToken(channel, dcColors = true) {
   if (!dcColors) {
-    return light ? [1.0, 0.66, 0.46] : [0.93, 0.55, 0.22];
+    return "var(--color-drum-kick)";
   }
 
-  const palette = light ? DC_CHANNEL_COLORS_LIGHT : DC_CHANNEL_COLORS;
-  return palette[channel % palette.length];
+  // Use --theme-channel-* (defined on :root) rather than --color-channel-* (@theme
+  // aliases that Tailwind omits when no utility class references them).
+  return `var(--theme-channel-${(channel % 8) + 1})`;
+}
+
+function channelLightColorToken(channel, dcColors = true) {
+  if (!dcColors) {
+    return "var(--color-drum-kick-light)";
+  }
+
+  return `var(--theme-channel-${(channel % 8) + 1}-light)`;
 }
 
 export function channelColor(channel, light = false, dcColors = true) {
-  return rgbaToCss(channelColorRgb(channel, light, dcColors));
+  return light
+    ? channelLightColorToken(channel, dcColors)
+    : channelColorToken(channel, dcColors);
 }
 
 export function channelToneColor(channel, tone = "light", dcColors = true) {
+  const base = channelColorToken(channel, dcColors);
+
   if (tone === "dark") {
-    return rgbaToCss(mixRgb(channelColorRgb(channel, false, dcColors), [0, 0, 0], 0.18));
+    return `color-mix(in srgb, ${base} 82%, var(--color-app))`;
   }
   if (tone === "divider") {
-    return rgbaToCss(mixRgb(channelColorRgb(channel, false, dcColors), [0, 0, 0], 0.08), 0.72);
+    return `color-mix(in srgb, ${base} 72%, transparent)`;
   }
-  return rgbaToCss(channelColorRgb(channel, true, dcColors));
+  return channelLightColorToken(channel, dcColors);
 }
 
 export function mutedChannelColor(colorCss) {
-  return colorCss.replace(/rgba\((\d+),\s*(\d+),\s*(\d+),/, (_, r, g, b) => {
-    const gray = (Number(r) + Number(g) + Number(b)) / 3;
-    const mix = (channel) => Math.round(gray * 0.56 + Number(channel) * 0.12);
-    return `rgba(${mix(r)}, ${mix(g)}, ${mix(b)},`;
-  });
+  return `color-mix(in srgb, ${colorCss} 42%, var(--color-grid-off))`;
 }
 
 export function editorDimensions(state, scale = 1) {

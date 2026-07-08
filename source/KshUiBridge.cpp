@@ -63,6 +63,7 @@ void KshUiBridge::emitEngineState()
     state["standaloneTempo"] = processor.getStandaloneTempoBpm();
     state["patternViewScale"] = processor.getPatternViewScale();
     state["projectUiScalePercent"] = processor.getProjectUiScalePercent();
+    state["projectThemeMode"] = processor.getProjectThemeMode().toStdString();
     state["patternRecordingEnabled"] = processor.isPatternRecordingEnabled() ? 1 : 0;
     emitJsonEvent ("engine_state", state);
 }

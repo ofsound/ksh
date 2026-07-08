@@ -37,6 +37,12 @@ juce::String juceStringFromView (std::string_view text)
     return juce::String::fromUTF8 (text.data(), static_cast<int> (text.size()));
 }
 
+juce::String normalizeProjectThemeMode (const juce::String& themeMode)
+{
+    const auto normalized = themeMode.trim().toLowerCase();
+    return normalized == "light" || normalized == "alt" ? normalized : juce::String ("dark");
+}
+
 int rateIndexForValue (std::string_view rate)
 {
     const auto normalized = ksh::Constants::normalizeRate (rate);
@@ -801,6 +807,7 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         state["projectDescription"] = projectDescription.toStdString();
         state["projectCreatedAt"] = projectCreatedAt.toStdString();
         state["projectModifiedAt"] = projectModifiedAt.toStdString();
+        state["projectThemeMode"] = projectThemeMode.toStdString();
     }
     state["patternViewScale"] = patternViewScale;
     state["projectUiScalePercent"] = projectUiScalePercent;
@@ -1011,6 +1018,18 @@ void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
     projectUiScalePercent = juce::jlimit (50, 100, uiScalePercent);
 }
 
+juce::String PluginProcessor::getProjectThemeMode() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectThemeMode;
+}
+
+void PluginProcessor::setProjectThemeMode (const juce::String& themeMode)
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    projectThemeMode = normalizeProjectThemeMode (themeMode);
+}
+
 void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
 {
     patternRecordingSource.store (ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1),
@@ -1124,10 +1143,13 @@ void PluginProcessor::applyProjectMetadataFromState (const nlohmann::json& state
         projectDescription = juceStringFromView (state.value ("projectDescription", std::string {})).trim();
         projectCreatedAt = juceStringFromView (state.value ("projectCreatedAt", std::string {}));
         projectModifiedAt = juceStringFromView (state.value ("projectModifiedAt", std::string {}));
+        projectThemeMode = normalizeProjectThemeMode (
+            juceStringFromView (state.value ("projectThemeMode", std::string { "dark" })));
     }
     catch (...)
     {
         setProjectMetadata ("Untitled Project", {}, {}, {});
+        setProjectThemeMode ("dark");
     }
 }
 
@@ -1154,6 +1176,7 @@ void PluginProcessor::resetProject()
     setProjectMetadata ("Untitled Project", {}, {}, {});
     setPatternViewScale (1.0);
     setProjectUiScalePercent (100);
+    setProjectThemeMode ("dark");
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);

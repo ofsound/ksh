@@ -31,7 +31,7 @@
   <span class="header-label">{label}</span>
   <button
     type="button"
-    class={`header-button min-w-[42px] border bg-transparent ${active ? "border-ksh-amber text-ksh-amber" : "border-ksh-stroke-soft text-ksh-text"}`}
+    class={`header-button min-w-[42px] border bg-transparent ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}

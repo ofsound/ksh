@@ -96,6 +96,14 @@ export function setProjectUiScalePercent(percent) {
   return getNativeFunction("setProjectUiScalePercent")(percent);
 }
 
+export function setProjectThemeMode(mode) {
+  if (!nativeFunctionAvailable("setProjectThemeMode")) {
+    return Promise.resolve(false);
+  }
+
+  return getNativeFunction("setProjectThemeMode")(mode);
+}
+
 export function getProjectState() {
   if (!nativeFunctionAvailable("kshGetProjectState")) {
     return Promise.resolve(null);

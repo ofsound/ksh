@@ -18,31 +18,31 @@
 
   function cellFill(channel, step) {
     if (isCompactFlashing(channel, step)) {
-      return "bg-ksh-text";
+      return "bg-text";
     }
 
     const activeStep = step < session.kshState.stepCount;
     if (!activeStep) {
-      return "bg-ksh-inactive-step";
+      return "bg-grid-inactive-step";
     }
 
     const cell = session.previewData?.generated?.[channel]?.[step];
     if (cell?.enabled) {
-      return "bg-ksh-blue";
+      return "bg-info";
     }
 
-    return step % 4 === 0 ? "bg-ksh-off-dark" : "bg-ksh-off";
+    return step % 4 === 0 ? "bg-grid-off-strong" : "bg-grid-off";
   }
 </script>
 
 <div
-  class="compact-strip relative h-full overflow-hidden text-ksh-text"
+  class="compact-strip relative h-full overflow-hidden text-text"
   style={`width:${dims.width}px;`}
 >
   {#if session.bridgeError}
-    <p class="absolute left-3 top-2 z-10 text-xs text-red-400">{session.bridgeError}</p>
+    <p class="absolute left-3 top-2 z-10 text-xs text-danger">{session.bridgeError}</p>
   {:else if !session.ready}
-    <p class="absolute left-3 top-2 z-10 text-xs text-ksh-muted">Loading…</p>
+    <p class="absolute left-3 top-2 z-10 text-xs text-text-muted">Loading…</p>
   {/if}
 
   <section class="px-3" style={`padding-top:${previewPad}px;padding-bottom:${previewPad}px;`}>
@@ -50,7 +50,7 @@
       {#each previewRows as channel (channel)}
         <div class="flex h-[18px] items-center gap-2">
           <span
-            class="channel-label shrink-0 truncate text-left text-[9px] text-ksh-muted"
+            class="channel-label shrink-0 truncate text-left text-[9px] text-text-muted"
             style={`width:${CHANNEL_LABEL_W}px`}
           >
             {session.kshState.channels[channel]?.label ?? channel + 1}

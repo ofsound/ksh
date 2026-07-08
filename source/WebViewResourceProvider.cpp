@@ -124,6 +124,7 @@ juce::var createProjectStateVar (PluginProcessor& processor, const PluginEditor&
     object->setProperty ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0);
     object->setProperty ("hasNextProject", editor.hasNextProject() ? 1 : 0);
     object->setProperty ("projectUiScalePercent", processor.getProjectUiScalePercent());
+    object->setProperty ("projectThemeMode", processor.getProjectThemeMode());
     return juce::var (object.release());
 }
 } // namespace
@@ -145,6 +146,7 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                        .withInitialisationData ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0)
                        .withInitialisationData ("hasNextProject", editor.hasNextProject() ? 1 : 0)
                        .withInitialisationData ("projectUiScalePercent", processor.getProjectUiScalePercent())
+                       .withInitialisationData ("projectThemeMode", processor.getProjectThemeMode())
                        .withNativeFunction ("kshSendCommand",
                                             [&processor] (const juce::Array<juce::var>& args,
                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -197,6 +199,15 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                                                     args.size() > 0 ? varToInt (args[0])
                                                                     : processor.getProjectUiScalePercent());
                                                 complete (processor.getProjectUiScalePercent());
+                                            })
+                       .withNativeFunction ("setProjectThemeMode",
+                                            [&processor] (const juce::Array<juce::var>& args,
+                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                processor.setProjectThemeMode (
+                                                    args.size() > 0 ? args[0].toString()
+                                                                    : processor.getProjectThemeMode());
+                                                complete (processor.getProjectThemeMode());
                                             })
                        .withNativeFunction ("kshGetProjectState",
                                             [&processor, &editor] (const juce::Array<juce::var>&,

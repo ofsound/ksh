@@ -1,6 +1,9 @@
 import "./app.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { applyThemeMode, storedThemeMode } from "./lib/themeMode.js";
+
+applyThemeMode(storedThemeMode(), { persist: false });
 
 function isEditableTarget(target) {
   return (

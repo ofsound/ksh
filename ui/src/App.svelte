@@ -2,14 +2,17 @@
   import { onMount } from "svelte";
   import CompactStrip from "./components/CompactStrip.svelte";
   import EditorView from "./components/EditorView.svelte";
+  import ThemeModeToggle from "./components/ThemeModeToggle.svelte";
   import UiScaleDragInput from "./components/UiScaleDragInput.svelte";
   import { SILENT_SOURCE } from "./lib/kshConstants.js";
   import { combinedDimensions, previewPanelHeight } from "./lib/kshEditorUtils.js";
   import {
     initKshSession,
+    initializeThemeModeFromNative,
     initializeUiScaleFromNative,
     session,
     setExplicitUiScalePercent,
+    setThemeMode,
     setUiScaleViewportSize,
     syncEditorScaleMinimumToNative,
   } from "./lib/kshSession.svelte.js";
@@ -18,6 +21,7 @@
   let appRoot = $state(null);
 
   onMount(() => {
+    initializeThemeModeFromNative();
     initializeUiScaleFromNative();
     const teardownSession = initKshSession();
     let scaleFrameId = 0;
@@ -63,9 +67,9 @@
   });
 </script>
 
-<main class="bg-ksh-bg" bind:this={appRoot}>
+<main class="bg-app" bind:this={appRoot}>
   <div
-    class="flex flex-col overflow-hidden bg-ksh-bg"
+    class="flex flex-col overflow-hidden bg-app"
     style={`width:${scaledDims.width}px;height:${scaledDims.height}px;`}
   >
     <div
@@ -74,7 +78,7 @@
     >
       <EditorView />
       <div
-        class="preview-panel relative shrink-0 border-t border-ksh-stroke-soft bg-ksh-bg"
+        class="preview-panel relative shrink-0 border-t border-border-subtle bg-app"
         style={`width:${dims.width}px;height:${previewPanelHeight()}px;`}
       >
         <div class="preview-branding" aria-hidden="true">
@@ -103,17 +107,18 @@
           </div>
         </div>
         <CompactStrip />
-        <footer class="absolute inset-x-0 bottom-0 z-20 flex h-[24px] items-center justify-end bg-ksh-bg px-3 text-[11px] text-ksh-muted">
+        <footer class="absolute inset-x-0 bottom-0 z-20 flex h-[24px] items-center justify-end bg-app px-3 text-[11px] text-text-muted">
           Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
         </footer>
       </div>
 
       <footer
-        class="flex h-[40px] shrink-0 items-center justify-between border-t border-ksh-stroke-soft bg-ksh-off-dark px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-ksh-muted"
+        class="flex h-[40px] shrink-0 items-center justify-between border-t border-border-subtle bg-shell px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted"
         style={`width:${dims.width}px;`}
       >
         <span>KSH</span>
         <div class="flex shrink-0 items-center gap-2">
+          <ThemeModeToggle value={session.themeMode} onValueChange={setThemeMode} />
           <span>UI</span>
           <UiScaleDragInput
             value={uiScaleState.percent}

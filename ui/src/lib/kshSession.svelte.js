@@ -35,11 +35,17 @@ import {
   saveProject as nativeSaveProject,
   sendCommand,
   setEditorScaleMinimum,
+  setProjectThemeMode as nativeSetProjectThemeMode,
   setProjectUiScalePercent as nativeSetProjectUiScalePercent,
   setViewSize,
   syncAll,
   waitForBackend,
 } from "./kshBridge.js";
+import {
+  applyThemeMode,
+  defaultThemeMode,
+  storedThemeMode,
+} from "./themeMode.js";
 import {
   currentUiScaleMinimumSize,
   resolveInitialUiScalePercent,
@@ -87,6 +93,7 @@ export const session = $state({
   projectCreatedAt: "",
   projectModifiedAt: "",
   projectFileName: "",
+  themeMode: defaultThemeMode,
   hasPreviousProject: false,
   hasNextProject: false,
   projectOperationBusy: false,
@@ -171,6 +178,9 @@ function assignProjectMetadata(state) {
   session.projectCreatedAt = String(nativeScalar(state, "projectCreatedAt", ""));
   session.projectModifiedAt = String(nativeScalar(state, "projectModifiedAt", ""));
   session.projectFileName = String(nativeScalar(state, "projectFileName", ""));
+  if (state.projectThemeMode !== undefined) {
+    session.themeMode = applyThemeMode(state.projectThemeMode, { persist: false });
+  }
   session.hasPreviousProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasPreviousProject", 0)), 10));
   session.hasNextProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasNextProject", 0)), 10));
 }
@@ -208,6 +218,18 @@ export function initializeUiScaleFromNative() {
         ? initialProjectScale[0]
         : initialProjectScale;
   setUiScalePercent(resolveInitialUiScalePercent(projectScaleScalar), { persist: false });
+}
+
+export function initializeThemeModeFromNative() {
+  const initialTheme = initialisationValue("projectThemeMode");
+  session.themeMode = applyThemeMode(initialTheme === null ? storedThemeMode() : initialTheme, {
+    persist: false,
+  });
+}
+
+export async function setThemeMode(next) {
+  session.themeMode = applyThemeMode(next);
+  await nativeSetProjectThemeMode(session.themeMode);
 }
 
 export function setUiScaleViewportSize(widthPx, heightPx) {

@@ -81,6 +81,8 @@ public:
     [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
     int getProjectUiScalePercent() const noexcept { return projectUiScalePercent; }
     void setProjectUiScalePercent (int uiScalePercent);
+    [[nodiscard]] juce::String getProjectThemeMode() const;
+    void setProjectThemeMode (const juce::String& themeMode);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
 
@@ -188,6 +190,7 @@ private:
     juce::String projectDescription;
     juce::String projectCreatedAt;
     juce::String projectModifiedAt;
+    juce::String projectThemeMode { "dark" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
