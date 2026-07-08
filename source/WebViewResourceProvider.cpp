@@ -2,6 +2,7 @@
 
 #include "BinaryData.h"
 #include "KshUiBridge.h"
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
 
 #include <cstring>
@@ -93,7 +94,41 @@ std::optional<juce::WebBrowserComponent::Resource> WebViewResources::getResource
     return resource;
 }
 
-juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginProcessor& processor)
+namespace
+{
+int varToInt (const juce::var& value)
+{
+    if (value.isBool())
+        return static_cast<bool> (value) ? 1 : 0;
+
+    if (value.isInt())
+        return static_cast<int> (value);
+
+    if (value.isInt64())
+        return static_cast<int> (value);
+
+    if (value.isDouble())
+        return static_cast<int> (static_cast<double> (value));
+
+    return static_cast<int> (value);
+}
+
+juce::var createProjectStateVar (PluginProcessor& processor, const PluginEditor& editor)
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty ("projectName", processor.getProjectName());
+    object->setProperty ("projectDescription", processor.getProjectDescription());
+    object->setProperty ("projectCreatedAt", processor.getProjectCreatedAt());
+    object->setProperty ("projectModifiedAt", processor.getProjectModifiedAt());
+    object->setProperty ("projectFileName", editor.getCurrentProjectFileName());
+    object->setProperty ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0);
+    object->setProperty ("hasNextProject", editor.hasNextProject() ? 1 : 0);
+    return juce::var (object.release());
+}
+} // namespace
+
+juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginProcessor& processor,
+                                                                         PluginEditor& editor)
 {
     using Options = juce::WebBrowserComponent::Options;
 
@@ -101,6 +136,13 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                        .withNativeIntegrationEnabled()
                        .withInitialisationData ("pluginName", juce::var { PRODUCT_NAME_WITHOUT_VERSION })
                        .withInitialisationData ("version", juce::var { VERSION })
+                       .withInitialisationData ("projectName", processor.getProjectName())
+                       .withInitialisationData ("projectDescription", processor.getProjectDescription())
+                       .withInitialisationData ("projectCreatedAt", processor.getProjectCreatedAt())
+                       .withInitialisationData ("projectModifiedAt", processor.getProjectModifiedAt())
+                       .withInitialisationData ("projectFileName", editor.getCurrentProjectFileName())
+                       .withInitialisationData ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0)
+                       .withInitialisationData ("hasNextProject", editor.hasNextProject() ? 1 : 0)
                        .withNativeFunction ("kshSendCommand",
                                             [&processor] (const juce::Array<juce::var>& args,
                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -130,6 +172,37 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                                                 }
 
                                                 complete (juce::var { false });
+                                            })
+                       .withNativeFunction ("kshGetProjectState",
+                                            [&processor, &editor] (const juce::Array<juce::var>&,
+                                                                   juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                complete (createProjectStateVar (processor, editor));
+                                            })
+                       .withNativeFunction ("kshNewProject",
+                                            [&editor] (const juce::Array<juce::var>&,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                editor.createNewProject (std::move (complete));
+                                            })
+                       .withNativeFunction ("kshSaveProject",
+                                            [&editor] (const juce::Array<juce::var>& args,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                editor.showSaveProjectDialog (args, std::move (complete));
+                                            })
+                       .withNativeFunction ("kshLoadProject",
+                                            [&editor] (const juce::Array<juce::var>&,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                editor.showLoadProjectDialog (std::move (complete));
+                                            })
+                       .withNativeFunction ("kshCycleProject",
+                                            [&editor] (const juce::Array<juce::var>& args,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                editor.cycleProject (args.size() > 0 ? varToInt (args[0]) : 1,
+                                                                     std::move (complete));
                                             })
                        .withUserScript (juce::String { R"(
                            document.documentElement.classList.add('juce-ready');

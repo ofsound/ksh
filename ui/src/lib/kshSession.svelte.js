@@ -25,7 +25,12 @@ import {
 } from "./kshPreviewUtils.js";
 import {
   onBackendEvent,
+  cycleProject as nativeCycleProject,
+  getProjectState,
+  loadProject as nativeLoadProject,
+  newProject as nativeNewProject,
   parseBackendJson,
+  saveProject as nativeSaveProject,
   sendCommand,
   setViewSize,
   syncAll,
@@ -65,6 +70,15 @@ export const session = $state({
   sourceChannelSoloSource: -1,
   sourceChannelSoloChannel: -1,
   sourceChannelSoloRestoreMutes: null,
+  projectName: "Untitled Project",
+  projectDescription: "",
+  projectCreatedAt: "",
+  projectModifiedAt: "",
+  projectFileName: "",
+  hasPreviousProject: false,
+  hasNextProject: false,
+  projectOperationBusy: false,
+  projectOperationError: "",
   bridgeError: "",
   ready: false,
 });
@@ -124,6 +138,28 @@ function assignHistorySnapshot(snapshot) {
   clearSourceChannelSolo();
   bumpState();
   bumpOptimisticPreview();
+}
+
+function nativeScalar(state, key, fallback) {
+  if (state == null || state[key] === undefined || state[key] === null) {
+    return fallback;
+  }
+
+  return state[key];
+}
+
+function assignProjectMetadata(state) {
+  if (state == null) {
+    return;
+  }
+
+  session.projectName = String(nativeScalar(state, "projectName", "Untitled Project"));
+  session.projectDescription = String(nativeScalar(state, "projectDescription", ""));
+  session.projectCreatedAt = String(nativeScalar(state, "projectCreatedAt", ""));
+  session.projectModifiedAt = String(nativeScalar(state, "projectModifiedAt", ""));
+  session.projectFileName = String(nativeScalar(state, "projectFileName", ""));
+  session.hasPreviousProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasPreviousProject", 0)), 10));
+  session.hasNextProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasNextProject", 0)), 10));
 }
 
 export function clearEditHistory() {
@@ -725,6 +761,85 @@ export async function resizeForCurrentView() {
   await setViewSize(width, height, session.patternViewScale);
 }
 
+export function formatProjectDate(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).toUpperCase();
+}
+
+export async function refreshProjectState() {
+  const state = await getProjectState();
+  assignProjectMetadata(state);
+}
+
+async function runProjectOperation(task, { loadProjectContent = false } = {}) {
+  if (session.projectOperationBusy) {
+    return false;
+  }
+
+  session.projectOperationBusy = true;
+  session.projectOperationError = "";
+
+  try {
+    const result = await task();
+    const success = Boolean(Number.parseInt(String(result?.success ?? 0), 10));
+    const error = String(result?.error ?? "");
+
+    if (error) {
+      session.projectOperationError = error;
+    }
+
+    if (!success) {
+      return false;
+    }
+
+    assignProjectMetadata(result);
+
+    if (loadProjectContent) {
+      clearEditHistory();
+      clearSourceChannelSolo();
+      await syncAll();
+      await resizeForCurrentView();
+    } else {
+      await refreshProjectState();
+    }
+
+    return true;
+  } catch {
+    session.projectOperationError = "The project operation could not be completed.";
+    return false;
+  } finally {
+    session.projectOperationBusy = false;
+  }
+}
+
+export function saveProject() {
+  void runProjectOperation(() => nativeSaveProject(session.projectName, session.projectDescription));
+}
+
+export function loadProject() {
+  void runProjectOperation(() => nativeLoadProject(), { loadProjectContent: true });
+}
+
+export function createNewProject() {
+  void runProjectOperation(() => nativeNewProject(), { loadProjectContent: true });
+}
+
+export function cycleProject(direction) {
+  void runProjectOperation(() => nativeCycleProject(direction), { loadProjectContent: true });
+}
+
 export async function togglePatternViewScale() {
   session.patternViewScale = normalizePatternViewScale(session.patternViewScale === 1.5 ? 1 : 1.5);
   await resizeForCurrentView();
@@ -760,6 +875,7 @@ export function initKshSession() {
       if (parsed?.patternViewScale !== undefined) {
         session.patternViewScale = normalizePatternViewScale(parsed.patternViewScale);
       }
+      assignProjectMetadata(parsed);
       session.selectedSource = session.kshState.staticSource;
       clearSourceChannelSolo();
       bumpState();
@@ -796,6 +912,7 @@ export function initKshSession() {
   waitForBackend()
     .then(async () => {
       await syncAll();
+      await refreshProjectState();
       await resizeForCurrentView();
       session.ready = true;
     })

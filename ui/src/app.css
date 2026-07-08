@@ -91,6 +91,55 @@
     @apply cursor-default text-ksh-stroke-soft;
   }
 
+  .project-row {
+    position: relative;
+    background:
+      linear-gradient(90deg, rgb(18 18 18 / 0.2), rgb(33 38 45 / 0.82), rgb(18 18 18 / 0.2)),
+      #292e35;
+  }
+
+  .project-bar {
+    min-width: 0;
+  }
+
+  .project-button {
+    @apply flex h-[32px] min-w-[72px] items-center justify-center rounded-sm bg-ksh-panel2 px-4 text-[11px] font-extrabold uppercase tracking-[0.18em] text-ksh-text outline-none transition-colors;
+  }
+
+  .project-button:not(:disabled):hover,
+  .project-arrow-button:not(:disabled):hover {
+    @apply text-ksh-amber;
+  }
+
+  .project-button:disabled,
+  .project-arrow-button:disabled {
+    @apply cursor-default text-ksh-stroke-soft;
+  }
+
+  .project-arrow-button {
+    @apply flex h-[32px] w-[42px] shrink-0 items-center justify-center rounded-sm bg-ksh-panel2 text-[18px] font-bold leading-none text-ksh-muted outline-none transition-colors;
+  }
+
+  .project-title-shell {
+    @apply flex h-[32px] min-w-0 flex-1 items-center overflow-hidden rounded-sm border border-ksh-stroke-soft bg-ksh-off-dark;
+  }
+
+  .project-title-input {
+    @apply h-full min-w-[180px] flex-[0_0_220px] bg-transparent px-4 text-[12px] font-bold text-ksh-text outline-none;
+  }
+
+  .project-description-input {
+    @apply h-full min-w-0 flex-1 bg-transparent px-4 text-[12px] font-medium text-ksh-muted outline-none;
+  }
+
+  .project-date {
+    @apply flex h-full min-w-[104px] shrink-0 items-center justify-center border-l border-ksh-stroke-soft px-3 text-[10px] font-extrabold tracking-[0.18em] text-ksh-text;
+  }
+
+  .project-error {
+    @apply absolute bottom-[-18px] left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-sm bg-ksh-off-dark px-2 py-1 text-[10px] font-semibold text-ksh-amber;
+  }
+
   .ksh-cell-text-flash,
   .ksh-cell-text-flash * {
     color: #ffffff !important;

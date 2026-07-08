@@ -105,6 +105,19 @@ double clampStandaloneTempoBpm (double bpm)
 
     return std::clamp (bpm, 20.0, 300.0);
 }
+
+nlohmann::json makeDefaultPersistenceState()
+{
+    ksh::KickSnareHatEngine defaults;
+    defaults.setGenerationMode (ksh::GenerationMode::staticSource);
+    defaults.setStaticSource (0);
+    defaults.setStepCount (16);
+    defaults.setChannelCount (ksh::Constants::defaultChannelCount);
+    defaults.setRate ("16n");
+    defaults.setTempo (120.0);
+    defaults.setCell (0, 0, 0, true, 100, 100, 1);
+    return defaults.serializeForPersistence();
+}
 } // namespace
 
 PluginProcessor::BusesProperties PluginProcessor::createBusesProperties()
@@ -642,6 +655,18 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
         publishPlaybackSnapshotLocked();
     }
 
+    applyProjectMetadataFromState (*payload);
+    if (payload->contains ("patternViewScale"))
+        setPatternViewScale (payload->value ("patternViewScale", patternViewScale));
+
+    if (payload->contains ("standaloneTransportPlaying"))
+    {
+        const auto& playing = (*payload)["standaloneTransportPlaying"];
+        const bool shouldPlay = playing.is_boolean() ? playing.get<bool>() : playing.get<int>() != 0;
+        if (hasStandaloneTransport())
+            setStandaloneTransportPlaying (shouldPlay);
+    }
+
     ksh::NativeHit drained;
 
     while (noteHitsForUi.try_dequeue (drained))
@@ -660,7 +685,18 @@ nlohmann::json PluginProcessor::enginePersistenceState()
     applyPendingMacroParametersLocked();
     publishPlaybackSnapshotIfChangedLocked();
 
-    return engine.serializeForPersistence();
+    auto state = engine.serializeForPersistence();
+    {
+        std::scoped_lock metadataLock { projectMetadataMutex };
+        state["projectName"] = projectName.toStdString();
+        state["projectDescription"] = projectDescription.toStdString();
+        state["projectCreatedAt"] = projectCreatedAt.toStdString();
+        state["projectModifiedAt"] = projectModifiedAt.toStdString();
+    }
+    state["patternViewScale"] = patternViewScale;
+    state["standaloneTransportPlaying"] = isStandaloneTransportPlaying() ? 1 : 0;
+    state["standaloneTempo"] = clampStandaloneTempoBpm (engine.getTempo());
+    return state;
 }
 
 nlohmann::json PluginProcessor::enginePreviewState()
@@ -837,6 +873,92 @@ void PluginProcessor::setEditorResizeCallback (EditorResizeCallback callback)
 void PluginProcessor::setPatternViewScale (double scale)
 {
     patternViewScale = scale == 1.5 ? 1.5 : 1.0;
+}
+
+void PluginProcessor::setProjectMetadata (const juce::String& name,
+                                          const juce::String& description,
+                                          const juce::String& createdAt,
+                                          const juce::String& modifiedAt)
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    projectName = name.trim().isNotEmpty() ? name.trim() : juce::String ("Untitled Project");
+    projectDescription = description.trim();
+    projectCreatedAt = createdAt;
+    projectModifiedAt = modifiedAt;
+}
+
+juce::String PluginProcessor::getProjectName() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectName;
+}
+
+juce::String PluginProcessor::getProjectDescription() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectDescription;
+}
+
+juce::String PluginProcessor::getProjectCreatedAt() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectCreatedAt;
+}
+
+juce::String PluginProcessor::getProjectModifiedAt() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectModifiedAt;
+}
+
+void PluginProcessor::applyProjectMetadataFromState (const nlohmann::json& state)
+{
+    try
+    {
+        std::scoped_lock lock { projectMetadataMutex };
+        projectName = juceStringFromView (state.value ("projectName", std::string { "Untitled Project" })).trim();
+        if (projectName.isEmpty())
+            projectName = "Untitled Project";
+
+        projectDescription = juceStringFromView (state.value ("projectDescription", std::string {})).trim();
+        projectCreatedAt = juceStringFromView (state.value ("projectCreatedAt", std::string {}));
+        projectModifiedAt = juceStringFromView (state.value ("projectModifiedAt", std::string {}));
+    }
+    catch (...)
+    {
+        setProjectMetadata ("Untitled Project", {}, {}, {});
+    }
+}
+
+void PluginProcessor::resetProject()
+{
+    {
+        std::scoped_lock lock { engineStateMutex };
+        const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
+
+        try
+        {
+            const auto resetOk = engine.deserializeForPersistence (makeDefaultPersistenceState());
+            juce::ignoreUnused (resetOk);
+        }
+        catch (...)
+        {
+        }
+
+        suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+        syncMacroParametersFromEngineLocked (false);
+        publishPlaybackSnapshotLocked();
+    }
+
+    setProjectMetadata ("Untitled Project", {}, {}, {});
+    setPatternViewScale (1.0);
+    standaloneTransportPlaying.store (0, std::memory_order_relaxed);
+    standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
+    standaloneStopAllNotesRequested.store (1, std::memory_order_release);
+    currentStepForUi.store (0, std::memory_order_relaxed);
+    requestPlaybackReset();
+    fullUiSyncPending.store (true, std::memory_order_release);
+    triggerAsyncUpdate();
 }
 
 void PluginProcessor::requestEditorSize (int width, int height)

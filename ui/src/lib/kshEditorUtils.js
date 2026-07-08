@@ -18,6 +18,7 @@ export function stepLabelFontPx(scale = 1) {
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
+export const PROJECT_ROW_H = 52;
 export const STANDALONE_TRANSPORT_ROW_H = 44;
 export const HELPER_FOOTER_H = 24;
 
@@ -54,14 +55,14 @@ export function gridBodyHeight(channelCount, scale = 1) {
 }
 
 export function gridAreaHeight(editorHeight, state) {
-  return editorHeight - MAIN_TOP - standaloneTransportRowHeight(state);
+  return editorHeight - MAIN_TOP - PROJECT_ROW_H - standaloneTransportRowHeight(state);
 }
 
 /** Top spacer at 1x for a channel count; 1.5x keeps this gap below the header rule. */
 export function referenceTopPadding(channelCount, state = null) {
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
-  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
+  const editorHeight = Math.max(MAIN_TOP + PROJECT_ROW_H + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
   const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
   return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
 }
@@ -70,7 +71,7 @@ export function referenceTopPadding(channelCount, state = null) {
 export function referenceBottomPadding(channelCount, state = null) {
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
-  const editorHeight = Math.max(MAIN_TOP + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
+  const editorHeight = Math.max(MAIN_TOP + PROJECT_ROW_H + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
   const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
   return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
 }
@@ -184,11 +185,11 @@ export function editorDimensions(state, scale = 1) {
   const normalizedScale = normalizePatternViewScale(scale);
   const bodyHeight = gridBodyHeight(state.channelCount, normalizedScale);
   const standaloneRow = standaloneTransportRowHeight(state);
-  let height = Math.max(MAIN_TOP + bodyHeight, minEditorHeight) + standaloneRow;
+  let height = Math.max(MAIN_TOP + PROJECT_ROW_H + bodyHeight, minEditorHeight) + standaloneRow;
   if (normalizedScale === 1.5) {
     height = Math.max(
       height,
-      MAIN_TOP + bodyHeight + referenceTopPadding(state.channelCount, state) + referenceBottomPadding(state.channelCount, state) + standaloneRow
+      MAIN_TOP + PROJECT_ROW_H + bodyHeight + referenceTopPadding(state.channelCount, state) + referenceBottomPadding(state.channelCount, state) + standaloneRow
     );
   }
   return {width, height};

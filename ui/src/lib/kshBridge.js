@@ -5,6 +5,11 @@ export function isBackendReady() {
   return Array.isArray(functions) && functions.includes("kshSendCommand");
 }
 
+export function nativeFunctionAvailable(name) {
+  const functions = window.__JUCE__?.initialisationData?.__juce__functions;
+  return Array.isArray(functions) && functions.includes(name);
+}
+
 /** Resolve when the plugin WebView has registered native functions. */
 export function waitForBackend(timeoutMs = 15000) {
   if (isBackendReady()) {
@@ -63,7 +68,7 @@ export function syncAll() {
 }
 
 export function setViewSize(width, height, patternViewScale) {
-  if (!window.__JUCE__?.initialisationData?.__juce__functions?.includes("kshSetViewSize")) {
+  if (!nativeFunctionAvailable("kshSetViewSize")) {
     return Promise.resolve(false);
   }
 
@@ -73,6 +78,46 @@ export function setViewSize(width, height, patternViewScale) {
   }
 
   return native(width, height, patternViewScale);
+}
+
+export function getProjectState() {
+  if (!nativeFunctionAvailable("kshGetProjectState")) {
+    return Promise.resolve(null);
+  }
+
+  return getNativeFunction("kshGetProjectState")();
+}
+
+export function newProject() {
+  if (!nativeFunctionAvailable("kshNewProject")) {
+    return Promise.resolve({ success: 0, error: "Project files are not available." });
+  }
+
+  return getNativeFunction("kshNewProject")();
+}
+
+export function loadProject() {
+  if (!nativeFunctionAvailable("kshLoadProject")) {
+    return Promise.resolve({ success: 0, error: "Project files are not available." });
+  }
+
+  return getNativeFunction("kshLoadProject")();
+}
+
+export function saveProject(name, description) {
+  if (!nativeFunctionAvailable("kshSaveProject")) {
+    return Promise.resolve({ success: 0, error: "Project files are not available." });
+  }
+
+  return getNativeFunction("kshSaveProject")(name, description);
+}
+
+export function cycleProject(direction) {
+  if (!nativeFunctionAvailable("kshCycleProject")) {
+    return Promise.resolve({ success: 0, error: "Project files are not available." });
+  }
+
+  return getNativeFunction("kshCycleProject")(direction);
 }
 
 /** Backend may emit parsed objects or { json: string } fallback. */

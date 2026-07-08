@@ -190,6 +190,53 @@ TEST_CASE ("plugin state save flushes pending host macro parameter changes", "[p
     REQUIRE (parsed["swing"] == 64);
 }
 
+TEST_CASE ("project metadata and editor state roundtrip through plugin state", "[plugin][persistence]")
+{
+    PluginProcessor original;
+    configureSnarePattern (original);
+    original.setProjectMetadata ("Pseudoflute",
+                                 "External file test",
+                                 "2026-07-08T10:00:00Z",
+                                 "2026-07-08T11:00:00Z");
+    original.setPatternViewScale (1.5);
+
+    const auto saved = getPluginState (original);
+    const auto parsed = nlohmann::json::parse (
+        std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
+
+    REQUIRE (parsed["projectName"] == "Pseudoflute");
+    REQUIRE (parsed["projectDescription"] == "External file test");
+    REQUIRE (parsed["patternViewScale"] == 1.5);
+
+    PluginProcessor restored;
+    setPluginState (restored, saved);
+
+    REQUIRE (restored.getProjectName() == "Pseudoflute");
+    REQUIRE (restored.getProjectDescription() == "External file test");
+    REQUIRE (restored.getProjectCreatedAt() == "2026-07-08T10:00:00Z");
+    REQUIRE (restored.getProjectModifiedAt() == "2026-07-08T11:00:00Z");
+    REQUIRE (restored.getPatternViewScale() == 1.5);
+    REQUIRE (restored.engineStateSnapshot().sources[0][1][4].enabled);
+}
+
+TEST_CASE ("resetProject restores default project-owned state", "[plugin][persistence]")
+{
+    PluginProcessor plugin;
+    configureSnarePattern (plugin);
+    plugin.setProjectMetadata ("Old Project", "Old description", "created", "modified");
+    plugin.setPatternViewScale (1.5);
+
+    plugin.resetProject();
+
+    const auto state = plugin.engineStateSnapshot();
+    REQUIRE (plugin.getProjectName() == "Untitled Project");
+    REQUIRE (plugin.getProjectDescription().isEmpty());
+    REQUIRE (plugin.getPatternViewScale() == 1.0);
+    REQUIRE (state.channelCount == ksh::Constants::defaultChannelCount);
+    REQUIRE (state.sources[0][0][0].enabled);
+    REQUIRE_FALSE (state.sources[0][1][4].enabled);
+}
+
 TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")
 {
     PluginProcessor plugin;

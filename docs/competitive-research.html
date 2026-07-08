@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KSH — MIDI Drum Sequencer Competitive Research</title>
+    <meta name="description" content="Competitive analysis of KSH against leading MIDI drum sequencers: positioning, gaps, and roadmap priorities." />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <style>
+      :root {
+        --bg: #0f1114;
+        --surface: #181b20;
+        --surface-2: #1f242b;
+        --border: #2a313c;
+        --text: #e8eaed;
+        --text-muted: #9aa3b2;
+        --accent: #6ee7b7;
+        --accent-dim: #34d399;
+        --warn: #fbbf24;
+        --danger: #f87171;
+        --link: #7dd3fc;
+        --p0: #f87171;
+        --p1: #fbbf24;
+        --p2: #a78bfa;
+        --p3: #6b7280;
+        --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        --max-width: 52rem;
+        --radius: 8px;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        font-size: 16px;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        padding: 2rem 1.25rem 4rem;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .page {
+        max-width: var(--max-width);
+        margin: 0 auto;
+      }
+
+      header.doc-header {
+        margin-bottom: 2.5rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .eyebrow {
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin: 0 0 0.5rem;
+      }
+
+      h1 {
+        font-size: 1.875rem;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0 0 0.75rem;
+        letter-spacing: -0.02em;
+      }
+
+      .meta {
+        font-size: 0.875rem;
+        color: var(--text-muted);
+        margin: 0;
+      }
+
+      h2 {
+        font-size: 1.375rem;
+        font-weight: 650;
+        margin: 2.5rem 0 1rem;
+        padding-top: 0.5rem;
+        letter-spacing: -0.01em;
+        color: var(--text);
+      }
+
+      h3 {
+        font-size: 1.0625rem;
+        font-weight: 600;
+        margin: 1.75rem 0 0.75rem;
+        color: var(--text);
+      }
+
+      p {
+        margin: 0 0 1rem;
+      }
+
+      strong {
+        font-weight: 600;
+        color: #fff;
+      }
+
+      em {
+        font-style: italic;
+        color: var(--text-muted);
+      }
+
+      a {
+        color: var(--link);
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.15s;
+      }
+
+      a:hover {
+        border-bottom-color: var(--link);
+      }
+
+      code,
+      .file-ref {
+        font-family: var(--font-mono);
+        font-size: 0.8125rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.1em 0.4em;
+        color: var(--accent-dim);
+      }
+
+      ul,
+      ol {
+        margin: 0 0 1rem;
+        padding-left: 1.35rem;
+      }
+
+      li {
+        margin-bottom: 0.35rem;
+      }
+      li::marker {
+        color: var(--text-muted);
+      }
+
+      hr {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 2rem 0;
+      }
+
+      .callout {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        border-radius: var(--radius);
+        padding: 1rem 1.25rem;
+        margin: 1.25rem 0;
+      }
+
+      .callout p:last-child {
+        margin-bottom: 0;
+      }
+
+      .callout.warn {
+        border-left-color: var(--warn);
+      }
+
+      .callout.danger {
+        border-left-color: var(--danger);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+        margin: 1rem 0 1.5rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      thead {
+        background: var(--surface-2);
+      }
+
+      th {
+        text-align: left;
+        font-weight: 600;
+        padding: 0.65rem 0.85rem;
+        border-bottom: 1px solid var(--border);
+        color: var(--text);
+        white-space: nowrap;
+      }
+
+      td {
+        padding: 0.65rem 0.85rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+        color: var(--text-muted);
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      td:first-child {
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      .tier-label {
+        display: inline-block;
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        padding: 0.2em 0.5em;
+        border-radius: 4px;
+        margin-bottom: 0.5rem;
+      }
+
+      .tier-1 {
+        background: rgba(110, 231, 183, 0.15);
+        color: var(--accent);
+      }
+      .tier-2 {
+        background: rgba(125, 211, 252, 0.12);
+        color: var(--link);
+      }
+      .tier-3 {
+        background: rgba(167, 139, 250, 0.12);
+        color: var(--p2);
+      }
+
+      .priority-list {
+        list-style: none;
+        padding: 0;
+        margin: 1rem 0 1.5rem;
+      }
+
+      .priority-list li {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1rem 1.15rem;
+        margin-bottom: 0.65rem;
+      }
+
+      .priority-list li p {
+        margin: 0.35rem 0 0;
+        color: var(--text-muted);
+        font-size: 0.9rem;
+      }
+
+      .badge {
+        display: inline-block;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        padding: 0.15em 0.45em;
+        border-radius: 4px;
+        margin-right: 0.4rem;
+        vertical-align: middle;
+      }
+
+      .badge-p0 {
+        background: rgba(248, 113, 113, 0.2);
+        color: var(--p0);
+      }
+      .badge-p1 {
+        background: rgba(251, 191, 36, 0.2);
+        color: var(--p1);
+      }
+      .badge-p2 {
+        background: rgba(167, 139, 250, 0.2);
+        color: var(--p2);
+      }
+      .badge-p3 {
+        background: rgba(107, 114, 128, 0.25);
+        color: var(--p3);
+      }
+
+      .diagram {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem 1rem;
+        margin: 1.25rem 0 1.75rem;
+        overflow-x: auto;
+      }
+
+      .diagram .mermaid {
+        display: flex;
+        justify-content: center;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin: 1rem 0 1.5rem;
+      }
+
+      @media (max-width: 640px) {
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+        table {
+          font-size: 0.8125rem;
+        }
+        th,
+        td {
+          padding: 0.5rem 0.6rem;
+        }
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1rem 1.15rem;
+      }
+
+      .card h4 {
+        margin: 0 0 0.5rem;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+      }
+
+      .card ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        font-size: 0.875rem;
+      }
+
+      .card li {
+        color: var(--text-muted);
+      }
+
+      footer.doc-footer {
+        margin-top: 3rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.8125rem;
+        color: var(--text-muted);
+      }
+
+      nav.toc {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1rem 1.25rem;
+        margin: 1.5rem 0 2rem;
+      }
+
+      nav.toc h2 {
+        font-size: 0.8125rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+        margin: 0 0 0.65rem;
+      }
+
+      nav.toc ol {
+        margin: 0;
+        padding-left: 1.25rem;
+        font-size: 0.9rem;
+      }
+
+      nav.toc a {
+        color: var(--text);
+      }
+      nav.toc a:hover {
+        color: var(--link);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="doc-header">
+        <p class="eyebrow">ofsound · KSH</p>
+        <h1>MIDI Drum Sequencer Competitive Research</h1>
+        <p class="meta">
+          June 2026 · Internal product research · Companion to
+          <a href="port-plan.md">port-plan.md</a>
+        </p>
+      </header>
+
+      <nav class="toc" aria-label="Table of contents">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#what-ksh-is">What KSH Is (and Isn't)</a></li>
+          <li><a href="#competitors">Who Is Better Than KSH — and Where</a></li>
+          <li><a href="#additions">Highest-Value Additions</a></li>
+          <li><a href="#lacking">What Is Lacking</a></li>
+          <li><a href="#positioning">Strategic Positioning</a></li>
+          <li><a href="#roadmap">Suggested Roadmap</a></li>
+        </ol>
+      </nav>
+
+      <section id="what-ksh-is">
+        <h2>What KSH Is (and Isn't)</h2>
+        <p>
+          KSH is a
+          <strong>generative MIDI effect</strong>
+          — it does not make sound. It sits closest to the Max for Live lineage (ProbablyGEN, Euclidean tools) and pure MIDI sequencers (Stepic, 510k POLYLLOP), not to full drum machines (Playbeat, Triaz, DrumComputer, XO).
+        </p>
+
+        <h3>Core strengths today</h3>
+        <p>
+          Engine:
+          <code class="file-ref">source/engine/KickSnareHatEngine.*</code>
+          · UI:
+          <code class="file-ref">ui/</code>
+        </p>
+        <ul>
+          <li>8 source banks with Stack / Per-channel / Static generation + refresh windows</li>
+          <li>Rich per-step logic: probability, cycle gating (offset + inversion), rolls, velocity</li>
+          <li>Per-channel polymeter: loop length, reverse/boomerang playback, source locks</li>
+          <li>Source editor + generated preview with stable assignments (edits don't gratuitously re-roll)</li>
+          <li>
+            Realtime-safe snapshot playback (
+            <a href="port-plan.md">port-plan.md</a>
+            )
+          </li>
+          <li>Host macros automatable: rate, swing, velocity/timing humanize, device active</li>
+          <li>M4L-faithful modifier-key layer editing (velocity / cycle / probability / roll)</li>
+        </ul>
+
+        <div class="diagram">
+          <pre class="mermaid">
+quadrantChart
+    title Competitive positioning
+    x-axis "Pure MIDI FX" --> "Drum machine + samples"
+    y-axis "Simple step grid" --> "Deep generative"
+    KSH: [0.25, 0.82]
+    Stepic: [0.18, 0.75]
+    POLYLLOP: [0.22, 0.70]
+    ProbablyGEN: [0.30, 0.65]
+    Playbeat4: [0.78, 0.72]
+    Triaz: [0.85, 0.68]
+    DrumComputer: [0.80, 0.55]
+    XO: [0.75, 0.40]
+    Nest: [0.35, 0.90]
+        </pre
+          >
+        </div>
+      </section>
+
+      <hr />
+
+      <section id="competitors">
+        <h2>Who Is Better Than KSH — and Where</h2>
+
+        <h3>
+          <span class="tier-label tier-1">Tier 1</span>
+          Direct MIDI-sequencer competitors (same buyer)
+        </h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Price</th>
+              <th>Beats KSH at</th>
+              <th>KSH beats them at</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <a href="https://devicemeister.com/">Stepic</a>
+                (Devicemeister)
+              </td>
+              <td>~$79</td>
+              <td>8 CC modulation lanes, 200+ randomization targets, pattern chaining (16×16 bars), drag-drop MIDI export, scale/chord tools, preset library, Windows+AAX, hardware MIDI maps</td>
+              <td>8-source generative banks, cycle gating depth, source/generated dual view, drum-specific 8-lane UX</td>
+            </tr>
+            <tr>
+              <td>
+                <a href="https://510k.de/">510k POLYLLOP</a>
+                / SEQUND
+              </td>
+              <td>~$49–79</td>
+              <td>Separate lanes for gate/pitch/length/hold/velocity, 12 MIDI-switchable patterns per preset, scale quantize + live transpose, MIDI export, AAX</td>
+              <td>Multi-source randomization modes, per-step cycle/roll, richer generative refresh model</td>
+            </tr>
+            <tr>
+              <td><a href="https://hy-plugins.com/product/hy-seq16x3/">HY-SEQ32</a></td>
+              <td>$50</td>
+              <td>Up to 15 sequencer units, CC sequencing, 8 snapshots per unit + snapshot chaining, chord/scale FX, MIDI recorder</td>
+              <td>Focused drum workflow, lower cognitive load, generative source architecture</td>
+            </tr>
+            <tr>
+              <td><a href="https://sugar-bytes.de/nest">Sugar Bytes Nest</a></td>
+              <td>€99</td>
+              <td>Modular generative depth (20 IC-style modules), 12 performance scenes, 16 MIDI channels, CC automation</td>
+              <td>Approachable grid UX, deterministic engine tests, M4L-style paint editing</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>
+          <span class="tier-label tier-2">Tier 2</span>
+          M4L / mobile peers (same philosophy, narrower distribution)
+        </h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Beats KSH at</th>
+              <th>KSH beats them at</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ProbablyGEN (M4L)</td>
+              <td>Per-channel independent tempos out of the box; generative LFO-driven mutation</td>
+              <td>Standalone plugin (no Live), polished WebView UI, test coverage, CLAP/AUv3</td>
+            </tr>
+            <tr>
+              <td>Euclidrum (M4L)</td>
+              <td>Classic Euclidean pulses/steps UI, 32 genre presets, accent/fill/drop, per-lane CC (filter/decay), pattern drift/mutation</td>
+              <td>Rolls, 8-source stack modes, cycle inversion, native plugin formats</td>
+            </tr>
+            <tr>
+              <td>Rozeta Rhythm (iOS AUv3)</td>
+              <td>Euclidean + mutations, $10, deep iOS ecosystem</td>
+              <td>Desktop DAW plugin, deeper step parameters, host project save</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>
+          <span class="tier-label tier-3">Tier 3</span>
+          Drum machines users compare anyway (different category)
+        </h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Beats KSH at</th>
+              <th>Why it's not a fair fight</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="https://audiomodern.com/shop/plugins/playbeat-4/">Playbeat 4</a></td>
+              <td>AI genre generation, samples + mixer, choke groups, 24-key variation keyboard, MIDI/audio stem export, preset packs</td>
+              <td>It's a drum designer, not a MIDI FX you pair with any kit</td>
+            </tr>
+            <tr>
+              <td><a href="https://www.wavealchemy.co.uk/triaz">Wave Alchemy Triaz</a></td>
+              <td>
+                Per-channel rate
+                <strong>and</strong>
+                swing, 12 patterns/preset, 15k samples, integrated FX
+              </td>
+              <td>Full instrument; sequencing is one layer of a bigger product</td>
+            </tr>
+            <tr>
+              <td>Sugar Bytes DrumComputer</td>
+              <td>Drum synthesis + per-lane "smart" sequencer</td>
+              <td>Sound design tool</td>
+            </tr>
+            <tr>
+              <td>XLN XO</td>
+              <td>Sample discovery/organization workflow</td>
+              <td>Sequencer is deliberately simple</td>
+            </tr>
+            <tr>
+              <td>Xfer Cthulhu</td>
+              <td>Chord memorizer + polymetric arp tabs, drag-drop pattern export</td>
+              <td>Melodic/harmonic tool, no probability</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <p>
+            <strong>Bottom line:</strong>
+            No single competitor matches KSH's
+            <strong>8-source generative architecture + source/preview split</strong>
+            . Stepic and POLYLLOP are the strongest pure-MIDI threats on
+            <strong>product completeness</strong>
+            (export, presets, platform coverage). Playbeat/Triaz win on
+            <strong>instant gratification and sound-in-the-box</strong>
+            .
+          </p>
+        </div>
+      </section>
+
+      <hr />
+
+      <section id="additions">
+        <h2>Highest-Value Additions (Prioritized)</h2>
+
+        <h3>
+          <span class="badge badge-p0">P0</span>
+          Table stakes for a commercial plugin
+        </h3>
+        <ol class="priority-list">
+          <li>
+            <strong>MIDI / bar export to DAW</strong>
+            <p>
+              Stub already exists:
+              <code class="file-ref">export_generated_bars</code>
+              returns
+              <code>false</code>
+              in
+              <code class="file-ref">source/KshUiBridge.cpp</code>
+              . Every serious competitor (Stepic, POLYLLOP, Playbeat, Cthulhu) offers drag-drop or print-to-clip. This is the single biggest workflow gap vs. the M4L original's LiveAPI clip export (
+              <a href="port-plan.md">port-plan.md</a>
+              documents the intentional skip).
+            </p>
+          </li>
+          <li>
+            <strong>Preset + pattern library</strong>
+            <p>
+              Today:
+              <code class="file-ref">getNumPrograms()</code>
+              = 1. Competitors offer factory banks + user saves + MIDI-triggered pattern recall (POLYLLOP: 12 patterns/preset; Triaz: 12/preset; HY-SEQ32: 8 snapshots + chaining). Minimum viable: named full-state presets + 8–12 pattern slots with MIDI note switching (KSH already maps C0–G0 for
+              source select — extend the model).
+            </p>
+          </li>
+          <li>
+            <strong>Per-channel rate and swing</strong>
+            <p>
+              KSH has global rate/swing only. Triaz and Playbeat allow independent lane timing — this is the #1 polymetric feature users cite in reviews. KSH already has per-channel loop length and playback mode; adding per-channel rate multipliers would close the gap without changing the product
+              category.
+            </p>
+          </li>
+          <li>
+            <strong>Per-channel MIDI channel routing</strong>
+            <p>
+              All output is channel 1 (
+              <code class="file-ref">source/engine/KshMidiPlayback.h</code>
+              ). Stepic, Nest, and Euclidrum route to multiple channels/CCs. Essential for hardware users and multi-instrument setups.
+            </p>
+          </li>
+          <li>
+            <strong>Ship-ready product packaging</strong>
+            <p>macOS-only CI, no AAX, no signing, v0.0.1. Competitors ship Windows + AAX + preset ecosystems. This isn't a feature but blocks comparison in pro studios.</p>
+          </li>
+        </ol>
+
+        <h3>
+          <span class="badge badge-p1">P1</span>
+          Differentiators that deepen the generative niche
+        </h3>
+        <ol class="priority-list" start="6">
+          <li>
+            <strong>Euclidean rhythm helper</strong>
+            <p>KSH's cycle gating is powerful but opaque vs. classic pulses/steps (Euclidrum, Rozeta, alkman's Euclidean Sequencer). A "fill N pulses in M steps" UI that writes cycle/cycleOffset would make polymeter discovery faster without replacing the existing model.</p>
+          </li>
+          <li>
+            <strong>Gate / note length per step</strong>
+            <p>Stepic and POLYLLOP expose duration/hold lanes. KSH schedules fixed note-offs from rolls but has no per-step gate. Adds expressiveness for hats, percussion, and melodic lanes if channel count expands.</p>
+          </li>
+          <li>
+            <strong>Per-lane MIDI CC output</strong>
+            <p>Euclidrum sends filter/decay CC per hit. KSH could output 1–2 CC lanes (e.g. hat openness, sample select) — high value for Elektron-style workflows without becoming a drum machine.</p>
+          </li>
+          <li>
+            <strong>Constrained randomize ("dice")</strong>
+            <p>Stepic's 200+ scoped randomizers and Playbeat's per-parameter dice are expected in generative tools. KSH has generative modes but no one-click "randomize this channel respecting locks/probability bounds."</p>
+          </li>
+          <li>
+            <strong>Expose channel count in UI</strong>
+            <p>Engine supports 1–8 channels; editor always renders full count with no control. Quick win for minimal patterns and mobile/smaller layouts.</p>
+          </li>
+        </ol>
+
+        <h3>
+          <span class="badge badge-p2">P2</span>
+          Performance and live use
+        </h3>
+        <ol class="priority-list" start="11">
+          <li>
+            <strong>Pattern/scene morphing or A/B</strong>
+            <p>Crossfade or quantized switch between two full persistence snapshots (Nest scenes, POLYLLOP patterns). Fits KSH's generative identity for live sets.</p>
+          </li>
+          <li>
+            <strong>Choke / exclusive groups</strong>
+            <p>Open/closed hat mutual exclusion (Playbeat, TR-style sequencers). Drum-specific and commonly requested.</p>
+          </li>
+          <li>
+            <strong>MIDI learn on macros</strong>
+            <p>Playbeat and Stepic map hardware to randomize/switch. KSH's five APVTS params are automatable but not MIDI-learnable from the UI.</p>
+          </li>
+          <li>
+            <strong>DAW undo integration</strong>
+            <p>UI undo stack (100 entries) is lost on reload and invisible to host undo. Expected polish for a paid plugin.</p>
+          </li>
+        </ol>
+
+        <h3>
+          <span class="badge badge-p3">P3</span>
+          Probably out of scope (different product)
+        </h3>
+        <ul>
+          <li>AI genre-based pattern generation (Playbeat) — large ML/content investment</li>
+          <li>Built-in samples/synthesis (Triaz, DrumComputer, XO)</li>
+          <li>Modular patch cables (Nest) — different UX paradigm</li>
+          <li>Scale/chord/harmony (Stepic, Cthulhu) — low value for kick/snare/hat focus</li>
+        </ul>
+      </section>
+
+      <hr />
+
+      <section id="lacking">
+        <h2>What Is Lacking (Honest Assessment)</h2>
+
+        <div class="grid-2">
+          <div class="card">
+            <h4>Product gaps (users notice first)</h4>
+            <ul>
+              <li>
+                <strong>No escape hatch to the DAW</strong>
+                — can't commit generative output to a MIDI clip
+              </li>
+              <li>
+                <strong>No preset browser</strong>
+                — every session starts from scratch or project state only
+              </li>
+              <li>
+                <strong>Global timing feel only</strong>
+                — no per-lane rate/swing
+              </li>
+              <li>
+                <strong>Single MIDI channel out</strong>
+                — limits hardware routing
+              </li>
+              <li>
+                <strong>Pre-release packaging</strong>
+                — no Windows/AAX; no signed installer
+              </li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>UX gaps (power users)</h4>
+            <ul>
+              <li>
+                <strong>Cycle layer is cryptic</strong>
+                — Euclidean UI communicates polymeter faster
+              </li>
+              <li>
+                <strong>Channel count hidden</strong>
+                — engine capability not exposed
+              </li>
+              <li>
+                <strong>No "inspire me" entry points</strong>
+                — no presets, dice, or drift/mutation
+              </li>
+              <li>
+                <strong>Host undo disconnect</strong>
+                — UI undo invisible to DAW
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>Architectural strengths to protect</h3>
+        <div class="callout warn">
+          <p>Don't copy competitors blindly. These are real differentiators:</p>
+          <ul>
+            <li>
+              <strong>Source assignment stability</strong>
+              — many randomizers re-roll on every edit; KSH's source/generated split supports iterative composition
+            </li>
+            <li>
+              <strong>Realtime snapshot model</strong>
+              — ahead of most indie sequencers on audio-thread safety
+            </li>
+            <li>
+              <strong>Sparse v:1 JSON persistence</strong>
+              — clean; don't bloat into thousands of APVTS params
+            </li>
+            <li>
+              <strong>Pure MIDI FX positioning</strong>
+              — competing with Playbeat on samples would dilute the identity
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <hr />
+
+      <section id="positioning">
+        <h2>Strategic Positioning Recommendation</h2>
+
+        <p>
+          <strong>Own:</strong>
+          <em>"The generative MIDI drum brain"</em>
+          — 8-source probabilistic sequencer that layers under any drum plugin or hardware, with the most sophisticated per-step gating in the MIDI-FX category.
+        </p>
+
+        <p>
+          <strong>Don't chase:</strong>
+          Sample libraries, AI genre packs, or full drum-machine UX — that's a different market with entrenched leaders.
+        </p>
+
+        <p>
+          <strong>Close first:</strong>
+          Export → presets/patterns → per-channel rate/swing → MIDI channel routing. Those four turn an excellent M4L port into a product that stands next to Stepic and POLYLLOP on a feature checklist.
+        </p>
+
+        <div class="callout">
+          <p>
+            <strong>Marketing angle competitors can't copy easily:</strong>
+            Dual-pane source/generated editing with stable generative assignments, 8-bank stack modes, and cycle-gate depth — show side-by-side with Playbeat randomize (re-rolls everything) vs. KSH (compose sources, preview outcome, commit when ready).
+          </p>
+        </div>
+      </section>
+
+      <hr />
+
+      <section id="roadmap">
+        <h2>Suggested Roadmap Phases</h2>
+
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart LR
+    subgraph phase1 [Phase 1 - Ship blockers]
+        export[MIDI bar export]
+        presets[Preset + pattern slots]
+        channelUI[Channel count UI]
+    end
+    subgraph phase2 [Phase 2 - Competitive parity]
+        perLaneRate[Per-channel rate/swing]
+        midiCh[Per-channel MIDI out]
+        euclidean[Euclidean fill helper]
+        dice[Scoped randomize]
+    end
+    subgraph phase3 [Phase 3 - Product]
+        winBuild[Windows + AAX]
+        signing[Signing / installer]
+        midiLearn[MIDI learn]
+        choke[Choke groups]
+    end
+    phase1 --> phase2 --> phase3
+        </pre
+          >
+        </div>
+
+        <p>
+          Implementation order reflects user-visible value per engineering effort, grounded in existing stubs (
+          <code class="file-ref">export_generated_bars</code>
+          in
+          <code class="file-ref">source/KshUiBridge.cpp</code>
+          ) and engine capabilities already present but not exposed in UI.
+        </p>
+      </section>
+
+      <footer class="doc-footer">
+        <p>
+          KSH by ofsound · Competitive research document ·
+          <code class="file-ref">docs/competitive-research.html</code>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "dark",
+        themeVariables: {
+          primaryColor: "#1f242b",
+          primaryTextColor: "#e8eaed",
+          primaryBorderColor: "#2a313c",
+          lineColor: "#6ee7b7",
+          secondaryColor: "#181b20",
+          tertiaryColor: "#0f1114",
+          fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+        },
+        quadrantChart: {
+          chartWidth: 480,
+          chartHeight: 380,
+        },
+      });
+    </script>
+  </body>
+</html>

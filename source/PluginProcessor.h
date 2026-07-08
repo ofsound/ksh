@@ -80,6 +80,16 @@ public:
     void setPatternViewScale (double scale);
     [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
 
+    void setProjectMetadata (const juce::String& name,
+                             const juce::String& description,
+                             const juce::String& createdAt,
+                             const juce::String& modifiedAt);
+    void resetProject();
+    [[nodiscard]] juce::String getProjectName() const;
+    [[nodiscard]] juce::String getProjectDescription() const;
+    [[nodiscard]] juce::String getProjectCreatedAt() const;
+    [[nodiscard]] juce::String getProjectModifiedAt() const;
+
 private:
     static BusesProperties createBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -99,6 +109,7 @@ private:
     void syncMacroParametersFromEngineLocked (bool notifyHost);
     ksh::MidiPatternSelectionBlock consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
     void drainPendingMidiPatternSelectionsLocked();
+    void applyProjectMetadataFromState (const nlohmann::json& state);
 
     juce::AudioProcessorValueTreeState parameters;
     KshUiBridge uiBridge;
@@ -141,8 +152,13 @@ private:
 
     EditorResizeCallback editorResizeCallback;
 
-    // Editor-only UI preference; not written to host project state.
     double patternViewScale = 1.0;
+
+    mutable std::mutex projectMetadataMutex;
+    juce::String projectName { "Untitled Project" };
+    juce::String projectDescription;
+    juce::String projectCreatedAt;
+    juce::String projectModifiedAt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

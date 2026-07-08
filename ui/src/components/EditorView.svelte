@@ -72,9 +72,14 @@
     beginEditGestureHistory,
     cancelEditGestureHistory,
     commitEditGestureHistory,
+    createNewProject,
+    cycleProject,
     redoEdit,
     redoStack,
+    formatProjectDate,
+    loadProject,
     shiftPattern,
+    saveProject,
     toggleDcColors,
     toggleDeviceActive,
     togglePatternViewScale,
@@ -113,6 +118,7 @@
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
   );
+  const projectDateLabel = $derived(formatProjectDate(session.projectModifiedAt || session.projectCreatedAt));
   const allStepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
   const effectiveLayerMode = $derived(
     normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
@@ -667,6 +673,75 @@
       </label>
     </div>
   {/if}
+
+  <div class="project-row flex h-[52px] shrink-0 items-center justify-center border-b border-ksh-stroke-soft px-3">
+    <div class="project-bar flex h-[36px] max-w-[1120px] flex-1 items-center justify-center gap-2">
+      <button
+        type="button"
+        class="project-button"
+        disabled={session.projectOperationBusy}
+        onclick={createNewProject}
+      >
+        New
+      </button>
+      <button
+        type="button"
+        class="project-button"
+        disabled={session.projectOperationBusy}
+        onclick={loadProject}
+      >
+        Load
+      </button>
+      <button
+        type="button"
+        class="project-button"
+        disabled={session.projectOperationBusy}
+        onclick={saveProject}
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        aria-label="Load previous project"
+        title="Previous project"
+        class="project-arrow-button"
+        disabled={session.projectOperationBusy || !session.hasPreviousProject}
+        onclick={() => cycleProject(-1)}
+      >
+        ◀
+      </button>
+      <div class="project-title-shell" title={session.projectFileName || "Unsaved project"}>
+        <input
+          aria-label="Project title"
+          class="project-title-input"
+          bind:value={session.projectName}
+          placeholder="Untitled Project"
+        />
+        <input
+          aria-label="Project description"
+          class="project-description-input"
+          bind:value={session.projectDescription}
+          placeholder="Add a project description..."
+        />
+        <span class="project-date">{projectDateLabel}</span>
+      </div>
+      <button
+        type="button"
+        aria-label="Load next project"
+        title="Next project"
+        class="project-arrow-button"
+        disabled={session.projectOperationBusy || !session.hasNextProject}
+        onclick={() => cycleProject(1)}
+      >
+        ▶
+      </button>
+    </div>
+    {#if session.projectOperationError}
+      <div class="project-error" role="status">
+        {session.projectOperationError}
+      </div>
+    {/if}
+  </div>
 
   <header class="flex h-[68px] shrink-0 items-center border-b border-ksh-stroke-soft px-3 text-[11px]">
     <div class="header-section border-l-0 pl-0">
