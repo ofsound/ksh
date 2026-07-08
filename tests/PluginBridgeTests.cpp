@@ -21,6 +21,11 @@ public:
         return position;
     }
 
+    void setPpqPosition (double ppqPosition)
+    {
+        position.setPpqPosition (ppqPosition);
+    }
+
 private:
     PositionInfo position;
 };
@@ -344,4 +349,52 @@ TEST_CASE ("armed pattern recording captures qwerty row command at current step"
     REQUIRE (engine.sources[2][3][0].enabled);
     REQUIRE (engine.sources[2][3][0].velocity == 77);
     REQUIRE (containsNoteOnWithVelocity (midi, 39, 77));
+}
+
+TEST_CASE ("armed qwerty recording quantizes late first step to next step", "[plugin][bridge][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setPpqPosition (0.13);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 4, 4, 1, 0, 100, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 4, 4, 2, 0, 100, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_enabled", { 1, 4 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 4, 73 }));
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE_FALSE (engine.sources[3][3][0].enabled);
+    REQUIRE (engine.sources[3][3][1].enabled);
+    REQUIRE (engine.sources[3][3][1].velocity == 73);
+}
+
+TEST_CASE ("armed qwerty recording quantizes late last step back to first step", "[plugin][bridge][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setPpqPosition (3.89);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 5, 4, 1, 0, 100, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 5, 4, 16, 0, 100, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_enabled", { 1, 5 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 4, 74 }));
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE (engine.sources[4][3][0].enabled);
+    REQUIRE (engine.sources[4][3][0].velocity == 74);
+    REQUIRE_FALSE (engine.sources[4][3][15].enabled);
 }

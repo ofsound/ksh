@@ -116,6 +116,7 @@ private:
                                                      double bpm,
                                                      bool isPlaying,
                                                      int numSamples);
+    void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying);
     void drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
     [[nodiscard]] bool enqueuePatternRecordEvent (int source, int channel, int step, int velocity);
@@ -165,6 +166,10 @@ private:
     std::atomic<int> standaloneStopAllNotesRequested { 0 };
     std::atomic<int> patternRecordingEnabled { 0 };
     std::atomic<int> patternRecordingSource { 0 };
+    std::atomic<double> patternRecordTransportPpq { 0.0 };
+    std::atomic<double> patternRecordTransportBpm { 120.0 };
+    std::atomic<double> patternRecordTransportUpdatedMs { 0.0 };
+    std::atomic<int> patternRecordTransportPlaying { 0 };
 
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;

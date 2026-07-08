@@ -71,6 +71,8 @@ int quantizedStepForPpq (const ksh::PlaybackSnapshot& snapshot, double ppqPositi
     return modInt (globalStep, std::max (1, snapshot.stepCount));
 }
 
+constexpr double kMaxPatternRecordTransportAgeMs = 250.0;
+
 juce::StringArray rateChoices()
 {
     juce::StringArray choices;
@@ -524,6 +526,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
+    publishPatternRecordTransportPosition (ppqPosition, bpm, isPlaying);
+
     const auto midiPatternSelections = consumeMidiInput (midiMessages, *snapshot, ppqPosition, bpm, isPlaying, numSamples);
 
     const auto playback =
@@ -663,6 +667,14 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
     midiInputScratch.clear();
 
     return selections;
+}
+
+void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying)
+{
+    patternRecordTransportPpq.store (ppqPosition, std::memory_order_relaxed);
+    patternRecordTransportBpm.store (bpm, std::memory_order_relaxed);
+    patternRecordTransportUpdatedMs.store (juce::Time::getMillisecondCounterHiRes(), std::memory_order_relaxed);
+    patternRecordTransportPlaying.store (isPlaying ? 1 : 0, std::memory_order_release);
 }
 
 void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
@@ -1008,9 +1020,9 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
     if (! isPatternRecordingEnabled())
         return false;
 
-    const int stepOneBased = currentStepForUi.load (std::memory_order_acquire);
+    const int fallbackStepOneBased = currentStepForUi.load (std::memory_order_acquire);
 
-    if (stepOneBased <= 0)
+    if (fallbackStepOneBased <= 0)
         return false;
 
     std::scoped_lock lock { engineStateMutex };
@@ -1018,7 +1030,27 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
                                      0,
                                      ksh::Constants::sourceCount - 1);
     const int row = ksh::clampInt (channel, 0, engine.getChannelCount() - 1);
-    const int step = ksh::clampInt (stepOneBased - 1, 0, engine.getStepCount() - 1);
+    const auto snapshot = engine.makePlaybackSnapshot();
+    int step = ksh::clampInt (fallbackStepOneBased - 1, 0, engine.getStepCount() - 1);
+
+    if (patternRecordTransportPlaying.load (std::memory_order_acquire) != 0)
+    {
+        const auto updatedMs = patternRecordTransportUpdatedMs.load (std::memory_order_relaxed);
+        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        const auto ageMs = nowMs - updatedMs;
+
+        if (updatedMs > 0.0 && ageMs >= 0.0 && ageMs <= kMaxPatternRecordTransportAgeMs)
+        {
+            const auto bpm = patternRecordTransportBpm.load (std::memory_order_relaxed);
+            auto eventPpq = patternRecordTransportPpq.load (std::memory_order_relaxed);
+
+            if (bpm > 0.0)
+                eventPpq += (ageMs / 1000.0) * (bpm / 60.0);
+
+            step = quantizedStepForPpq (snapshot, eventPpq);
+        }
+    }
+
     engine.setCell (source, row, step, true, ksh::clampInt (velocity, 1, 127), 100, 1, 0, false, 1);
 
     if (engine.isDeviceActive())
