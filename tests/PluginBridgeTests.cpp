@@ -51,6 +51,19 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
     return false;
 }
 
+bool containsNoteOnWithVelocity (const juce::MidiBuffer& midi, int pitch, int velocity)
+{
+    for (const auto metadata : midi)
+    {
+        const auto& message = metadata.getMessage();
+
+        if (message.isNoteOn() && message.getNoteNumber() == pitch && message.getVelocity() == velocity)
+            return true;
+    }
+
+    return false;
+}
+
 bool containsNoteOff (const juce::MidiBuffer& midi, int pitch)
 {
     for (const auto metadata : midi)
@@ -268,6 +281,23 @@ TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve ot
     REQUIRE (plugin.engineStateSnapshot().staticSource == 3);
 }
 
+TEST_CASE ("incoming row MIDI notes monitor when pattern recording is off", "[plugin][bridge][midi-input]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 38, static_cast<juce::uint8> (91)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (containsNoteOnWithVelocity (midi, 38, 91));
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE_FALSE (engine.sources[0][2][0].enabled);
+}
+
 TEST_CASE ("armed pattern recording captures incoming row MIDI notes", "[plugin][bridge][midi-input][record]")
 {
     PluginProcessor plugin;
@@ -283,7 +313,7 @@ TEST_CASE ("armed pattern recording captures incoming row MIDI notes", "[plugin]
 
     plugin.processBlock (buffer, midi);
 
-    REQUIRE_FALSE (containsNoteOn (midi, 38));
+    REQUIRE (containsNoteOnWithVelocity (midi, 38, 91));
 
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
 
@@ -307,7 +337,11 @@ TEST_CASE ("armed pattern recording captures qwerty row command at current step"
 
     REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 4, 77 }));
 
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.sources[2][3][0].enabled);
     REQUIRE (engine.sources[2][3][0].velocity == 77);
+    REQUIRE (containsNoteOnWithVelocity (midi, 39, 77));
 }

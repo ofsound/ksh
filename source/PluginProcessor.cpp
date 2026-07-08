@@ -619,8 +619,6 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
 
             if (row >= 0)
             {
-                shouldFilter = true;
-
                 if (message.isNoteOn() && isPlaying && quartersPerSample > 0.0)
                 {
                     const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
@@ -628,8 +626,6 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
                     recordQueued = enqueuePatternRecordEvent (recordSource, row, step, message.getVelocity())
                                 || recordQueued;
                 }
-
-                continue;
             }
         }
 
@@ -658,9 +654,6 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
         const auto message = metadata.getMessage();
 
         if ((message.isNoteOn() || message.isNoteOff()) && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
-            continue;
-
-        if (recordEnabled && (message.isNoteOn() || message.isNoteOff()) && rowForNote (message.getNoteNumber()) >= 0)
             continue;
 
         midiInputScratch.addEvent (metadata.data, metadata.numBytes, metadata.samplePosition);
@@ -1027,6 +1020,17 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
     const int row = ksh::clampInt (channel, 0, engine.getChannelCount() - 1);
     const int step = ksh::clampInt (stepOneBased - 1, 0, engine.getStepCount() - 1);
     engine.setCell (source, row, step, true, ksh::clampInt (velocity, 1, 127), 100, 1, 0, false, 1);
+
+    if (engine.isDeviceActive())
+    {
+        const auto& rowChannel = engine.channelAt (row);
+        midiPlayback.queueAuditionNote ({ rowChannel.note,
+                                          ksh::clampInt (velocity, 1, 127),
+                                          ksh::Constants::defaultMidiChannel,
+                                          ksh::Constants::defaultNoteDurationMs,
+                                          0.0 });
+    }
+
     publishPlaybackSnapshotIfChangedLocked();
     engine.flushPreview();
     return true;

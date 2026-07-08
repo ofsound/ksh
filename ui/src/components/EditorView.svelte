@@ -611,11 +611,24 @@
     }
   }
 
-  function keyInputBlocked(event) {
+  function textInputBlocked(event) {
     const target = event.target;
-    return Boolean(
-      target?.closest?.("button, input, textarea, select, a, [contenteditable='true'], [role='slider']")
-    );
+    return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+  }
+
+  function onStandaloneTransportShortcut(event) {
+    if (!session.kshState.standaloneTransportAvailable || event.repeat || event.code !== "Space") {
+      return false;
+    }
+
+    if (textInputBlocked(event)) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void setStandaloneTransportPlaying(!session.kshState.standaloneTransportPlaying);
+    return true;
   }
 
   function recordPadChannelForEvent(event) {
@@ -624,7 +637,7 @@
   }
 
   function onRecordPadKeyDown(event) {
-    if (!session.patternRecordingEnabled || keyInputBlocked(event)) {
+    if (textInputBlocked(event)) {
       return;
     }
 
@@ -635,7 +648,12 @@
 
     event.preventDefault();
     recordPadKeysHeld.add(event.code);
-    void recordPatternRow(channel);
+
+    if (session.patternRecordingEnabled) {
+      void recordPatternRow(channel);
+    } else {
+      void auditionChannel(channel);
+    }
   }
 
   function onRecordPadKeyUp(event) {
@@ -648,6 +666,10 @@
     const removeModifierListener = onBackendEvent("modifier_keys", syncHoverLayerModeFromNativeModifiers);
 
     const onKeyDown = (event) => {
+      if (onStandaloneTransportShortcut(event)) {
+        return;
+      }
+
       syncHoverLayerModeFromKeyEvent(event);
       onEditorKeyDown(event);
       onRecordPadKeyDown(event);
