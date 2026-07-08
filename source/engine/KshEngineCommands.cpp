@@ -115,6 +115,16 @@ int parseChannelLock (const nlohmann::json& args, size_t index)
 
     return zeroBased (argInt (args, index, 1));
 }
+
+int parseStaticSource (const nlohmann::json& args, size_t index)
+{
+    const auto sourceText = argString (args, index);
+
+    if (sourceText == "mute" || sourceText == "Mute" || sourceText == "M" || sourceText == "m")
+        return Constants::mutedStaticSource;
+
+    return zeroBased (argInt (args, index, 1));
+}
 } // namespace
 
 bool dispatchEngineCommand (KickSnareHatEngine& engine,
@@ -147,7 +157,7 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 
     if (selector == "static_source")
     {
-        engine.setStaticSource (zeroBased (argInt (args, 0, 1)));
+        engine.setStaticSource (parseStaticSource (args, 0));
         return true;
     }
 

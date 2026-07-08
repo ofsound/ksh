@@ -41,13 +41,14 @@
     stepFromGridX,
     toggleCellOnRelease,
   } from "../lib/kshEditorInteractions.js";
-  import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
+  import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SILENT_SOURCE, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
   import {
     adjustChannelNote,
     auditionChannel,
     beginPatternCopy,
     cancelPatternCopy,
     clearPattern,
+    clearSourceChannelSteps,
     copyPatternToSource,
     cycleChannelLock,
     cycleChannelPlaybackMode,
@@ -83,7 +84,6 @@
     shiftPattern,
     saveProject,
     toggleDcColors,
-    toggleDeviceActive,
     togglePatternViewScale,
     togglePatternRecording,
     toggleSourceChannelSolo,
@@ -119,7 +119,10 @@
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
-  const sourceButtons = $derived(Array.from({ length: SOURCE_COUNT }, (_, source) => source));
+  const sourceButtonRows = $derived([
+    Array.from({ length: SOURCE_COUNT / 2 }, (_, source) => source),
+    Array.from({ length: SOURCE_COUNT / 2 }, (_, source) => source + SOURCE_COUNT / 2),
+  ]);
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
   );
@@ -135,6 +138,12 @@
 
   function cellStyle(channel, step) {
     const source = session.selectedSource;
+    if (source === SILENT_SOURCE) {
+      return step >= session.kshState.stepCount
+        ? "background:#242930;color:#5c636b;opacity:0.55;"
+        : "background:#121212;color:#8c969e;";
+    }
+
     const cell = session.kshState.sources[source][channel][step];
     const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
@@ -195,9 +204,10 @@
   function cellClass(channel, step) {
     const beyondSteps = step >= session.kshState.stepCount;
     const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
-    const cell = session.kshState.sources[session.selectedSource][channel][step];
-    const cycleLayer = effectiveLayerMode === "cycle" && cell.enabled;
-    const flashing = isEditorFlashing(session.selectedSource, channel, step);
+    const silent = session.selectedSource === SILENT_SOURCE;
+    const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
+    const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
+    const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
 
     return [
       "relative mr-0 flex overflow-hidden rounded-sm border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
@@ -208,6 +218,10 @@
   }
 
   function cellLabel(channel, step) {
+    if (session.selectedSource === SILENT_SOURCE) {
+      return "";
+    }
+
     const cell = session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled) {
       return "";
@@ -219,6 +233,10 @@
   }
 
   function cyclePrimaryLabel(channel, step) {
+    if (session.selectedSource === SILENT_SOURCE) {
+      return "";
+    }
+
     const cell = session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled || effectiveLayerMode !== "cycle") {
       return "";
@@ -239,7 +257,7 @@
   }
 
   function isCellInteractive(channel, step) {
-    return step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, channel, step);
+    return session.selectedSource !== SILENT_SOURCE && step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, channel, step);
   }
 
   function stepLabelClass(step) {
@@ -253,9 +271,16 @@
     const copySource = session.patternCopySource === source;
 
     return [
-      "header-button w-8",
+      "pattern-slot-button",
       selected ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text",
       copySource ? "ksh-pattern-copy-source" : "",
+    ].join(" ");
+  }
+
+  function mutePatternClass() {
+    return [
+      "pattern-mute-button",
+      session.selectedSource === SILENT_SOURCE ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text",
     ].join(" ");
   }
 
@@ -275,6 +300,11 @@
     }
 
     await selectSource(source);
+  }
+
+  async function onMutePatternClick() {
+    cancelPatternCopy();
+    await selectSource(SILENT_SOURCE);
   }
 
   function headerHistoryLabel(id) {
@@ -471,6 +501,10 @@
   }
 
   async function onMutePointerDown(channel, event) {
+    if (session.selectedSource === SILENT_SOURCE) {
+      return;
+    }
+
     const now = Date.now();
     const source = session.selectedSource;
 
@@ -513,8 +547,8 @@
 
   function historyButtonClass(enabled) {
     return [
-      "header-history-button",
-      enabled ? "header-history-button-active" : "header-history-button-disabled",
+      "project-history-button",
+      enabled ? "project-history-button-active" : "project-history-button-disabled",
     ].join(" ");
   }
 
@@ -737,8 +771,9 @@
     </div>
   {/if}
 
-  <div class="project-row flex h-[52px] shrink-0 items-center justify-center border-b border-ksh-stroke-soft px-3">
-    <div class="project-bar flex h-[36px] max-w-[1120px] flex-1 items-center justify-center gap-2">
+  <div class="project-row flex h-[86px] shrink-0 items-center justify-center border-b border-ksh-stroke-soft px-3">
+    <div class="project-bar flex min-w-0 flex-1 items-center gap-3">
+    <div class="project-controls flex h-[36px] min-w-0 flex-1 items-center justify-start gap-2">
       <button
         type="button"
         class="project-button"
@@ -799,6 +834,80 @@
         ▶
       </button>
     </div>
+    <div class="project-history-controls">
+      <button
+        type="button"
+        aria-label="Undo"
+        title="Undo"
+        disabled={undoStack.length === 0}
+        class={historyButtonClass(undoStack.length > 0)}
+        onclick={undoEdit}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9 14 4 9l5-5" />
+          <path d="M4 9h10a6 6 0 0 1 0 12h-2" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        aria-label="Redo"
+        title="Redo"
+        disabled={redoStack.length === 0}
+        class={historyButtonClass(redoStack.length > 0)}
+        onclick={redoEdit}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m15 14 5-5-5-5" />
+          <path d="M20 9H10a6 6 0 0 0 0 12h2" />
+        </svg>
+      </button>
+    </div>
+    <div class="pattern-bank ml-auto flex shrink-0 items-center gap-3">
+      <span class="text-right text-[11px] font-extrabold text-ksh-text">Patterns:</span>
+      <div class="grid grid-rows-2 gap-1.5">
+        {#each sourceButtonRows as row, rowIndex (rowIndex)}
+          <div class="flex gap-1.5">
+            {#each row as source (source)}
+              <button
+                type="button"
+                class={sourceButtonClass(source)}
+                aria-pressed={session.selectedSource === source ? "true" : "false"}
+                title={session.patternCopySource === source ? "Copy source selected" : "Shift-click to copy from this pattern"}
+                onclick={(event) => onSourceClick(event, source)}
+              >
+                {source + 1}
+              </button>
+            {/each}
+          </div>
+        {/each}
+      </div>
+      <button
+        type="button"
+        class={mutePatternClass()}
+        aria-pressed={session.selectedSource === SILENT_SOURCE ? "true" : "false"}
+        title="Mute pattern"
+        onclick={onMutePatternClick}
+      >
+        M
+      </button>
+    </div>
+    </div>
     {#if session.projectOperationError}
       <div class="project-error" role="status">
         {session.projectOperationError}
@@ -808,25 +917,6 @@
 
   <header class="flex h-[68px] shrink-0 items-center border-b border-ksh-stroke-soft px-3 text-[11px]">
     <div class="header-section border-l-0 pl-0">
-      <div class="flex flex-col items-start">
-        <span class="header-label">Patterns</span>
-        <div class="flex gap-0.5">
-          {#each sourceButtons as source (source)}
-            <button
-              type="button"
-              class={sourceButtonClass(source)}
-              aria-pressed={session.selectedSource === source ? "true" : "false"}
-              title={session.patternCopySource === source ? "Copy source selected" : "Shift-click to copy from this pattern"}
-              onclick={(event) => onSourceClick(event, source)}
-            >
-              {source + 1}
-            </button>
-          {/each}
-        </div>
-      </div>
-    </div>
-
-    <div class="header-section">
       <HeaderValueDrag
         id="steps"
         label="Steps"
@@ -882,56 +972,9 @@
         >
           ●
         </button>
-        <button type="button" class="header-icon-button" onclick={() => shiftPattern(-1)}>◀</button>
-        <button type="button" class="header-icon-button" onclick={() => shiftPattern(1)}>▶</button>
-        <button type="button" class="header-icon-button text-[18px]" onclick={clearPattern}>×</button>
-      </div>
-    </div>
-
-    <div class="header-section header-history-section">
-      <div class="header-history-controls">
-        <button
-          type="button"
-          aria-label="Undo"
-          title="Undo"
-          disabled={undoStack.length === 0}
-          class={historyButtonClass(undoStack.length > 0)}
-          onclick={undoEdit}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M9 14 4 9l5-5" />
-            <path d="M4 9h10a6 6 0 0 1 0 12h-2" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          aria-label="Redo"
-          title="Redo"
-          disabled={redoStack.length === 0}
-          class={historyButtonClass(redoStack.length > 0)}
-          onclick={redoEdit}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m15 14 5-5-5-5" />
-            <path d="M20 9H10a6 6 0 0 0 0 12h2" />
-          </svg>
-        </button>
+        <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(-1)}>◀</button>
+        <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(1)}>▶</button>
+        <button type="button" class="header-icon-button text-[18px]" disabled={session.selectedSource === SILENT_SOURCE} onclick={clearPattern}>×</button>
       </div>
     </div>
 
@@ -990,13 +1033,6 @@
             onclick={toggleDcColors}
           >
             DC
-          </button>
-          <button
-            type="button"
-            class={`header-button min-w-[54px] ${session.kshState.deviceActive ? "bg-ksh-amber text-ksh-off" : "bg-ksh-panel2 text-ksh-text"}`}
-            onclick={toggleDeviceActive}
-          >
-            {session.kshState.deviceActive ? "ON" : "OFF"}
           </button>
         </div>
       </div>
@@ -1090,10 +1126,24 @@
           >
             {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
           </button>
+          <button
+            type="button"
+            class="row-clear-button"
+            disabled={session.selectedSource === SILENT_SOURCE}
+            aria-label="Clear channel row steps"
+            title="Double-click to clear this row"
+            ondblclick={(event) => {
+              event.currentTarget.blur();
+              clearSourceChannelSteps(session.selectedSource, channel);
+            }}
+          >
+            <span aria-hidden="true"></span>
+          </button>
           <div class="flex items-center">
             <button
               type="button"
               class="w-5 text-[13px] leading-none text-ksh-amber"
+              disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, -1)}
             >
               ◀
@@ -1101,6 +1151,7 @@
             <button
               type="button"
               class="w-5 text-[13px] leading-none text-ksh-amber"
+              disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, 1)}
             >
               ▶
@@ -1108,9 +1159,10 @@
           </div>
           <button
             type="button"
-            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-amber bg-transparent" : "border-ksh-amber bg-ksh-amber"}`}
+            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-ksh-amber bg-transparent" : "border-ksh-amber bg-ksh-amber"} ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : ""}`}
             aria-label="Mute channel"
-            aria-pressed={session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
+            aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
+            disabled={session.selectedSource === SILENT_SOURCE}
             title="Shift-click to solo channel"
             onpointerdown={(event) => onMutePointerDown(channel, event)}
             onpointermove={onMutePointerMove}
@@ -1131,7 +1183,7 @@
               onpointerup={onCellPointerUp}
               onpointercancel={onCellPointerUp}
             >
-              {#if effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
                   class="pointer-events-none absolute leading-none"
                   style={`left:${cellInsetPx}px;top:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
@@ -1144,14 +1196,14 @@
                 >
                   {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
-              {:else if effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {:else if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
                   class="pointer-events-none w-full text-center text-[#5c636b]"
                   style={`font-size:${smallCellFontPx}px;`}
                 >
                   {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
-              {:else if isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {:else if session.selectedSource !== SILENT_SOURCE && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
                   class="pointer-events-none w-full text-center text-[#5c636b]"
                   style={`font-size:${smallCellFontPx}px;`}

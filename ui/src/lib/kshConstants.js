@@ -1,6 +1,7 @@
 export const MAX_STEPS = 32;
 export const MAX_CHANNELS = 8;
-export const SOURCE_COUNT = 8;
+export const SILENT_SOURCE = -1;
+export const SOURCE_COUNT = 16;
 
 export const COMPACT_HEIGHT = 200;
 

@@ -3,6 +3,7 @@ import {
   MAX_CHANNELS,
   MAX_STEPS,
   NOTE_HIT_FLASH_MS,
+  SILENT_SOURCE,
   SOURCE_COUNT,
   clamp,
 } from "./kshConstants.js";
@@ -397,17 +398,22 @@ export function setSelectedCell(channel, step) {
 }
 
 export async function selectSource(source) {
-  session.selectedSource = clamp(source, 0, SOURCE_COUNT - 1);
+  session.selectedSource = clamp(source, SILENT_SOURCE, SOURCE_COUNT - 1);
   session.kshState.staticSource = session.selectedSource;
   bumpState();
-  await sendCommand("static_source", [session.selectedSource + 1]);
+  await sendCommand("static_source", [session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1]);
 
-  if (session.patternRecordingEnabled) {
+  if (session.patternRecordingEnabled && session.selectedSource !== SILENT_SOURCE) {
     await sendCommand("pattern_record_enabled", [1, session.selectedSource + 1]);
+  } else if (session.patternRecordingEnabled) {
+    await setPatternRecordingEnabled(false);
   }
 }
 
 export function beginPatternCopy(source) {
+  if (source === SILENT_SOURCE) {
+    return;
+  }
   session.patternCopySource = clamp(source, 0, SOURCE_COUNT - 1);
 }
 
@@ -527,6 +533,25 @@ export async function resetSourceChannelRow(source, channel) {
   });
 }
 
+export async function clearSourceChannelSteps(source, channel) {
+  await commitEditHistory("Clear channel row steps", async () => {
+    const steps = Array.from({ length: MAX_STEPS }, (_, step) => step);
+
+    for (const step of steps) {
+      session.kshState.sources[source][channel][step] = defaultCell();
+    }
+
+    bumpState();
+    bumpOptimisticPreview();
+
+    await withPreviewSuppressed(async () => {
+      for (const step of steps) {
+        await sendCellCommand(source, channel, step);
+      }
+    });
+  });
+}
+
 export async function sendCellsForChannel(source, channel, steps) {
   bumpState();
   for (const step of steps) {
@@ -565,13 +590,6 @@ export async function cycleRateCommand(direction = 1) {
   });
 }
 
-export async function toggleDeviceActive() {
-  await commitEditHistory("Toggle device", async () => {
-    session.kshState.deviceActive = session.kshState.deviceActive ? 0 : 1;
-    bumpState();
-    await sendCommand("device_active", [session.kshState.deviceActive]);
-  });
-}
 
 export async function setStandaloneTransportPlaying(playing) {
   session.kshState.standaloneTransportPlaying = playing ? 1 : 0;
@@ -706,6 +724,9 @@ export async function toggleSourceChannelSolo(source, channel) {
 export async function shiftChannelRow(channel, direction) {
   await commitEditHistory("Shift channel row", async () => {
     const source = session.selectedSource;
+    if (source === SILENT_SOURCE) {
+      return;
+    }
     const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
     bumpState();
     bumpOptimisticPreview();
@@ -721,6 +742,9 @@ export async function shiftChannelRow(channel, direction) {
 export async function shiftPattern(direction) {
   await commitEditHistory("Shift pattern", async () => {
     const source = session.selectedSource;
+    if (source === SILENT_SOURCE) {
+      return;
+    }
     const shifted = [];
 
     for (let channel = 0; channel < session.kshState.channelCount; channel += 1) {
@@ -746,6 +770,9 @@ export async function shiftPattern(direction) {
 export async function clearPattern() {
   await commitEditHistory("Clear pattern", async () => {
     const source = session.selectedSource;
+    if (source === SILENT_SOURCE) {
+      return;
+    }
     const { channelCount } = session.kshState;
 
     clearSourcePattern(session.kshState, source);
@@ -764,6 +791,10 @@ export async function clearPattern() {
 
 export async function setPatternRecordingEnabled(enabled) {
   const next = enabled ? 1 : 0;
+
+  if (next && session.selectedSource === SILENT_SOURCE) {
+    return;
+  }
 
   if (session.patternRecordingEnabled === next) {
     return;

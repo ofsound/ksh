@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import CompactStrip from "./components/CompactStrip.svelte";
   import EditorView from "./components/EditorView.svelte";
+  import { SILENT_SOURCE } from "./lib/kshConstants.js";
   import { combinedDimensions, compactPanelHeight } from "./lib/kshEditorUtils.js";
   import { initKshSession, session } from "./lib/kshSession.svelte.js";
 
@@ -48,7 +49,7 @@
       </div>
       <CompactStrip />
       <footer class="absolute inset-x-0 bottom-0 z-20 flex h-[24px] items-center justify-end bg-ksh-bg px-3 text-[11px] text-ksh-muted">
-        Source {session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
+        Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Cmd/Opt layers
       </footer>
     </div>
   </div>

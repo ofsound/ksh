@@ -22,7 +22,8 @@ struct Constants
     static constexpr int maxSteps = 32;
     static constexpr int maxChannels = 8;
     static constexpr int defaultChannelCount = 8;
-    static constexpr int sourceCount = 8;
+    static constexpr int mutedStaticSource = -1;
+    static constexpr int sourceCount = 16;
     static constexpr int maxRoll = 8;
 
     static constexpr int defaultMidiChannel = 1;

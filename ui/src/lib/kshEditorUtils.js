@@ -18,7 +18,7 @@ export function stepLabelFontPx(scale = 1) {
 export const EDITOR_MIN_WIDTH = 1328;
 export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
-export const PROJECT_ROW_H = 52;
+export const PROJECT_ROW_H = 86;
 export const STANDALONE_TRANSPORT_ROW_H = 44;
 export const HELPER_FOOTER_H = 24;
 

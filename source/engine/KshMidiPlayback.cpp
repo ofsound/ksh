@@ -211,6 +211,9 @@ int MidiPlaybackRunner::staticSourceForStep (const PlaybackSnapshot& snapshot,
         source = pendingStaticSourceOverride;
     }
 
+    if (source < 0)
+        return -1;
+
     return clampInt (source, 0, Constants::sourceCount - 1);
 }
 

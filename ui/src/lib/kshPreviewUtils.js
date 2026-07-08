@@ -1,4 +1,4 @@
-import { SOURCE_COUNT, clamp } from "./kshConstants.js";
+import { SILENT_SOURCE, SOURCE_COUNT, clamp } from "./kshConstants.js";
 import { cloneCell, defaultCell } from "./kshUiState.js";
 
 function mod(value, divisor) {
@@ -6,7 +6,11 @@ function mod(value, divisor) {
 }
 
 function previewSourceIndex(cell) {
-  return clamp(Number(cell?.source ?? 1) - 1, 0, SOURCE_COUNT - 1);
+  const source = Number(cell?.source ?? 1);
+  if (source <= 0) {
+    return SILENT_SOURCE;
+  }
+  return clamp(source - 1, 0, SOURCE_COUNT - 1);
 }
 
 function isSourceEmpty(state, source) {
@@ -43,6 +47,13 @@ function pickFirstActiveSource(activeSources) {
 }
 
 function generatedCellFromSource(state, source, channel, step) {
+  if (source === SILENT_SOURCE) {
+    return {
+      ...defaultCell(),
+      source: SILENT_SOURCE,
+    };
+  }
+
   const loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
   const sourceStep = mod(step, loopLength);
 

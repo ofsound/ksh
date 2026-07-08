@@ -282,12 +282,12 @@ void KickSnareHatEngine::setGenerationMode (GenerationMode mode)
 
 void KickSnareHatEngine::setStaticSource (int source)
 {
-    staticSource = clampSource (source);
+    staticSource = source < 0 ? Constants::mutedStaticSource : clampSource (source);
 
     if (generationMode == GenerationMode::staticSource)
         recomposeWindow (0, stepCount, true);
 
-    status ("static_source " + std::to_string (staticSource + 1));
+    status (staticSource < 0 ? "static_source M" : "static_source " + std::to_string (staticSource + 1));
 }
 
 void KickSnareHatEngine::setRate (std::string_view rateIn)
@@ -389,6 +389,14 @@ bool KickSnareHatEngine::isSourceChannelMuted (int source, int channel) const
 
 Cell KickSnareHatEngine::generatedCellFromSource (int source, int channel, int step) const
 {
+    if (source < 0)
+    {
+        Cell cell = defaultCell();
+        cell.source = Constants::mutedStaticSource;
+        cell.sourceStep = mod (step, stepCount);
+        return cell;
+    }
+
     source = clampSource (source);
     channel = clampChannel (channel);
 
@@ -941,7 +949,7 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
     channelCount = clampInt (state["channelCount"].get<int>(), 1, Constants::maxChannels);
     refreshSteps = clampInt (state["refreshSteps"].get<int>(), 1, stepCount);
     generationMode = generationModeFromJson (state, GenerationMode::stack);
-    staticSource = clampInt (state["staticSource"].get<int>(), 0, Constants::sourceCount - 1);
+    staticSource = clampInt (state["staticSource"].get<int>(), Constants::mutedStaticSource, Constants::sourceCount - 1);
     rate = Constants::normalizeRate (state["rate"].get<std::string>());
     tempo = std::clamp (state.value ("tempo", tempo), 20.0, 300.0);
     swing = clampInt (state["swing"].get<int>(), 0, 100);

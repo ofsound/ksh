@@ -4,6 +4,7 @@ import {
   DEFAULT_CHANNEL_NOTES,
   MAX_CHANNELS,
   MAX_STEPS,
+  SILENT_SOURCE,
   SOURCE_COUNT,
   clamp,
   normalizePlaybackMode,
@@ -162,7 +163,7 @@ export function applyPersistencePayload(state, payload) {
     payload.generationMode === "per_channel" || payload.generationMode === "static"
       ? payload.generationMode
       : "stack";
-  state.staticSource = clamp(payload.staticSource ?? 0, 0, SOURCE_COUNT - 1);
+  state.staticSource = clamp(payload.staticSource ?? 0, SILENT_SOURCE, SOURCE_COUNT - 1);
   state.rate = normalizeRate(payload.rate);
   state.swing = clamp(payload.swing, 0, 100);
   state.velocityHumanize = clamp(payload.velocityHumanize, 0, 100);
@@ -288,7 +289,10 @@ export function applyStatusMessage(state, selector, args = []) {
           : "stack";
       break;
     case "static_source":
-      state.staticSource = clamp(values[0] - 1, 0, SOURCE_COUNT - 1);
+      state.staticSource =
+        String(values[0]).toLowerCase() === "m"
+          ? SILENT_SOURCE
+          : clamp(values[0] - 1, SILENT_SOURCE, SOURCE_COUNT - 1);
       break;
     case "rate":
       state.rate = normalizeRate(values[0]);

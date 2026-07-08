@@ -79,6 +79,20 @@ TEST_CASE ("static mode uses selected source", "[engine][generation]")
     REQUIRE (fixture.engine.generatedCellAt (1, 0).velocity == 90);
 }
 
+TEST_CASE ("static mode muted source generates silence", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setStaticSource (Constants::mutedStaticSource);
+    fixture.engine.setCell (0, 0, 0, true, 70, 100, 1);
+    fixture.engine.generateWindow (0, fixture.engine.getStepCount(), true);
+
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == Constants::mutedStaticSource);
+    REQUIRE_FALSE (fixture.engine.generatedCellAt (0, 0).enabled);
+}
+
 TEST_CASE ("random source ignores empty sources", "[engine][generation]")
 {
     EngineFixture fixture;

@@ -35,6 +35,15 @@ TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][br
     REQUIRE (fixture.engine.sourceCellAt (0, 1, 4).velocity == 90);
 }
 
+TEST_CASE ("dispatchEngineCommand accepts muted static source", "[engine][bridge]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "static_source", { "M" }));
+    REQUIRE (fixture.engine.getStaticSource() == Constants::mutedStaticSource);
+}
+
 TEST_CASE ("dispatchEngineCommand copies source patterns with one-based args", "[engine][bridge]")
 {
     EngineFixture fixture;

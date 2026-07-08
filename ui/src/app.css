@@ -67,27 +67,64 @@
     @apply flex h-[24px] min-w-[20px] items-center justify-center rounded-sm px-1 text-[14px] font-semibold leading-none text-ksh-amber outline-none;
   }
 
-  .header-history-section {
-    @apply min-w-[5.5rem] items-center px-3 pt-[15px];
+  .header-icon-button:disabled {
+    @apply cursor-default text-ksh-stroke-soft;
   }
 
-  .header-history-controls {
-    @apply flex w-full items-center justify-between;
+  .pattern-slot-button {
+    @apply flex h-[30px] w-[36px] items-center justify-center rounded-sm bg-ksh-panel2 px-2 text-[12px] font-extrabold leading-none text-ksh-text outline-none transition-colors;
   }
 
-  .header-history-button {
-    @apply flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-sm outline-none transition-colors;
+  .pattern-mute-button {
+    @apply flex h-[66px] w-[58px] items-center justify-center rounded-sm px-2 text-[22px] font-extrabold leading-none outline-none transition-colors;
   }
 
-  .header-history-button svg {
-    @apply pointer-events-none h-[18px] w-[18px];
+  .pattern-slot-button:not(:disabled):hover,
+  .pattern-mute-button:not(:disabled):hover {
+    @apply text-ksh-amber;
   }
 
-  .header-history-button-active {
+  .row-clear-button {
+    @apply relative flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-sm outline-none;
+  }
+
+  .row-clear-button span,
+  .row-clear-button span::before {
+    position: absolute;
+    display: block;
+    width: 15px;
+    height: 3px;
+    border-radius: 999px;
+    background: #e84a4f;
+    box-shadow: 0 0 5px rgb(232 74 79 / 0.28);
+    content: "";
+  }
+
+  .row-clear-button span {
+    transform: rotate(45deg);
+  }
+
+  .row-clear-button span::before {
+    transform: rotate(90deg);
+  }
+
+  .project-history-controls {
+    @apply flex shrink-0 items-center gap-2 border-l border-ksh-stroke-soft pl-3;
+  }
+
+  .project-history-button {
+    @apply flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-sm bg-ksh-panel2 outline-none transition-colors;
+  }
+
+  .project-history-button svg {
+    @apply pointer-events-none h-[26px] w-[26px];
+  }
+
+  .project-history-button-active {
     @apply cursor-pointer text-ksh-muted hover:text-ksh-amber;
   }
 
-  .header-history-button-disabled {
+  .project-history-button-disabled {
     @apply cursor-default text-ksh-stroke-soft;
   }
 
@@ -100,6 +137,12 @@
 
   .project-bar {
     min-width: 0;
+  }
+
+  .project-controls {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: min(760px, 52vw);
   }
 
   .project-button {
@@ -129,11 +172,11 @@
   }
 
   .project-description-input {
-    @apply h-full min-w-0 flex-1 bg-transparent px-4 text-[12px] font-medium text-ksh-muted outline-none;
+    @apply h-full min-w-0 flex-[1_1_120px] bg-transparent px-4 text-[12px] font-medium text-ksh-muted outline-none;
   }
 
   .project-date {
-    @apply flex h-full min-w-[104px] shrink-0 items-center justify-center border-l border-ksh-stroke-soft px-3 text-[10px] font-extrabold tracking-[0.18em] text-ksh-text;
+    @apply flex h-full min-w-0 max-w-[104px] shrink items-center justify-center overflow-hidden border-l border-ksh-stroke-soft px-3 text-[10px] font-extrabold tracking-[0.18em] text-ksh-text truncate;
   }
 
   .project-error {
