@@ -28,15 +28,25 @@ import {
   onBackendEvent,
   cycleProject as nativeCycleProject,
   getProjectState,
+  initialisationValue,
   loadProject as nativeLoadProject,
   newProject as nativeNewProject,
   parseBackendJson,
   saveProject as nativeSaveProject,
   sendCommand,
+  setEditorScaleMinimum,
+  setProjectUiScalePercent as nativeSetProjectUiScalePercent,
   setViewSize,
   syncAll,
   waitForBackend,
 } from "./kshBridge.js";
+import {
+  currentUiScaleMinimumSize,
+  resolveInitialUiScalePercent,
+  setUiScalePercent,
+  setUiViewportSize,
+  uiScaleState,
+} from "./uiScale.svelte.js";
 import {
   applyEngineState,
   applyPersistencePayload,
@@ -163,6 +173,49 @@ function assignProjectMetadata(state) {
   session.projectFileName = String(nativeScalar(state, "projectFileName", ""));
   session.hasPreviousProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasPreviousProject", 0)), 10));
   session.hasNextProject = Boolean(Number.parseInt(String(nativeScalar(state, "hasNextProject", 0)), 10));
+}
+
+export async function syncEditorScaleMinimumToNative() {
+  const minimumSize = currentUiScaleMinimumSize({
+    standaloneTransportAvailable: session.kshState.standaloneTransportAvailable,
+  });
+  await setEditorScaleMinimum(minimumSize.widthPx, minimumSize.heightPx);
+}
+
+async function syncProjectUiScaleToNative() {
+  await nativeSetProjectUiScalePercent(uiScaleState.percent);
+}
+
+export async function setExplicitUiScalePercent(next) {
+  setUiScalePercent(next);
+  await syncEditorScaleMinimumToNative();
+  await syncProjectUiScaleToNative();
+  await resizeForCurrentView();
+}
+
+async function applyProjectUiScalePercent(next) {
+  setUiScalePercent(next, { persist: false });
+  await syncEditorScaleMinimumToNative();
+  await resizeForCurrentView();
+}
+
+export function initializeUiScaleFromNative() {
+  const initialProjectScale = initialisationValue("projectUiScalePercent");
+  const projectScaleScalar =
+    initialProjectScale === null
+      ? null
+      : Array.isArray(initialProjectScale)
+        ? initialProjectScale[0]
+        : initialProjectScale;
+  setUiScalePercent(resolveInitialUiScalePercent(projectScaleScalar), { persist: false });
+}
+
+export function setUiScaleViewportSize(widthPx, heightPx) {
+  setUiViewportSize({
+    widthPx,
+    heightPx,
+    standaloneTransportAvailable: session.kshState.standaloneTransportAvailable,
+  });
 }
 
 export function clearEditHistory() {
@@ -830,7 +883,11 @@ export async function recordPatternRow(channel, velocity = 100) {
 
 export async function resizeForCurrentView() {
   const { width, height } = combinedDimensions(session.kshState, session.patternViewScale);
-  await setViewSize(width, height, session.patternViewScale);
+  await setViewSize(
+    Math.round(width * uiScaleState.scale),
+    Math.round(height * uiScaleState.scale),
+    session.patternViewScale
+  );
 }
 
 export function formatProjectDate(value) {
@@ -947,6 +1004,9 @@ export function initKshSession() {
       if (parsed?.patternViewScale !== undefined) {
         session.patternViewScale = normalizePatternViewScale(parsed.patternViewScale);
       }
+      if (parsed?.projectUiScalePercent !== undefined && session.ready) {
+        void applyProjectUiScalePercent(parsed.projectUiScalePercent);
+      }
       if (parsed?.patternRecordingEnabled !== undefined) {
         session.patternRecordingEnabled = parsed.patternRecordingEnabled ? 1 : 0;
       }
@@ -988,6 +1048,7 @@ export function initKshSession() {
     .then(async () => {
       await syncAll();
       await refreshProjectState();
+      await syncEditorScaleMinimumToNative();
       await resizeForCurrentView();
       session.ready = true;
     })

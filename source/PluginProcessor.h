@@ -79,6 +79,8 @@ public:
 
     void setPatternViewScale (double scale);
     [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
+    int getProjectUiScalePercent() const noexcept { return projectUiScalePercent; }
+    void setProjectUiScalePercent (int uiScalePercent);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
 
@@ -179,6 +181,7 @@ private:
     EditorResizeCallback editorResizeCallback;
 
     double patternViewScale = 1.0;
+    int projectUiScalePercent = 100;
 
     mutable std::mutex projectMetadataMutex;
     juce::String projectName { "Untitled Project" };

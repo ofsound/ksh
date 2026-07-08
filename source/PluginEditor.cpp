@@ -6,6 +6,13 @@
 
 #if JUCE_WEB_BROWSER
 
+namespace
+{
+constexpr int defaultEditorWidth = 1328;
+constexpr int defaultPluginEditorHeight = 828;
+constexpr int defaultStandaloneEditorHeight = 872;
+} // namespace
+
 KshWebBrowserComponent::KshWebBrowserComponent (const Options& options,
                                                 std::function<void()> onPageLoadedIn)
     : juce::WebBrowserComponent (options),
@@ -56,14 +63,18 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (fallbackLabel);
 #endif
 
-    constexpr int standaloneTransportRowHeight = 44;
-    constexpr int projectRowHeight = 52;
-    const auto initialHeight = 756 + projectRowHeight
-                             + (processorRef.hasStandaloneTransport() ? standaloneTransportRowHeight : 0);
-
-    setResizeLimits (1296, 756 + projectRowHeight, 3200, 1400);
+#if JUCE_WEB_BROWSER
+    scaleMinimumWidth = defaultEditorWidth;
+    scaleMinimumHeight = processorRef.hasStandaloneTransport() ? defaultStandaloneEditorHeight
+                                                               : defaultPluginEditorHeight;
+    applyNormalResizeLimits();
+#else
+    setResizeLimits (900, 480, 3200, 1400);
+#endif
     setResizable (true, true);
-    setSize (1296, initialHeight);
+    setSize (defaultEditorWidth,
+             processorRef.hasStandaloneTransport() ? defaultStandaloneEditorHeight
+                                                   : defaultPluginEditorHeight);
     startTimerHz (60);
 }
 
@@ -75,6 +86,11 @@ PluginEditor::~PluginEditor()
 }
 
 #if JUCE_WEB_BROWSER
+void PluginEditor::applyNormalResizeLimits()
+{
+    setResizeLimits (scaleMinimumWidth, scaleMinimumHeight, 4096, 2400);
+}
+
 juce::File PluginEditor::getDefaultProjectsDirectory() const
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
@@ -130,6 +146,7 @@ juce::var PluginEditor::projectOperationResult (const bool success,
         object->setProperty ("projectFileName", getCurrentProjectFileName());
         object->setProperty ("hasPreviousProject", hasPreviousProject() ? 1 : 0);
         object->setProperty ("hasNextProject", hasNextProject() ? 1 : 0);
+        object->setProperty ("projectUiScalePercent", processorRef.getProjectUiScalePercent());
     }
 
     return juce::var (object.release());
@@ -225,6 +242,7 @@ void PluginEditor::showSaveProjectDialog (
     const auto now = juce::Time::getCurrentTime().toISO8601 (true);
     const auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
     const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
+    const auto scale = args.size() > 2 ? static_cast<int> (args[2]) : processorRef.getProjectUiScalePercent();
     const auto createdAt = processorRef.getProjectCreatedAt().isNotEmpty()
                                ? processorRef.getProjectCreatedAt()
                                : now;
@@ -252,7 +270,8 @@ void PluginEditor::showSaveProjectDialog (
          name,
          description,
          createdAt,
-         now] (const juce::FileChooser& chooser) mutable
+         now,
+         scale] (const juce::FileChooser& chooser) mutable
         {
             if (safeThis == nullptr)
                 return;
@@ -276,6 +295,7 @@ void PluginEditor::showSaveProjectDialog (
 
             safeThis->processorRef.setProjectMetadata (
                 projectNameToSave, description, createdAt, now);
+            safeThis->processorRef.setProjectUiScalePercent (scale);
             juce::String error;
             const auto saved = safeThis->saveProjectFile (file, error);
             completion (safeThis->projectOperationResult (saved, error));
@@ -372,6 +392,30 @@ void PluginEditor::cycleProject (
     juce::String error;
     const auto loaded = loadProjectFile (files[nextIndex], error);
     complete (projectOperationResult (loaded, error));
+}
+
+juce::var PluginEditor::handleEditorScaleMinimumRequest (const int minWidth, const int minHeight)
+{
+    const auto previousMinimumWidth = scaleMinimumWidth;
+    const auto previousMinimumHeight = scaleMinimumHeight;
+    const auto followsScaleMinimum = getWidth() == previousMinimumWidth
+                                  && getHeight() == previousMinimumHeight;
+
+    scaleMinimumWidth = juce::jlimit (900, 2400, minWidth);
+    scaleMinimumHeight = juce::jlimit (480, 1800, minHeight);
+
+    applyNormalResizeLimits();
+    const auto nextWidth = followsScaleMinimum ? scaleMinimumWidth
+                                               : juce::jmax (getWidth(), scaleMinimumWidth);
+    const auto nextHeight = followsScaleMinimum ? scaleMinimumHeight
+                                                : juce::jmax (getHeight(), scaleMinimumHeight);
+    setSize (nextWidth, nextHeight);
+
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty ("available", 1);
+    object->setProperty ("minWidth", scaleMinimumWidth);
+    object->setProperty ("minHeight", scaleMinimumHeight);
+    return juce::var (object.release());
 }
 #endif
 

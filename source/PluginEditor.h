@@ -35,6 +35,7 @@ public:
     void createNewProject (juce::WebBrowserComponent::NativeFunctionCompletion complete);
     void cycleProject (int direction,
                        juce::WebBrowserComponent::NativeFunctionCompletion complete);
+    juce::var handleEditorScaleMinimumRequest (int minWidth, int minHeight);
     bool hasPreviousProject() const;
     bool hasNextProject() const;
     juce::String getCurrentProjectFileName() const;
@@ -46,6 +47,7 @@ private:
     PluginProcessor& processorRef;
 
 #if JUCE_WEB_BROWSER
+    void applyNormalResizeLimits();
     juce::File getDefaultProjectsDirectory() const;
     juce::Array<juce::File> getSiblingProjectFiles() const;
     bool loadProjectFile (const juce::File& file, juce::String& errorMessage);
@@ -56,6 +58,8 @@ private:
     std::unique_ptr<KshWebBrowserComponent> webView;
     std::unique_ptr<juce::FileChooser> projectFileChooser;
     juce::File currentProjectFile;
+    int scaleMinimumWidth = 1328;
+    int scaleMinimumHeight = 828;
 #else
     juce::Label fallbackLabel;
 #endif

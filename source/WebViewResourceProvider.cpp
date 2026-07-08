@@ -123,6 +123,7 @@ juce::var createProjectStateVar (PluginProcessor& processor, const PluginEditor&
     object->setProperty ("projectFileName", editor.getCurrentProjectFileName());
     object->setProperty ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0);
     object->setProperty ("hasNextProject", editor.hasNextProject() ? 1 : 0);
+    object->setProperty ("projectUiScalePercent", processor.getProjectUiScalePercent());
     return juce::var (object.release());
 }
 } // namespace
@@ -143,6 +144,7 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                        .withInitialisationData ("projectFileName", editor.getCurrentProjectFileName())
                        .withInitialisationData ("hasPreviousProject", editor.hasPreviousProject() ? 1 : 0)
                        .withInitialisationData ("hasNextProject", editor.hasNextProject() ? 1 : 0)
+                       .withInitialisationData ("projectUiScalePercent", processor.getProjectUiScalePercent())
                        .withNativeFunction ("kshSendCommand",
                                             [&processor] (const juce::Array<juce::var>& args,
                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -172,6 +174,29 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                                                 }
 
                                                 complete (juce::var { false });
+                                            })
+                       .withNativeFunction ("setEditorScaleMinimum",
+                                            [&editor] (const juce::Array<juce::var>& args,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                if (args.size() < 2)
+                                                {
+                                                    complete (juce::var { false });
+                                                    return;
+                                                }
+
+                                                complete (editor.handleEditorScaleMinimumRequest (
+                                                    varToInt (args[0]),
+                                                    varToInt (args[1])));
+                                            })
+                       .withNativeFunction ("setProjectUiScalePercent",
+                                            [&processor] (const juce::Array<juce::var>& args,
+                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                processor.setProjectUiScalePercent (
+                                                    args.size() > 0 ? varToInt (args[0])
+                                                                    : processor.getProjectUiScalePercent());
+                                                complete (processor.getProjectUiScalePercent());
                                             })
                        .withNativeFunction ("kshGetProjectState",
                                             [&processor, &editor] (const juce::Array<juce::var>&,

@@ -366,7 +366,7 @@
     const localX = event.clientX - rect.left;
     const localY = event.clientY - rect.top;
     const layerMode =
-      modifierLayerMode(event.metaKey, event.shiftKey, event.altKey) ?? session.sourceLayerMode;
+      modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
     const triangle =
       normalizeSourceLayerMode(layerMode) === "cycle"
         ? resolveCellTriangle(localX, localY, gridCellW, gridCellH)
@@ -592,8 +592,8 @@
     editingChannel = -1;
   }
 
-  function syncHoverLayerModeFromModifiers(metaKey, shiftKey, altKey) {
-    hoverLayerMode = modifierLayerMode(metaKey, shiftKey, altKey);
+  function syncHoverLayerModeFromModifiers(shiftKey, altKey) {
+    hoverLayerMode = modifierLayerMode(shiftKey, altKey);
   }
 
   function modifierStateFromKeyEvent(event) {
@@ -608,13 +608,12 @@
 
   function syncHoverLayerModeFromKeyEvent(event) {
     const modifiers = modifierStateFromKeyEvent(event);
-    syncHoverLayerModeFromModifiers(modifiers.metaKey, modifiers.shiftKey, modifiers.altKey);
+    syncHoverLayerModeFromModifiers(modifiers.shiftKey, modifiers.altKey);
   }
 
   function syncHoverLayerModeFromNativeModifiers(payload) {
     const modifiers = parseBackendJson(payload);
     syncHoverLayerModeFromModifiers(
-      Boolean(modifiers?.metaKey),
       Boolean(modifiers?.shiftKey),
       Boolean(modifiers?.altKey)
     );
@@ -739,10 +738,10 @@
   aria-label="KSH pattern editor"
   style={`width:${dims.width}px;height:${dims.height}px;`}
   onpointermove={(event) => {
-    syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
+    syncHoverLayerModeFromModifiers(event.shiftKey, event.altKey);
   }}
   onpointerleave={(event) => {
-    syncHoverLayerModeFromModifiers(event.metaKey, event.shiftKey, event.altKey);
+    syncHoverLayerModeFromModifiers(event.shiftKey, event.altKey);
   }}
 >
   {#if session.kshState.standaloneTransportAvailable}
@@ -773,7 +772,7 @@
 
   <div class="project-row flex h-[86px] shrink-0 items-center justify-center border-b border-ksh-stroke-soft px-3">
     <div class="project-bar flex min-w-0 flex-1 items-center gap-3">
-    <div class="project-controls flex h-[36px] min-w-0 flex-1 items-center justify-start gap-2">
+    <div class="project-controls flex h-[40px] min-w-0 flex-1 items-center justify-start gap-2">
       <button
         type="button"
         class="project-button"
@@ -819,7 +818,7 @@
           aria-label="Project description"
           class="project-description-input"
           bind:value={session.projectDescription}
-          placeholder="Add a project description..."
+          placeholder="Add Description..."
         />
         <span class="project-date">{projectDateLabel}</span>
       </div>
@@ -834,6 +833,7 @@
         ▶
       </button>
     </div>
+    <div class="project-trailing ml-auto">
     <div class="project-history-controls">
       <button
         type="button"
@@ -878,7 +878,7 @@
         </svg>
       </button>
     </div>
-    <div class="pattern-bank ml-auto flex shrink-0 items-center gap-3">
+    <div class="pattern-bank flex shrink-0 items-center gap-3">
       <span class="text-right text-[11px] font-extrabold text-ksh-text">Patterns:</span>
       <div class="grid grid-rows-2 gap-1.5">
         {#each sourceButtonRows as row, rowIndex (rowIndex)}
@@ -906,6 +906,7 @@
       >
         M
       </button>
+    </div>
     </div>
     </div>
     {#if session.projectOperationError}

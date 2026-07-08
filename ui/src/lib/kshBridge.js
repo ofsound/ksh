@@ -80,6 +80,22 @@ export function setViewSize(width, height, patternViewScale) {
   return native(width, height, patternViewScale);
 }
 
+export function setEditorScaleMinimum(width, height) {
+  if (!nativeFunctionAvailable("setEditorScaleMinimum")) {
+    return Promise.resolve(false);
+  }
+
+  return getNativeFunction("setEditorScaleMinimum")(width, height);
+}
+
+export function setProjectUiScalePercent(percent) {
+  if (!nativeFunctionAvailable("setProjectUiScalePercent")) {
+    return Promise.resolve(false);
+  }
+
+  return getNativeFunction("setProjectUiScalePercent")(percent);
+}
+
 export function getProjectState() {
   if (!nativeFunctionAvailable("kshGetProjectState")) {
     return Promise.resolve(null);
@@ -118,6 +134,10 @@ export function cycleProject(direction) {
   }
 
   return getNativeFunction("kshCycleProject")(direction);
+}
+
+export function initialisationValue(key) {
+  return window.__JUCE__?.initialisationData?.[key] ?? null;
 }
 
 /** Backend may emit parsed objects or { json: string } fallback. */

@@ -21,6 +21,7 @@ export const MAIN_TOP = 68;
 export const PROJECT_ROW_H = 86;
 export const STANDALONE_TRANSPORT_ROW_H = 44;
 export const HELPER_FOOTER_H = 24;
+export const APP_FOOTER_H = 40;
 
 export function standaloneTransportRowHeight(state) {
   return state?.standaloneTransportAvailable ? STANDALONE_TRANSPORT_ROW_H : 0;
@@ -100,6 +101,10 @@ export function gridTopPadding(channelCount, editorHeight, scale = 1, state = nu
 export const COMPACT_ROW_H = 18;
 
 export function compactPanelHeight() {
+  return previewPanelHeight() + APP_FOOTER_H;
+}
+
+export function previewPanelHeight() {
   return COMPACT_HEIGHT + HELPER_FOOTER_H;
 }
 
@@ -468,8 +473,8 @@ export function nextStepCount(current) {
   return options[index + 1];
 }
 
-export function modifierLayerMode(metaKey, shiftKey, altKey) {
-  if (metaKey) {
+export function modifierLayerMode(shiftKey, altKey) {
+  if (altKey && shiftKey) {
     return "roll";
   }
   if (altKey) {

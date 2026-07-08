@@ -765,6 +765,8 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     applyProjectMetadataFromState (*payload);
     if (payload->contains ("patternViewScale"))
         setPatternViewScale (payload->value ("patternViewScale", patternViewScale));
+    if (payload->contains ("projectUiScalePercent"))
+        setProjectUiScalePercent (payload->value ("projectUiScalePercent", projectUiScalePercent));
 
     if (payload->contains ("standaloneTransportPlaying"))
     {
@@ -801,6 +803,7 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         state["projectModifiedAt"] = projectModifiedAt.toStdString();
     }
     state["patternViewScale"] = patternViewScale;
+    state["projectUiScalePercent"] = projectUiScalePercent;
     state["standaloneTransportPlaying"] = isStandaloneTransportPlaying() ? 1 : 0;
     state["standaloneTempo"] = clampStandaloneTempoBpm (engine.getTempo());
     return state;
@@ -1003,6 +1006,11 @@ void PluginProcessor::setPatternViewScale (double scale)
     patternViewScale = scale == 1.5 ? 1.5 : 1.0;
 }
 
+void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
+{
+    projectUiScalePercent = juce::jlimit (50, 100, uiScalePercent);
+}
+
 void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
 {
     patternRecordingSource.store (ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1),
@@ -1145,6 +1153,7 @@ void PluginProcessor::resetProject()
 
     setProjectMetadata ("Untitled Project", {}, {}, {});
     setPatternViewScale (1.0);
+    setProjectUiScalePercent (100);
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
