@@ -1,5 +1,6 @@
 <script>
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
@@ -40,7 +41,7 @@
     stepFromGridX,
     toggleCellOnRelease,
   } from "../lib/kshEditorInteractions.js";
-  import { CHANNEL_RENAME_MS, MAX_STEPS, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
+  import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
   import {
     adjustChannelNote,
     auditionChannel,
@@ -56,6 +57,7 @@
     incrementChannelNote,
     isEditorFlashing,
     resetSourceChannelRow,
+    recordPatternRow,
     selectSource,
     sendCell,
     sendCellsForChannel,
@@ -83,6 +85,7 @@
     toggleDcColors,
     toggleDeviceActive,
     togglePatternViewScale,
+    togglePatternRecording,
     toggleSourceChannelSolo,
     undoEdit,
     undoStack,
@@ -100,6 +103,8 @@
   let channelRenameTap = $state({ channel: -1, at: 0 });
   let sourceRowResetTap = $state({ channel: -1, at: 0 });
   let lastAudition = $state({ channel: -1, at: 0 });
+  const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
+  const recordPadKeysHeld = new SvelteSet();
 
   const patternScale = $derived(session.patternViewScale);
   const dims = $derived(editorDimensions(session.kshState, patternScale));
@@ -606,20 +611,56 @@
     }
   }
 
+  function keyInputBlocked(event) {
+    const target = event.target;
+    return Boolean(
+      target?.closest?.("button, input, textarea, select, a, [contenteditable='true'], [role='slider']")
+    );
+  }
+
+  function recordPadChannelForEvent(event) {
+    const index = recordPadCodes.indexOf(event.code);
+    return index >= 0 && index < Math.min(MAX_CHANNELS, session.kshState.channelCount) ? index : -1;
+  }
+
+  function onRecordPadKeyDown(event) {
+    if (!session.patternRecordingEnabled || keyInputBlocked(event)) {
+      return;
+    }
+
+    const channel = recordPadChannelForEvent(event);
+    if (channel < 0 || recordPadKeysHeld.has(event.code)) {
+      return;
+    }
+
+    event.preventDefault();
+    recordPadKeysHeld.add(event.code);
+    void recordPatternRow(channel);
+  }
+
+  function onRecordPadKeyUp(event) {
+    if (recordPadKeysHeld.delete(event.code)) {
+      event.preventDefault();
+    }
+  }
+
   onMount(() => {
     const removeModifierListener = onBackendEvent("modifier_keys", syncHoverLayerModeFromNativeModifiers);
 
     const onKeyDown = (event) => {
       syncHoverLayerModeFromKeyEvent(event);
       onEditorKeyDown(event);
+      onRecordPadKeyDown(event);
     };
 
     const onKeyUp = (event) => {
       syncHoverLayerModeFromKeyEvent(event);
+      onRecordPadKeyUp(event);
     };
 
     const onBlur = () => {
       hoverLayerMode = null;
+      recordPadKeysHeld.clear();
       showCellAdjustmentCursor();
     };
 
@@ -806,6 +847,19 @@
     <div class="header-section">
       <div class="flex items-center gap-3 pt-[15px]">
         <span class="text-[13px] font-semibold text-ksh-text">Pattern:</span>
+        <button
+          type="button"
+          class={`header-icon-button ${session.patternRecordingEnabled ? "bg-ksh-amber text-ksh-off" : ""}`}
+          aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
+          aria-pressed={Boolean(session.patternRecordingEnabled)}
+          title={session.patternRecordingEnabled ? "Stop pattern recording" : "Record MIDI or ASDFGHJK into the selected pattern"}
+          onclick={(event) => {
+            event.currentTarget.blur();
+            togglePatternRecording();
+          }}
+        >
+          ●
+        </button>
         <button type="button" class="header-icon-button" onclick={() => shiftPattern(-1)}>◀</button>
         <button type="button" class="header-icon-button" onclick={() => shiftPattern(1)}>▶</button>
         <button type="button" class="header-icon-button text-[18px]" onclick={clearPattern}>×</button>

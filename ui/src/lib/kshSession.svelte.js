@@ -65,6 +65,7 @@ export const session = $state({
   selectedStep: 0,
   dcColors: 1,
   patternViewScale: 1,
+  patternRecordingEnabled: 0,
   sourceLayerMode: "velocity",
   patternCopySource: -1,
   sourceChannelSoloSource: -1,
@@ -86,6 +87,7 @@ let sessionStarted = false;
 /** @type {Array<() => void>} */
 let teardownHandlers = [];
 let previewSuppressionDepth = 0;
+let patternRecordHistoryBefore = null;
 
 function beginPreviewSuppression() {
   previewSuppressionDepth += 1;
@@ -399,6 +401,10 @@ export async function selectSource(source) {
   session.kshState.staticSource = session.selectedSource;
   bumpState();
   await sendCommand("static_source", [session.selectedSource + 1]);
+
+  if (session.patternRecordingEnabled) {
+    await sendCommand("pattern_record_enabled", [1, session.selectedSource + 1]);
+  }
 }
 
 export function beginPatternCopy(source) {
@@ -756,6 +762,41 @@ export async function clearPattern() {
   });
 }
 
+export async function setPatternRecordingEnabled(enabled) {
+  const next = enabled ? 1 : 0;
+
+  if (session.patternRecordingEnabled === next) {
+    return;
+  }
+
+  if (next) {
+    patternRecordHistoryBefore = createHistorySnapshot();
+  }
+
+  session.patternRecordingEnabled = next;
+  await sendCommand("pattern_record_enabled", [next, session.selectedSource + 1]);
+
+  if (!next) {
+    if (patternRecordHistoryBefore) {
+      pushHistoryEntry("Record pattern", patternRecordHistoryBefore, createHistorySnapshot());
+    }
+    patternRecordHistoryBefore = null;
+  }
+}
+
+export async function togglePatternRecording() {
+  await setPatternRecordingEnabled(!session.patternRecordingEnabled);
+}
+
+export async function recordPatternRow(channel, velocity = 100) {
+  if (!session.patternRecordingEnabled) {
+    return;
+  }
+
+  const row = clamp(channel, 0, session.kshState.channelCount - 1);
+  await sendCommand("pattern_record_row", [row + 1, clamp(velocity, 1, 127)]);
+}
+
 export async function resizeForCurrentView() {
   const { width, height } = combinedDimensions(session.kshState, session.patternViewScale);
   await setViewSize(width, height, session.patternViewScale);
@@ -874,6 +915,9 @@ export function initKshSession() {
       applyEngineState(session.kshState, parsed);
       if (parsed?.patternViewScale !== undefined) {
         session.patternViewScale = normalizePatternViewScale(parsed.patternViewScale);
+      }
+      if (parsed?.patternRecordingEnabled !== undefined) {
+        session.patternRecordingEnabled = parsed.patternRecordingEnabled ? 1 : 0;
       }
       assignProjectMetadata(parsed);
       session.selectedSource = session.kshState.staticSource;

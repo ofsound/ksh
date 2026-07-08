@@ -5,6 +5,7 @@
 #include "engine/KshPersistence.h"
 #include "engine/KshEngineCommands.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string_view>
@@ -52,6 +53,22 @@ int rateIndexForValue (std::string_view rate)
 bool isMidiPatternSelectionNoteNumber (int noteNumber)
 {
     return noteNumber >= 0 && noteNumber < ksh::Constants::sourceCount;
+}
+
+int modInt (int value, int divisor)
+{
+    if (divisor <= 0)
+        return 0;
+
+    const int remainder = value % divisor;
+    return remainder < 0 ? remainder + divisor : remainder;
+}
+
+int quantizedStepForPpq (const ksh::PlaybackSnapshot& snapshot, double ppqPosition)
+{
+    const auto beatsPerStep = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
+    const int globalStep = static_cast<int> (std::llround (ppqPosition / beatsPerStep));
+    return modInt (globalStep, std::max (1, snapshot.stepCount));
 }
 
 juce::StringArray rateChoices()
@@ -246,6 +263,7 @@ void PluginProcessor::handleAsyncUpdate()
 
         applyPendingMacroParametersLocked();
         drainPendingMidiPatternSelectionsLocked();
+        drainPendingPatternRecordEventsLocked();
 
         // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
         if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
@@ -463,7 +481,6 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     buffer.clear();
 
     const auto numSamples = buffer.getNumSamples();
-    const auto midiPatternSelections = consumeMidiPatternSelectionInput (midiMessages);
 
     // Read-only immutable view built on the message thread. No engine access on the audio thread.
     const auto* snapshot = playbackMailbox.current();
@@ -506,6 +523,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             isPlaying = position->getIsPlaying();
         }
     }
+
+    const auto midiPatternSelections = consumeMidiInput (midiMessages, *snapshot, ppqPosition, bpm, isPlaying, numSamples);
 
     const auto playback =
         midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages, midiPatternSelections);
@@ -555,12 +574,64 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
 ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
 {
+    const auto* snapshot = playbackMailbox.current();
+    const double bpm = snapshot != nullptr ? snapshot->tempo : 120.0;
+    return snapshot != nullptr ? consumeMidiInput (midiMessages, *snapshot, 0.0, bpm, false, 0)
+                               : ksh::MidiPatternSelectionBlock {};
+}
+
+ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuffer& midiMessages,
+                                                                  const ksh::PlaybackSnapshot& snapshot,
+                                                                  double ppqPosition,
+                                                                  double bpm,
+                                                                  bool isPlaying,
+                                                                  int numSamples)
+{
     ksh::MidiPatternSelectionBlock selections;
     bool shouldFilter = false;
+    bool recordQueued = false;
+    juce::ignoreUnused (numSamples);
+    const bool recordEnabled = patternRecordingEnabled.load (std::memory_order_acquire) != 0;
+    const int recordSource = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
+                                           0,
+                                           ksh::Constants::sourceCount - 1);
+    const double sampleRate = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;
+    const double quartersPerSample = bpm > 0.0 ? (bpm / 60.0) / sampleRate : 0.0;
+
+    auto rowForNote = [&snapshot] (int noteNumber) -> int
+    {
+        for (int channel = 0; channel < snapshot.channelCount; ++channel)
+        {
+            if (snapshot.channels[static_cast<size_t> (channel)].note == noteNumber)
+                return channel;
+        }
+
+        return -1;
+    };
 
     for (const auto metadata : midiMessages)
     {
         const auto message = metadata.getMessage();
+
+        if (recordEnabled && (message.isNoteOn() || message.isNoteOff()))
+        {
+            const int row = rowForNote (message.getNoteNumber());
+
+            if (row >= 0)
+            {
+                shouldFilter = true;
+
+                if (message.isNoteOn() && isPlaying && quartersPerSample > 0.0)
+                {
+                    const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
+                    const int step = quantizedStepForPpq (snapshot, eventPpq);
+                    recordQueued = enqueuePatternRecordEvent (recordSource, row, step, message.getVelocity())
+                                || recordQueued;
+                }
+
+                continue;
+            }
+        }
 
         if (message.isNoteOn() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
         {
@@ -574,6 +645,9 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput
         }
     }
 
+    if (recordQueued)
+        messageThreadWorkPending.store (true, std::memory_order_release);
+
     if (! shouldFilter)
         return selections;
 
@@ -584,6 +658,9 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput
         const auto message = metadata.getMessage();
 
         if ((message.isNoteOn() || message.isNoteOff()) && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
+            continue;
+
+        if (recordEnabled && (message.isNoteOn() || message.isNoteOff()) && rowForNote (message.getNoteNumber()) >= 0)
             continue;
 
         midiInputScratch.addEvent (metadata.data, metadata.numBytes, metadata.samplePosition);
@@ -601,6 +678,31 @@ void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
 
     while (pendingMidiPatternSelections.try_dequeue (source))
         engine.setStaticSource (source);
+}
+
+bool PluginProcessor::enqueuePatternRecordEvent (int source, int channel, int step, int velocity)
+{
+    PatternRecordEvent event;
+    event.source = ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1);
+    event.channel = ksh::clampInt (channel, 0, ksh::Constants::maxChannels - 1);
+    event.step = ksh::clampInt (step, 0, ksh::Constants::maxSteps - 1);
+    event.velocity = ksh::clampInt (velocity, 1, 127);
+    return pendingPatternRecordEvents.try_enqueue (event);
+}
+
+void PluginProcessor::drainPendingPatternRecordEventsLocked()
+{
+    PatternRecordEvent event;
+    bool changed = false;
+
+    while (pendingPatternRecordEvents.try_dequeue (event))
+    {
+        engine.setCell (event.source, event.channel, event.step, true, event.velocity, 100, 1, 0, false, 1);
+        changed = true;
+    }
+
+    if (changed)
+        fullUiSyncPending.store (true, std::memory_order_release);
 }
 
 //==============================================================================
@@ -757,6 +859,27 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
 
 bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args)
 {
+    if (selector == "pattern_record_enabled")
+    {
+        const bool shouldRecord = args.is_array() && ! args.empty()
+                                      ? (args[0].is_boolean() ? args[0].get<bool>() : args[0].get<int>() != 0)
+                                      : false;
+        const int source = args.is_array() && args.size() > 1 ? args[1].get<int>() - 1 : 0;
+        setPatternRecordingEnabled (shouldRecord, source);
+        uiBridge.emitEngineState();
+        return true;
+    }
+
+    if (selector == "pattern_record_row")
+    {
+        const int row = args.is_array() && ! args.empty() ? args[0].get<int>() - 1 : 0;
+        const int velocity = args.is_array() && args.size() > 1 ? args[1].get<int>() : 100;
+        const bool ok = recordPatternRowAtCurrentStep (row, velocity);
+        if (ok)
+            uiBridge.syncAll();
+        return ok;
+    }
+
     if (selector == "standalone_transport_playing")
     {
         const bool shouldPlay = args.is_array() && ! args.empty()
@@ -873,6 +996,40 @@ void PluginProcessor::setEditorResizeCallback (EditorResizeCallback callback)
 void PluginProcessor::setPatternViewScale (double scale)
 {
     patternViewScale = scale == 1.5 ? 1.5 : 1.0;
+}
+
+void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
+{
+    patternRecordingSource.store (ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1),
+                                  std::memory_order_release);
+    patternRecordingEnabled.store (shouldRecord ? 1 : 0, std::memory_order_release);
+}
+
+bool PluginProcessor::isPatternRecordingEnabled() const
+{
+    return patternRecordingEnabled.load (std::memory_order_acquire) != 0;
+}
+
+bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
+{
+    if (! isPatternRecordingEnabled())
+        return false;
+
+    const int stepOneBased = currentStepForUi.load (std::memory_order_acquire);
+
+    if (stepOneBased <= 0)
+        return false;
+
+    std::scoped_lock lock { engineStateMutex };
+    const int source = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
+                                     0,
+                                     ksh::Constants::sourceCount - 1);
+    const int row = ksh::clampInt (channel, 0, engine.getChannelCount() - 1);
+    const int step = ksh::clampInt (stepOneBased - 1, 0, engine.getStepCount() - 1);
+    engine.setCell (source, row, step, true, ksh::clampInt (velocity, 1, 127), 100, 1, 0, false, 1);
+    publishPlaybackSnapshotIfChangedLocked();
+    engine.flushPreview();
+    return true;
 }
 
 void PluginProcessor::setProjectMetadata (const juce::String& name,

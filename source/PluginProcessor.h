@@ -79,6 +79,8 @@ public:
 
     void setPatternViewScale (double scale);
     [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
+    void setPatternRecordingEnabled (bool shouldRecord, int source);
+    [[nodiscard]] bool isPatternRecordingEnabled() const;
 
     void setProjectMetadata (const juce::String& name,
                              const juce::String& description,
@@ -108,7 +110,16 @@ private:
     void applyMacroParametersToEngineLocked();
     void syncMacroParametersFromEngineLocked (bool notifyHost);
     ksh::MidiPatternSelectionBlock consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
+    ksh::MidiPatternSelectionBlock consumeMidiInput (juce::MidiBuffer& midiMessages,
+                                                     const ksh::PlaybackSnapshot& snapshot,
+                                                     double ppqPosition,
+                                                     double bpm,
+                                                     bool isPlaying,
+                                                     int numSamples);
     void drainPendingMidiPatternSelectionsLocked();
+    void drainPendingPatternRecordEventsLocked();
+    [[nodiscard]] bool enqueuePatternRecordEvent (int source, int channel, int step, int velocity);
+    [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
     void applyProjectMetadataFromState (const nlohmann::json& state);
 
     juce::AudioProcessorValueTreeState parameters;
@@ -127,6 +138,14 @@ private:
     // Audio -> message-thread handoff (drained in handleAsyncUpdate / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
     moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
+    struct PatternRecordEvent
+    {
+        int source = 0;
+        int channel = 0;
+        int step = 0;
+        int velocity = 100;
+    };
+    moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingPatternRecordEvents { 256 };
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
@@ -144,6 +163,8 @@ private:
     std::atomic<double> standaloneTransportPpqPosition { 0.0 };
     std::atomic<int> standaloneTransportResetRequested { 0 };
     std::atomic<int> standaloneStopAllNotesRequested { 0 };
+    std::atomic<int> patternRecordingEnabled { 0 };
+    std::atomic<int> patternRecordingSource { 0 };
 
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;

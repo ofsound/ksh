@@ -267,3 +267,47 @@ TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve ot
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 3);
 }
+
+TEST_CASE ("armed pattern recording captures incoming row MIDI notes", "[plugin][bridge][midi-input][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_enabled", { 1, 2 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 38, static_cast<juce::uint8> (91)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 38));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE (engine.sources[1][2][0].enabled);
+    REQUIRE (engine.sources[1][2][0].velocity == 91);
+}
+
+TEST_CASE ("armed pattern recording captures qwerty row command at current step", "[plugin][bridge][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_enabled", { 1, 3 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 4, 77 }));
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE (engine.sources[2][3][0].enabled);
+    REQUIRE (engine.sources[2][3][0].velocity == 77);
+}
