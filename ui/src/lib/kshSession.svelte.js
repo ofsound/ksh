@@ -86,7 +86,7 @@ export const session = $state({
   selectedStep: 0,
   dcColors: 1,
   patternViewScale: 1,
-  channelNoteDisplayNames: false,
+  channelNoteDisplayNames: true,
   patternRecordingEnabled: 0,
   sourceLayerMode: "velocity",
   patternCopySource: -1,
