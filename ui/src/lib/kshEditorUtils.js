@@ -6,7 +6,7 @@ export const GRID_CELL_H = 50;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
-export const GRID_SIDEBAR_W = 242;
+export const GRID_SIDEBAR_W = 270;
 export const GRID_CELL_LEFT_GAP = 8;
 export const STEP_LABEL_H = 18;
 export const STEP_LABEL_CELL_GAP = 8;
@@ -220,15 +220,19 @@ export function cycleRate(state, direction = 1) {
   state.rate = RATES[index];
 }
 
-export function playbackModeLabel(mode) {
+export const PLAYBACK_MODE_OPTIONS = [
+  { value: "normal", label: "Forward" },
+  { value: "reverse", label: "Reverse" },
+  { value: "boomerang", label: "Boomerang" },
+];
+
+export function playbackModeOption(mode) {
   const normalized = normalizePlaybackMode(mode);
-  if (normalized === "reverse") {
-    return "R";
-  }
-  if (normalized === "boomerang") {
-    return "B";
-  }
-  return "N";
+  return PLAYBACK_MODE_OPTIONS.find((option) => option.value === normalized) ?? PLAYBACK_MODE_OPTIONS[0];
+}
+
+export function playbackModeLabel(mode) {
+  return playbackModeOption(mode).label;
 }
 
 export function nextPlaybackMode(mode) {

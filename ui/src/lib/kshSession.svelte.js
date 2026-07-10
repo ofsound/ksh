@@ -6,6 +6,7 @@ import {
   SILENT_SOURCE,
   SOURCE_COUNT,
   clamp,
+  normalizePlaybackMode,
   normalizeRate,
 } from "./kshConstants.js";
 import {
@@ -764,6 +765,19 @@ export async function cycleChannelLock(channel) {
     }
     bumpState();
     await sendChannel(channel);
+  });
+}
+
+export async function setChannelPlaybackMode(channel, mode) {
+  const normalized = normalizePlaybackMode(mode);
+  if (session.kshState.channels[channel].playbackMode === normalized) {
+    return;
+  }
+
+  await commitEditHistory("Change playback mode", async () => {
+    session.kshState.channels[channel].playbackMode = normalized;
+    bumpState();
+    await sendChannelPlaybackMode(channel);
   });
 }
 

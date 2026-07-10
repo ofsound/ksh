@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
@@ -19,12 +20,10 @@
     stepLabelFontPx,
     isStepBeyondLoopLength,
     channelToneColor,
-    lockLabel,
     loopRangeForChannel,
     modifierLayerMode,
     mutedChannelColor,
     normalizeSourceLayerMode,
-    playbackModeLabel,
     resolveCellTriangle,
     sourceLayerLabel,
     sourceLayerValue,
@@ -49,8 +48,6 @@
     clearPattern,
     clearSourceChannelSteps,
     copyPatternToSource,
-    cycleChannelLock,
-    cycleChannelPlaybackMode,
     cycleSourceLayerMode,
     incrementChannelNote,
     isEditorFlashing,
@@ -64,6 +61,7 @@
     setRateCommand,
     setHeaderValue,
     setChannelLabel,
+    setChannelPlaybackMode,
     setRowLoopRange,
     setSelectedCell,
     setSourceLayerMode,
@@ -1138,6 +1136,19 @@
         data-channel-row={channel}
       >
         <div class="flex shrink-0 items-center gap-1 pr-2 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
+          <button
+            type="button"
+            class="row-clear-button"
+            disabled={session.selectedSource === SILENT_SOURCE}
+            aria-label="Clear channel row steps"
+            title="Double-click to clear this row"
+            ondblclick={(event) => {
+              event.currentTarget.blur();
+              clearSourceChannelSteps(session.selectedSource, channel);
+            }}
+          >
+            <span aria-hidden="true"></span>
+          </button>
           {#if editingChannel === channel}
             <input
               class="rounded border border-accent bg-grid-off px-1 text-[13px] text-text outline-none"
@@ -1175,29 +1186,11 @@
           >
             {session.kshState.channels[channel]?.note ?? 36}
           </button>
-          <button type="button" class="w-6 text-center text-[13px] text-info" onclick={() => cycleChannelLock(channel)}>
-            {lockLabel(session.kshState.channels[channel]?.lock ?? -1)}
-          </button>
-          <button
-            type="button"
-            class={`w-5 text-center text-[13px] ${loopRangeClass(channel)}`}
-            onclick={() => cycleChannelPlaybackMode(channel)}
-          >
-            {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
-          </button>
-          <button
-            type="button"
-            class="row-clear-button"
-            disabled={session.selectedSource === SILENT_SOURCE}
-            aria-label="Clear channel row steps"
-            title="Double-click to clear this row"
-            ondblclick={(event) => {
-              event.currentTarget.blur();
-              clearSourceChannelSteps(session.selectedSource, channel);
-            }}
-          >
-            <span aria-hidden="true"></span>
-          </button>
+          <PlaybackModeSelect
+            value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
+            accentClass={loopRangeClass(channel)}
+            onChange={(mode) => setChannelPlaybackMode(channel, mode)}
+          />
           <div class="flex items-center">
             <button
               type="button"
