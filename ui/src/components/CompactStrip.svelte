@@ -34,7 +34,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
 
   function channelLockLabel(channel) {
     const lock = session.kshState.channels[channel]?.lock ?? -1;
-    return lock < 0 ? "R" : `P${lock + 1}`;
+    return lock < 0 ? "OFF" : `P${lock + 1}`;
   }
 
   function channelLockTitle(channel) {

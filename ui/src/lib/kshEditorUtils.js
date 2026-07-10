@@ -387,7 +387,7 @@ export function sourceLayerLabel(mode) {
 
 export function lockLabel(lock) {
   if (lock < 0) {
-    return "R";
+    return "OFF";
   }
   return String(lock + 1);
 }
