@@ -9,7 +9,6 @@
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
-    GRID_CELL_LEFT_GAP,
     GRID_ROW_CELL_LEFT_GAP,
     GRID_SIDEBAR_W,
     cycleOffsetLabel,
@@ -1153,7 +1152,7 @@
     <div class="shrink-0">
     <div
       class="flex items-center"
-      style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
+      style={`padding-left:${GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
     >
       <div class="flex">
       {#each stepCols as step (step)}
