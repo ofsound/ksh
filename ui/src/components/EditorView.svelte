@@ -100,6 +100,8 @@
   let stepValueMenuOpen = $state(false);
   let stepValueHighlightIndex = $state(-1);
   let stepValueGesturePointerId = $state(null);
+  let stepValueMenuCloseTimer = null;
+  let stepValueMenuRoot = $state(null);
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
   const stepValueOptions = [
@@ -170,9 +172,35 @@
   }
 
   async function chooseStepValue(value) {
+    closeStepValueMenu();
+    await setRateCommand(value);
+  }
+
+  function cancelStepValueMenuClose() {
+    if (stepValueMenuCloseTimer !== null) {
+      clearTimeout(stepValueMenuCloseTimer);
+      stepValueMenuCloseTimer = null;
+    }
+  }
+
+  function closeStepValueMenu() {
+    cancelStepValueMenuClose();
     stepValueMenuOpen = false;
     stepValueHighlightIndex = -1;
-    await setRateCommand(value);
+  }
+
+  function scheduleStepValueMenuClose() {
+    if (stepValueGesturePointerId !== null) {
+      return;
+    }
+
+    cancelStepValueMenuClose();
+    stepValueMenuCloseTimer = setTimeout(() => {
+      stepValueMenuCloseTimer = null;
+      if (stepValueGesturePointerId === null) {
+        closeStepValueMenu();
+      }
+    }, 120);
   }
 
   function removeStepValueGestureListeners() {
@@ -190,6 +218,7 @@
   function beginStepValueGesture(event) {
     event.stopPropagation();
     absorbPointerDragFocus(event);
+    cancelStepValueMenuClose();
     stepValueMenuOpen = true;
     stepValueGesturePointerId = event.pointerId;
     stepValueHighlightIndex = stepValueOptionIndexFromPoint(event.clientX, event.clientY);
@@ -224,9 +253,22 @@
     }
   }
 
+  function onStepValueMenuPointerMove(event) {
+    if (!stepValueMenuOpen || stepValueGesturePointerId !== null) {
+      return;
+    }
+
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    if (target && stepValueMenuRoot?.contains(target)) {
+      cancelStepValueMenuClose();
+    } else {
+      scheduleStepValueMenuClose();
+    }
+  }
+
   function closeStepValueMenuOnFocusOut(event) {
     if (!event.currentTarget.contains(event.relatedTarget)) {
-      stepValueMenuOpen = false;
+      scheduleStepValueMenuClose();
     }
   }
 
@@ -826,11 +868,14 @@
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
+    document.addEventListener("pointermove", onStepValueMenuPointerMove, true);
     return () => {
       removeModifierListener();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      document.removeEventListener("pointermove", onStepValueMenuPointerMove, true);
+      cancelStepValueMenuClose();
       removeStepValueGestureListeners();
     };
   });
@@ -1107,6 +1152,9 @@
         />
         <div
           class="relative flex items-center"
+          bind:this={stepValueMenuRoot}
+          role="group"
+          aria-label="Step value selector"
           onfocusout={closeStepValueMenuOnFocusOut}
         >
           <button

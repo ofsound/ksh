@@ -9,8 +9,10 @@ export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 308;
 export const GRID_CELL_LEFT_GAP = 34;
 export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP + 24;
-/** Sidebar, pre-grid gap, and outer editor padding east of the step grid. */
-export const EDITOR_GRID_LEADING_CHROME = GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + 34;
+/** Extra breathing room after the step grid in the editor viewport. */
+export const EDITOR_GRID_TRAILING_GAP = 64;
+/** Sidebar, pre-grid gap, and trailing editor space east of the step grid. */
+export const EDITOR_GRID_LEADING_CHROME = GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + EDITOR_GRID_TRAILING_GAP;
 export const STEP_LABEL_H = 18;
 export const STEP_LABEL_CELL_GAP = 8;
 export const STEP_LABEL_FONT_PX = 10;

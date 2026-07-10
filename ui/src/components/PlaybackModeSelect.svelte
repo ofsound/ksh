@@ -12,6 +12,7 @@
   let highlightIndex = $state(-1);
   let gesturePointerId = $state(null);
   let menuStyle = $state("");
+  let menuCloseTimer = null;
 
   const normalizedValue = $derived(normalizePlaybackMode(value));
   const selectedOption = $derived(playbackModeOption(normalizedValue));
@@ -33,7 +34,29 @@
     window.removeEventListener("pointercancel", onWindowPointerUp);
   }
 
+  function cancelMenuClose() {
+    if (menuCloseTimer !== null) {
+      clearTimeout(menuCloseTimer);
+      menuCloseTimer = null;
+    }
+  }
+
+  function scheduleMenuClose() {
+    if (gesturePointerId !== null) {
+      return;
+    }
+
+    cancelMenuClose();
+    menuCloseTimer = setTimeout(() => {
+      menuCloseTimer = null;
+      if (gesturePointerId === null) {
+        closeMenu();
+      }
+    }, 120);
+  }
+
   function closeMenu() {
+    cancelMenuClose();
     open = false;
     highlightIndex = -1;
     gesturePointerId = null;
@@ -98,6 +121,7 @@
   function beginGesture(event) {
     event.stopPropagation();
     absorbPointerDragFocus(event);
+    cancelMenuClose();
 
     if (!open) {
       open = true;
@@ -132,6 +156,19 @@
     }
   }
 
+  function onMenuPointerMove(event) {
+    if (!open || gesturePointerId !== null) {
+      return;
+    }
+
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    if (target && rootEl?.contains(target)) {
+      cancelMenuClose();
+    } else {
+      scheduleMenuClose();
+    }
+  }
+
   $effect(() => {
     if (!open) {
       return;
@@ -154,19 +191,27 @@
     const timer = setTimeout(() => {
       document.addEventListener("pointerdown", onDocPointerDown, true);
     }, 0);
+    document.addEventListener("pointermove", onMenuPointerMove, true);
 
     return () => {
       clearTimeout(timer);
       document.removeEventListener("pointerdown", onDocPointerDown, true);
+      document.removeEventListener("pointermove", onMenuPointerMove, true);
     };
   });
 
   onDestroy(() => {
+    cancelMenuClose();
     removeGestureListeners();
   });
 </script>
 
-<div class="relative shrink-0" bind:this={rootEl}>
+<div
+  class="relative shrink-0"
+  bind:this={rootEl}
+  role="group"
+  aria-label="Playback mode selector"
+>
   <button
     type="button"
     data-playback-mode-trigger
