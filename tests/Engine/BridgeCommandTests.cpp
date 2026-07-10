@@ -56,6 +56,17 @@ TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][br
     REQUIRE (fixture.engine.sourceCellAt (0, 1, 4).velocity == 90);
 }
 
+TEST_CASE ("dispatchEngineCommand sets channel loop range with one-based start", "[engine][bridge]")
+{
+    EngineFixture fixture;
+    fixture.engine.setStepCount (16);
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "channel_loop_length", { 1, 5, 4 }));
+
+    REQUIRE (fixture.engine.channelAt (0).loopStart == 3);
+    REQUIRE (fixture.engine.channelAt (0).loopLength == 5);
+}
+
 TEST_CASE ("dispatchEngineCommand accepts muted static source", "[engine][bridge]")
 {
     EngineFixture fixture;

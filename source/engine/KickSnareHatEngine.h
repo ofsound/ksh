@@ -153,7 +153,7 @@ public:
     void setChannelLabel (int channel, std::string_view label);
     void setChannelNote (int channel, int note);
     void setChannelLock (int channel, int lock);
-    void setChannelLoopLength (int channel, int loopLength);
+    void setChannelLoopLength (int channel, int loopLength, int loopStart = 0);
     void setChannelPlaybackMode (int channel, PlaybackMode mode);
 
     void setCell (int source,

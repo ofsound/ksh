@@ -23,7 +23,7 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
     original.engine.setChannelLabel (0, "Sub");
     original.engine.setChannelNote (0, 35);
     original.engine.setChannelLock (0, 1);
-    original.engine.setChannelLoopLength (0, 5);
+    original.engine.setChannelLoopLength (0, 5, 2);
     original.engine.setDeviceActive (false);
     original.engine.setVelocityHumanize (12);
     original.engine.setTimingHumanize (8);
@@ -38,6 +38,7 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
     REQUIRE (restored.engine.channelAt (0).label == "Sub");
     REQUIRE (restored.engine.channelAt (0).note == 35);
     REQUIRE (restored.engine.channelAt (0).lock == 1);
+    REQUIRE (restored.engine.channelAt (0).loopStart == 2);
     REQUIRE (restored.engine.channelAt (0).loopLength == 5);
     REQUIRE_FALSE (restored.engine.isDeviceActive());
     REQUIRE (restored.engine.getVelocityHumanize() == 12);

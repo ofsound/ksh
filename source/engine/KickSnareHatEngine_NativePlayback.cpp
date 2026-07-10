@@ -30,10 +30,14 @@ int KickSnareHatEngine::nativePlaybackPeriod() const
 
     for (int channel = 0; channel < channelCount; ++channel)
     {
-        const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
+        const auto& channelState = channels[static_cast<size_t> (channel)];
+        const int loopStart = clampInt (channelState.loopStart, 0, stepCount - 1);
+        const int loopLength = clampInt (channelState.loopLength, 1, stepCount - loopStart);
 
-        if (channels[static_cast<size_t> (channel)].playbackMode == PlaybackMode::boomerang)
+        if (channelState.playbackMode == PlaybackMode::boomerang)
             baseRows = lcmInt (baseRows, loopLength * 2);
+        else
+            baseRows = lcmInt (baseRows, loopLength);
     }
 
     period = baseRows / stepCount;
@@ -76,23 +80,28 @@ bool KickSnareHatEngine::nativePlaybackSupported() const
 int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) const
 {
     channel = clampInt (channel, 0, Constants::maxChannels - 1);
-    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
-    const auto mode = channels[static_cast<size_t> (channel)].playbackMode;
+    const auto& channelState = channels[static_cast<size_t> (channel)];
+    const int loopStart = clampInt (channelState.loopStart, 0, stepCount - 1);
+    const int loopLength = clampInt (channelState.loopLength, 1, stepCount - loopStart);
+    const auto mode = channelState.playbackMode;
     playbackIndex = static_cast<int> (std::floor (static_cast<double> (playbackIndex)));
 
     if (mode == PlaybackMode::reverse)
     {
         const int activeIndex = mod (playbackIndex, loopLength);
-        return loopLength - 1 - activeIndex;
+        return loopStart + loopLength - 1 - activeIndex;
     }
 
     if (mode == PlaybackMode::boomerang)
     {
         const int activeIndex = mod (playbackIndex, loopLength * 2);
-        return activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex;
+        return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
     }
 
-    return mod (playbackIndex, stepCount);
+    if (loopStart > 0 && playbackIndex < loopStart)
+        return -1;
+
+    return loopStart + mod (playbackIndex - loopStart, loopLength);
 }
 
 std::string KickSnareHatEngine::cycleKey (int source, int channel, int step) const
@@ -200,6 +209,10 @@ NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
         for (int channel = 0; channel < channelCount; ++channel)
         {
             const int playbackStep = playbackStepForChannel (channel, step);
+
+            if (playbackStep < 0)
+                continue;
+
             const auto& cell = generated[static_cast<size_t> (channel)][static_cast<size_t> (playbackStep)];
 
             if (! cell.enabled)

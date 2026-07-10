@@ -138,6 +138,7 @@ struct Channel
     std::string label;
     int note = 36;
     int lock = -1;
+    int loopStart = 0;
     int loopLength = Constants::maxSteps;
     PlaybackMode playbackMode = PlaybackMode::normal;
 };
@@ -148,6 +149,7 @@ struct Channel
     channel.label = std::string { Constants::defaultChannelLabels[static_cast<size_t> (index)] };
     channel.note = Constants::defaultChannelNotes[static_cast<size_t> (index)];
     channel.lock = -1;
+    channel.loopStart = 0;
     channel.loopLength = 16;
     channel.playbackMode = PlaybackMode::normal;
     return channel;

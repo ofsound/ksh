@@ -66,6 +66,7 @@ export function makeDefaultKshState() {
     label: DEFAULT_CHANNEL_LABELS[index] ?? String(index + 1),
     note: DEFAULT_CHANNEL_NOTES[index] ?? 36 + index,
     lock: -1,
+    loopStart: 0,
     loopLength: 16,
     playbackMode: "normal",
   }));
@@ -97,9 +98,12 @@ export const makeDefaultCompactState = makeDefaultKshState;
 
 export function resizeChannelLoopLengths(state, nextStepCount, previousStepCount = state.stepCount) {
   for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
-    const loopLength = state.channels[channel].loopLength;
-    state.channels[channel].loopLength =
-      loopLength === previousStepCount ? nextStepCount : clamp(loopLength, 1, nextStepCount);
+    const row = state.channels[channel];
+    if ((row.loopStart ?? 0) === 0 && row.loopLength === previousStepCount) {
+      row.loopLength = nextStepCount;
+    }
+    row.loopStart = clamp(row.loopStart ?? 0, 0, nextStepCount - 1);
+    row.loopLength = clamp(row.loopLength, 1, nextStepCount - row.loopStart);
   }
 }
 
@@ -157,6 +161,7 @@ export function serializePersistenceState(state) {
       channel.lock,
       channel.loopLength,
       channel.playbackMode,
+      channel.loopStart ?? 0,
     ]),
     sourceSettings: state.sourceSettings.map((settings) => [
       clamp(settings.stepCount, 1, MAX_STEPS),
@@ -244,15 +249,30 @@ export function applyPersistencePayload(state, payload) {
   for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
     if (channelsIn[channel]) {
       const row = channelsIn[channel];
-      state.channels[channel].label = String(row[0] ?? state.channels[channel].label);
-      state.channels[channel].note = clamp(row[1], 0, 127);
-      state.channels[channel].lock = clamp(row[2], -1, SOURCE_COUNT - 1);
-      state.channels[channel].loopLength = clamp(row[3], 1, state.stepCount);
-      if (row[4] !== undefined) {
-        state.channels[channel].playbackMode = normalizePlaybackMode(row[4]);
+      if (Array.isArray(row)) {
+        state.channels[channel].label = String(row[0] ?? state.channels[channel].label);
+        state.channels[channel].note = clamp(row[1], 0, 127);
+        state.channels[channel].lock = clamp(row[2], -1, SOURCE_COUNT - 1);
+        state.channels[channel].loopLength = clamp(row[3], 1, state.stepCount);
+        if (row[4] !== undefined) {
+          state.channels[channel].playbackMode = normalizePlaybackMode(row[4]);
+        }
+        state.channels[channel].loopStart = clamp(row[5] ?? 0, 0, state.stepCount - 1);
+      } else if (row && typeof row === "object") {
+        state.channels[channel].label = String(row.label ?? state.channels[channel].label);
+        state.channels[channel].note = clamp(row.note, 0, 127);
+        state.channels[channel].lock = clamp(row.lock, -1, SOURCE_COUNT - 1);
+        state.channels[channel].loopStart = clamp(row.loopStart ?? 0, 0, state.stepCount - 1);
+        state.channels[channel].loopLength = clamp(row.loopLength, 1, state.stepCount - state.channels[channel].loopStart);
+        state.channels[channel].playbackMode = normalizePlaybackMode(row.playbackMode);
       }
     }
-    state.channels[channel].loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
+    state.channels[channel].loopStart = clamp(state.channels[channel].loopStart ?? 0, 0, state.stepCount - 1);
+    state.channels[channel].loopLength = clamp(
+      state.channels[channel].loopLength,
+      1,
+      state.stepCount - state.channels[channel].loopStart
+    );
   }
 
   state.sourceChannelMutes = makeSourceChannelMutes();
@@ -340,6 +360,13 @@ export function applyStatusMessage(state, selector, args = []) {
     case "refresh_steps":
       state.refreshSteps = clamp(values[0], 1, state.stepCount);
       break;
+    case "channel_loop_length":
+    {
+      const channel = clamp(values[0] - 1, 0, MAX_CHANNELS - 1);
+      state.channels[channel].loopStart = clamp(values[2] === undefined ? state.channels[channel].loopStart : values[2] - 1, 0, state.stepCount - 1);
+      state.channels[channel].loopLength = clamp(values[1], 1, state.stepCount - state.channels[channel].loopStart);
+      break;
+    }
     case "mode":
       state.generationMode =
         String(values[0]) === "per_channel" || String(values[0]) === "static"

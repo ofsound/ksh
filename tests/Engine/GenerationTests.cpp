@@ -214,6 +214,29 @@ TEST_CASE ("channel loop length wraps source step lookup", "[engine][generation]
     REQUIRE (fixture.engine.generatedCellAt (0, 7).velocity == 20);
 }
 
+TEST_CASE ("channel loop range offsets wrapped source step lookup", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setStaticSource (0);
+    fixture.engine.setChannelLoopLength (0, 3, 2);
+    fixture.engine.setCell (0, 0, 0, true, 99, 100, 1);
+    fixture.engine.setCell (0, 0, 2, true, 20, 100, 1);
+    fixture.engine.setCell (0, 0, 3, true, 30, 100, 1);
+    fixture.engine.setCell (0, 0, 4, true, 40, 100, 1);
+    fixture.engine.generateWindow (0, 8, true);
+
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 30);
+    REQUIRE (fixture.engine.generatedCellAt (0, 1).velocity == 40);
+    REQUIRE (fixture.engine.generatedCellAt (0, 2).velocity == 20);
+    REQUIRE (fixture.engine.generatedCellAt (0, 3).velocity == 30);
+    REQUIRE (fixture.engine.generatedCellAt (0, 4).velocity == 40);
+    REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 20);
+}
+
 TEST_CASE ("channel loop length refreshes all wrapped generated cells", "[engine][generation]")
 {
     EngineFixture fixture;
@@ -237,6 +260,30 @@ TEST_CASE ("channel loop length refreshes all wrapped generated cells", "[engine
 
     fixture.engine.setCellVelocity (0, 0, 5, 44);
     REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 30);
+}
+
+TEST_CASE ("channel loop range refreshes all offset wrapped generated cells", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setStaticSource (0);
+    fixture.engine.setChannelLoopLength (0, 3, 2);
+    fixture.engine.setCell (0, 0, 2, true, 20, 100, 1);
+    fixture.engine.setCell (0, 0, 3, true, 30, 100, 1);
+    fixture.engine.setCell (0, 0, 4, true, 40, 100, 1);
+    fixture.engine.generateWindow (0, 8, true);
+
+    fixture.engine.setCellVelocity (0, 0, 2, 88);
+
+    REQUIRE (fixture.engine.generatedCellAt (0, 2).velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 5).velocity == 88);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 30);
+
+    fixture.engine.setCellVelocity (0, 0, 1, 44);
+    REQUIRE (fixture.engine.generatedCellAt (0, 2).velocity == 88);
 }
 
 TEST_CASE ("channel loop length follows step count only when it matched the old step count", "[engine][generation]")
@@ -264,6 +311,18 @@ TEST_CASE ("trailing cells do not make source active", "[engine][generation]")
     fixture.engine.setChannelCount (1);
     fixture.engine.setChannelLoopLength (0, 3);
     fixture.engine.setCell (0, 0, 5, true, 99, 100, 1);
+
+    REQUIRE (test::EngineTestPeer::activeSourceIndicesEmpty (fixture.engine));
+}
+
+TEST_CASE ("cells before an offset channel loop range do not make source active", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setChannelLoopLength (0, 3, 2);
+    fixture.engine.setCell (0, 0, 1, true, 99, 100, 1);
 
     REQUIRE (test::EngineTestPeer::activeSourceIndicesEmpty (fixture.engine));
 }

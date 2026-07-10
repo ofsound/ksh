@@ -52,25 +52,28 @@ size_t cycleCounterIndex (int source, int channel, int sourceStep)
 int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int playbackIndex)
 {
     channel = clampInt (channel, 0, Constants::maxChannels - 1);
-    const int loopLength = clampInt (snapshot.channels[static_cast<size_t> (channel)].loopLength,
-                                     1,
-                                     snapshot.stepCount);
-    const auto mode = snapshot.channels[static_cast<size_t> (channel)].playbackMode;
+    const auto& channelState = snapshot.channels[static_cast<size_t> (channel)];
+    const int loopStart = clampInt (channelState.loopStart, 0, snapshot.stepCount - 1);
+    const int loopLength = clampInt (channelState.loopLength, 1, snapshot.stepCount - loopStart);
+    const auto mode = channelState.playbackMode;
     playbackIndex = static_cast<int> (std::floor (static_cast<double> (playbackIndex)));
 
     if (mode == PlaybackMode::reverse)
     {
         const int activeIndex = mod (playbackIndex, loopLength);
-        return loopLength - 1 - activeIndex;
+        return loopStart + loopLength - 1 - activeIndex;
     }
 
     if (mode == PlaybackMode::boomerang)
     {
         const int activeIndex = mod (playbackIndex, loopLength * 2);
-        return activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex;
+        return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
     }
 
-    return mod (playbackIndex, snapshot.stepCount);
+    if (loopStart > 0 && playbackIndex < loopStart)
+        return -1;
+
+    return loopStart + mod (playbackIndex - loopStart, loopLength);
 }
 
 double swingDelayMsForStep (const PlaybackSnapshot& snapshot, int step)
@@ -106,10 +109,10 @@ Cell staticSourceCellForStep (const PlaybackSnapshot& snapshot, int source, int 
 
     const int sourceStepCount =
         clampInt (snapshot.sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
-    const int loopLength = clampInt (snapshot.channels[static_cast<size_t> (channel)].loopLength,
-                                     1,
-                                     sourceStepCount);
-    const int sourceStep = mod (playbackStep, loopLength);
+    const auto& channelState = snapshot.channels[static_cast<size_t> (channel)];
+    const int loopStart = clampInt (channelState.loopStart, 0, sourceStepCount - 1);
+    const int loopLength = clampInt (channelState.loopLength, 1, sourceStepCount - loopStart);
+    const int sourceStep = loopStart + mod (playbackStep - loopStart, loopLength);
 
     Cell cell = snapshot.sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)]
                     ? defaultCell()
@@ -300,6 +303,10 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
     for (int channel = 0; channel < snapshot.channelCount; ++channel)
     {
         const int playbackStep = playbackStepForChannel (snapshot, channel, globalStep);
+
+        if (playbackStep < 0)
+            continue;
+
         const Cell staticSourceCell =
             staticSourceOverride >= 0
                 ? staticSourceCellForStep (snapshot, staticSourceOverride, channel, playbackStep)

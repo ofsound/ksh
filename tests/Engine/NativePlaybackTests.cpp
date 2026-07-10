@@ -334,6 +334,20 @@ TEST_CASE ("reverse playback mirrors transport position across active length", "
     REQUIRE (fixture.engine.playbackStepForChannel (0, 3) == 0);
 }
 
+TEST_CASE ("reverse playback mirrors transport position across offset active range", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setChannelLoopLength (0, 3, 2);
+    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::reverse);
+
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 0) == 4);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 1) == 3);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 2) == 2);
+}
+
 TEST_CASE ("boomerang playback repeats endpoints across active length", "[engine][native]")
 {
     EngineFixture fixture;
@@ -353,6 +367,50 @@ TEST_CASE ("boomerang playback repeats endpoints across active length", "[engine
     REQUIRE (fixture.engine.playbackStepForChannel (0, 3) + 1 == 3);
     REQUIRE (fixture.engine.playbackStepForChannel (0, 4) + 1 == 2);
     REQUIRE (fixture.engine.playbackStepForChannel (0, 5) + 1 == 1);
+}
+
+TEST_CASE ("forward playback wraps within offset loop range", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setChannelLoopLength (0, 10, 2);
+
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 0) == -1);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 1) == -1);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 2) == 2);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 3) == 3);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 12) == 2);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 13) == 3);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 16) == 6);
+}
+
+TEST_CASE ("forward playback repeats offset loop hits on loop length cadence", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setChannelLoopLength (0, 10, 2);
+    fixture.engine.setCell (0, 0, 3, true, 10, 100, 1);
+    fixture.engine.setCell (0, 0, 8, true, 20, 100, 1);
+    fixture.engine.setCell (0, 0, 10, true, 30, 100, 1);
+    fixture.engine.generateWindow (0, 16, true);
+
+    const auto built = fixture.engine.buildNativePlaybackRows();
+    const auto& rows = built.rows;
+
+    REQUIRE (built.stepCount == 80);
+    requireNativeRow (rows[3], nativeHitRow (36, 10, 100, 1, 0.0, 1, 4, 1, 4));
+    requireNativeRow (rows[8], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
+    requireNativeRow (rows[10], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
+    requireNativeRow (rows[13], nativeHitRow (36, 10, 100, 1, 0.0, 1, 4, 1, 4));
+    requireNativeRow (rows[18], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
+    requireNativeRow (rows[20], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
+    requireNativeRow (rows[0], {});
+    requireNativeRow (rows[16], {});
 }
 
 TEST_CASE ("native playback rows apply playback modes to metadata", "[engine][native]")

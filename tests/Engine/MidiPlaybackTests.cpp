@@ -431,3 +431,36 @@ TEST_CASE ("midi playback emits evenly spaced roll hits across blocks", "[engine
 
     REQUIRE (deferredHits == 1);
 }
+
+TEST_CASE ("midi playback repeats offset loop hits on loop length cadence", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setChannelLoopLength (0, 10, 2);
+    fixture.engine.setCell (0, 0, 3, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 8, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 10, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 16, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const double beatsPerStep = snapshot.beatsPerStep;
+    std::vector<int> hitSteps;
+
+    for (int step = 0; step < 21; ++step)
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (step) * beatsPerStep, 120.0, true, 512);
+
+        if (countNoteOns (result.midi) > 0)
+            hitSteps.push_back (step);
+    }
+
+    REQUIRE (hitSteps == std::vector<int> { 3, 8, 10, 13, 18, 20 });
+}

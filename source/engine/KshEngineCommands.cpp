@@ -237,7 +237,11 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 
     if (selector == "channel_loop_length")
     {
-        engine.setChannelLoopLength (zeroBased (argInt (args, 0, 1)), argInt (args, 1, engine.getStepCount()));
+        const int channel = zeroBased (argInt (args, 0, 1));
+        const int fallbackStart = engine.channelAt (channel).loopStart + 1;
+        engine.setChannelLoopLength (channel,
+                                     argInt (args, 1, engine.getStepCount()),
+                                     zeroBased (argInt (args, 2, fallbackStart)));
         return true;
     }
 

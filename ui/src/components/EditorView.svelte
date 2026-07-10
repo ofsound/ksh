@@ -19,7 +19,7 @@
     isStepBeyondLoopLength,
     channelToneColor,
     lockLabel,
-    loopLengthForChannel,
+    loopRangeForChannel,
     modifierLayerMode,
     mutedChannelColor,
     normalizeSourceLayerMode,
@@ -35,7 +35,6 @@
     createCellDrag,
     headerDragNextValue,
     headerValueForState,
-    loopDragNextValue,
     resolveCellDragMode,
     stepFromGridX,
     toggleCellOnRelease,
@@ -64,7 +63,7 @@
     setRateCommand,
     setHeaderValue,
     setChannelLabel,
-    setRowLoopLength,
+    setRowLoopRange,
     setSelectedCell,
     setSourceLayerMode,
     setStandaloneTransportPlaying,
@@ -90,7 +89,7 @@
   let gridEl = $state(null);
   let headerDrag = $state(null);
   let cellDrag = $state(null);
-  let loopDrag = $state(null);
+  let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
   let muteDrag = $state(null);
   let hoverLayerMode = $state(null);
@@ -290,15 +289,21 @@
     return `${cell.cycleInverted ? "!" : ""}${value}`;
   }
 
-  function loopLengthClass(channel) {
-    const shortened = loopLengthForChannel(session.kshState, channel) < session.kshState.stepCount;
-    if (loopDrag?.channel === channel) {
+  function loopRangeClass(channel) {
+    const range = loopRangeForChannel(session.kshState, channel);
+    const shortened = range.start > 0 || range.length < session.kshState.stepCount;
+    if (loopRangeDrag?.channel === channel) {
       return "text-accent";
     }
     if (shortened) {
       return "text-accent";
     }
     return "text-info";
+  }
+
+  function loopBraceStyle(channel) {
+    const range = loopRangeForChannel(session.kshState, channel);
+    return `left:${range.start * gridCellW}px;width:${range.length * gridCellW}px;height:${gridCellH}px;`;
   }
 
   function isCellInteractive(channel, step) {
@@ -499,29 +504,48 @@
     cellDrag = null;
   }
 
-  function beginLoopDrag(channel, clientY, event) {
+  function beginLoopRangeDrag(channel, edge, clientX, event) {
+    const range = loopRangeForChannel(session.kshState, channel);
     beginEditGestureHistory();
-    loopDrag = {
+    loopRangeDrag = {
       channel,
-      startY: clientY,
-      startValue: session.kshState.channels[channel].loopLength,
+      edge,
+      startX: clientX,
+      startStart: range.start,
+      startLength: range.length,
     };
     setSelectedCell(channel, session.selectedStep);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function moveLoopDrag(clientY) {
-    if (!loopDrag) {
+  function moveLoopRangeDrag(clientX) {
+    if (!loopRangeDrag) {
       return;
     }
-    setRowLoopLength(loopDrag.channel, loopDragNextValue(loopDrag, clientY));
+
+    const deltaSteps = Math.round((clientX - loopRangeDrag.startX) / gridCellW);
+    if (loopRangeDrag.edge === "left") {
+      const originalEnd = loopRangeDrag.startStart + loopRangeDrag.startLength - 1;
+      const nextStart = Math.min(
+        Math.max(0, loopRangeDrag.startStart + deltaSteps),
+        originalEnd
+      );
+      setRowLoopRange(loopRangeDrag.channel, nextStart, originalEnd - nextStart + 1);
+      return;
+    }
+
+    const nextEnd = Math.max(
+      loopRangeDrag.startStart,
+      Math.min(session.kshState.stepCount - 1, loopRangeDrag.startStart + loopRangeDrag.startLength - 1 + deltaSteps)
+    );
+    setRowLoopRange(loopRangeDrag.channel, loopRangeDrag.startStart, nextEnd - loopRangeDrag.startStart + 1);
   }
 
-  async function endLoopDrag() {
-    if (loopDrag) {
-      await commitEditGestureHistory("Change loop length");
+  async function endLoopRangeDrag() {
+    if (loopRangeDrag) {
+      await commitEditGestureHistory("Change row range");
     }
-    loopDrag = null;
+    loopRangeDrag = null;
   }
 
   function channelFromMuteDrag(clientX, clientY) {
@@ -1155,21 +1179,7 @@
           </button>
           <button
             type="button"
-            class={`w-8 text-center text-[13px] ${loopLengthClass(channel)}`}
-            onpointerdown={(event) => beginLoopDrag(channel, event.clientY, event)}
-            onpointermove={(event) => {
-              if (loopDrag?.channel === channel) {
-                moveLoopDrag(event.clientY);
-              }
-            }}
-            onpointerup={endLoopDrag}
-            onpointercancel={endLoopDrag}
-          >
-            L{session.kshState.channels[channel]?.loopLength ?? 16}
-          </button>
-          <button
-            type="button"
-            class="w-5 text-center text-[13px] text-accent"
+            class={`w-5 text-center text-[13px] ${loopRangeClass(channel)}`}
             onclick={() => cycleChannelPlaybackMode(channel)}
           >
             {playbackModeLabel(session.kshState.channels[channel]?.playbackMode ?? "normal")}
@@ -1219,7 +1229,44 @@
           ></button>
         </div>
 
-        <div class="flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
+        <div class="relative flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
+          <div
+            class="pointer-events-none absolute top-0 z-10 rounded-[3px] border border-accent/75 shadow-[0_0_8px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
+            style={loopBraceStyle(channel)}
+            aria-hidden="true"
+          ></div>
+          <button
+            type="button"
+            class="absolute top-0 z-20 flex w-4 -translate-x-1/2 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;height:${gridCellH}px;`}
+            aria-label="Move row range start"
+            onpointerdown={(event) => beginLoopRangeDrag(channel, "left", event.clientX, event)}
+            onpointermove={(event) => {
+              if (loopRangeDrag?.channel === channel && loopRangeDrag?.edge === "left") {
+                moveLoopRangeDrag(event.clientX);
+              }
+            }}
+            onpointerup={endLoopRangeDrag}
+            onpointercancel={endLoopRangeDrag}
+          >
+            ⋮
+          </button>
+          <button
+            type="button"
+            class="absolute top-0 z-20 flex w-4 -translate-x-1/2 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;height:${gridCellH}px;`}
+            aria-label="Move row range end"
+            onpointerdown={(event) => beginLoopRangeDrag(channel, "right", event.clientX, event)}
+            onpointermove={(event) => {
+              if (loopRangeDrag?.channel === channel && loopRangeDrag?.edge === "right") {
+                moveLoopRangeDrag(event.clientX);
+              }
+            }}
+            onpointerup={endLoopRangeDrag}
+            onpointercancel={endLoopRangeDrag}
+          >
+            ⋮
+          </button>
           {#each allStepCols as step (step)}
             <button
               type="button"

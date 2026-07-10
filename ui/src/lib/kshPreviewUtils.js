@@ -1,5 +1,6 @@
 import { SILENT_SOURCE, SOURCE_COUNT, clamp } from "./kshConstants.js";
 import { cloneCell, defaultCell } from "./kshUiState.js";
+import { loopRangeForChannel } from "./kshEditorUtils.js";
 
 function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
@@ -19,8 +20,8 @@ function isSourceEmpty(state, source) {
       continue;
     }
 
-    const loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
-    for (let step = 0; step < Math.min(state.stepCount, loopLength); step += 1) {
+    const { start, end } = loopRangeForChannel(state, channel);
+    for (let step = start; step <= end; step += 1) {
       if (state.sources[source][channel][step].enabled) {
         return false;
       }
@@ -54,8 +55,8 @@ function generatedCellFromSource(state, source, channel, step) {
     };
   }
 
-  const loopLength = clamp(state.channels[channel].loopLength, 1, state.stepCount);
-  const sourceStep = mod(step, loopLength);
+  const { start, length } = loopRangeForChannel(state, channel);
+  const sourceStep = start + mod(step - start, length);
 
   if (state.sourceChannelMutes[source][channel]) {
     return {

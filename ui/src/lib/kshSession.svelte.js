@@ -18,6 +18,7 @@ import {
   cycleGenerationMode,
   cycleLayerMode,
   cycleRate,
+  loopRangeForChannel,
   normalizePatternViewScale,
   nextPlaybackMode,
   shiftSourceChannelRow,
@@ -467,12 +468,8 @@ export function setSelectedChannel(channel) {
 
 export function setSelectedCell(channel, step) {
   session.selectedChannel = clamp(channel, 0, MAX_CHANNELS - 1);
-  const loopLength = clamp(
-    session.kshState.channels[session.selectedChannel]?.loopLength ?? session.kshState.stepCount,
-    1,
-    session.kshState.stepCount
-  );
-  session.selectedStep = clamp(step, 0, loopLength - 1);
+  const range = loopRangeForChannel(session.kshState, session.selectedChannel);
+  session.selectedStep = clamp(step, range.start, range.end);
 }
 
 export async function selectSource(source) {
@@ -541,9 +538,11 @@ export async function copyPatternToSource(destination) {
 }
 
 export async function sendChannelLoopLength(channel) {
+  const row = session.kshState.channels[channel];
   await sendCommand("channel_loop_length", [
     channel + 1,
-    session.kshState.channels[channel].loopLength,
+    row.loopLength,
+    (row.loopStart ?? 0) + 1,
   ]);
 }
 
@@ -596,14 +595,23 @@ export async function setHeaderValue(id, value) {
 }
 
 export async function setRowLoopLength(channel, value) {
-  const next = clamp(value, 1, session.kshState.stepCount);
-  if (session.kshState.channels[channel].loopLength === next) {
+  const start = session.kshState.channels[channel].loopStart ?? 0;
+  await setRowLoopRange(channel, start, value);
+}
+
+export async function setRowLoopRange(channel, start, length) {
+  const nextStart = clamp(start, 0, session.kshState.stepCount - 1);
+  const nextLength = clamp(length, 1, session.kshState.stepCount - nextStart);
+  const row = session.kshState.channels[channel];
+  if ((row.loopStart ?? 0) === nextStart && row.loopLength === nextLength) {
     return;
   }
 
-  session.kshState.channels[channel].loopLength = next;
-  if (session.selectedChannel === channel && session.selectedStep >= next) {
-    session.selectedStep = next - 1;
+  row.loopStart = nextStart;
+  row.loopLength = nextLength;
+  if (session.selectedChannel === channel) {
+    const range = loopRangeForChannel(session.kshState, channel);
+    session.selectedStep = clamp(session.selectedStep, range.start, range.end);
   }
   bumpState();
   await sendChannelLoopLength(channel);
@@ -621,6 +629,7 @@ export async function setChannelLabel(channel, text) {
 export async function resetSourceChannelRow(source, channel) {
   await commitEditHistory("Reset channel row", async () => {
     session.kshState.sourceChannelMutes[source][channel] = 0;
+    session.kshState.channels[channel].loopStart = 0;
     session.kshState.channels[channel].loopLength = session.kshState.stepCount;
 
     for (let step = 0; step < MAX_STEPS; step += 1) {

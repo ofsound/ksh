@@ -14,6 +14,7 @@ import {
   GRID_CELL_W,
   cycleScrollIndex,
   cycleStateFromScrollIndex,
+  loopRangeForChannel,
   normalizeSourceLayerMode,
   normalizeSourceValueMode,
   stepCycleScrollIndex,
@@ -75,11 +76,6 @@ export function clampHeaderValue(state, id, value) {
 }
 
 export function headerDragNextValue(drag, clientY) {
-  const delta = drag.startY - clientY;
-  return drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE);
-}
-
-export function loopDragNextValue(drag, clientY) {
   const delta = drag.startY - clientY;
   return drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE);
 }
@@ -165,10 +161,9 @@ export function applySourcePaintRange(state, source, drag, fromStep, toStep) {
     return [];
   }
 
-  const lo = Math.min(fromStep, toStep);
-  let hi = Math.max(fromStep, toStep);
-  const loopLength = clamp(state.channels[drag.channel].loopLength, 1, state.stepCount);
-  hi = Math.min(hi, loopLength - 1);
+  const range = loopRangeForChannel(state, drag.channel);
+  const lo = Math.max(Math.min(fromStep, toStep), range.start);
+  const hi = Math.min(Math.max(fromStep, toStep), range.end);
   const changedSteps = [];
 
   for (let step = lo; step <= hi; step += 1) {

@@ -23,6 +23,13 @@ int clampStep (int step)
     return clampInt (step, 0, Constants::maxSteps - 1);
 }
 
+void clampChannelLoopRange (Channel& channel, int stepCount)
+{
+    stepCount = clampInt (stepCount, 1, Constants::maxSteps);
+    channel.loopStart = clampInt (channel.loopStart, 0, stepCount - 1);
+    channel.loopLength = clampInt (channel.loopLength, 1, stepCount - channel.loopStart);
+}
+
 int normalizeCycleOffset (int cycleOffset, int cycle)
 {
     return clampInt (cycleOffset, 0, clampInt (cycle, 1, 64) - 1);
@@ -283,8 +290,12 @@ void KickSnareHatEngine::setStepCount (int count)
     refreshSteps = clampInt (refreshSteps, 1, stepCount);
 
     for (auto& channel : channels)
-        channel.loopLength =
-            channel.loopLength == previousStepCount ? stepCount : clampInt (channel.loopLength, 1, stepCount);
+    {
+        if (channel.loopStart == 0 && channel.loopLength == previousStepCount)
+            channel.loopLength = stepCount;
+
+        clampChannelLoopRange (channel, stepCount);
+    }
 
     recomposeWindow (0, stepCount, true);
     status ("steps " + std::to_string (stepCount));
@@ -429,13 +440,15 @@ void KickSnareHatEngine::setChannelLock (int channel, int lock)
             + (locked < 0 ? "random" : std::to_string (locked + 1)));
 }
 
-void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength)
+void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int loopStart)
 {
     channel = clampChannel (channel);
-    channels[static_cast<size_t> (channel)].loopLength = clampInt (loopLength, 1, stepCount);
+    auto& channelState = channels[static_cast<size_t> (channel)];
+    channelState.loopStart = clampInt (loopStart, 0, stepCount - 1);
+    channelState.loopLength = clampInt (loopLength, 1, stepCount - channelState.loopStart);
     recomposeWindow (0, stepCount, true);
     status ("channel_loop_length " + std::to_string (channel + 1) + " "
-            + std::to_string (channels[static_cast<size_t> (channel)].loopLength));
+            + std::to_string (channelState.loopLength) + " " + std::to_string (channelState.loopStart + 1));
 }
 
 void KickSnareHatEngine::setChannelPlaybackMode (int channel, PlaybackMode mode)
@@ -467,8 +480,10 @@ Cell KickSnareHatEngine::generatedCellFromSource (int source, int channel, int s
     channel = clampChannel (channel);
 
     const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
-    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
-    const int sourceStep = mod (step, loopLength);
+    const auto& channelState = channels[static_cast<size_t> (channel)];
+    const int loopStart = clampInt (channelState.loopStart, 0, sourceStepCount - 1);
+    const int loopLength = clampInt (channelState.loopLength, 1, sourceStepCount - loopStart);
+    const int sourceStep = loopStart + mod (step - loopStart, loopLength);
 
     Cell cell;
 
@@ -509,15 +524,20 @@ void KickSnareHatEngine::refreshGeneratedCellsForSourceEdit (int source, int cha
 
     source = clampSource (source);
     const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
-    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
+    const auto& channelState = channels[static_cast<size_t> (channel)];
+    const int loopStart = clampInt (channelState.loopStart, 0, sourceStepCount - 1);
+    const int loopLength = clampInt (channelState.loopLength, 1, sourceStepCount - loopStart);
 
-    if (sourceStep >= loopLength)
+    if (sourceStep < loopStart || sourceStep >= loopStart + loopLength)
         return;
 
     bool changed = false;
 
-    for (int generatedStep = sourceStep; generatedStep < stepCount; generatedStep += loopLength)
+    for (int generatedStep = 0; generatedStep < stepCount; ++generatedStep)
     {
+        if (loopStart + mod (generatedStep - loopStart, loopLength) != sourceStep)
+            continue;
+
         if (generatedCellForSourceEdit (source, channel, generatedStep) != nullptr)
         {
             generated[static_cast<size_t> (channel)][static_cast<size_t> (generatedStep)] =
@@ -653,10 +673,11 @@ void KickSnareHatEngine::resetSourceChannel (int source, int channel)
     for (int step = 0; step < Constants::maxSteps; ++step)
         sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] = defaultCell();
 
+    channels[static_cast<size_t> (channel)].loopStart = 0;
     channels[static_cast<size_t> (channel)].loopLength = stepCount;
     recomposeWindow (0, stepCount, true);
     status ("channel_loop_length " + std::to_string (channel + 1) + " "
-            + std::to_string (channels[static_cast<size_t> (channel)].loopLength));
+            + std::to_string (channels[static_cast<size_t> (channel)].loopLength) + " 1");
     status ("source_channel_reset " + std::to_string (source + 1) + " " + std::to_string (channel + 1));
 }
 
@@ -686,9 +707,11 @@ bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const
             continue;
 
         const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (sourceIndex)].stepCount, 1, Constants::maxSteps);
-        const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
+        const auto& channelState = channels[static_cast<size_t> (channel)];
+        const int loopStart = clampInt (channelState.loopStart, 0, sourceStepCount - 1);
+        const int loopLength = clampInt (channelState.loopLength, 1, sourceStepCount - loopStart);
 
-        for (int step = 0; step < std::min (sourceStepCount, loopLength); ++step)
+        for (int step = loopStart; step < loopStart + loopLength; ++step)
         {
             if (sources[static_cast<size_t> (sourceIndex)][static_cast<size_t> (channel)][static_cast<size_t> (step)].enabled)
                 return false;
@@ -909,6 +932,7 @@ nlohmann::json KickSnareHatEngine::snapshot() const
             { "label", channels[static_cast<size_t> (channel)].label },
             { "note", channels[static_cast<size_t> (channel)].note },
             { "lock", channels[static_cast<size_t> (channel)].lock },
+            { "loopStart", channels[static_cast<size_t> (channel)].loopStart },
             { "loopLength", channels[static_cast<size_t> (channel)].loopLength },
             { "playbackMode", playbackModeToString (channels[static_cast<size_t> (channel)].playbackMode) }
         });
@@ -990,7 +1014,8 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
             channelState.note,
             channelState.lock,
             channelState.loopLength,
-            playbackModeToString (channelState.playbackMode)
+            playbackModeToString (channelState.playbackMode),
+            channelState.loopStart
         }));
     }
 
@@ -1110,10 +1135,12 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
 
             if (row.size() > 4)
                 channels[static_cast<size_t> (channel)].playbackMode = normalizePlaybackMode (row[4].get<std::string>());
+
+            if (row.size() > 5)
+                channels[static_cast<size_t> (channel)].loopStart = clampInt (row[5].get<int>(), 0, stepCount - 1);
         }
 
-        channels[static_cast<size_t> (channel)].loopLength =
-            clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
+        clampChannelLoopRange (channels[static_cast<size_t> (channel)], stepCount);
     }
 
     for (auto& mutes : sourceChannelMutes)
