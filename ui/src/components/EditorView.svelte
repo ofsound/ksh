@@ -138,6 +138,7 @@
   const patternHeading = $derived(
     session.selectedSource === SILENT_SOURCE ? "M" : `P${session.selectedSource + 1}`
   );
+  const patternHeadingWidthLabel = "P16: velocity";
   const effectiveLayerMode = $derived(
     normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
   );
@@ -961,10 +962,16 @@
   </div>
 
   <header class="flex h-[68px] shrink-0 items-center border-b border-border-subtle px-3 text-[11px]">
-    <div class="flex h-full items-center pr-3">
+    <div class="grid h-full shrink-0 items-center">
+      <span
+        class="invisible col-start-1 row-start-1 h-[54px] whitespace-nowrap text-[54px] font-extrabold leading-none tracking-tighter"
+        aria-hidden="true"
+      >
+        {patternHeadingWidthLabel}
+      </span>
       <button
         type="button"
-        class="h-[54px] w-[548px] text-left text-[54px] font-extrabold leading-none tracking-tighter text-accent-strong outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+        class="col-start-1 row-start-1 h-[54px] w-full whitespace-nowrap text-left text-[54px] font-extrabold leading-none tracking-tighter text-accent-strong outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         aria-label={session.selectedSource === SILENT_SOURCE ? `Mute pattern, ${layerHeading} layer` : `Pattern ${session.selectedSource + 1}, ${layerHeading} layer`}
         title="Click to cycle layer"
         onclick={cycleSourceLayerMode}
@@ -973,11 +980,11 @@
       </button>
     </div>
 
-    <div class="header-section">
-      <div class="flex items-center gap-2 pt-[15px]">
+    <div class="header-section h-full items-center">
+      <div class="flex items-center gap-2">
         <button
           type="button"
-          class={`header-icon-button ${session.patternRecordingEnabled ? "bg-accent-strong text-text-inverse" : ""}`}
+          class="header-icon-button text-danger"
           aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
           aria-pressed={Boolean(session.patternRecordingEnabled)}
           title={session.patternRecordingEnabled ? "Stop pattern recording" : "Record MIDI or ASDFGHJK into the selected pattern"}
@@ -990,7 +997,7 @@
         </button>
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(-1)}>◀</button>
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(1)}>▶</button>
-        <button type="button" class="header-icon-button text-[18px]" disabled={session.selectedSource === SILENT_SOURCE} onclick={clearPattern}>×</button>
+        <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={clearPattern}>×</button>
       </div>
     </div>
 

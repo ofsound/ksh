@@ -55,7 +55,7 @@
   }
 
   .header-icon-button {
-    @apply flex h-[24px] min-w-[20px] items-center justify-center rounded-sm px-1 text-[14px] font-semibold leading-none text-accent outline-none;
+    @apply flex h-[41px] w-[42px] items-center justify-center rounded-sm px-0 text-[32px] font-semibold leading-none text-text outline-none;
   }
 
   .header-icon-button:disabled {
