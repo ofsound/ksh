@@ -2,16 +2,28 @@
   import { onMount } from "svelte";
   import CompactStrip from "./components/CompactStrip.svelte";
   import EditorView from "./components/EditorView.svelte";
+  import HeaderValueDrag from "./components/HeaderValueDrag.svelte";
   import ThemeModeToggle from "./components/ThemeModeToggle.svelte";
   import UiScaleDragInput from "./components/UiScaleDragInput.svelte";
   import { SILENT_SOURCE } from "./lib/kshConstants.js";
-  import { combinedDimensions, previewPanelHeight } from "./lib/kshEditorUtils.js";
+  import { headerDragNextValue, headerValueForState } from "./lib/kshEditorInteractions.js";
   import {
+    GRID_CELL_LEFT_GAP,
+    GRID_SIDEBAR_W,
+    combinedDimensions,
+    generationModeLabel,
+    previewPanelHeight,
+  } from "./lib/kshEditorUtils.js";
+  import {
+    beginEditGestureHistory,
+    commitEditGestureHistory,
+    cycleMode,
     initKshSession,
     initializeThemeModeFromNative,
     initializeUiScaleFromNative,
     session,
     setExplicitUiScalePercent,
+    setHeaderValue,
     setThemeMode,
     setUiScaleViewportSize,
     syncEditorScaleMinimumToNative,
@@ -21,6 +33,7 @@
   import { uiScaleState } from "./lib/uiScale.svelte.js";
 
   let appRoot = $state(null);
+  let randomHeaderDrag = $state(null);
 
   onMount(() => {
     initializeThemeModeFromNative();
@@ -67,6 +80,32 @@
     width: Math.round(dims.width * uiScaleState.scale),
     height: Math.round(dims.height * uiScaleState.scale),
   });
+  const randomOverlayLeft = $derived(GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP + 20);
+
+  function beginRandomHeaderDrag(id, clientY) {
+    beginEditGestureHistory();
+    randomHeaderDrag = {
+      id,
+      startY: clientY,
+      startValue: headerValueForState(session.kshState, id),
+    };
+  }
+
+  function moveRandomHeaderDrag(clientY) {
+    if (!randomHeaderDrag) {
+      return;
+    }
+
+    const next = headerDragNextValue(randomHeaderDrag, clientY);
+    setHeaderValue(randomHeaderDrag.id, next);
+  }
+
+  async function endRandomHeaderDrag() {
+    if (randomHeaderDrag) {
+      await commitEditGestureHistory("Change refresh rate");
+    }
+    randomHeaderDrag = null;
+  }
 </script>
 
 <main class="bg-app" bind:this={appRoot}>
@@ -107,6 +146,26 @@
             <span class="drum-stick drum-stick-left"></span>
             <span class="drum-stick drum-stick-right"></span>
           </div>
+        </div>
+        <div
+          class="absolute top-[72px] z-30 flex items-start gap-4 border-l border-r border-border-subtle px-5 py-1"
+          style={`left:${randomOverlayLeft}px;`}
+        >
+          <div class="flex flex-col items-start">
+            <span class="header-label">Random</span>
+            <button type="button" class="header-button min-w-[164px] bg-control-secondary text-text" onclick={cycleMode}>
+              {generationModeLabel(session.kshState.generationMode)}
+            </button>
+          </div>
+          <HeaderValueDrag
+            id="refresh"
+            label="Rate"
+            value={session.kshState.refreshSteps}
+            active={randomHeaderDrag?.id === "refresh"}
+            onBegin={beginRandomHeaderDrag}
+            onMove={moveRandomHeaderDrag}
+            onEnd={endRandomHeaderDrag}
+          />
         </div>
         <CompactStrip />
         <footer class="absolute inset-x-0 bottom-0 z-20 flex h-[24px] items-center justify-end bg-app px-3 text-[11px] text-text-muted">

@@ -6,6 +6,7 @@ import {
   SILENT_SOURCE,
   SOURCE_COUNT,
   clamp,
+  normalizeRate,
 } from "./kshConstants.js";
 import {
   clampHeaderValue,
@@ -689,6 +690,20 @@ export async function cycleRateCommand(direction = 1) {
     session.kshState.sourceSettings[session.selectedSource].rate = session.kshState.rate;
     bumpState();
     await sendCommand("source_rate", [session.selectedSource + 1, session.kshState.rate]);
+  });
+}
+
+export async function setRateCommand(rate) {
+  const nextRate = normalizeRate(rate);
+  if (session.selectedSource === SILENT_SOURCE || session.kshState.rate === nextRate) {
+    return;
+  }
+
+  await commitEditHistory("Change step value", async () => {
+    session.kshState.rate = nextRate;
+    session.kshState.sourceSettings[session.selectedSource].rate = nextRate;
+    bumpState();
+    await sendCommand("source_rate", [session.selectedSource + 1, nextRate]);
   });
 }
 

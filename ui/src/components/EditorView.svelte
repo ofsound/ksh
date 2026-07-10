@@ -9,7 +9,6 @@
     GRID_SIDEBAR_W,
     cycleOffsetLabel,
     editorDimensions,
-    generationModeLabel,
     gridCellHeight,
     gridCellPadding,
     gridCellWidth,
@@ -52,8 +51,6 @@
     copyPatternToSource,
     cycleChannelLock,
     cycleChannelPlaybackMode,
-    cycleMode,
-    cycleRateCommand,
     cycleSourceLayerMode,
     incrementChannelNote,
     isEditorFlashing,
@@ -64,6 +61,7 @@
     sendCellsForChannel,
     setSourceChannelMute,
     session,
+    setRateCommand,
     setHeaderValue,
     setChannelLabel,
     setRowLoopLength,
@@ -101,8 +99,19 @@
   let channelRenameTap = $state({ channel: -1, at: 0 });
   let sourceRowResetTap = $state({ channel: -1, at: 0 });
   let lastAudition = $state({ channel: -1, at: 0 });
+  let stepValueMenuOpen = $state(false);
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
+  const stepValueOptions = [
+    { value: "4n", mark: "♩", shortLabel: "Quarter", menuLabel: "Quarter note" },
+    { value: "4nt", mark: "♩3", shortLabel: "Quarter T", menuLabel: "Quarter triplet" },
+    { value: "8n", mark: "♪", shortLabel: "Eighth", menuLabel: "Eighth note" },
+    { value: "8nt", mark: "♪3", shortLabel: "Eighth T", menuLabel: "Eighth triplet" },
+    { value: "16n", mark: "♬", shortLabel: "16th", menuLabel: "16th note" },
+    { value: "16nt", mark: "♬3", shortLabel: "16th T", menuLabel: "16th triplet" },
+    { value: "32n", mark: "♬", shortLabel: "32nd", menuLabel: "32nd note" },
+    { value: "32nt", mark: "♬3", shortLabel: "32nd T", menuLabel: "32nd triplet" },
+  ];
 
   const patternScale = $derived(session.patternViewScale);
   const dims = $derived(editorDimensions(session.kshState, patternScale));
@@ -126,8 +135,15 @@
   );
   const projectDateLabel = $derived(formatProjectDate(session.projectModifiedAt || session.projectCreatedAt));
   const allStepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
+  const patternHeading = $derived(
+    session.selectedSource === SILENT_SOURCE ? "M" : `P${session.selectedSource + 1}`
+  );
   const effectiveLayerMode = $derived(
     normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
+  );
+  const layerHeading = $derived(sourceLayerLabel(effectiveLayerMode).toLowerCase());
+  const selectedStepValueOption = $derived(
+    stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
   );
 
   function gridLeft() {
@@ -140,6 +156,17 @@
 
   function activeCellBackground(background) {
     return `linear-gradient(to bottom, color-mix(in srgb, var(--color-text) 18%, transparent) 0%, transparent 36%, color-mix(in srgb, var(--color-app) 18%, transparent) 100%), ${background}`;
+  }
+
+  async function chooseStepValue(value) {
+    stepValueMenuOpen = false;
+    await setRateCommand(value);
+  }
+
+  function closeStepValueMenuOnFocusOut(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      stepValueMenuOpen = false;
+    }
   }
 
   function cellStyle(channel, step) {
@@ -934,49 +961,20 @@
   </div>
 
   <header class="flex h-[68px] shrink-0 items-center border-b border-border-subtle px-3 text-[11px]">
-    <div class="header-section border-l-0 pl-0">
-      <HeaderValueDrag
-        id="steps"
-        label="Steps"
-        value={session.kshState.stepCount}
-        active={headerDrag?.id === "steps"}
-        onBegin={beginHeaderDrag}
-        onMove={moveHeaderDrag}
-        onEnd={endHeaderDrag}
-      />
-      <div class="flex flex-col items-start">
-        <span class="header-label">Step Value</span>
-        <button
-          type="button"
-          class="header-button min-w-[68px] bg-control-secondary text-text"
-          onclick={(event) => cycleRateCommand(event.shiftKey ? -1 : 1)}
-        >
-          {session.kshState.rate}
-        </button>
-      </div>
+    <div class="flex h-full items-center pr-3">
+      <button
+        type="button"
+        class="h-[54px] w-[548px] text-left text-[54px] font-extrabold leading-none tracking-tighter text-accent-strong outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+        aria-label={session.selectedSource === SILENT_SOURCE ? `Mute pattern, ${layerHeading} layer` : `Pattern ${session.selectedSource + 1}, ${layerHeading} layer`}
+        title="Click to cycle layer"
+        onclick={cycleSourceLayerMode}
+      >
+        {patternHeading}: {layerHeading}
+      </button>
     </div>
 
     <div class="header-section">
-      <div class="flex flex-col items-start">
-        <span class="header-label">Random</span>
-        <button type="button" class="header-button min-w-[82px] bg-control-secondary text-text" onclick={cycleMode}>
-          {generationModeLabel(session.kshState.generationMode)}
-        </button>
-      </div>
-      <HeaderValueDrag
-        id="refresh"
-        label="Rate"
-        value={session.kshState.refreshSteps}
-        active={headerDrag?.id === "refresh"}
-        onBegin={beginHeaderDrag}
-        onMove={moveHeaderDrag}
-        onEnd={endHeaderDrag}
-      />
-    </div>
-
-    <div class="header-section">
-      <div class="flex items-center gap-3 pt-[15px]">
-        <span class="text-[13px] font-semibold text-text">Pattern:</span>
+      <div class="flex items-center gap-2 pt-[15px]">
         <button
           type="button"
           class={`header-icon-button ${session.patternRecordingEnabled ? "bg-accent-strong text-text-inverse" : ""}`}
@@ -997,6 +995,59 @@
     </div>
 
     <div class="ml-auto flex items-center">
+      <div class="header-section">
+        <HeaderValueDrag
+          id="steps"
+          label="Steps"
+          value={session.kshState.stepCount}
+          active={headerDrag?.id === "steps"}
+          onBegin={beginHeaderDrag}
+          onMove={moveHeaderDrag}
+          onEnd={endHeaderDrag}
+        />
+        <div
+          class="relative flex flex-col items-start"
+          onfocusout={closeStepValueMenuOnFocusOut}
+        >
+          <span class="header-label">Step Value</span>
+          <button
+            type="button"
+            class="header-button flex w-[126px] items-center justify-between gap-2 bg-control-secondary px-3 text-text"
+            aria-haspopup="listbox"
+            aria-expanded={stepValueMenuOpen}
+            onclick={() => {
+              stepValueMenuOpen = !stepValueMenuOpen;
+            }}
+          >
+            <span class="flex min-w-0 items-center gap-2">
+              <span class="w-7 text-left text-[15px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
+              <span class="truncate">{selectedStepValueOption.shortLabel}</span>
+            </span>
+            <span class="text-[10px] text-text-muted">▾</span>
+          </button>
+          {#if stepValueMenuOpen}
+            <div
+              class="absolute left-0 top-full z-30 mt-1 w-[190px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
+              role="listbox"
+              aria-label="Step value"
+            >
+              {#each stepValueOptions as option (option.value)}
+                <button
+                  type="button"
+                  class={`flex h-9 w-full items-center gap-3 px-3 text-left text-[12px] font-semibold uppercase tracking-[0.08em] outline-none hover:bg-control-secondary focus-visible:bg-control-secondary ${option.value === session.kshState.rate ? "text-accent-strong" : "text-text"}`}
+                  role="option"
+                  aria-selected={option.value === session.kshState.rate}
+                  onclick={() => chooseStepValue(option.value)}
+                >
+                  <span class="w-7 text-[15px] leading-none">{option.mark}</span>
+                  <span class="flex-1">{option.menuLabel}</span>
+                  <span class="w-4 text-right text-[12px]">{option.value === session.kshState.rate ? "✓" : ""}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
       <div class="header-section">
         <HeaderValueDrag
           id="swing"
@@ -1025,15 +1076,6 @@
           onMove={moveHeaderDrag}
           onEnd={endHeaderDrag}
         />
-      </div>
-
-      <div class="header-section">
-        <div class="flex flex-col items-start">
-          <span class="header-label">Layer</span>
-          <button type="button" class="header-button min-w-[76px] bg-control-secondary text-text" onclick={cycleSourceLayerMode}>
-            {sourceLayerLabel(effectiveLayerMode)}
-          </button>
-        </div>
       </div>
     </div>
   </header>
