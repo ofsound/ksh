@@ -7,6 +7,7 @@
     horizontal = false,
     compactHorizontal = false,
     showLabel = true,
+    brightLabel = false,
     active = false,
     onBegin = () => {},
     onMove = () => {},
@@ -32,7 +33,7 @@
 
 <div class={horizontal ? "flex items-center gap-2" : "flex flex-col items-start"}>
   {#if showLabel}
-    <span class={horizontal ? "header-label-horizontal" : "header-label"}>{label}</span>
+    <span class={`${horizontal ? "header-label-horizontal" : "header-label"} ${brightLabel ? "text-text" : ""}`}>{label}</span>
   {/if}
   <button
     type="button"

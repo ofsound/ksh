@@ -943,6 +943,7 @@
         id="swing"
         label="Swing"
         value={session.kshState.swing}
+        brightLabel
         active={headerDrag?.id === "swing"}
         onBegin={beginHeaderDrag}
         onMove={moveHeaderDrag}
@@ -952,6 +953,7 @@
         id="velocity_humanize"
         label="Vel %"
         value={session.kshState.velocityHumanize}
+        brightLabel
         active={headerDrag?.id === "velocity_humanize"}
         onBegin={beginHeaderDrag}
         onMove={moveHeaderDrag}
@@ -961,6 +963,7 @@
         id="timing_humanize"
         label="Time %"
         value={session.kshState.timingHumanize}
+        brightLabel
         active={headerDrag?.id === "timing_humanize"}
         onBegin={beginHeaderDrag}
         onMove={moveHeaderDrag}
@@ -1218,7 +1221,7 @@
           <div class="flex items-center">
             <button
               type="button"
-              class="w-5 text-[13px] leading-none text-accent"
+              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-[17px] leading-none text-accent"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, -1)}
             >
@@ -1226,7 +1229,7 @@
             </button>
             <button
               type="button"
-              class="w-5 text-[13px] leading-none text-accent"
+              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-[17px] leading-none text-accent"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, 1)}
             >
@@ -1235,7 +1238,7 @@
           </div>
           <button
             type="button"
-            class={`channel-power-toggle ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
+            class={`channel-power-toggle ml-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
             aria-label={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "Turn channel on" : "Turn channel off"}
             aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "false" : "true"}
             disabled={session.selectedSource === SILENT_SOURCE}
@@ -1245,7 +1248,7 @@
             onpointerup={endMuteDrag}
             onpointercancel={endMuteDrag}
           >
-            <RowDisableIcon class="channel-power-toggle-icon h-4 w-4" />
+            <RowDisableIcon class="channel-power-toggle-icon h-[21px] w-[21px]" />
           </button>
         </div>
 
