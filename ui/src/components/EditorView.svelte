@@ -963,50 +963,6 @@
         onEnd={endHeaderDrag}
       />
     </div>
-    <div class="project-history-controls">
-      <button
-        type="button"
-        aria-label="Undo"
-        title="Undo"
-        disabled={undoStack.length === 0}
-        class={historyButtonClass(undoStack.length > 0)}
-        onclick={undoEdit}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M9 14 4 9l5-5" />
-          <path d="M4 9h10a6 6 0 0 1 0 12h-2" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        aria-label="Redo"
-        title="Redo"
-        disabled={redoStack.length === 0}
-        class={historyButtonClass(redoStack.length > 0)}
-        onclick={redoEdit}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m15 14 5-5-5-5" />
-          <path d="M20 9H10a6 6 0 0 0 0 12h2" />
-        </svg>
-      </button>
-    </div>
     <div class="pattern-bank flex shrink-0 items-center gap-3">
       <span class="text-right text-[11px] font-extrabold text-text">Patterns:</span>
       <div class="grid grid-rows-2 gap-1.5">
@@ -1084,9 +1040,39 @@
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={clearPattern}>×</button>
       </div>
     </div>
+    <div class="flex h-full flex-1 items-center justify-center">
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="header-icon-button"
+          aria-label="Undo"
+          title="Undo"
+          disabled={undoStack.length === 0}
+          onclick={undoEdit}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h10a6 6 0 0 1 0 12h-2" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="header-icon-button"
+          aria-label="Redo"
+          title="Redo"
+          disabled={redoStack.length === 0}
+          onclick={redoEdit}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H10a6 6 0 0 0 0 12h2" />
+          </svg>
+        </button>
+      </div>
+    </div>
 
     <div class="ml-auto flex items-center">
-      <div class="header-section">
+      <div class="header-section border-l-0">
         <HeaderValueDrag
           id="steps"
           label="Steps"
@@ -1106,20 +1092,20 @@
         >
           <button
             type="button"
-            class="header-button flex h-[32px] w-[188px] shrink-0 items-center justify-between gap-2 border border-border-subtle bg-transparent px-2.5 text-[12px] font-semibold leading-none text-text"
+            class="header-button flex h-[42px] w-[250px] shrink-0 items-center justify-between gap-3 border border-border-subtle bg-transparent px-3.5 text-[16px] font-semibold text-text"
             aria-haspopup="listbox"
             aria-expanded={stepValueMenuOpen}
             onpointerdown={beginStepValueGesture}
           >
-            <span class="flex min-w-0 items-center gap-1.5">
-              <span class="w-7 shrink-0 text-left text-[16px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
-              <span class="whitespace-nowrap">{selectedStepValueOption.shortLabel}</span>
+            <span class="flex min-w-0 items-center gap-2">
+              <span class="w-9 shrink-0 text-left text-[21px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
+              <span class="whitespace-nowrap leading-tight">{selectedStepValueOption.shortLabel}</span>
             </span>
             <span class="shrink-0 text-[9px] text-text-muted">▾</span>
           </button>
           {#if stepValueMenuOpen}
             <div
-              class="absolute left-0 top-full z-30 mt-1 w-[188px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
+              class="absolute left-0 top-full z-30 mt-1 w-[250px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
               role="listbox"
               aria-label="Step value"
             >

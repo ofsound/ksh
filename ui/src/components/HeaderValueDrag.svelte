@@ -36,7 +36,7 @@
   {/if}
   <button
     type="button"
-    class={`header-button border bg-transparent ${horizontal ? (compactHorizontal ? "h-[32px] w-[92px] shrink-0 px-2.5 text-[12px] font-semibold leading-none" : "h-[54px] min-w-[160px] px-5 text-[24px]") : "min-w-[42px]"} ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
+    class={`header-button border bg-transparent ${horizontal ? (compactHorizontal ? "h-[42px] w-[122px] shrink-0 px-3.5 text-[16px] font-semibold leading-none" : "h-[54px] min-w-[160px] px-5 text-[24px]") : "min-w-[42px]"} ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
     aria-label={label}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}

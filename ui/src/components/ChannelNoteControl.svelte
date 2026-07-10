@@ -64,7 +64,7 @@
 
 <button
   type="button"
-  class="w-9 shrink-0 text-left text-[13px] text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+  class="flex h-8 w-11 shrink-0 items-center justify-center whitespace-nowrap rounded-sm border border-border-subtle bg-transparent px-2 py-2 text-[13px] leading-none text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
   aria-label={session.channelNoteDisplayNames ? `Channel note ${midiNoteLabel(note)}` : `Channel note ${note}`}
   title={session.channelNoteDisplayNames ? "Click to show MIDI numbers. Drag vertically to change." : "Click to show note names. Drag vertically to change."}
   onpointerdown={onPointerDown}

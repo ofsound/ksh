@@ -6,7 +6,7 @@ export const GRID_CELL_H = 50;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
-export const GRID_SIDEBAR_W = 286;
+export const GRID_SIDEBAR_W = 308;
 export const GRID_CELL_LEFT_GAP = 34;
 /** Sidebar, pre-grid gap, and outer editor padding east of the step grid. */
 export const EDITOR_GRID_LEADING_CHROME = GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP + 34;

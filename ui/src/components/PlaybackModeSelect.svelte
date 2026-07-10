@@ -170,7 +170,7 @@
   <button
     type="button"
     data-playback-mode-trigger
-    class="flex h-5 w-[4.5rem] shrink-0 items-center justify-start text-left text-[13px] leading-none text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+    class="flex h-8 w-[5.75rem] shrink-0 items-center justify-start whitespace-nowrap rounded-sm border border-border-subtle bg-transparent px-2.5 py-2 text-left text-[13px] leading-none text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-label={`Playback mode: ${selectedOption.label}`}

@@ -62,6 +62,10 @@
     @apply flex h-[41px] w-[42px] items-center justify-center rounded-sm px-0 text-[32px] font-semibold leading-none text-text outline-none;
   }
 
+  .header-icon-button svg {
+    @apply pointer-events-none h-[32px] w-[32px];
+  }
+
   .header-icon-button:disabled {
     @apply cursor-default text-text-faint;
   }
