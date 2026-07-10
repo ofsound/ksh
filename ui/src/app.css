@@ -57,7 +57,7 @@
   }
 
   .compact-lock-label {
-    @apply text-[9px] font-semibold leading-none text-text-muted;
+    @apply text-[9px] font-semibold leading-none text-accent;
   }
 
   .compact-lock-button-random {

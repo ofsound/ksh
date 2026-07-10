@@ -179,7 +179,7 @@ export function generationModeLabel(mode) {
     return "Per Channel";
   }
   if (mode === "static") {
-    return "Static";
+    return "Off";
   }
   return "Stack";
 }

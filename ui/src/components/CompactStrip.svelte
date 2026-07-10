@@ -159,7 +159,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
       <div class="compact-random-panel flex shrink-0 flex-col gap-3 border-l border-border-subtle pl-4">
         <div class="flex items-end gap-6">
           <div class="flex flex-col items-start">
-            <span class="header-label">Random</span>
+            <span class="header-label">Random Mode</span>
             <button type="button" class="header-button min-w-[164px] bg-control-secondary text-text" onclick={cycleMode}>
               {generationModeLabel(session.kshState.generationMode)}
             </button>
