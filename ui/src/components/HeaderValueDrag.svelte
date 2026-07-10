@@ -4,6 +4,7 @@
     label,
     value,
     suffix = "",
+    horizontal = false,
     active = false,
     onBegin = () => {},
     onMove = () => {},
@@ -27,11 +28,11 @@
   }
 </script>
 
-<div class="flex flex-col items-start">
-  <span class="header-label">{label}</span>
+<div class={horizontal ? "flex items-center gap-2.5" : "flex flex-col items-start"}>
+  <span class={horizontal ? "header-label-horizontal" : "header-label"}>{label}</span>
   <button
     type="button"
-    class={`header-button min-w-[42px] border bg-transparent ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
+    class={`header-button border bg-transparent ${horizontal ? "h-[48px] min-w-[72px] px-4 text-[20px]" : "min-w-[42px]"} ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}

@@ -50,6 +50,10 @@
     @apply mb-1 block cursor-default text-[9px] font-semibold leading-none text-text-muted;
   }
 
+  .header-label-horizontal {
+    @apply block shrink-0 cursor-default text-[11px] font-bold text-text-muted;
+  }
+
   .header-button {
     @apply flex h-[28px] items-center justify-center rounded-sm px-2 text-[11px] font-semibold leading-none outline-none;
   }
@@ -112,6 +116,10 @@
     @apply flex min-w-0 shrink-0 items-center gap-3;
   }
 
+  .project-settings {
+    @apply shrink-0 items-start;
+  }
+
   .project-history-button {
     @apply flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-sm bg-control-secondary outline-none transition-colors;
   }
@@ -146,7 +154,7 @@
   }
 
   .project-button {
-    @apply flex h-[32px] min-w-[72px] items-center justify-center rounded-sm bg-control-secondary px-4 text-[11px] font-extrabold uppercase tracking-[0.18em] text-control-secondary-text outline-none transition-colors;
+    @apply flex h-[32px] min-w-[54px] items-center justify-center rounded-sm bg-control-secondary px-2.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-control-secondary-text outline-none transition-colors;
   }
 
   .project-button:not(:disabled):hover,
@@ -160,7 +168,7 @@
   }
 
   .project-arrow-button {
-    @apply flex h-[32px] w-[42px] shrink-0 items-center justify-center rounded-sm bg-control-secondary text-[18px] font-bold leading-none text-text-muted outline-none transition-colors;
+    @apply flex h-[32px] w-[30px] shrink-0 items-center justify-center rounded-sm bg-control-secondary text-[15px] font-bold leading-none text-text-muted outline-none transition-colors;
   }
 
   .project-title-shell {

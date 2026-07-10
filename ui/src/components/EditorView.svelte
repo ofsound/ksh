@@ -101,14 +101,14 @@
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
   const stepValueOptions = [
-    { value: "4n", mark: "♩", shortLabel: "Quarter", menuLabel: "Quarter note" },
-    { value: "4nt", mark: "♩3", shortLabel: "Quarter T", menuLabel: "Quarter triplet" },
-    { value: "8n", mark: "♪", shortLabel: "Eighth", menuLabel: "Eighth note" },
-    { value: "8nt", mark: "♪3", shortLabel: "Eighth T", menuLabel: "Eighth triplet" },
-    { value: "16n", mark: "♬", shortLabel: "16th", menuLabel: "16th note" },
-    { value: "16nt", mark: "♬3", shortLabel: "16th T", menuLabel: "16th triplet" },
-    { value: "32n", mark: "♬", shortLabel: "32nd", menuLabel: "32nd note" },
-    { value: "32nt", mark: "♬3", shortLabel: "32nd T", menuLabel: "32nd triplet" },
+    { value: "4n", mark: "♩", shortLabel: "Quarter", menuLabel: "Quarter" },
+    { value: "4nt", mark: "♩³", shortLabel: "Quarter Triplet", menuLabel: "Quarter Triplet" },
+    { value: "8n", mark: "♪", shortLabel: "Eighth", menuLabel: "Eighth" },
+    { value: "8nt", mark: "♪³", shortLabel: "Eighth Triplet", menuLabel: "Eighth Triplet" },
+    { value: "16n", mark: "♬", shortLabel: "16th", menuLabel: "16th" },
+    { value: "16nt", mark: "♬³", shortLabel: "16th Triplet", menuLabel: "16th Triplet" },
+    { value: "32n", mark: "♬", shortLabel: "32nd", menuLabel: "32nd" },
+    { value: "32nt", mark: "♬³", shortLabel: "32nd Triplet", menuLabel: "32nd Triplet" },
   ];
 
   const patternScale = $derived(session.patternViewScale);
@@ -892,6 +892,35 @@
       </button>
     </div>
     <div class="project-trailing ml-auto">
+    <div class="project-settings header-section">
+      <HeaderValueDrag
+        id="swing"
+        label="Swing"
+        value={session.kshState.swing}
+        active={headerDrag?.id === "swing"}
+        onBegin={beginHeaderDrag}
+        onMove={moveHeaderDrag}
+        onEnd={endHeaderDrag}
+      />
+      <HeaderValueDrag
+        id="velocity_humanize"
+        label="Vel %"
+        value={session.kshState.velocityHumanize}
+        active={headerDrag?.id === "velocity_humanize"}
+        onBegin={beginHeaderDrag}
+        onMove={moveHeaderDrag}
+        onEnd={endHeaderDrag}
+      />
+      <HeaderValueDrag
+        id="timing_humanize"
+        label="Time %"
+        value={session.kshState.timingHumanize}
+        active={headerDrag?.id === "timing_humanize"}
+        onBegin={beginHeaderDrag}
+        onMove={moveHeaderDrag}
+        onEnd={endHeaderDrag}
+      />
+    </div>
     <div class="project-history-controls">
       <button
         type="button"
@@ -1020,19 +1049,20 @@
           id="steps"
           label="Steps"
           value={session.kshState.stepCount}
+          horizontal
           active={headerDrag?.id === "steps"}
           onBegin={beginHeaderDrag}
           onMove={moveHeaderDrag}
           onEnd={endHeaderDrag}
         />
         <div
-          class="relative flex flex-col items-start"
+          class="relative flex items-center gap-2.5"
           onfocusout={closeStepValueMenuOnFocusOut}
         >
-          <span class="header-label">Step Value</span>
+          <span class="header-label-horizontal">Step Value</span>
           <button
             type="button"
-            class="header-button flex w-[126px] items-center justify-between gap-2 bg-control-secondary px-3 text-text"
+            class="header-button flex h-[48px] w-[210px] items-center justify-between gap-3 border border-border-subtle bg-transparent px-4 text-[20px] text-text"
             aria-haspopup="listbox"
             aria-expanded={stepValueMenuOpen}
             onclick={() => {
@@ -1040,14 +1070,14 @@
             }}
           >
             <span class="flex min-w-0 items-center gap-2">
-              <span class="w-7 text-left text-[15px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
+              <span class="w-10 text-left text-[28px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
               <span class="truncate">{selectedStepValueOption.shortLabel}</span>
             </span>
             <span class="text-[10px] text-text-muted">▾</span>
           </button>
           {#if stepValueMenuOpen}
             <div
-              class="absolute left-0 top-full z-30 mt-1 w-[190px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
+              class="absolute left-0 top-full z-30 mt-1 w-[230px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
               role="listbox"
               aria-label="Step value"
             >
@@ -1059,43 +1089,14 @@
                   aria-selected={option.value === session.kshState.rate}
                   onclick={() => chooseStepValue(option.value)}
                 >
-                  <span class="w-7 text-[15px] leading-none">{option.mark}</span>
-                  <span class="flex-1">{option.menuLabel}</span>
+                  <span class="w-9 shrink-0 whitespace-nowrap text-[17px] leading-none">{option.mark}</span>
+                  <span class="flex-1 whitespace-nowrap">{option.menuLabel}</span>
                   <span class="w-4 text-right text-[12px]">{option.value === session.kshState.rate ? "✓" : ""}</span>
                 </button>
               {/each}
             </div>
           {/if}
         </div>
-      </div>
-      <div class="header-section">
-        <HeaderValueDrag
-          id="swing"
-          label="Swing"
-          value={session.kshState.swing}
-          active={headerDrag?.id === "swing"}
-          onBegin={beginHeaderDrag}
-          onMove={moveHeaderDrag}
-          onEnd={endHeaderDrag}
-        />
-        <HeaderValueDrag
-          id="velocity_humanize"
-          label="Vel %"
-          value={session.kshState.velocityHumanize}
-          active={headerDrag?.id === "velocity_humanize"}
-          onBegin={beginHeaderDrag}
-          onMove={moveHeaderDrag}
-          onEnd={endHeaderDrag}
-        />
-        <HeaderValueDrag
-          id="timing_humanize"
-          label="Time %"
-          value={session.kshState.timingHumanize}
-          active={headerDrag?.id === "timing_humanize"}
-          onBegin={beginHeaderDrag}
-          onMove={moveHeaderDrag}
-          onEnd={endHeaderDrag}
-        />
       </div>
     </div>
   </header>
@@ -1211,7 +1212,7 @@
           ></div>
           <button
             type="button"
-            class="absolute top-0 z-20 flex w-4 -translate-x-1/2 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            class="absolute top-0 z-20 flex w-4 -translate-x-full items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
             style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;height:${gridCellH}px;`}
             aria-label="Move row range start"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "left", event.clientX, event)}
@@ -1227,7 +1228,7 @@
           </button>
           <button
             type="button"
-            class="absolute top-0 z-20 flex w-4 -translate-x-1/2 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            class="absolute top-0 z-20 flex w-4 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
             style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;height:${gridCellH}px;`}
             aria-label="Move row range end"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "right", event.clientX, event)}
