@@ -1206,13 +1206,13 @@
 
         <div class="relative flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
           <div
-            class="pointer-events-none absolute top-0 z-10 rounded-[3px] border border-accent/75 shadow-[0_0_8px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
+            class="loop-range-brace pointer-events-none absolute top-0 z-10"
             style={loopBraceStyle(channel)}
             aria-hidden="true"
           ></div>
           <button
             type="button"
-            class="absolute top-0 z-20 flex w-4 -translate-x-full items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            class="loop-range-handle loop-range-handle-start absolute top-0 z-20 flex w-4 -translate-x-full items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
             style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;height:${gridCellH}px;`}
             aria-label="Move row range start"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "left", event.clientX, event)}
@@ -1228,7 +1228,7 @@
           </button>
           <button
             type="button"
-            class="absolute top-0 z-20 flex w-4 items-center justify-center rounded-sm border border-accent/80 bg-grid-bg/85 text-[15px] font-bold leading-none text-accent shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent)_28%,transparent)] outline-none"
+            class="loop-range-handle loop-range-handle-end absolute top-0 z-20 flex w-4 items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
             style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;height:${gridCellH}px;`}
             aria-label="Move row range end"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "right", event.clientX, event)}

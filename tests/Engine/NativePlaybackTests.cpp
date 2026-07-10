@@ -348,7 +348,7 @@ TEST_CASE ("reverse playback mirrors transport position across offset active ran
     REQUIRE (fixture.engine.playbackStepForChannel (0, 2) == 2);
 }
 
-TEST_CASE ("boomerang playback repeats endpoints across active length", "[engine][native]")
+TEST_CASE ("ping-pong playback repeats endpoints across active length", "[engine][native]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -356,7 +356,7 @@ TEST_CASE ("boomerang playback repeats endpoints across active length", "[engine
     fixture.engine.setChannelCount (1);
     fixture.engine.setGenerationMode (GenerationMode::staticSource);
     fixture.engine.setChannelLoopLength (0, 3);
-    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::boomerang);
+    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::ping_pong);
     fixture.engine.setCell (0, 0, 0, true, 10, 100, 1);
     fixture.engine.setCell (0, 0, 1, true, 20, 100, 1);
     fixture.engine.setCell (0, 0, 2, true, 30, 100, 1);
@@ -417,7 +417,7 @@ TEST_CASE ("native playback rows apply playback modes to metadata", "[engine][na
     fixture.engine.setChannelCount (1);
     fixture.engine.setGenerationMode (GenerationMode::staticSource);
     fixture.engine.setChannelLoopLength (0, 3);
-    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::boomerang);
+    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::ping_pong);
     fixture.engine.setCell (0, 0, 0, true, 10, 100, 1);
     fixture.engine.setCell (0, 0, 1, true, 20, 100, 1);
     fixture.engine.setCell (0, 0, 2, true, 30, 100, 1);

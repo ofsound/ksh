@@ -28,8 +28,10 @@ TEST_CASE ("Playback mode normalization matches ksh_constants.js", "[engine][fou
 {
     REQUIRE (Constants::normalizeChannelPlaybackMode ("reverse") == "reverse");
     REQUIRE (Constants::normalizeChannelPlaybackMode ("rev") == "reverse");
-    REQUIRE (Constants::normalizeChannelPlaybackMode ("boomerang") == "boomerang");
-    REQUIRE (Constants::normalizeChannelPlaybackMode ("boom") == "boomerang");
+    REQUIRE (Constants::normalizeChannelPlaybackMode ("ping_pong") == "ping_pong");
+    REQUIRE (Constants::normalizeChannelPlaybackMode ("ping-pong") == "ping_pong");
+    REQUIRE (Constants::normalizeChannelPlaybackMode ("boomerang") == "ping_pong");
+    REQUIRE (Constants::normalizeChannelPlaybackMode ("boom") == "ping_pong");
     REQUIRE (Constants::normalizeChannelPlaybackMode ("unknown") == "normal");
 }
 

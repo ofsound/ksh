@@ -233,7 +233,7 @@ export function cycleRate(state, direction = 1) {
 export const PLAYBACK_MODE_OPTIONS = [
   { value: "normal", label: "Forward" },
   { value: "reverse", label: "Reverse" },
-  { value: "boomerang", label: "Boomerang" },
+  { value: "ping_pong", label: "Ping-Pong" },
 ];
 
 export function playbackModeOption(mode) {
@@ -260,7 +260,7 @@ export function nextPlaybackMode(mode) {
     return "reverse";
   }
   if (normalized === "reverse") {
-    return "boomerang";
+    return "ping_pong";
   }
   return "normal";
 }

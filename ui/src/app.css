@@ -108,6 +108,65 @@
     transform: rotate(90deg);
   }
 
+  .loop-range-brace {
+    border-top: 1px solid color-mix(in srgb, var(--color-accent) 68%, var(--color-border-strong));
+    border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 68%, var(--color-border-strong));
+    border-radius: 0;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--color-accent) 12%, transparent) 0%,
+        color-mix(in srgb, var(--color-accent) 4%, transparent) 38%,
+        transparent 62%,
+        color-mix(in srgb, var(--color-accent) 8%, transparent) 100%
+      );
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--color-text) 15%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, var(--color-app) 58%, transparent),
+      0 0 10px color-mix(in srgb, var(--color-accent) 20%, transparent),
+      0 3px 10px color-mix(in srgb, var(--color-app) 42%, transparent);
+  }
+
+  .loop-range-handle {
+    border: 1px solid color-mix(in srgb, var(--color-accent) 72%, var(--color-border-strong));
+    border-radius: 0;
+    background:
+      linear-gradient(
+        145deg,
+        color-mix(in srgb, var(--color-accent) 14%, var(--color-grid-bg)) 0%,
+        color-mix(in srgb, var(--color-shell) 90%, var(--color-accent)) 48%,
+        color-mix(in srgb, var(--color-app) 92%, var(--color-accent)) 100%
+      );
+    box-shadow:
+      inset 1px 1px 0 color-mix(in srgb, var(--color-text) 13%, transparent),
+      inset -1px -1px 0 color-mix(in srgb, var(--color-app) 72%, transparent),
+      0 0 9px color-mix(in srgb, var(--color-accent) 24%, transparent),
+      0 4px 9px color-mix(in srgb, var(--color-app) 48%, transparent);
+    text-shadow: 0 1px 3px color-mix(in srgb, var(--color-app) 70%, transparent);
+  }
+
+  .loop-range-handle-start {
+    border-right: 0;
+    border-radius: 6px 0 0 6px;
+  }
+
+  .loop-range-handle-end {
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+  }
+
+  .loop-range-handle:hover,
+  .loop-range-handle:focus-visible {
+    border-color: var(--color-accent);
+    background:
+      linear-gradient(
+        145deg,
+        color-mix(in srgb, var(--color-accent) 22%, var(--color-grid-bg)) 0%,
+        color-mix(in srgb, var(--color-shell) 84%, var(--color-accent)) 48%,
+        color-mix(in srgb, var(--color-app) 88%, var(--color-accent)) 100%
+      );
+  }
+
   .project-history-controls {
     @apply flex shrink-0 items-center gap-2 border-l border-border-subtle pl-3;
   }

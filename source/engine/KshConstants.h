@@ -68,8 +68,9 @@ struct Constants
         if (lower == "r" || lower == "rev" || lower == "reverse")
             return "reverse";
 
-        if (lower == "b" || lower == "boom" || lower == "boomerang")
-            return "boomerang";
+        if (lower == "p" || lower == "ping" || lower == "ping-pong" || lower == "ping_pong"
+            || lower == "b" || lower == "boom" || lower == "boomerang")
+            return "ping_pong";
 
         return std::string { defaultChannelPlaybackMode };
     }

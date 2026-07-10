@@ -119,7 +119,7 @@ TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persis
     original.engine.setChannelNote (1, 38);
     original.engine.setChannelLoopLength (0, 16);
     original.engine.setChannelLock (1, 2);
-    original.engine.setChannelPlaybackMode (1, PlaybackMode::boomerang);
+    original.engine.setChannelPlaybackMode (1, PlaybackMode::ping_pong);
     original.engine.setGenerationMode (GenerationMode::staticSource);
     original.engine.setCell (0, 0, 0, true, 100, 100, 1);
     original.engine.setCell (1, 1, 4, true, 80, 50, 4, 3, true, 6);
@@ -133,7 +133,7 @@ TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persis
     REQUIRE (restored.engine.channelAt (1).note == 38);
     REQUIRE (restored.engine.channelAt (0).loopLength == 16);
     REQUIRE (restored.engine.channelAt (1).lock == 2);
-    REQUIRE (restored.engine.channelAt (1).playbackMode == PlaybackMode::boomerang);
+    REQUIRE (restored.engine.channelAt (1).playbackMode == PlaybackMode::ping_pong);
     REQUIRE (restored.engine.getGenerationMode() == GenerationMode::staticSource);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).enabled);
     REQUIRE (restored.engine.sourceCellAt (1, 1, 4).enabled);

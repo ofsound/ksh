@@ -64,7 +64,7 @@ int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int p
         return loopStart + loopLength - 1 - activeIndex;
     }
 
-    if (mode == PlaybackMode::boomerang)
+    if (mode == PlaybackMode::ping_pong)
     {
         const int activeIndex = mod (playbackIndex, loopLength * 2);
         return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);

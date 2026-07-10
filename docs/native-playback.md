@@ -35,7 +35,7 @@ The audio thread must not:
 
 For each emitted global step, playback resolves:
 
-- channel playback mode: normal, reverse, boomerang
+- channel playback mode: normal, reverse, ping-pong
 - generated cell lookup
 - cycle gate and cycle offset/inversion
 - probability
