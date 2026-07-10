@@ -1168,7 +1168,14 @@
               <span class="w-9 shrink-0 text-left text-[21px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
               <span class="whitespace-nowrap leading-tight">{selectedStepValueOption.shortLabel}</span>
             </span>
-            <span class="shrink-0 text-[9px] text-text-muted">▾</span>
+            <svg
+              class="h-3 w-3 shrink-0 text-text-muted"
+              viewBox="0 0 12 8"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M1 1.25 6 6.25 11 1.25Z" />
+            </svg>
           </button>
           {#if stepValueMenuOpen}
             <div
