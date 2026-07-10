@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import RowDisableIcon from "./RowDisableIcon.svelte";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
@@ -1217,16 +1218,18 @@
           </div>
           <button
             type="button"
-            class={`ml-1 h-3.5 w-3.5 rounded-full border ${session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "border-accent bg-transparent" : "border-accent bg-accent-strong"} ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : ""}`}
-            aria-label="Mute channel"
-            aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "true" : "false"}
+            class={`channel-power-toggle ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
+            aria-label={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "Turn channel on" : "Turn channel off"}
+            aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "false" : "true"}
             disabled={session.selectedSource === SILENT_SOURCE}
             title="Shift-click to solo channel"
             onpointerdown={(event) => onMutePointerDown(channel, event)}
             onpointermove={onMutePointerMove}
             onpointerup={endMuteDrag}
             onpointercancel={endMuteDrag}
-          ></button>
+          >
+            <RowDisableIcon class="channel-power-toggle-icon h-4 w-4" />
+          </button>
         </div>
 
         <div class="relative flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
