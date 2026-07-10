@@ -109,40 +109,32 @@
   }
 
   .loop-range-brace {
-    border-top: 1px solid color-mix(in srgb, var(--color-accent) 68%, var(--color-border-strong));
-    border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 68%, var(--color-border-strong));
+    border-top: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, var(--color-shell));
+    border-bottom: 1px solid color-mix(in srgb, var(--color-app) 70%, var(--color-border-subtle));
     border-radius: 0;
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--color-accent) 12%, transparent) 0%,
-        color-mix(in srgb, var(--color-accent) 4%, transparent) 38%,
-        transparent 62%,
-        color-mix(in srgb, var(--color-accent) 8%, transparent) 100%
+        color-mix(in srgb, var(--color-text) 5%, transparent) 0%,
+        color-mix(in srgb, var(--color-shell) 7%, transparent) 30%,
+        transparent 58%,
+        color-mix(in srgb, var(--color-app) 12%, transparent) 100%
       );
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--color-text) 15%, transparent),
-      inset 0 -1px 0 color-mix(in srgb, var(--color-app) 58%, transparent),
-      0 0 10px color-mix(in srgb, var(--color-accent) 20%, transparent),
-      0 3px 10px color-mix(in srgb, var(--color-app) 42%, transparent);
+      inset 0 1px 0 color-mix(in srgb, var(--color-text) 8%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, var(--color-app) 64%, transparent),
+      0 2px 7px color-mix(in srgb, var(--color-app) 44%, transparent);
   }
 
   .loop-range-handle {
     border: 1px solid color-mix(in srgb, var(--color-accent) 72%, var(--color-border-strong));
     border-radius: 0;
-    background:
-      linear-gradient(
-        145deg,
-        color-mix(in srgb, var(--color-accent) 14%, var(--color-grid-bg)) 0%,
-        color-mix(in srgb, var(--color-shell) 90%, var(--color-accent)) 48%,
-        color-mix(in srgb, var(--color-app) 92%, var(--color-accent)) 100%
-      );
+    background: var(--color-app);
     box-shadow:
       inset 1px 1px 0 color-mix(in srgb, var(--color-text) 13%, transparent),
       inset -1px -1px 0 color-mix(in srgb, var(--color-app) 72%, transparent),
       0 0 9px color-mix(in srgb, var(--color-accent) 24%, transparent),
       0 4px 9px color-mix(in srgb, var(--color-app) 48%, transparent);
-    text-shadow: 0 1px 3px color-mix(in srgb, var(--color-app) 70%, transparent);
   }
 
   .loop-range-handle-start {
@@ -158,13 +150,7 @@
   .loop-range-handle:hover,
   .loop-range-handle:focus-visible {
     border-color: var(--color-accent);
-    background:
-      linear-gradient(
-        145deg,
-        color-mix(in srgb, var(--color-accent) 22%, var(--color-grid-bg)) 0%,
-        color-mix(in srgb, var(--color-shell) 84%, var(--color-accent)) 48%,
-        color-mix(in srgb, var(--color-app) 88%, var(--color-accent)) 100%
-      );
+    background: var(--color-app);
   }
 
   .project-history-controls {
