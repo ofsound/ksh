@@ -70,10 +70,7 @@ int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int p
         return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
     }
 
-    if (loopStart > 0 && playbackIndex < loopStart)
-        return -1;
-
-    return loopStart + mod (playbackIndex - loopStart, loopLength);
+    return loopStart + mod (playbackIndex, loopLength);
 }
 
 double swingDelayMsForStep (const PlaybackSnapshot& snapshot, int step)

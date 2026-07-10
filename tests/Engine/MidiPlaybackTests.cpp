@@ -442,7 +442,7 @@ TEST_CASE ("midi playback repeats offset loop hits on loop length cadence", "[en
     fixture.engine.setRate ("16n");
     fixture.engine.setTempo (120.0);
     fixture.engine.setChannelLoopLength (0, 10, 2);
-    fixture.engine.setCell (0, 0, 3, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 2, true, 100, 100, 1);
     fixture.engine.setCell (0, 0, 8, true, 100, 100, 1);
     fixture.engine.setCell (0, 0, 10, true, 100, 100, 1);
     fixture.engine.generateWindow (0, 16, true);
@@ -454,7 +454,7 @@ TEST_CASE ("midi playback repeats offset loop hits on loop length cadence", "[en
     const double beatsPerStep = snapshot.beatsPerStep;
     std::vector<int> hitSteps;
 
-    for (int step = 0; step < 21; ++step)
+    for (int step = 0; step < 20; ++step)
     {
         const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (step) * beatsPerStep, 120.0, true, 512);
 
@@ -462,5 +462,5 @@ TEST_CASE ("midi playback repeats offset loop hits on loop length cadence", "[en
             hitSteps.push_back (step);
     }
 
-    REQUIRE (hitSteps == std::vector<int> { 3, 8, 10, 13, 18, 20 });
+    REQUIRE (hitSteps == std::vector<int> { 0, 6, 8, 10, 16, 18 });
 }

@@ -377,13 +377,11 @@ TEST_CASE ("forward playback wraps within offset loop range", "[engine][native]"
     fixture.engine.setChannelCount (1);
     fixture.engine.setChannelLoopLength (0, 10, 2);
 
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 0) == -1);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 1) == -1);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 2) == 2);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 3) == 3);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 12) == 2);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 13) == 3);
-    REQUIRE (fixture.engine.playbackStepForChannel (0, 16) == 6);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 0) == 2);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 1) == 3);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 10) == 2);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 11) == 3);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 16) == 8);
 }
 
 TEST_CASE ("forward playback repeats offset loop hits on loop length cadence", "[engine][native]")
@@ -394,7 +392,7 @@ TEST_CASE ("forward playback repeats offset loop hits on loop length cadence", "
     fixture.engine.setChannelCount (1);
     fixture.engine.setGenerationMode (GenerationMode::staticSource);
     fixture.engine.setChannelLoopLength (0, 10, 2);
-    fixture.engine.setCell (0, 0, 3, true, 10, 100, 1);
+    fixture.engine.setCell (0, 0, 2, true, 10, 100, 1);
     fixture.engine.setCell (0, 0, 8, true, 20, 100, 1);
     fixture.engine.setCell (0, 0, 10, true, 30, 100, 1);
     fixture.engine.generateWindow (0, 16, true);
@@ -403,14 +401,12 @@ TEST_CASE ("forward playback repeats offset loop hits on loop length cadence", "
     const auto& rows = built.rows;
 
     REQUIRE (built.stepCount == 80);
-    requireNativeRow (rows[3], nativeHitRow (36, 10, 100, 1, 0.0, 1, 4, 1, 4));
-    requireNativeRow (rows[8], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
-    requireNativeRow (rows[10], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
-    requireNativeRow (rows[13], nativeHitRow (36, 10, 100, 1, 0.0, 1, 4, 1, 4));
-    requireNativeRow (rows[18], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
-    requireNativeRow (rows[20], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
-    requireNativeRow (rows[0], {});
-    requireNativeRow (rows[16], {});
+    requireNativeRow (rows[0], nativeHitRow (36, 10, 100, 1, 0.0, 1, 3, 1, 3));
+    requireNativeRow (rows[6], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
+    requireNativeRow (rows[8], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
+    requireNativeRow (rows[10], nativeHitRow (36, 10, 100, 1, 0.0, 1, 3, 1, 3));
+    requireNativeRow (rows[16], nativeHitRow (36, 20, 100, 1, 0.0, 1, 9, 1, 9));
+    requireNativeRow (rows[18], nativeHitRow (36, 30, 100, 1, 0.0, 1, 11, 1, 11));
 }
 
 TEST_CASE ("native playback rows apply playback modes to metadata", "[engine][native]")

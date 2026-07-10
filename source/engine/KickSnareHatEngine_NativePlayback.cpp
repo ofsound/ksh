@@ -98,10 +98,7 @@ int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) 
         return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
     }
 
-    if (loopStart > 0 && playbackIndex < loopStart)
-        return -1;
-
-    return loopStart + mod (playbackIndex - loopStart, loopLength);
+    return loopStart + mod (playbackIndex, loopLength);
 }
 
 std::string KickSnareHatEngine::cycleKey (int source, int channel, int step) const
