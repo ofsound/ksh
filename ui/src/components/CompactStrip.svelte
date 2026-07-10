@@ -159,7 +159,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
       <div class="compact-random-panel flex shrink-0 flex-col gap-3 border-l border-border-subtle pl-4">
         <div class="flex items-end gap-6">
           <div class="flex flex-col items-start">
-            <span class="header-label">Random Mode</span>
+            <span class="header-label text-text">Random Mode</span>
             <button type="button" class="header-button min-w-[164px] bg-control-secondary text-text" onclick={cycleMode}>
               {generationModeLabel(session.kshState.generationMode)}
             </button>
@@ -168,6 +168,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
             id="refresh"
             label="Rate"
             value={session.kshState.refreshSteps}
+            brightLabel
             active={randomHeaderDrag?.id === "refresh"}
             onBegin={beginRandomHeaderDrag}
             onMove={moveRandomHeaderDrag}
@@ -175,7 +176,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
           />
         </div>
         <div class="flex flex-col items-start gap-1.5">
-          <span class="header-label">Lane Lock</span>
+          <span class="header-label text-text">Lane Lock</span>
           <div class="flex items-center gap-2" aria-label="Lane pattern locks">
           {#each lockRows as channel (channel)}
             <div class="flex flex-col items-center gap-1">
