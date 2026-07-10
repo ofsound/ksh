@@ -116,8 +116,8 @@
     width: 15px;
     height: 3px;
     border-radius: 999px;
-    background: var(--color-danger);
-    box-shadow: 0 0 5px color-mix(in srgb, var(--color-danger) 28%, transparent);
+    background: var(--color-accent);
+    box-shadow: 0 0 5px color-mix(in srgb, var(--color-accent) 28%, transparent);
     content: "";
   }
 
