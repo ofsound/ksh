@@ -233,6 +233,10 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
         return true;
     }
 
+    // Audition / row triggers must not push preview JSON back through the WebView.
+    if (selector == "channel_audition" || selector == "pattern_record_row")
+        return true;
+
     emitPreview (processor.enginePreviewState());
     return true;
 }

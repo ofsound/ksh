@@ -161,6 +161,22 @@ juce::WebBrowserComponent::Options WebViewResources::makeBrowserOptions (PluginP
                                                     processor.getUiBridge().handleCommand (args[0].toString())
                                                 });
                                             })
+                       .withNativeFunction ("kshTriggerRow",
+                                            [&processor] (const juce::Array<juce::var>& args,
+                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                            {
+                                                if (args.isEmpty())
+                                                {
+                                                    complete (juce::var { false });
+                                                    return;
+                                                }
+
+                                                const int channelZeroBased = varToInt (args[0]);
+                                                const int velocity = args.size() > 1 ? varToInt (args[1]) : 100;
+                                                complete (juce::var {
+                                                    processor.triggerRowFromUi (channelZeroBased, velocity)
+                                                });
+                                            })
                        .withNativeFunction ("kshSetViewSize",
                                             [&processor] (const juce::Array<juce::var>& args,
                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)

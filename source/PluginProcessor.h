@@ -65,6 +65,10 @@ public:
     [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
     [[nodiscard]] bool applyPersistenceFromUi (const nlohmann::json& state);
 
+    /** Low-latency QWERTY / pad trigger: queues MIDI audition without the JSON command bus.
+        When pattern recording is armed, also enqueues a quantized cell write (deferred UI sync). */
+    [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100);
+
     using EditorResizeCallback = std::function<void (int, int)>;
     void setEditorResizeCallback (EditorResizeCallback callback);
     void requestEditorSize (int width, int height);
@@ -125,6 +129,9 @@ private:
     void drainPendingPatternRecordEventsLocked();
     [[nodiscard]] bool enqueuePatternRecordEvent (int source, int channel, int step, int velocity);
     [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
+    [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity);
+    [[nodiscard]] int quantizedStepForUiTrigger() const;
+    void refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnapshot& snapshot);
     void applyProjectMetadataFromState (const nlohmann::json& state);
 
     juce::AudioProcessorValueTreeState parameters;
@@ -174,6 +181,13 @@ private:
     std::atomic<double> patternRecordTransportBpm { 120.0 };
     std::atomic<double> patternRecordTransportUpdatedMs { 0.0 };
     std::atomic<int> patternRecordTransportPlaying { 0 };
+
+    // Message-thread-readable cache of the last published snapshot (for lock-free row triggers).
+    std::array<std::atomic<int>, ksh::Constants::maxChannels> auditionChannelNotes {};
+    std::atomic<int> auditionChannelCount { ksh::Constants::defaultChannelCount };
+    std::atomic<int> auditionDeviceActive { 1 };
+    std::atomic<int> auditionStepCount { 16 };
+    std::atomic<double> auditionBeatsPerStep { 0.25 };
 
     // Audio-thread-only state for deciding when to wake the message thread.
     int lastReportedStepForRegen = 0;

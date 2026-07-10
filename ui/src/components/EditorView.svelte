@@ -83,8 +83,6 @@
     loadProject,
     shiftPattern,
     saveProject,
-    toggleDcColors,
-    togglePatternViewScale,
     togglePatternRecording,
     toggleSourceChannelSolo,
     undoEdit,
@@ -1034,25 +1032,6 @@
           <span class="header-label">Layer</span>
           <button type="button" class="header-button min-w-[76px] bg-control-secondary text-text" onclick={cycleSourceLayerMode}>
             {sourceLayerLabel(effectiveLayerMode)}
-          </button>
-        </div>
-      </div>
-
-      <div class="header-section">
-        <div class="flex gap-1 pt-[15px]">
-          <button
-            type="button"
-            class={`header-button min-w-[54px] ${session.patternViewScale === 1.5 ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-text"}`}
-            onclick={togglePatternViewScale}
-          >
-            {session.patternViewScale === 1.5 ? "1.5x" : "1x"}
-          </button>
-          <button
-            type="button"
-            class={`header-button min-w-[54px] ${session.dcColors ? "bg-accent-strong text-text-inverse" : "bg-control-secondary text-text"}`}
-            onclick={toggleDcColors}
-          >
-            DC
           </button>
         </div>
       </div>

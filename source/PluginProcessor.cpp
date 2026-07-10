@@ -215,9 +215,28 @@ void PluginProcessor::publishPlaybackSnapshot()
     publishPlaybackSnapshotLocked();
 }
 
+void PluginProcessor::refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnapshot& snapshot)
+{
+    auditionChannelCount.store (snapshot.channelCount, std::memory_order_relaxed);
+    auditionDeviceActive.store (snapshot.deviceActive ? 1 : 0, std::memory_order_relaxed);
+    auditionStepCount.store (snapshot.stepCount, std::memory_order_relaxed);
+    auditionBeatsPerStep.store (snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25,
+                                std::memory_order_relaxed);
+
+    for (int channel = 0; channel < ksh::Constants::maxChannels; ++channel)
+    {
+        const int note = channel < snapshot.channelCount
+                             ? snapshot.channels[static_cast<size_t> (channel)].note
+                             : ksh::Constants::defaultChannelNotes[static_cast<size_t> (channel)];
+        auditionChannelNotes[static_cast<size_t> (channel)].store (note, std::memory_order_relaxed);
+    }
+}
+
 void PluginProcessor::publishPlaybackSnapshotLocked()
 {
-    playbackMailbox.publish (engine.makePlaybackSnapshot());
+    const auto snapshot = engine.makePlaybackSnapshot();
+    refreshAuditionCacheFromSnapshot (snapshot);
+    playbackMailbox.publish (snapshot);
     lastPublishedSnapshotVersion = engine.playbackSnapshotVersion();
 }
 
@@ -891,8 +910,14 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
         const int velocity = args.is_array() && args.size() > 1 ? args[1].get<int>() : 100;
         const bool ok = recordPatternRowAtCurrentStep (row, velocity);
         if (ok)
-            uiBridge.syncAll();
+            uiBridge.emitEngineState();
         return ok;
+    }
+
+    if (selector == "channel_audition")
+    {
+        const int row = args.is_array() && ! args.empty() ? args[0].get<int>() - 1 : 0;
+        return queueRowAudition (row, ksh::CellDefaults::velocity);
     }
 
     if (selector == "standalone_transport_playing")
@@ -919,14 +944,11 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
     if (! ok)
         return false;
 
-    if (selector != "channel_audition")
-    {
-        if (isMacroParameterID (selector))
-            syncMacroParametersFromEngineLocked (true);
+    if (isMacroParameterID (selector) || selector == "source_rate" || selector == "static_source")
+        syncMacroParametersFromEngineLocked (true);
 
-        if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
-            publishPlaybackSnapshotLocked();
-    }
+    if (engine.playbackSnapshotVersion() != lastPublishedSnapshotVersion)
+        publishPlaybackSnapshotLocked();
 
     return true;
 }
@@ -1042,6 +1064,83 @@ bool PluginProcessor::isPatternRecordingEnabled() const
     return patternRecordingEnabled.load (std::memory_order_acquire) != 0;
 }
 
+bool PluginProcessor::queueRowAudition (int channelZeroBased, int velocity)
+{
+    if (auditionDeviceActive.load (std::memory_order_acquire) == 0)
+        return false;
+
+    const int channelCount = auditionChannelCount.load (std::memory_order_acquire);
+
+    if (channelZeroBased < 0 || channelZeroBased >= channelCount)
+        return false;
+
+    const int pitch = auditionChannelNotes[static_cast<size_t> (channelZeroBased)].load (std::memory_order_acquire);
+    midiPlayback.queueAuditionNote ({ pitch,
+                                      ksh::clampInt (velocity, 1, 127),
+                                      ksh::Constants::defaultMidiChannel,
+                                      ksh::Constants::defaultNoteDurationMs,
+                                      0.0 });
+    return true;
+}
+
+int PluginProcessor::quantizedStepForUiTrigger() const
+{
+    const int stepCount = std::max (1, auditionStepCount.load (std::memory_order_acquire));
+    const int fallbackStepOneBased = currentStepForUi.load (std::memory_order_acquire);
+    int step = fallbackStepOneBased > 0 ? ksh::clampInt (fallbackStepOneBased - 1, 0, stepCount - 1) : 0;
+
+    if (patternRecordTransportPlaying.load (std::memory_order_acquire) == 0)
+        return step;
+
+    const auto updatedMs = patternRecordTransportUpdatedMs.load (std::memory_order_relaxed);
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+    const auto ageMs = nowMs - updatedMs;
+
+    if (updatedMs <= 0.0 || ageMs < 0.0 || ageMs > kMaxPatternRecordTransportAgeMs)
+        return step;
+
+    const auto bpm = patternRecordTransportBpm.load (std::memory_order_relaxed);
+    auto eventPpq = patternRecordTransportPpq.load (std::memory_order_relaxed);
+
+    if (bpm > 0.0)
+        eventPpq += (ageMs / 1000.0) * (bpm / 60.0);
+
+    const auto beatsPerStep = auditionBeatsPerStep.load (std::memory_order_relaxed);
+    const double safeBeatsPerStep = beatsPerStep > 0.0 ? beatsPerStep : 0.25;
+    const int globalStep = static_cast<int> (std::llround (eventPpq / safeBeatsPerStep));
+    return modInt (globalStep, stepCount);
+}
+
+bool PluginProcessor::triggerRowFromUi (int channelZeroBased, int velocity)
+{
+    const int vel = ksh::clampInt (velocity, 1, 127);
+    const bool auditioned = queueRowAudition (channelZeroBased, vel);
+
+    if (! isPatternRecordingEnabled())
+        return auditioned;
+
+    const int channelCount = auditionChannelCount.load (std::memory_order_acquire);
+
+    if (channelZeroBased < 0 || channelZeroBased >= channelCount)
+        return auditioned;
+
+    const int fallbackStepOneBased = currentStepForUi.load (std::memory_order_acquire);
+
+    if (fallbackStepOneBased <= 0 && patternRecordTransportPlaying.load (std::memory_order_acquire) == 0)
+        return auditioned;
+
+    const int source = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
+                                     0,
+                                     ksh::Constants::sourceCount - 1);
+    const int step = quantizedStepForUiTrigger();
+    const bool queued = enqueuePatternRecordEvent (source, channelZeroBased, step, vel);
+
+    if (queued)
+        messageThreadWorkPending.store (true, std::memory_order_release);
+
+    return auditioned || queued;
+}
+
 bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
 {
     if (! isPatternRecordingEnabled())
@@ -1049,47 +1148,19 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
 
     const int fallbackStepOneBased = currentStepForUi.load (std::memory_order_acquire);
 
-    if (fallbackStepOneBased <= 0)
+    if (fallbackStepOneBased <= 0 && patternRecordTransportPlaying.load (std::memory_order_acquire) == 0)
         return false;
 
-    std::scoped_lock lock { engineStateMutex };
+    const int vel = ksh::clampInt (velocity, 1, 127);
+    const int step = quantizedStepForUiTrigger();
     const int source = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
                                      0,
                                      ksh::Constants::sourceCount - 1);
+
+    std::scoped_lock lock { engineStateMutex };
     const int row = ksh::clampInt (channel, 0, engine.getChannelCount() - 1);
-    const auto snapshot = engine.makePlaybackSnapshot();
-    int step = ksh::clampInt (fallbackStepOneBased - 1, 0, engine.getStepCount() - 1);
-
-    if (patternRecordTransportPlaying.load (std::memory_order_acquire) != 0)
-    {
-        const auto updatedMs = patternRecordTransportUpdatedMs.load (std::memory_order_relaxed);
-        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
-        const auto ageMs = nowMs - updatedMs;
-
-        if (updatedMs > 0.0 && ageMs >= 0.0 && ageMs <= kMaxPatternRecordTransportAgeMs)
-        {
-            const auto bpm = patternRecordTransportBpm.load (std::memory_order_relaxed);
-            auto eventPpq = patternRecordTransportPpq.load (std::memory_order_relaxed);
-
-            if (bpm > 0.0)
-                eventPpq += (ageMs / 1000.0) * (bpm / 60.0);
-
-            step = quantizedStepForPpq (snapshot, eventPpq);
-        }
-    }
-
-    engine.setCell (source, row, step, true, ksh::clampInt (velocity, 1, 127), 100, 1, 0, false, 1);
-
-    if (engine.isDeviceActive())
-    {
-        const auto& rowChannel = engine.channelAt (row);
-        midiPlayback.queueAuditionNote ({ rowChannel.note,
-                                          ksh::clampInt (velocity, 1, 127),
-                                          ksh::Constants::defaultMidiChannel,
-                                          ksh::Constants::defaultNoteDurationMs,
-                                          0.0 });
-    }
-
+    engine.setCell (source, row, step, true, vel, 100, 1, 0, false, 1);
+    [[maybe_unused]] const bool auditioned = queueRowAudition (row, vel);
     publishPlaybackSnapshotIfChangedLocked();
     engine.flushPreview();
     return true;

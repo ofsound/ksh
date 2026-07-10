@@ -56,6 +56,7 @@ struct EngineStateSnapshot
     NativePlaybackTable nativePlaybackRows;
     std::array<Channel, Constants::maxChannels> channels {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
+    std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
     std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
     GeneratedPattern generated {};
     int activeSourceIndicesCallCount = 0;
@@ -71,9 +72,11 @@ public:
     [[nodiscard]] int getStepCount() const { return stepCount; }
     [[nodiscard]] int getChannelCount() const { return channelCount; }
     [[nodiscard]] int getRefreshSteps() const { return refreshSteps; }
+    [[nodiscard]] int getSourceStepCount (int source) const;
     [[nodiscard]] GenerationMode getGenerationMode() const { return generationMode; }
     [[nodiscard]] int getStaticSource() const { return staticSource; }
     [[nodiscard]] std::string_view getRate() const { return rate; }
+    [[nodiscard]] std::string_view getSourceRate (int source) const;
     [[nodiscard]] double getTempo() const { return tempo; }
     [[nodiscard]] int getSwing() const { return swing; }
     [[nodiscard]] int getVelocityHumanize() const { return velocityHumanize; }
@@ -123,6 +126,7 @@ private:
 
     std::array<Channel, Constants::maxChannels> channels {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
+    std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
     std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
     GeneratedPattern generated {};
 
@@ -135,9 +139,11 @@ public:
     void setStepCount (int count);
     void setChannelCount (int count);
     void setRefreshSteps (int count);
+    void setSourceStepCount (int source, int count);
     void setGenerationMode (GenerationMode mode);
     void setStaticSource (int source);
     void setRate (std::string_view rate);
+    void setSourceRate (int source, std::string_view rate);
     void setTempo (double bpm);
     void setSwing (int amount);
     void setVelocityHumanize (int amount);
@@ -217,6 +223,8 @@ private:
 
     void initChannels();
     void initSources();
+    [[nodiscard]] int activeSettingsSource() const;
+    void applyActiveSourceSettings();
     double nextRandom() const;
     void status (const std::string& message);
     void markPreviewDirty (bool forceEmit);

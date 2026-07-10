@@ -418,6 +418,8 @@ export function copySourcePattern(state, source, destination) {
     return false;
   }
 
+  state.sourceSettings[destination] = { ...state.sourceSettings[source] };
+
   for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
     state.sourceChannelMutes[destination][channel] = state.sourceChannelMutes[source][channel] ? 1 : 0;
 

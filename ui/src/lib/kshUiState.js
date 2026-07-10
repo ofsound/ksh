@@ -50,6 +50,17 @@ export function makeSourceChannelMutes() {
   return Array.from({ length: SOURCE_COUNT }, () => Array(MAX_CHANNELS).fill(0));
 }
 
+export function defaultSourceSettings() {
+  return {
+    stepCount: 16,
+    rate: "16n",
+  };
+}
+
+export function makeSourceSettings() {
+  return Array.from({ length: SOURCE_COUNT }, () => defaultSourceSettings());
+}
+
 export function makeDefaultKshState() {
   const channels = Array.from({ length: MAX_CHANNELS }, (_, index) => ({
     label: DEFAULT_CHANNEL_LABELS[index] ?? String(index + 1),
@@ -76,6 +87,7 @@ export function makeDefaultKshState() {
     standaloneTempo: 120,
     channels,
     sources: makeEmptySources(),
+    sourceSettings: makeSourceSettings(),
     sourceChannelMutes: makeSourceChannelMutes(),
   };
 }
@@ -146,6 +158,10 @@ export function serializePersistenceState(state) {
       channel.loopLength,
       channel.playbackMode,
     ]),
+    sourceSettings: state.sourceSettings.map((settings) => [
+      clamp(settings.stepCount, 1, MAX_STEPS),
+      normalizeRate(settings.rate),
+    ]),
     sourceChannelMutes: state.sourceChannelMutes.map((row) => row.map((muted) => (muted ? 1 : 0))),
     cells,
   };
@@ -187,6 +203,33 @@ export function applyPersistencePayload(state, payload) {
 
   if (!state.sources) {
     state.sources = makeEmptySources();
+  }
+
+  state.sourceSettings = makeSourceSettings();
+  const settingsIn = payload.sourceSettings ?? [];
+  for (let source = 0; source < SOURCE_COUNT; source += 1) {
+    const row = settingsIn[source];
+    let stepCount = state.stepCount;
+    let rate = state.rate;
+
+    if (Array.isArray(row)) {
+      stepCount = row[0] ?? stepCount;
+      rate = row[1] ?? rate;
+    } else if (row && typeof row === "object") {
+      stepCount = row.stepCount ?? stepCount;
+      rate = row.rate ?? rate;
+    }
+
+    state.sourceSettings[source] = {
+      stepCount: clamp(stepCount, 1, MAX_STEPS),
+      rate: normalizeRate(rate),
+    };
+  }
+
+  if (state.staticSource >= 0 && state.staticSource < SOURCE_COUNT) {
+    state.stepCount = state.sourceSettings[state.staticSource].stepCount;
+    state.rate = state.sourceSettings[state.staticSource].rate;
+    state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
   }
 
   for (let source = 0; source < SOURCE_COUNT; source += 1) {
@@ -272,8 +315,23 @@ export function applyStatusMessage(state, selector, args = []) {
     {
       const previousStepCount = state.stepCount;
       state.stepCount = clamp(values[0], 1, MAX_STEPS);
+      if (state.staticSource >= 0 && state.staticSource < SOURCE_COUNT) {
+        state.sourceSettings[state.staticSource].stepCount = state.stepCount;
+      }
       state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
       resizeChannelLoopLengths(state, state.stepCount, previousStepCount);
+      break;
+    }
+    case "source_steps":
+    {
+      const source = clamp(values[0] - 1, 0, SOURCE_COUNT - 1);
+      const previousStepCount = state.stepCount;
+      state.sourceSettings[source].stepCount = clamp(values[1], 1, MAX_STEPS);
+      if (source === state.staticSource) {
+        state.stepCount = state.sourceSettings[source].stepCount;
+        state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
+        resizeChannelLoopLengths(state, state.stepCount, previousStepCount);
+      }
       break;
     }
     case "channels":
@@ -293,10 +351,27 @@ export function applyStatusMessage(state, selector, args = []) {
         String(values[0]).toLowerCase() === "m"
           ? SILENT_SOURCE
           : clamp(values[0] - 1, SILENT_SOURCE, SOURCE_COUNT - 1);
+      if (state.staticSource >= 0 && state.staticSource < SOURCE_COUNT) {
+        state.stepCount = state.sourceSettings[state.staticSource].stepCount;
+        state.rate = state.sourceSettings[state.staticSource].rate;
+        state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
+      }
       break;
     case "rate":
       state.rate = normalizeRate(values[0]);
+      if (state.staticSource >= 0 && state.staticSource < SOURCE_COUNT) {
+        state.sourceSettings[state.staticSource].rate = state.rate;
+      }
       break;
+    case "source_rate":
+    {
+      const source = clamp(values[0] - 1, 0, SOURCE_COUNT - 1);
+      state.sourceSettings[source].rate = normalizeRate(values[1]);
+      if (source === state.staticSource) {
+        state.rate = state.sourceSettings[source].rate;
+      }
+      break;
+    }
     case "swing":
       state.swing = clamp(values[0], 0, 100);
       break;

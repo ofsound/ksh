@@ -92,6 +92,7 @@ struct PlaybackSnapshot
 {
     GeneratedPattern generated {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
+    std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
     std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
     std::array<Channel, Constants::maxChannels> channels {};
     GenerationMode generationMode = GenerationMode::staticSource;

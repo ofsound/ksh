@@ -137,6 +137,13 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "source_steps")
+    {
+        const int source = zeroBased (argInt (args, 0, engine.getStaticSource() + 1));
+        engine.setSourceStepCount (source, argInt (args, 1, engine.getSourceStepCount (source)));
+        return true;
+    }
+
     if (selector == "channels")
     {
         engine.setChannelCount (argInt (args, 0, engine.getChannelCount()));
@@ -164,6 +171,13 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
     if (selector == "rate")
     {
         engine.setRate (argString (args, 0));
+        return true;
+    }
+
+    if (selector == "source_rate")
+    {
+        const int source = zeroBased (argInt (args, 0, engine.getStaticSource() + 1));
+        engine.setSourceRate (source, argString (args, 1));
         return true;
     }
 

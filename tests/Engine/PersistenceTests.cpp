@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 using namespace ksh;
 using ksh::test::EngineFixture;
 
@@ -14,6 +16,8 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
 
     original.clearAll();
     restored.clearAll();
+    original.engine.setGenerationMode (GenerationMode::staticSource);
+    original.engine.setStaticSource (2);
     original.engine.setStepCount (7);
     original.engine.setChannelCount (4);
     original.engine.setChannelLabel (0, "Sub");
@@ -23,8 +27,6 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
     original.engine.setDeviceActive (false);
     original.engine.setVelocityHumanize (12);
     original.engine.setTimingHumanize (8);
-    original.engine.setGenerationMode (GenerationMode::staticSource);
-    original.engine.setStaticSource (2);
     original.engine.setCell (1, 0, 2, true, 77, 25, 1);
     original.engine.setSourceChannelMute (1, 0, true);
 
@@ -49,6 +51,29 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
     REQUIRE (restored.engine.sourceChannelMutedAt (1, 0));
 }
 
+TEST_CASE ("persistence payload restores per-source resolution", "[engine][persistence]")
+{
+    EngineFixture original;
+    EngineFixture restored;
+
+    original.engine.setStepCount (16);
+    original.engine.setRate ("16n");
+    original.engine.setSourceStepCount (2, 11);
+    original.engine.setSourceRate (2, "8n");
+    original.engine.setStaticSource (2);
+
+    const auto state = original.engine.serializeForPersistence();
+    REQUIRE (restored.engine.deserializeForPersistence (state));
+
+    REQUIRE (restored.engine.getStaticSource() == 2);
+    REQUIRE (restored.engine.getSourceStepCount (0) == 16);
+    REQUIRE (restored.engine.getSourceStepCount (2) == 11);
+    REQUIRE (std::string { restored.engine.getSourceRate (0) } == "16n");
+    REQUIRE (std::string { restored.engine.getSourceRate (2) } == "8n");
+    REQUIRE (restored.engine.getStepCount() == 11);
+    REQUIRE (std::string { restored.engine.getRate() } == "8n");
+}
+
 TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persistence]")
 {
     EngineFixture original;
@@ -64,6 +89,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (payload["stepCount"] == 8);
     REQUIRE (payload["channelCount"] == 2);
     REQUIRE (payload["swing"] == 25);
+    REQUIRE (payload["sourceSettings"].size() == Constants::sourceCount);
     REQUIRE_FALSE (payload.contains ("nativeTiming"));
     REQUIRE (payload["cells"].size() >= 1);
 

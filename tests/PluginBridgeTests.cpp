@@ -216,6 +216,50 @@ TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")
     REQUIRE (containsNoteOn (midi, 42));
 }
 
+TEST_CASE ("triggerRowFromUi queues audition without engine lock", "[plugin][bridge][latency]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("channel_note", { 1, 55 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("channel_note", { 3, 60 }));
+
+    REQUIRE (plugin.triggerRowFromUi (0, 100));
+    REQUIRE (plugin.triggerRowFromUi (2, 110));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (containsNoteOnWithVelocity (midi, 55, 100));
+    REQUIRE (containsNoteOnWithVelocity (midi, 60, 110));
+}
+
+TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][bridge][latency][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_enabled", { 1, 2 }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE (plugin.triggerRowFromUi (2, 91));
+
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOnWithVelocity (midi, 38, 91));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE (engine.sources[1][2][0].enabled);
+    REQUIRE (engine.sources[1][2][0].velocity == 91);
+}
+
 TEST_CASE ("incoming MIDI notes 0-7 select source patterns", "[plugin][bridge][midi-input]")
 {
     PluginProcessor plugin;

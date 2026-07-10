@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 using namespace ksh;
 using ksh::test::EngineFixture;
 
@@ -18,6 +20,25 @@ TEST_CASE ("dispatchEngineCommand sets steps and channels", "[engine][bridge]")
 
     REQUIRE (fixture.engine.getStepCount() == 8);
     REQUIRE (fixture.engine.getChannelCount() == 4);
+}
+
+TEST_CASE ("dispatchEngineCommand sets source pattern resolution", "[engine][bridge]")
+{
+    EngineFixture fixture;
+    fixture.engine.setStepCount (16);
+    fixture.engine.setRate ("16n");
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "source_steps", { 2, 12 }));
+    REQUIRE (dispatchEngineCommand (fixture.engine, "source_rate", { 2, "8n" }));
+
+    REQUIRE (fixture.engine.getSourceStepCount (0) == 16);
+    REQUIRE (std::string { fixture.engine.getSourceRate (0) } == "16n");
+    REQUIRE (fixture.engine.getSourceStepCount (1) == 12);
+    REQUIRE (std::string { fixture.engine.getSourceRate (1) } == "8n");
+
+    REQUIRE (dispatchEngineCommand (fixture.engine, "static_source", { 2 }));
+    REQUIRE (fixture.engine.getStepCount() == 12);
+    REQUIRE (std::string { fixture.engine.getRate() } == "8n");
 }
 
 TEST_CASE ("dispatchEngineCommand edits cells with one-based args", "[engine][bridge]")
@@ -55,6 +76,8 @@ TEST_CASE ("dispatchEngineCommand copies source patterns with one-based args", "
     fixture.engine.setCell (1, 1, 4, true, 12, 100, 1, 0, false, 1);
     fixture.engine.setSourceChannelMute (0, 1, true);
     fixture.engine.setSourceChannelMute (1, 1, false);
+    fixture.engine.setSourceStepCount (0, 12);
+    fixture.engine.setSourceRate (0, "8n");
 
     REQUIRE (dispatchEngineCommand (fixture.engine, "source_pattern_copy", { 1, 2 }));
 
@@ -67,6 +90,8 @@ TEST_CASE ("dispatchEngineCommand copies source patterns with one-based args", "
     REQUIRE (copied.cycleInverted);
     REQUIRE (copied.roll == 3);
     REQUIRE (fixture.engine.sourceChannelMutedAt (1, 1));
+    REQUIRE (fixture.engine.getSourceStepCount (1) == 12);
+    REQUIRE (std::string { fixture.engine.getSourceRate (1) } == "8n");
 
     REQUIRE (dispatchEngineCommand (fixture.engine, "source_pattern_copy", { 2, 2 }));
     REQUIRE (fixture.engine.sourceCellAt (1, 1, 4) == copied);

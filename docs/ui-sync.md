@@ -6,7 +6,7 @@ The C++ engine is the source of truth. Svelte mirrors engine state and sends com
 
 | Event | Payload | Thread |
 | --- | --- | --- |
-| `engine_state` | Strict `v:1` JSON: globals, channels, source cells, mutes | Message |
+| `engine_state` | Strict `v:1` JSON: globals, channels, source settings, source cells, mutes | Message |
 | `preview` | Generated grid + dimensions | Message |
 | `current_step` | 1-based step index, 0 when stopped | Message |
 | `note_hit` | `channel`, `generatedStep`, `source`, `sourceStep` | Message |
@@ -18,7 +18,10 @@ The audio thread never emits WebView events. It enqueues note-hit metadata into 
 
 Commands use JSON `{ selector, args }` through `kshSendCommand`. Indexes crossing the JS/C++ boundary are 1-based for M4L message compatibility.
 
-- Globals: `steps`, `channels`, `refresh_steps`, `mode`, `rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `static_source`
+**Low-latency row triggers** use a separate native function `kshTriggerRow(channelZeroBased, velocity)` that bypasses the serialized command bus and JSON parse. It reads a lock-free cache of channel notes from the last published playback snapshot, queues an audition note for the next audio block, and (when pattern recording is armed) enqueues a quantized cell write for the message thread. The UI must not wait on the global `sendCommand` chain for QWERTY / pad hits.
+
+- Globals: `channels`, `refresh_steps`, `mode`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `static_source`
+- Pattern resolution: `source_steps`, `source_rate` (legacy `steps`/`rate` still target the active pattern)
 - Channel: `channel_label`, `channel_note`, `channel_lock`, `channel_loop_length`, `channel_playback_mode`, `channel_audition`
 - Source grid: `cell`, `cell_enabled`, `cell_velocity`, `cell_probability`, `cell_cycle`, `cell_cycle_offset`, `cell_cycle_inverted`, `cell_roll`
 - Source/channel utilities: `source_channel_mute`, `source_channel_reset`
@@ -32,10 +35,11 @@ Use channel naming in UI state:
 
 - `channelCount`
 - `channels`
+- `sourceSettings`
 - `selectedChannel`
 - `MAX_CHANNELS`
 
-The persisted JSON also uses `channelCount` and `channels`. Legacy UI `laneCount`/`lanes` naming should not come back.
+The persisted JSON also uses `channelCount`, `channels`, and per-pattern `sourceSettings`. Legacy UI `laneCount`/`lanes` naming should not come back.
 
 ## Editor and compact preview
 

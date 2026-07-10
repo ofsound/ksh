@@ -104,9 +104,11 @@ Cell staticSourceCellForStep (const PlaybackSnapshot& snapshot, int source, int 
     source = clampInt (source, 0, Constants::sourceCount - 1);
     channel = clampInt (channel, 0, Constants::maxChannels - 1);
 
+    const int sourceStepCount =
+        clampInt (snapshot.sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
     const int loopLength = clampInt (snapshot.channels[static_cast<size_t> (channel)].loopLength,
                                      1,
-                                     snapshot.stepCount);
+                                     sourceStepCount);
     const int sourceStep = mod (playbackStep, loopLength);
 
     Cell cell = snapshot.sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)]

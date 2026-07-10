@@ -39,6 +39,7 @@ import {
   setProjectUiScalePercent as nativeSetProjectUiScalePercent,
   setViewSize,
   syncAll,
+  triggerRow,
   waitForBackend,
 } from "./kshBridge.js";
 import {
@@ -136,6 +137,7 @@ function bumpState() {
     sources: session.kshState.sources.map((source) =>
       source.map((channel) => channel.map((cell) => ({ ...cell })))
     ),
+    sourceSettings: session.kshState.sourceSettings.map((settings) => ({ ...settings })),
     sourceChannelMutes: session.kshState.sourceChannelMutes.map((row) => [...row]),
   };
 }
@@ -299,7 +301,7 @@ async function applyHistorySnapshot(snapshot) {
     assignHistorySnapshot(snapshot);
     await sendCommand("apply_persistence", [snapshot]);
 
-    if (snapshot.stepCount !== previousStepCount) {
+    if (session.kshState.stepCount !== previousStepCount) {
       await resizeForCurrentView();
     }
   } finally {
@@ -473,10 +475,20 @@ export function setSelectedCell(channel, step) {
 }
 
 export async function selectSource(source) {
+  const previousStepCount = session.kshState.stepCount;
   session.selectedSource = clamp(source, SILENT_SOURCE, SOURCE_COUNT - 1);
   session.kshState.staticSource = session.selectedSource;
+  if (session.selectedSource !== SILENT_SOURCE) {
+    const settings = session.kshState.sourceSettings[session.selectedSource];
+    session.kshState.stepCount = settings.stepCount;
+    session.kshState.rate = settings.rate;
+    session.kshState.refreshSteps = clamp(session.kshState.refreshSteps, 1, session.kshState.stepCount);
+  }
   bumpState();
   await sendCommand("static_source", [session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1]);
+  if (session.kshState.stepCount !== previousStepCount) {
+    await resizeForCurrentView();
+  }
 
   if (session.patternRecordingEnabled && session.selectedSource !== SILENT_SOURCE) {
     await sendCommand("pattern_record_enabled", [1, session.selectedSource + 1]);
@@ -505,6 +517,7 @@ export async function copyPatternToSource(destination) {
   }
 
   await commitEditHistory("Copy pattern", async () => {
+    const previousStepCount = session.kshState.stepCount;
     if (!copySourcePattern(session.kshState, source, destination)) {
       return;
     }
@@ -512,11 +525,17 @@ export async function copyPatternToSource(destination) {
     session.patternCopySource = -1;
     session.selectedSource = destination;
     session.kshState.staticSource = destination;
+    session.kshState.stepCount = session.kshState.sourceSettings[destination].stepCount;
+    session.kshState.rate = session.kshState.sourceSettings[destination].rate;
+    session.kshState.refreshSteps = clamp(session.kshState.refreshSteps, 1, session.kshState.stepCount);
     bumpState();
     bumpOptimisticPreview();
 
     await sendCommand("source_pattern_copy", [source + 1, destination + 1]);
     await sendCommand("static_source", [destination + 1]);
+    if (session.kshState.stepCount !== previousStepCount) {
+      await resizeForCurrentView();
+    }
   });
 }
 
@@ -532,12 +551,16 @@ export async function setHeaderValue(id, value) {
   const state = session.kshState;
 
   if (id === "steps" && state.stepCount !== next) {
+    if (session.selectedSource === SILENT_SOURCE) {
+      return;
+    }
     const previousStepCount = state.stepCount;
     state.stepCount = next;
+    state.sourceSettings[session.selectedSource].stepCount = next;
     state.refreshSteps = clamp(state.refreshSteps, 1, next);
     resizeChannelLoopLengths(state, next, previousStepCount);
     bumpState();
-    await sendCommand("steps", [next]);
+    await sendCommand("source_steps", [session.selectedSource + 1, next]);
     await sendCommand("refresh_steps", [state.refreshSteps]);
     await resizeForCurrentView();
     return;
@@ -659,9 +682,13 @@ export async function cycleMode() {
 
 export async function cycleRateCommand(direction = 1) {
   await commitEditHistory("Change step value", async () => {
+    if (session.selectedSource === SILENT_SOURCE) {
+      return;
+    }
     cycleRate(session.kshState, direction);
+    session.kshState.sourceSettings[session.selectedSource].rate = session.kshState.rate;
     bumpState();
-    await sendCommand("rate", [session.kshState.rate]);
+    await sendCommand("source_rate", [session.selectedSource + 1, session.kshState.rate]);
   });
 }
 
@@ -696,8 +723,9 @@ export async function setStandaloneTempoFromInput(event) {
   await sendCommand("standalone_tempo", [next]);
 }
 
-export async function auditionChannel(channel) {
-  await sendCommand("channel_audition", [channel + 1]);
+export function auditionChannel(channel) {
+  // Fire-and-forget: do not await — chords must not serialize on the native Promise.
+  void triggerRow(channel, 100);
 }
 
 export async function incrementChannelNote(channel) {
@@ -894,13 +922,14 @@ export async function togglePatternRecording() {
   await setPatternRecordingEnabled(!session.patternRecordingEnabled);
 }
 
-export async function recordPatternRow(channel, velocity = 100) {
+export function recordPatternRow(channel, velocity = 100) {
   if (!session.patternRecordingEnabled) {
     return;
   }
 
   const row = clamp(channel, 0, session.kshState.channelCount - 1);
-  await sendCommand("pattern_record_row", [row + 1, clamp(velocity, 1, 127)]);
+  // Fire-and-forget so recording hits stay as snappy as audition.
+  void triggerRow(row, clamp(velocity, 1, 127));
 }
 
 export async function resizeForCurrentView() {
@@ -1022,6 +1051,7 @@ export function initKshSession() {
       }
 
       const parsed = parseBackendJson(payload);
+      const previousStepCount = session.kshState.stepCount;
       applyEngineState(session.kshState, parsed);
       if (parsed?.patternViewScale !== undefined) {
         session.patternViewScale = normalizePatternViewScale(parsed.patternViewScale);
@@ -1036,6 +1066,9 @@ export function initKshSession() {
       session.selectedSource = session.kshState.staticSource;
       clearSourceChannelSolo();
       bumpState();
+      if (session.kshState.stepCount !== previousStepCount) {
+        void resizeForCurrentView();
+      }
     }),
     onBackendEvent("preview", (payload) => {
       if (previewSuppressionDepth > 0) {
@@ -1058,11 +1091,15 @@ export function initKshSession() {
         : payload.args !== undefined
           ? [payload.args]
           : [];
+      const previousStepCount = session.kshState.stepCount;
       applyStatusMessage(session.kshState, payload.selector, args);
       if (payload.selector === "static_source") {
         session.selectedSource = session.kshState.staticSource;
       }
       bumpState();
+      if (session.kshState.stepCount !== previousStepCount) {
+        void resizeForCurrentView();
+      }
     }),
   ];
 

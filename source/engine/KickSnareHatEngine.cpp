@@ -143,6 +143,7 @@ EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
     snapshot.nativePlaybackRows = nativePlaybackRows;
     snapshot.channels = channels;
     snapshot.sources = sources;
+    snapshot.sourceSettings = sourceSettings;
     snapshot.sourceChannelMutes = sourceChannelMutes;
     snapshot.generated = generated;
     snapshot.activeSourceIndicesCallCount = activeSourceIndicesCallCount;
@@ -176,6 +177,16 @@ bool KickSnareHatEngine::sourceChannelMutedAt (int source, int channel) const
     return isSourceChannelMuted (source, channel);
 }
 
+int KickSnareHatEngine::getSourceStepCount (int source) const
+{
+    return sourceSettings[static_cast<size_t> (clampSource (source))].stepCount;
+}
+
+std::string_view KickSnareHatEngine::getSourceRate (int source) const
+{
+    return sourceSettings[static_cast<size_t> (clampSource (source))].rate;
+}
+
 void KickSnareHatEngine::initChannels()
 {
     for (int i = 0; i < Constants::maxChannels; ++i)
@@ -187,8 +198,26 @@ void KickSnareHatEngine::initSources()
     for (auto& source : sources)
         source = makeEmptySourcePattern();
 
+    for (auto& settings : sourceSettings)
+        settings = defaultSourceSettings();
+
     for (auto& mutes : sourceChannelMutes)
         mutes.fill (false);
+}
+
+int KickSnareHatEngine::activeSettingsSource() const
+{
+    return staticSource >= 0 ? clampSource (staticSource) : 0;
+}
+
+void KickSnareHatEngine::applyActiveSourceSettings()
+{
+    const auto& settings = sourceSettings[static_cast<size_t> (activeSettingsSource())];
+    stepCount = clampInt (settings.stepCount, 1, Constants::maxSteps);
+    rate = Constants::normalizeRate (settings.rate);
+    currentStep = mod (currentStep, stepCount);
+    refreshSteps = clampInt (refreshSteps, 1, stepCount);
+    updateStepIntervalMs();
 }
 
 double KickSnareHatEngine::nextRandom() const
@@ -249,6 +278,7 @@ void KickSnareHatEngine::setStepCount (int count)
 {
     const int previousStepCount = stepCount;
     stepCount = clampInt (count, 1, Constants::maxSteps);
+    sourceSettings[static_cast<size_t> (activeSettingsSource())].stepCount = stepCount;
     currentStep = mod (currentStep, stepCount);
     refreshSteps = clampInt (refreshSteps, 1, stepCount);
 
@@ -258,6 +288,22 @@ void KickSnareHatEngine::setStepCount (int count)
 
     recomposeWindow (0, stepCount, true);
     status ("steps " + std::to_string (stepCount));
+}
+
+void KickSnareHatEngine::setSourceStepCount (int source, int count)
+{
+    source = clampSource (source);
+
+    if (source == activeSettingsSource())
+    {
+        setStepCount (count);
+        status ("source_steps " + std::to_string (source + 1) + " " + std::to_string (stepCount));
+        return;
+    }
+
+    sourceSettings[static_cast<size_t> (source)].stepCount = clampInt (count, 1, Constants::maxSteps);
+    status ("source_steps " + std::to_string (source + 1) + " "
+            + std::to_string (sourceSettings[static_cast<size_t> (source)].stepCount));
 }
 
 void KickSnareHatEngine::setChannelCount (int count)
@@ -284,6 +330,9 @@ void KickSnareHatEngine::setStaticSource (int source)
 {
     staticSource = source < 0 ? Constants::mutedStaticSource : clampSource (source);
 
+    if (staticSource >= 0)
+        applyActiveSourceSettings();
+
     if (generationMode == GenerationMode::staticSource)
         recomposeWindow (0, stepCount, true);
 
@@ -293,9 +342,26 @@ void KickSnareHatEngine::setStaticSource (int source)
 void KickSnareHatEngine::setRate (std::string_view rateIn)
 {
     rate = Constants::normalizeRate (rateIn);
+    sourceSettings[static_cast<size_t> (activeSettingsSource())].rate = rate;
     updateStepIntervalMs();
     ++playbackSnapshotVersion_;
     status ("rate " + rate);
+}
+
+void KickSnareHatEngine::setSourceRate (int source, std::string_view rateIn)
+{
+    source = clampSource (source);
+    sourceSettings[static_cast<size_t> (source)].rate = Constants::normalizeRate (rateIn);
+
+    if (source == activeSettingsSource())
+    {
+        rate = sourceSettings[static_cast<size_t> (source)].rate;
+        updateStepIntervalMs();
+        ++playbackSnapshotVersion_;
+    }
+
+    status ("source_rate " + std::to_string (source + 1) + " "
+            + sourceSettings[static_cast<size_t> (source)].rate);
 }
 
 void KickSnareHatEngine::setTempo (double bpm)
@@ -400,7 +466,8 @@ Cell KickSnareHatEngine::generatedCellFromSource (int source, int channel, int s
     source = clampSource (source);
     channel = clampChannel (channel);
 
-    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
+    const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
+    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
     const int sourceStep = mod (step, loopLength);
 
     Cell cell;
@@ -440,7 +507,9 @@ void KickSnareHatEngine::refreshGeneratedCellsForSourceEdit (int source, int cha
     if (channel >= channelCount)
         return;
 
-    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
+    source = clampSource (source);
+    const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
+    const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
 
     if (sourceStep >= loopLength)
         return;
@@ -600,6 +669,7 @@ void KickSnareHatEngine::copySourcePattern (int source, int destination)
         return;
 
     sources[static_cast<size_t> (destination)] = sources[static_cast<size_t> (source)];
+    sourceSettings[static_cast<size_t> (destination)] = sourceSettings[static_cast<size_t> (source)];
     sourceChannelMutes[static_cast<size_t> (destination)] = sourceChannelMutes[static_cast<size_t> (source)];
 
     recomposeWindow (0, stepCount, true);
@@ -615,9 +685,10 @@ bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const
         if (isSourceChannelMuted (sourceIndex, channel))
             continue;
 
-        const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, stepCount);
+        const int sourceStepCount = clampInt (sourceSettings[static_cast<size_t> (sourceIndex)].stepCount, 1, Constants::maxSteps);
+        const int loopLength = clampInt (channels[static_cast<size_t> (channel)].loopLength, 1, sourceStepCount);
 
-        for (int step = 0; step < std::min (stepCount, loopLength); ++step)
+        for (int step = 0; step < std::min (sourceStepCount, loopLength); ++step)
         {
             if (sources[static_cast<size_t> (sourceIndex)][static_cast<size_t> (channel)][static_cast<size_t> (step)].enabled)
                 return false;
@@ -821,6 +892,16 @@ nlohmann::json KickSnareHatEngine::snapshot() const
 {
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json generatedOut = nlohmann::json::array();
+    nlohmann::json sourceSettingsOut = nlohmann::json::array();
+
+    for (int source = 0; source < Constants::sourceCount; ++source)
+    {
+        const auto& settings = sourceSettings[static_cast<size_t> (source)];
+        sourceSettingsOut.push_back ({
+            { "stepCount", settings.stepCount },
+            { "rate", settings.rate }
+        });
+    }
 
     for (int channel = 0; channel < channelCount; ++channel)
     {
@@ -853,6 +934,7 @@ nlohmann::json KickSnareHatEngine::snapshot() const
         { "timingHumanize", timingHumanize },
         { "currentStep", currentStep + 1 },
         { "channels", channelsOut },
+        { "sourceSettings", sourceSettingsOut },
         { "sourceChannelMutes", sourceChannelMutes },
         { "generated", generatedOut }
     };
@@ -862,6 +944,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 {
     nlohmann::json cells = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
+    nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
 
     for (int source = 0; source < Constants::sourceCount; ++source)
@@ -913,6 +996,15 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
+        const auto& settings = sourceSettings[static_cast<size_t> (source)];
+        sourceSettingsOut.push_back (nlohmann::json::array ({
+            settings.stepCount,
+            settings.rate
+        }));
+    }
+
+    for (int source = 0; source < Constants::sourceCount; ++source)
+    {
         nlohmann::json row = nlohmann::json::array();
 
         for (int channel = 0; channel < channelCount; ++channel)
@@ -935,6 +1027,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         { "timingHumanize", timingHumanize },
         { "deviceActive", deviceActive ? 1 : 0 },
         { "channels", channelsOut },
+        { "sourceSettings", sourceSettingsOut },
         { "sourceChannelMutes", mutes },
         { "cells", cells }
     };
@@ -962,6 +1055,43 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
         deviceActive = state["deviceActive"].get<int>() != 0;
 
     updateStepIntervalMs();
+
+    for (auto& settings : sourceSettings)
+    {
+        settings.stepCount = stepCount;
+        settings.rate = rate;
+    }
+
+    if (state.contains ("sourceSettings") && state["sourceSettings"].is_array())
+    {
+        const auto& settingsIn = state["sourceSettings"];
+
+        for (int source = 0; source < Constants::sourceCount; ++source)
+        {
+            if (source >= static_cast<int> (settingsIn.size()))
+                continue;
+
+            const auto& row = settingsIn[static_cast<size_t> (source)];
+            auto& settings = sourceSettings[static_cast<size_t> (source)];
+
+            if (row.is_array())
+            {
+                if (! row.empty())
+                    settings.stepCount = clampInt (row[0].get<int>(), 1, Constants::maxSteps);
+
+                if (row.size() > 1)
+                    settings.rate = Constants::normalizeRate (row[1].get<std::string>());
+            }
+            else if (row.is_object())
+            {
+                settings.stepCount = clampInt (row.value ("stepCount", settings.stepCount), 1, Constants::maxSteps);
+                settings.rate = Constants::normalizeRate (row.value ("rate", settings.rate));
+            }
+        }
+    }
+
+    if (staticSource >= 0)
+        applyActiveSourceSettings();
 
     for (auto& source : sources)
         source = makeEmptySourcePattern();

@@ -153,6 +153,17 @@ struct Channel
     return channel;
 }
 
+struct SourceSettings
+{
+    int stepCount = 16;
+    std::string rate = std::string { Constants::defaultRate };
+};
+
+[[nodiscard]] inline SourceSettings defaultSourceSettings()
+{
+    return {};
+}
+
 using SourcePattern = std::array<std::array<Cell, Constants::maxSteps>, Constants::maxChannels>;
 using GeneratedPattern = SourcePattern;
 

@@ -55,6 +55,21 @@ export function sendCommand(selector, args = []) {
   return task;
 }
 
+/**
+ * Low-latency row trigger for QWERTY / pads.
+ * Bypasses the serialized command bus and JSON parse path; safe to fire in parallel.
+ * Does not join the engine commandChain — chords must not wait on each other.
+ */
+export function triggerRow(channelZeroBased, velocity = 100) {
+  if (!nativeFunctionAvailable("kshTriggerRow")) {
+    // Legacy fallback still serializes; prefer the dedicated native path.
+    return sendCommand("channel_audition", [channelZeroBased + 1]);
+  }
+
+  const native = getNativeFunction("kshTriggerRow");
+  return Promise.resolve(native(channelZeroBased, velocity)).catch(() => false);
+}
+
 export function onBackendEvent(eventId, callback) {
   if (!window.__JUCE__?.backend) {
     return () => {};
