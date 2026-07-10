@@ -66,6 +66,37 @@
     @apply pointer-events-none h-[32px] w-[32px];
   }
 
+  .compact-lock-button {
+    @apply flex h-7 w-9 shrink-0 items-center justify-center rounded-sm border px-1 text-[10px] font-bold leading-none outline-none transition-colors;
+  }
+
+  .compact-lock-label {
+    @apply text-[9px] font-semibold leading-none text-text-muted;
+  }
+
+  .compact-lock-button-random {
+    @apply border-border-subtle bg-control-secondary text-text-muted;
+  }
+
+  .compact-lock-button-locked {
+    @apply border-accent bg-accent/15 text-accent;
+  }
+
+  .compact-random-panel {
+    border-radius: 6px;
+    padding: 10px 16px 12px 18px;
+    background:
+      linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--color-shell) 78%, transparent),
+        color-mix(in srgb, var(--color-app) 88%, transparent) 58%,
+        color-mix(in srgb, var(--color-accent) 4%, var(--color-app))
+      );
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--color-text) 6%, transparent),
+      0 4px 14px color-mix(in srgb, var(--color-app) 28%, transparent);
+  }
+
   .header-icon-button:disabled {
     @apply cursor-default text-text-faint;
   }

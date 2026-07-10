@@ -786,6 +786,13 @@ export async function cycleChannelLock(channel) {
   });
 }
 
+export async function setChannelLock(channel, lock) {
+  const nextLock = Math.max(-1, Math.min(SOURCE_COUNT - 1, Math.round(lock)));
+  session.kshState.channels[channel].lock = nextLock;
+  bumpState();
+  await sendChannel(channel);
+}
+
 export async function setChannelPlaybackMode(channel, mode) {
   const normalized = normalizePlaybackMode(mode);
   if (session.kshState.channels[channel].playbackMode === normalized) {
