@@ -6,8 +6,10 @@ export const GRID_CELL_H = 50;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
-export const GRID_SIDEBAR_W = 270;
-export const GRID_CELL_LEFT_GAP = 8;
+export const GRID_SIDEBAR_W = 266;
+export const GRID_CELL_LEFT_GAP = 22;
+/** Sidebar, pre-grid gap, and outer editor padding east of the step grid. */
+export const EDITOR_GRID_LEADING_CHROME = GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP + 34;
 export const STEP_LABEL_H = 18;
 export const STEP_LABEL_CELL_GAP = 8;
 export const STEP_LABEL_FONT_PX = 10;
@@ -50,8 +52,16 @@ export function gridRowPaddingY(scale = 1) {
   return gridRowGap(scale) / 2;
 }
 
+export function stepLabelOuterMargin(scale = 1) {
+  return STEP_LABEL_CELL_GAP + gridRowPaddingY(scale);
+}
+
+export function stepLabelBandHeight(scale = 1) {
+  return stepLabelOuterMargin(scale) + STEP_LABEL_H + STEP_LABEL_CELL_GAP;
+}
+
 export function gridBodyHeight(channelCount, scale = 1) {
-  return STEP_LABEL_H + STEP_LABEL_CELL_GAP + channelCount * gridRowHeight(scale);
+  return stepLabelBandHeight(scale) + channelCount * gridRowHeight(scale);
 }
 
 export function gridAreaHeight(editorHeight, state) {
@@ -64,7 +74,7 @@ export function referenceTopPadding(channelCount, state = null) {
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
   const editorHeight = Math.max(MAIN_TOP + PROJECT_ROW_H + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
   const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
-  return Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+  return Math.max(0, Math.floor((slack - stepLabelBandHeight(1)) / 2));
 }
 
 /** Bottom spacer at 1x for a channel count; 1.5x keeps this gap above the compact strip. */
@@ -73,7 +83,7 @@ export function referenceBottomPadding(channelCount, state = null) {
   const oneXBodyHeight = gridBodyHeight(channelCount, 1);
   const editorHeight = Math.max(MAIN_TOP + PROJECT_ROW_H + oneXBodyHeight, minEditorHeight) + standaloneTransportRowHeight(state);
   const slack = gridAreaHeight(editorHeight, state) - oneXBodyHeight;
-  return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
+  return Math.max(0, Math.floor((slack + stepLabelBandHeight(1)) / 2));
 }
 
 /** Bottom spacer so first/last cell rows sit equidistant from the header rule and grid-area bottom. */
@@ -84,13 +94,13 @@ export function gridCellPadding(channelCount, editorHeight, scale = 1, state = n
     const distributed = Math.max(0, slack - top);
     return Math.max(referenceBottomPadding(channelCount, state), distributed);
   }
-  return Math.max(0, Math.floor((slack + STEP_LABEL_H) / 2));
+  return Math.max(0, Math.floor((slack + stepLabelBandHeight(1)) / 2));
 }
 
 /** Top spacer; step labels sit between this and the first cell row. */
 export function gridTopPadding(channelCount, editorHeight, scale = 1, state = null) {
   const slack = gridAreaHeight(editorHeight, state) - gridBodyHeight(channelCount, scale);
-  const distributed = Math.max(0, Math.floor((slack - STEP_LABEL_H) / 2));
+  const distributed = Math.max(0, Math.floor((slack - stepLabelBandHeight(scale)) / 2));
   if (normalizePatternViewScale(scale) === 1.5) {
     return Math.max(referenceTopPadding(channelCount, state), distributed);
   }
@@ -159,7 +169,7 @@ export function mutedChannelColor(colorCss) {
 
 export function editorDimensions(state, scale = 1) {
   const gridW = state.stepCount * gridCellWidth(scale);
-  const width = Math.max(EDITOR_MIN_WIDTH, 312 + gridW);
+  const width = Math.max(EDITOR_MIN_WIDTH, EDITOR_GRID_LEADING_CHROME + gridW);
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const normalizedScale = normalizePatternViewScale(scale);
   const bodyHeight = gridBodyHeight(state.channelCount, normalizedScale);
@@ -233,6 +243,15 @@ export function playbackModeOption(mode) {
 
 export function playbackModeLabel(mode) {
   return playbackModeOption(mode).label;
+}
+
+const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+export function midiNoteLabel(note) {
+  const clamped = clamp(Math.round(note), 0, 127);
+  const name = MIDI_NOTE_NAMES[clamped % 12];
+  const octave = Math.floor(clamped / 12) - 1;
+  return `${name}${octave}`;
 }
 
 export function nextPlaybackMode(mode) {

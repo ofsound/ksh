@@ -80,6 +80,15 @@ export function headerDragNextValue(drag, clientY) {
   return drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE);
 }
 
+export function channelNoteDragNextValue(drag, clientY) {
+  const delta = drag.startY - clientY;
+  return clamp(
+    drag.startValue + quantizedDragOffset(delta, HEADER_VALUE_DRAG_SCALE),
+    0,
+    127
+  );
+}
+
 export function createCellDrag(source, channel, step, cell, layerMode, valueMode, clientX, clientY) {
   return {
     source,

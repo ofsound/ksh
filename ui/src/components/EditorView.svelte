@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
@@ -18,6 +19,7 @@
     gridTopPadding,
     STEP_LABEL_CELL_GAP,
     stepLabelFontPx,
+    stepLabelOuterMargin,
     isStepBeyondLoopLength,
     channelToneColor,
     loopRangeForChannel,
@@ -41,7 +43,6 @@
   } from "../lib/kshEditorInteractions.js";
   import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SILENT_SOURCE, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
   import {
-    adjustChannelNote,
     auditionChannel,
     beginPatternCopy,
     cancelPatternCopy,
@@ -49,7 +50,6 @@
     clearSourceChannelSteps,
     copyPatternToSource,
     cycleSourceLayerMode,
-    incrementChannelNote,
     isEditorFlashing,
     resetSourceChannelRow,
     recordPatternRow,
@@ -118,8 +118,8 @@
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
   const cellFontPx = $derived(Math.round(18 * patternScale));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
+  const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
   const cycleCellFontPx = $derived(Math.round(14 * patternScale));
-  const smallCellFontPx = $derived(Math.round(9 * patternScale));
   const cellInsetPx = $derived(Math.round(8 * patternScale));
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
@@ -179,17 +179,9 @@
     const cell = session.kshState.sources[source][channel][step];
     const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
-    const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
 
     if (beyondSteps) {
       return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)");
-    }
-
-    if (beyondLoop) {
-      if (cell.enabled) {
-        return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)");
-      }
-      return cellStyleFromBackground("var(--color-grid-inactive-step)", "var(--color-text-faint)", "opacity:0.55;");
     }
 
     let lightColor = channelToneColor(channel, "light", session.dcColors);
@@ -244,19 +236,17 @@
 
   function cellClass(channel, step) {
     const beyondSteps = step >= session.kshState.stepCount;
-    const beyondLoop = isStepBeyondLoopLength(session.kshState, channel, step);
     const silent = session.selectedSource === SILENT_SOURCE;
     const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
     const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
-    const active = !silent && !beyondSteps && !beyondLoop && cell.enabled;
+    const active = !silent && !beyondSteps && cell.enabled;
 
     return [
-      "ksh-grid-cell relative mr-0 flex overflow-hidden border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
-      beyondLoop ? "border-grid-cell-border/40" : "border-grid-cell-border",
+      "ksh-grid-cell relative mr-0 flex overflow-hidden border border-grid-cell-border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       active ? "ksh-grid-cell-active" : "",
       flashing ? "ksh-cell-text-flash" : "",
-      cycleLayer && !beyondSteps && !beyondLoop ? "cell-cycle" : "items-center justify-center",
+      cycleLayer && !beyondSteps ? "cell-cycle" : "items-center justify-center",
     ].join(" ");
   }
 
@@ -1115,7 +1105,7 @@
     <div class="shrink-0">
     <div
       class="flex items-center"
-      style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
+      style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
     >
       <div class="flex" bind:this={gridEl}>
       {#each stepCols as step (step)}
@@ -1135,10 +1125,10 @@
         style={`padding-top:${gridRowPadY}px;padding-bottom:${gridRowPadY}px;`}
         data-channel-row={channel}
       >
-        <div class="flex shrink-0 items-center gap-1 pr-2 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
+        <div class="flex shrink-0 items-center gap-0.5 pr-1 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           <button
             type="button"
-            class="row-clear-button"
+            class="row-clear-button mr-2.5"
             disabled={session.selectedSource === SILENT_SOURCE}
             aria-label="Clear channel row steps"
             title="Double-click to clear this row"
@@ -1173,19 +1163,7 @@
               {session.kshState.channels[channel]?.label ?? channel + 1}
             </button>
           {/if}
-          <button
-            type="button"
-            class="w-6 text-[13px] text-info"
-            onclick={(event) => {
-              if (event.shiftKey) {
-                adjustChannelNote(channel, -1);
-              } else {
-                incrementChannelNote(channel);
-              }
-            }}
-          >
-            {session.kshState.channels[channel]?.note ?? 36}
-          </button>
+          <ChannelNoteControl {channel} />
           <PlaybackModeSelect
             value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
             accentClass={loopRangeClass(channel)}
@@ -1264,6 +1242,13 @@
             ⋮
           </button>
           {#each allStepCols as step (step)}
+            {#if isStepBeyondLoopLength(session.kshState, channel, step)}
+              <div
+                class="shrink-0"
+                style={`width:${gridCellW}px;height:${gridCellH}px;`}
+                aria-hidden="true"
+              ></div>
+            {:else}
             <button
               type="button"
               class={cellClass(channel, step)}
@@ -1287,24 +1272,11 @@
                 >
                   {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
                 </span>
-              {:else if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span
-                  class="pointer-events-none w-full text-center text-text-faint"
-                  style={`font-size:${smallCellFontPx}px;`}
-                >
-                  {cyclePrimaryLabel(channel, step)}/{cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
-                </span>
-              {:else if session.selectedSource !== SILENT_SOURCE && isStepBeyondLoopLength(session.kshState, channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span
-                  class="pointer-events-none w-full text-center text-text-faint"
-                  style={`font-size:${smallCellFontPx}px;`}
-                >
-                  {cellLabel(channel, step)}
-                </span>
               {:else}
                 {cellLabel(channel, step)}
               {/if}
             </button>
+            {/if}
           {/each}
         </div>
       </div>

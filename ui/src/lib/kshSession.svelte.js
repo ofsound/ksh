@@ -86,6 +86,7 @@ export const session = $state({
   selectedStep: 0,
   dcColors: 1,
   patternViewScale: 1,
+  channelNoteDisplayNames: false,
   patternRecordingEnabled: 0,
   sourceLayerMode: "velocity",
   patternCopySource: -1,
@@ -674,6 +675,23 @@ export async function adjustChannelNote(channel, delta) {
     bumpState();
     await sendCommand("channel_note", [channel + 1, session.kshState.channels[channel].note]);
   });
+}
+
+export async function setChannelNote(channel, note) {
+  const next = clamp(Math.round(note), 0, 127);
+  const row = session.kshState.channels[channel];
+
+  if (row.note === next) {
+    return;
+  }
+
+  row.note = next;
+  bumpState();
+  await sendCommand("channel_note", [channel + 1, next]);
+}
+
+export function toggleChannelNoteDisplayNames() {
+  session.channelNoteDisplayNames = !session.channelNoteDisplayNames;
 }
 
 export async function toggleCell(source, channel, step) {
