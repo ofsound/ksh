@@ -4,8 +4,8 @@
   import { PLAYBACK_MODE_OPTIONS, playbackModeOption } from "../lib/kshEditorUtils.js";
   import { absorbPointerDragFocus, releasePointerDragFocus } from "./pointerDragFocus.js";
 
-  /** @type {{ value?: string, accentClass?: string, onChange?: (mode: string) => void | Promise<void> }} */
-  let { value = "normal", accentClass = "text-info", onChange } = $props();
+  /** @type {{ value?: string, onChange?: (mode: string) => void | Promise<void> }} */
+  let { value = "normal", onChange } = $props();
 
   let rootEl = $state(null);
   let open = $state(false);
@@ -170,7 +170,7 @@
   <button
     type="button"
     data-playback-mode-trigger
-    class={`flex h-5 w-[4.5rem] shrink-0 items-center justify-start text-left text-[13px] leading-none outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${accentClass}`}
+    class="flex h-5 w-[4.5rem] shrink-0 items-center justify-start text-left text-[13px] leading-none text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-label={`Playback mode: ${selectedOption.label}`}

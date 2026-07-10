@@ -13,7 +13,6 @@
   /** @type {{ channel: number }} */
   let { channel } = $props();
 
-  let dragging = $state(false);
   /** @type {{ channel: number, startY: number, startValue: number, moved: boolean } | null} */
   let drag = $state(null);
 
@@ -38,7 +37,6 @@
     if (!drag.moved && Math.abs(event.clientY - drag.startY) > VELOCITY_DRAG_THRESHOLD) {
       beginEditGestureHistory();
       drag = { ...drag, moved: true };
-      dragging = true;
     }
 
     if (!drag.moved) {
@@ -60,14 +58,13 @@
       await commitEditGestureHistory("Change channel note");
     }
 
-    dragging = false;
     drag = null;
   }
 </script>
 
 <button
   type="button"
-  class={`w-9 shrink-0 text-left text-[13px] outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${dragging ? "text-accent" : "text-info"}`}
+  class="w-9 shrink-0 text-left text-[13px] text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
   aria-label={session.channelNoteDisplayNames ? `Channel note ${midiNoteLabel(note)}` : `Channel note ${note}`}
   title={session.channelNoteDisplayNames ? "Click to show MIDI numbers. Drag vertically to change." : "Click to show note names. Drag vertically to change."}
   onpointerdown={onPointerDown}

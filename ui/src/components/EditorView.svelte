@@ -5,6 +5,7 @@
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
+  import { absorbPointerDragFocus, releasePointerDragFocus } from "./pointerDragFocus.js";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
@@ -98,6 +99,8 @@
   let sourceRowResetTap = $state({ channel: -1, at: 0 });
   let lastAudition = $state({ channel: -1, at: 0 });
   let stepValueMenuOpen = $state(false);
+  let stepValueHighlightIndex = $state(-1);
+  let stepValueGesturePointerId = $state(null);
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
   const stepValueOptions = [
@@ -159,7 +162,57 @@
 
   async function chooseStepValue(value) {
     stepValueMenuOpen = false;
+    stepValueHighlightIndex = -1;
     await setRateCommand(value);
+  }
+
+  function removeStepValueGestureListeners() {
+    window.removeEventListener("pointermove", onStepValueWindowPointerMove);
+    window.removeEventListener("pointerup", onStepValueWindowPointerUp);
+    window.removeEventListener("pointercancel", onStepValueWindowPointerUp);
+  }
+
+  function stepValueOptionIndexFromPoint(x, y) {
+    const target = document.elementFromPoint(x, y);
+    const optionEl = target?.closest?.("[data-step-value-option]");
+    return optionEl ? Number.parseInt(optionEl.getAttribute("data-index") ?? "-1", 10) : -1;
+  }
+
+  function beginStepValueGesture(event) {
+    event.stopPropagation();
+    absorbPointerDragFocus(event);
+    stepValueMenuOpen = true;
+    stepValueGesturePointerId = event.pointerId;
+    stepValueHighlightIndex = stepValueOptionIndexFromPoint(event.clientX, event.clientY);
+    removeStepValueGestureListeners();
+    window.addEventListener("pointermove", onStepValueWindowPointerMove);
+    window.addEventListener("pointerup", onStepValueWindowPointerUp);
+    window.addEventListener("pointercancel", onStepValueWindowPointerUp);
+  }
+
+  function onStepValueWindowPointerMove(event) {
+    if (stepValueGesturePointerId !== event.pointerId) {
+      return;
+    }
+    const index = stepValueOptionIndexFromPoint(event.clientX, event.clientY);
+    if (index >= 0) {
+      stepValueHighlightIndex = index;
+    }
+  }
+
+  async function onStepValueWindowPointerUp(event) {
+    if (stepValueGesturePointerId !== event.pointerId) {
+      return;
+    }
+    const index = stepValueHighlightIndex >= 0
+      ? stepValueHighlightIndex
+      : stepValueOptionIndexFromPoint(event.clientX, event.clientY);
+    stepValueGesturePointerId = null;
+    removeStepValueGestureListeners();
+    releasePointerDragFocus(event);
+    if (index >= 0) {
+      await chooseStepValue(stepValueOptions[index].value);
+    }
   }
 
   function closeStepValueMenuOnFocusOut(event) {
@@ -276,18 +329,6 @@
     }
     const value = sourceLayerValue(cell, "cycle");
     return `${cell.cycleInverted ? "!" : ""}${value}`;
-  }
-
-  function loopRangeClass(channel) {
-    const range = loopRangeForChannel(session.kshState, channel);
-    const shortened = range.start > 0 || range.length < session.kshState.stepCount;
-    if (loopRangeDrag?.channel === channel) {
-      return "text-accent";
-    }
-    if (shortened) {
-      return "text-accent";
-    }
-    return "text-info";
   }
 
   function loopBraceStyle(channel) {
@@ -785,6 +826,7 @@
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      removeStepValueGestureListeners();
       showCellAdjustmentCursor();
     };
   });
@@ -1049,47 +1091,49 @@
           id="steps"
           label="Steps"
           value={session.kshState.stepCount}
+          suffix=" steps"
           horizontal
+          compactHorizontal
+          showLabel={false}
           active={headerDrag?.id === "steps"}
           onBegin={beginHeaderDrag}
           onMove={moveHeaderDrag}
           onEnd={endHeaderDrag}
         />
         <div
-          class="relative flex items-center gap-2.5"
+          class="relative flex items-center"
           onfocusout={closeStepValueMenuOnFocusOut}
         >
-          <span class="header-label-horizontal">Step Value</span>
           <button
             type="button"
-            class="header-button flex h-[48px] w-[210px] items-center justify-between gap-3 border border-border-subtle bg-transparent px-4 text-[20px] text-text"
+            class="header-button flex h-[32px] w-[188px] shrink-0 items-center justify-between gap-2 border border-border-subtle bg-transparent px-2.5 text-[12px] font-semibold leading-none text-text"
             aria-haspopup="listbox"
             aria-expanded={stepValueMenuOpen}
-            onclick={() => {
-              stepValueMenuOpen = !stepValueMenuOpen;
-            }}
+            onpointerdown={beginStepValueGesture}
           >
-            <span class="flex min-w-0 items-center gap-2">
-              <span class="w-10 text-left text-[28px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
-              <span class="truncate">{selectedStepValueOption.shortLabel}</span>
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span class="w-7 shrink-0 text-left text-[16px] leading-none text-accent-strong">{selectedStepValueOption.mark}</span>
+              <span class="whitespace-nowrap">{selectedStepValueOption.shortLabel}</span>
             </span>
-            <span class="text-[10px] text-text-muted">▾</span>
+            <span class="shrink-0 text-[9px] text-text-muted">▾</span>
           </button>
           {#if stepValueMenuOpen}
             <div
-              class="absolute left-0 top-full z-30 mt-1 w-[230px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
+              class="absolute left-0 top-full z-30 mt-1 w-[188px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
               role="listbox"
               aria-label="Step value"
             >
-              {#each stepValueOptions as option (option.value)}
+              {#each stepValueOptions as option, index (option.value)}
                 <button
                   type="button"
-                  class={`flex h-9 w-full items-center gap-3 px-3 text-left text-[12px] font-semibold uppercase tracking-[0.08em] outline-none hover:bg-control-secondary focus-visible:bg-control-secondary ${option.value === session.kshState.rate ? "text-accent-strong" : "text-text"}`}
+                  data-step-value-option
+                  data-index={index}
+                  class={`flex h-8 w-full items-center gap-2.5 px-3 text-left text-[11px] font-bold normal-case tracking-normal outline-none hover:bg-control-secondary focus-visible:bg-control-secondary ${stepValueHighlightIndex === index ? "bg-control-secondary" : ""} ${option.value === session.kshState.rate ? "text-accent-strong" : "text-text"}`}
                   role="option"
                   aria-selected={option.value === session.kshState.rate}
-                  onclick={() => chooseStepValue(option.value)}
+                  onpointerdown={beginStepValueGesture}
                 >
-                  <span class="w-9 shrink-0 whitespace-nowrap text-[17px] leading-none">{option.mark}</span>
+                  <span class="w-8 shrink-0 whitespace-nowrap text-[15px] leading-none">{option.mark}</span>
                   <span class="flex-1 whitespace-nowrap">{option.menuLabel}</span>
                   <span class="w-4 text-right text-[12px]">{option.value === session.kshState.rate ? "✓" : ""}</span>
                 </button>
@@ -1129,7 +1173,7 @@
         <div class="flex shrink-0 items-center gap-0.5 pr-1 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           <button
             type="button"
-            class="row-clear-button mr-2.5"
+            class="row-clear-button mr-[30px]"
             disabled={session.selectedSource === SILENT_SOURCE}
             aria-label="Clear channel row steps"
             title="Double-click to clear this row"
@@ -1167,7 +1211,6 @@
           <ChannelNoteControl {channel} />
           <PlaybackModeSelect
             value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
-            accentClass={loopRangeClass(channel)}
             onChange={(mode) => setChannelPlaybackMode(channel, mode)}
           />
           <div class="flex items-center">

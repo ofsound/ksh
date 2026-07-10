@@ -5,6 +5,8 @@
     value,
     suffix = "",
     horizontal = false,
+    compactHorizontal = false,
+    showLabel = true,
     active = false,
     onBegin = () => {},
     onMove = () => {},
@@ -28,11 +30,14 @@
   }
 </script>
 
-<div class={horizontal ? "flex items-center gap-2.5" : "flex flex-col items-start"}>
-  <span class={horizontal ? "header-label-horizontal" : "header-label"}>{label}</span>
+<div class={horizontal ? "flex items-center gap-2" : "flex flex-col items-start"}>
+  {#if showLabel}
+    <span class={horizontal ? "header-label-horizontal" : "header-label"}>{label}</span>
+  {/if}
   <button
     type="button"
-    class={`header-button border bg-transparent ${horizontal ? "h-[48px] min-w-[72px] px-4 text-[20px]" : "min-w-[42px]"} ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
+    class={`header-button border bg-transparent ${horizontal ? (compactHorizontal ? "h-[32px] w-[92px] shrink-0 px-2.5 text-[12px] font-semibold leading-none" : "h-[54px] min-w-[160px] px-5 text-[24px]") : "min-w-[42px]"} ${active ? "border-accent text-accent" : "border-border-subtle text-text"}`}
+    aria-label={label}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
