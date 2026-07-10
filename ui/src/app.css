@@ -19,25 +19,11 @@
     color: var(--color-text);
   }
 
-  button:not(.channel-label):not(:disabled),
-  [role="button"]:not(.channel-label):not([aria-disabled="true"]) {
-    cursor: pointer;
-  }
-
-  [data-cursor="vertical-drag"] {
-    cursor: pointer !important;
-  }
-
   input:not([type="checkbox"]):not([type="radio"]),
   textarea {
     -webkit-user-select: text;
     user-select: text;
     cursor: text;
-  }
-
-  html.ksh-hide-cursor,
-  html.ksh-hide-cursor * {
-    cursor: none !important;
   }
 }
 
@@ -209,7 +195,7 @@
   }
 
   .project-history-button-active {
-    @apply cursor-pointer text-text-muted hover:text-accent;
+    @apply text-text-muted hover:text-accent;
   }
 
   .project-history-button-disabled {

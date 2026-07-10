@@ -438,14 +438,6 @@
     headerDrag = null;
   }
 
-  function hideCellAdjustmentCursor() {
-    document.documentElement.classList.add("ksh-hide-cursor");
-  }
-
-  function showCellAdjustmentCursor() {
-    document.documentElement.classList.remove("ksh-hide-cursor");
-  }
-
   function onCellPointerDown(event, channel, step) {
     if (!isCellInteractive(channel, step)) {
       return;
@@ -502,9 +494,6 @@
         : resolveCellDragMode(cellDrag, event.clientX, event.clientY);
       if (mode) {
         cellDrag = { ...cellDrag, mode, moved: true };
-        if (mode === "value") {
-          hideCellAdjustmentCursor();
-        }
       }
     }
 
@@ -549,7 +538,6 @@
     }
 
     await commitEditGestureHistory("Edit cell");
-    showCellAdjustmentCursor();
     cellDrag = null;
   }
 
@@ -834,7 +822,6 @@
     const onBlur = () => {
       hoverLayerMode = null;
       recordPadKeysHeld.clear();
-      showCellAdjustmentCursor();
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -846,7 +833,6 @@
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       removeStepValueGestureListeners();
-      showCellAdjustmentCursor();
     };
   });
 </script>

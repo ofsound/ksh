@@ -163,7 +163,6 @@
 </script>
 
 <div
-  data-cursor={disabled ? "default" : "vertical-drag"}
   style:--param-box-chars={boxed ? effectiveBoxChars : undefined}
   class="touch-none select-none outline-none {boxed
     ? boxedControlBaseClasses
