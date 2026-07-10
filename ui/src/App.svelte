@@ -109,16 +109,15 @@
           </div>
         </div>
         <CompactStrip />
-        <footer class="absolute inset-x-0 bottom-0 z-20 flex h-[24px] items-center justify-end bg-app px-3 text-[11px] text-text-muted">
-          Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
-        </footer>
       </div>
 
       <footer
         class="flex h-[40px] shrink-0 items-center justify-between border-t border-border-subtle bg-shell px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted"
         style={`width:${dims.width}px;`}
       >
-        <span>KSH</span>
+        <span class="min-w-0 truncate font-medium normal-case tracking-normal">
+          Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
+        </span>
         <div class="flex shrink-0 items-center gap-2">
           <button
             type="button"

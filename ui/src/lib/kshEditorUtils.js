@@ -20,7 +20,6 @@ export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
 export const PROJECT_ROW_H = 86;
 export const STANDALONE_TRANSPORT_ROW_H = 44;
-export const HELPER_FOOTER_H = 24;
 export const APP_FOOTER_H = 40;
 
 export function standaloneTransportRowHeight(state) {
@@ -105,14 +104,14 @@ export function compactPanelHeight() {
 }
 
 export function previewPanelHeight() {
-  return COMPACT_HEIGHT + HELPER_FOOTER_H;
+  return COMPACT_HEIGHT;
 }
 
 export function compactPreviewHeight(channelCount) {
   return channelCount * COMPACT_ROW_H;
 }
 
-/** Equal top/bottom padding for the generated preview grid above the helper footer. */
+/** Equal top/bottom padding for the generated preview grid in the compact strip. */
 export function compactPreviewPadding(channelCount) {
   const slack = COMPACT_HEIGHT - compactPreviewHeight(channelCount);
   return Math.max(0, Math.floor(slack / 2));
