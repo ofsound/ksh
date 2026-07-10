@@ -10,6 +10,7 @@
   import {
     CHANNEL_LABEL_W,
     GRID_CELL_LEFT_GAP,
+    GRID_ROW_CELL_LEFT_GAP,
     GRID_SIDEBAR_W,
     cycleOffsetLabel,
     editorDimensions,
@@ -86,7 +87,6 @@
     undoStack,
   } from "../lib/kshSession.svelte.js";
 
-  let gridEl = $state(null);
   let headerDrag = $state(null);
   let cellDrag = $state(null);
   let loopRangeDrag = $state(null);
@@ -118,6 +118,7 @@
   const dims = $derived(editorDimensions(session.kshState, patternScale));
   const gridCellW = $derived(gridCellWidth(patternScale));
   const gridCellH = $derived(gridCellHeight(patternScale));
+  const channelLabelFontPx = $derived(Math.round(gridCellH * 0.45));
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
   const cellFontPx = $derived(Math.round(18 * patternScale));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
@@ -148,8 +149,17 @@
     stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
   );
 
-  function gridLeft() {
-    return gridEl?.getBoundingClientRect().left ?? 0;
+  function stepAtClientX(clientX) {
+    if (!cellDrag?.cellWidth) {
+      return cellDrag?.step ?? 0;
+    }
+
+    return stepFromGridX(
+      clientX,
+      cellDrag.gridLeft,
+      session.kshState.stepCount,
+      cellDrag.cellWidth
+    );
   }
 
   function cellStyleFromBackground(background, color, extra = "") {
@@ -466,6 +476,11 @@
       event.clientX,
       event.clientY
     );
+    cellDrag = {
+      ...cellDrag,
+      gridLeft: rect.left - step * rect.width,
+      cellWidth: rect.width,
+    };
     setSelectedCell(channel, step);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -479,8 +494,12 @@
       return;
     }
 
+    const pointerStep = stepAtClientX(event.clientX);
+
     if (!cellDrag.mode) {
-      const mode = resolveCellDragMode(cellDrag, event.clientX, event.clientY);
+      const mode = pointerStep !== cellDrag.step
+        ? "paint"
+        : resolveCellDragMode(cellDrag, event.clientX, event.clientY);
       if (mode) {
         cellDrag = { ...cellDrag, mode, moved: true };
         if (mode === "value") {
@@ -490,7 +509,7 @@
     }
 
     if (cellDrag.mode === "paint") {
-      const toStep = stepFromGridX(event.clientX, gridLeft(), session.kshState.stepCount, gridCellW);
+      const toStep = pointerStep;
       const changed = applySourcePaintRange(
         session.kshState,
         session.selectedSource,
@@ -1138,7 +1157,7 @@
       class="flex items-center"
       style={`padding-left:${GRID_SIDEBAR_W + GRID_CELL_LEFT_GAP}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
     >
-      <div class="flex" bind:this={gridEl}>
+      <div class="flex">
       {#each stepCols as step (step)}
         <div
           class={`flex items-center justify-center leading-none ${stepLabelClass(step)}`}
@@ -1172,8 +1191,8 @@
           </button>
           {#if editingChannel === channel}
             <input
-              class="rounded border border-accent bg-grid-off px-1 text-[13px] text-text outline-none"
-              style={`width:${CHANNEL_LABEL_W}px`}
+              class="rounded border border-accent bg-grid-off px-1 text-accent outline-none"
+              style={`width:${CHANNEL_LABEL_W}px;height:${gridCellH}px;font-size:${channelLabelFontPx}px;line-height:1;`}
               bind:value={labelDraft}
               onkeydown={(event) => {
                 if (event.key === "Enter") {
@@ -1187,8 +1206,8 @@
           {:else}
             <button
               type="button"
-              class="channel-label shrink-0 truncate text-left text-[13px] text-text"
-              style={`width:${CHANNEL_LABEL_W}px`}
+              class="channel-label flex shrink-0 items-center truncate text-left text-accent"
+              style={`width:${CHANNEL_LABEL_W}px;height:${gridCellH}px;font-size:${channelLabelFontPx}px;line-height:1;`}
               onclick={() => onLabelClick(channel)}
             >
               {session.kshState.channels[channel]?.label ?? channel + 1}
@@ -1233,7 +1252,7 @@
           </button>
         </div>
 
-        <div class="relative flex" style={`margin-left:${GRID_CELL_LEFT_GAP}px`}>
+        <div class="relative flex" style={`margin-left:${GRID_ROW_CELL_LEFT_GAP}px`}>
           <div
             class="loop-range-brace pointer-events-none absolute top-0 z-10"
             style={loopBraceStyle(channel)}
