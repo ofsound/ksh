@@ -422,7 +422,7 @@
 
   <div class="flex items-end gap-5">
     <div class="flex flex-col items-start gap-1">
-      <span class="compact-inspector-field-label">Vel</span>
+      <span class="header-label text-text">Velocity</span>
       <StepNumberDragInput
         boxed
         compact
@@ -442,7 +442,7 @@
       />
     </div>
     <div class="flex flex-col items-start gap-1">
-      <span class="compact-inspector-field-label">Prob</span>
+      <span class="header-label text-text">Probability</span>
       <StepNumberDragInput
         boxed
         compact
@@ -465,7 +465,7 @@
 
   <div class="flex items-end gap-5">
     <div class="relative flex flex-col items-start gap-1">
-      <span class="compact-inspector-field-label">Cycle</span>
+      <span class="header-label text-text">Cycle</span>
       <button
         type="button"
         class="mp-param-box mp-control-gradient flex h-8 items-center justify-center rounded-md border border-border text-sm font-semibold tabular-nums text-text outline-none transition-[border-color,box-shadow,filter] duration-75 hover:border-border-strong disabled:opacity-50"
@@ -481,7 +481,7 @@
       </button>
     </div>
     <div class="flex flex-col items-start gap-1">
-      <span class="compact-inspector-field-label">Roll</span>
+      <span class="header-label text-text">Roll</span>
       <StepNumberDragInput
         boxed
         compact

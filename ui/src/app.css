@@ -99,10 +99,6 @@
     opacity: 0.55;
   }
 
-  .compact-inspector-field-label {
-    @apply text-[9px] font-semibold uppercase tracking-[0.08em] text-text-muted;
-  }
-
   .header-icon-button:disabled {
     @apply cursor-default text-text-faint;
   }
