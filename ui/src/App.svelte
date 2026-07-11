@@ -16,7 +16,6 @@
     setUiScaleViewportSize,
     syncEditorScaleMinimumToNative,
     toggleDcColors,
-    togglePatternViewScale,
   } from "./lib/kshSession.svelte.js";
   import { uiScaleState } from "./lib/uiScale.svelte.js";
 
@@ -121,21 +120,6 @@
         <div class="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            class={`mp-param-box mp-control-gradient flex h-8 min-w-[2.75rem] items-center justify-center rounded-md border text-sm font-semibold tabular-nums normal-case tracking-normal outline-none transition-[border-color,color] duration-75 focus-visible:ring-1 focus-visible:ring-focus-ring ${
-              session.patternViewScale === 1.5
-                ? "border-accent text-accent"
-                : "border-border text-text-muted"
-            }`}
-            style="--param-box-chars:4"
-            aria-pressed={session.patternViewScale === 1.5}
-            aria-label="Pattern view scale"
-            title={session.patternViewScale === 1.5 ? "Pattern scale 1.5x" : "Pattern scale 1x"}
-            onclick={togglePatternViewScale}
-          >
-            {session.patternViewScale === 1.5 ? "1.5x" : "1x"}
-          </button>
-          <button
-            type="button"
             class={`mp-param-box mp-control-gradient flex h-8 min-w-[2.25rem] items-center justify-center rounded-md border text-sm font-semibold tabular-nums normal-case tracking-normal outline-none transition-[border-color,color] duration-75 focus-visible:ring-1 focus-visible:ring-focus-ring ${
               session.dcColors
                 ? "border-accent text-accent"
@@ -150,7 +134,6 @@
             DC
           </button>
           <ThemeModeToggle value={session.themeMode} onValueChange={setThemeMode} />
-          <span>UI</span>
           <UiScaleDragInput
             value={uiScaleState.percent}
             onValueChange={setExplicitUiScalePercent}

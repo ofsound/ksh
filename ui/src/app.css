@@ -395,16 +395,6 @@
     opacity: 0.5;
   }
 
-  .preview-branding::after {
-    content: "";
-    position: absolute;
-    right: 52px;
-    bottom: 38px;
-    width: 460px;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-text) 22%, transparent), transparent);
-  }
-
   .preview-branding-steps {
     position: absolute;
     right: 72px;
