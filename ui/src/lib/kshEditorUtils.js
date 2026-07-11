@@ -3,6 +3,7 @@ import {cloneCell, defaultCell} from "./kshUiState.js";
 
 export const GRID_CELL_W = 50;
 export const GRID_CELL_H = 50;
+export const GRID_FULL_WIDTH_STEP_COUNT = 16;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
@@ -36,12 +37,43 @@ export function normalizePatternViewScale(scale) {
   return Number(scale) === 1.5 ? 1.5 : 1;
 }
 
-export function gridCellWidth(scale = 1) {
-  return Math.round(GRID_CELL_W * normalizePatternViewScale(scale));
+export function gridCellWidth(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  const normalizedScale = normalizePatternViewScale(scale);
+  const baseWidth = GRID_CELL_W * normalizedScale;
+  const normalizedStepCount = Math.max(1, Number(stepCount) || GRID_FULL_WIDTH_STEP_COUNT);
+
+  if (normalizedStepCount <= GRID_FULL_WIDTH_STEP_COUNT) {
+    return baseWidth;
+  }
+
+  return (GRID_FULL_WIDTH_STEP_COUNT * baseWidth) / normalizedStepCount;
 }
 
 export function gridCellHeight(scale = 1) {
   return Math.round(GRID_CELL_H * normalizePatternViewScale(scale));
+}
+
+export function gridCellFontPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  const normalizedScale = normalizePatternViewScale(scale);
+  const cellWidth = gridCellWidth(normalizedScale, stepCount);
+  return Math.max(8, Math.min(Math.round(18 * normalizedScale), Math.floor(cellWidth * 0.42)));
+}
+
+export function gridCycleFontPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  const normalizedScale = normalizePatternViewScale(scale);
+  const cellWidth = gridCellWidth(normalizedScale, stepCount);
+  return Math.max(8, Math.min(Math.round(14 * normalizedScale), Math.floor(cellWidth * 0.34)));
+}
+
+export function gridCellInsetPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  const normalizedScale = normalizePatternViewScale(scale);
+  const cellWidth = gridCellWidth(normalizedScale, stepCount);
+  return Math.max(2, Math.min(Math.round(8 * normalizedScale), Math.floor(cellWidth * 0.18)));
+}
+
+export function gridLoopHandleWidth(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  const cellWidth = gridCellWidth(scale, stepCount);
+  return Math.max(12, Math.min(16, Math.round(cellWidth * 0.5)));
 }
 
 export function gridRowGap(scale = 1) {
@@ -155,7 +187,7 @@ export function mutedChannelColor(colorCss) {
 }
 
 export function editorDimensions(state, scale = 1) {
-  const gridW = state.stepCount * gridCellWidth(scale);
+  const gridW = state.stepCount * gridCellWidth(scale, state.stepCount);
   const width = Math.max(EDITOR_MIN_WIDTH, EDITOR_GRID_LEADING_CHROME + gridW);
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const normalizedScale = normalizePatternViewScale(scale);

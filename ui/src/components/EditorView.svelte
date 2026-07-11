@@ -17,6 +17,10 @@
     gridCellHeight,
     gridCellPadding,
     gridCellWidth,
+    gridCellFontPx,
+    gridCellInsetPx,
+    gridCycleFontPx,
+    gridLoopHandleWidth,
     gridRowPaddingY,
     gridTopPadding,
     STEP_LABEL_CELL_GAP,
@@ -128,15 +132,16 @@
 
   const patternScale = $derived(session.patternViewScale);
   const dims = $derived(editorDimensions(session.kshState, patternScale));
-  const gridCellW = $derived(gridCellWidth(patternScale));
+  const gridCellW = $derived(gridCellWidth(patternScale, session.kshState.stepCount));
   const gridCellH = $derived(gridCellHeight(patternScale));
   const channelLabelFontPx = $derived(Math.round(gridCellH * 0.45));
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
-  const cellFontPx = $derived(Math.round(18 * patternScale));
+  const cellFontPx = $derived(gridCellFontPx(patternScale, session.kshState.stepCount));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
   const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
-  const cycleCellFontPx = $derived(Math.round(14 * patternScale));
-  const cellInsetPx = $derived(Math.round(8 * patternScale));
+  const cycleCellFontPx = $derived(gridCycleFontPx(patternScale, session.kshState.stepCount));
+  const cellInsetPx = $derived(gridCellInsetPx(patternScale, session.kshState.stepCount));
+  const loopHandleW = $derived(gridLoopHandleWidth(patternScale, session.kshState.stepCount));
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const channelRows = $derived(Array.from({ length: session.kshState.channelCount }, (_, channel) => channel));
@@ -1726,8 +1731,8 @@
           ></div>
           <button
             type="button"
-            class="loop-range-handle loop-range-handle-start absolute top-0 z-20 flex w-4 -translate-x-full items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
-            style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;height:${gridCellH}px;`}
+            class="loop-range-handle loop-range-handle-start absolute top-0 z-20 flex -translate-x-full items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
+            style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;width:${loopHandleW}px;height:${gridCellH}px;`}
             aria-label="Move row range start"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "left", event.clientX, event)}
             onpointermove={(event) => {
@@ -1742,8 +1747,8 @@
           </button>
           <button
             type="button"
-            class="loop-range-handle loop-range-handle-end absolute top-0 z-20 flex w-4 items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
-            style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;height:${gridCellH}px;`}
+            class="loop-range-handle loop-range-handle-end absolute top-0 z-20 flex items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
+            style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;width:${loopHandleW}px;height:${gridCellH}px;`}
             aria-label="Move row range end"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "right", event.clientX, event)}
             onpointermove={(event) => {
