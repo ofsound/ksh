@@ -19,11 +19,7 @@
     d="M3 7h12c3.3 0 6 2.2 6 5s-2.7 5-6 5H7"
   />
   <path
-    fill="none"
-    stroke="currentColor"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    stroke-width="2.4"
-    d="m7 13-4 4 4 4"
+    fill="currentColor"
+    d="M7 12.5 2 17l5 4.5Z"
   />
 </svg>
