@@ -127,6 +127,9 @@
   let cyclePopover = $state(null);
   let cyclePopoverRoot = $state(null);
   let cyclePopoverAnchor = null;
+  let clearBlink = $state({ pattern: false, rowChannel: -1 });
+  let patternClearBlinkTimer = null;
+  let rowClearBlinkTimer = null;
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
   const stepValueOptions = [
@@ -923,6 +926,29 @@
     cycleSourceLayerMode();
   }
 
+  function triggerClearBlink(kind, channel = -1) {
+    if (kind === "pattern") {
+      clearBlink.pattern = true;
+      if (patternClearBlinkTimer !== null) {
+        clearTimeout(patternClearBlinkTimer);
+      }
+      patternClearBlinkTimer = setTimeout(() => {
+        clearBlink.pattern = false;
+        patternClearBlinkTimer = null;
+      }, 1000);
+      return;
+    }
+
+    clearBlink.rowChannel = channel;
+    if (rowClearBlinkTimer !== null) {
+      clearTimeout(rowClearBlinkTimer);
+    }
+    rowClearBlinkTimer = setTimeout(() => {
+      clearBlink.rowChannel = -1;
+      rowClearBlinkTimer = null;
+    }, 1000);
+  }
+
   function headerHistoryLabel(id) {
     switch (id) {
       case "steps":
@@ -1414,6 +1440,12 @@
       document.removeEventListener("pointermove", onStepValueMenuPointerMove, true);
       cancelStepValueMenuClose();
       removeStepValueGestureListeners();
+      if (patternClearBlinkTimer !== null) {
+        clearTimeout(patternClearBlinkTimer);
+      }
+      if (rowClearBlinkTimer !== null) {
+        clearTimeout(rowClearBlinkTimer);
+      }
     };
   });
 </script>
@@ -1638,10 +1670,11 @@
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(1)}>▶</button>
         <button
           type="button"
-          class="header-icon-button"
+          class={`header-icon-button ${clearBlink.pattern ? "ksh-clear-blink" : ""}`}
           disabled={session.selectedSource === SILENT_SOURCE}
           aria-label="Clear pattern"
           title="Double-click to clear this pattern"
+          onclick={() => triggerClearBlink("pattern")}
           ondblclick={(event) => {
             event.currentTarget.blur();
             clearPattern();
@@ -1788,6 +1821,7 @@
     </div>
 
     {#each channelRows as channel (channel)}
+      {@const rowLoopRange = loopRangeForChannel(session.kshState, channel)}
       <div
         class="flex items-center"
         style={`padding-top:${gridRowPadY}px;padding-bottom:${gridRowPadY}px;`}
@@ -1796,10 +1830,11 @@
         <div class="flex shrink-0 items-center pr-1 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           <button
             type="button"
-            class="row-clear-button mr-[30px]"
+            class={`row-clear-button mr-[30px] ${clearBlink.rowChannel === channel ? "ksh-clear-blink" : ""}`}
             disabled={session.selectedSource === SILENT_SOURCE}
             aria-label="Clear channel row steps"
             title="Double-click to clear this row"
+            onclick={() => triggerClearBlink("row", channel)}
             ondblclick={(event) => {
               event.currentTarget.blur();
               clearSourceChannelSteps(session.selectedSource, channel);
@@ -1894,13 +1929,7 @@
             ⋮
           </button>
           {#each allStepCols as step (step)}
-            {#if isStepBeyondLoopLength(session.kshState, channel, step) && !editMode}
-              <div
-                class="shrink-0"
-                style={`width:${gridCellW}px;height:${gridCellH}px;`}
-                aria-hidden="true"
-              ></div>
-            {:else}
+            {#if editMode || (step >= rowLoopRange.start && step <= rowLoopRange.end)}
             <button
               type="button"
               class={cellClass(channel, step)}
@@ -1932,6 +1961,12 @@
                 {cellLabel(channel, step)}
               {/if}
             </button>
+            {:else if step < rowLoopRange.start}
+              <div
+                class="shrink-0"
+                style={`width:${gridCellW}px;height:${gridCellH}px;`}
+                aria-hidden="true"
+              ></div>
             {/if}
           {/each}
           <div

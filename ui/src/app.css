@@ -129,6 +129,23 @@
     transform: rotate(90deg);
   }
 
+  .ksh-clear-blink {
+    animation: ksh-clear-blink 100ms steps(2, end) infinite;
+  }
+
+  @keyframes ksh-clear-blink {
+    0%,
+    100% {
+      filter: brightness(1);
+      opacity: 1;
+    }
+
+    50% {
+      filter: brightness(1.85);
+      opacity: 0.2;
+    }
+  }
+
   .loop-range-brace {
     border-top: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, var(--color-shell));
     border-bottom: 1px solid color-mix(in srgb, var(--color-app) 70%, var(--color-border-subtle));
