@@ -1973,7 +1973,7 @@
           ></div>
           <button
             type="button"
-            class="loop-range-handle loop-range-handle-start absolute top-0 z-20 flex -translate-x-full items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
+            class="loop-range-handle loop-range-handle-start absolute top-0 z-20 flex -translate-x-full items-center justify-center outline-none"
             style={`left:${loopRangeForChannel(session.kshState, channel).start * gridCellW}px;width:${loopHandleW}px;height:${gridCellH}px;`}
             aria-label="Move row range start"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "left", event.clientX, event)}
@@ -1985,11 +1985,10 @@
             onpointerup={endLoopRangeDrag}
             onpointercancel={endLoopRangeDrag}
           >
-            ⋮
           </button>
           <button
             type="button"
-            class="loop-range-handle loop-range-handle-end absolute top-0 z-20 flex items-center justify-center text-[15px] font-bold leading-none text-accent outline-none"
+            class="loop-range-handle loop-range-handle-end absolute top-0 z-20 flex items-center justify-center outline-none"
             style={`left:${(loopRangeForChannel(session.kshState, channel).end + 1) * gridCellW}px;width:${loopHandleW}px;height:${gridCellH}px;`}
             aria-label="Move row range end"
             onpointerdown={(event) => beginLoopRangeDrag(channel, "right", event.clientX, event)}
@@ -2001,7 +2000,6 @@
             onpointerup={endLoopRangeDrag}
             onpointercancel={endLoopRangeDrag}
           >
-            ⋮
           </button>
           {#each allStepCols as step (step)}
             {#if step >= rowLoopRange.start && step <= rowLoopRange.end}

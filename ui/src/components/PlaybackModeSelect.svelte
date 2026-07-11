@@ -6,7 +6,7 @@
     playbackModeLabel,
   } from "../lib/kshEditorUtils.js";
   import PlaybackDirectionIcon from "./PlaybackDirectionIcon.svelte";
-  import PingPongPaddleIcon from "./PingPongPaddleIcon.svelte";
+  import PingPongUturnIcon from "./PingPongUturnIcon.svelte";
 
   /** @type {{ value?: string, onChange?: (mode: string) => void | Promise<void> }} */
   let { value = "normal", onChange, distributed = false } = $props();
@@ -55,6 +55,6 @@
     title="Ping-Pong"
     onclick={togglePingPong}
   >
-    <PingPongPaddleIcon />
+    <PingPongUturnIcon />
   </button>
 </div>
