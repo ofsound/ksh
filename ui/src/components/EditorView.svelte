@@ -62,6 +62,11 @@
     selectedCellLocations,
     wrappedCellDestinations,
   } from "../lib/kshBulkEdit.js";
+  import {
+    cellSelection,
+    clearEditSelection,
+    selectedCellKeys,
+  } from "../lib/kshCellSelection.svelte.js";
   import { cloneCell, defaultCell } from "../lib/kshUiState.js";
   import {
     CHANNEL_RENAME_MS,
@@ -118,9 +123,7 @@
 
   let headerDrag = $state(null);
   let cellDrag = $state(null);
-  let editMode = $state(false);
   let editGesture = $state(null);
-  const selectedCellKeys = new SvelteSet();
   let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
   let muteDrag = $state(null);
@@ -277,17 +280,13 @@
     );
   }
 
-  function clearEditSelection() {
-    selectedCellKeys.clear();
-  }
-
   function toggleEditMode() {
-    if (editMode) {
+    if (cellSelection.editMode) {
       cancelEditGesture();
       clearEditSelection();
     }
 
-    editMode = !editMode;
+    cellSelection.editMode = !cellSelection.editMode;
   }
 
   function cellAtPoint(clientX, clientY) {
@@ -527,7 +526,7 @@
   }
 
   function onGridPointerDown(event) {
-    if (!editMode || event.button !== 0) {
+    if (!cellSelection.editMode || event.button !== 0) {
       return;
     }
 
@@ -818,7 +817,7 @@
         : cellStyleFromBackground("var(--color-grid-off-strong)", "var(--color-text-muted)");
     }
 
-    const previewCell = editMode
+    const previewCell = cellSelection.editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
       : null;
     const cell = previewCell ?? session.kshState.sources[source][channel][step];
@@ -839,7 +838,7 @@
     }
     [lightColor, darkColor] = [darkColor, lightColor];
 
-    if (editMode) {
+    if (cellSelection.editMode) {
       const topLeft = cell.enabled ? darkColor : "var(--color-grid-off-strong)";
       const bottomRight = cell.enabled ? lightColor : "var(--color-grid-off)";
       return cellStyleFromBackground(
@@ -900,12 +899,12 @@
     const silent = session.selectedSource === SILENT_SOURCE;
     const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
-    const previewCell = editMode
+    const previewCell = cellSelection.editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
       : null;
     const active = !silent && !beyondSteps && (previewCell ?? cell).enabled;
-    const selected = editMode && selectedCellKeys.has(cellSelectionKey(channel, step));
-    const previewTarget = editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
+    const selected = cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step));
+    const previewTarget = cellSelection.editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
 
     return [
@@ -927,10 +926,10 @@
       return "";
     }
 
-    const previewCell = editMode
+    const previewCell = cellSelection.editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
       : null;
-    if (editMode) {
+    if (cellSelection.editMode) {
       return "";
     }
 
@@ -988,7 +987,7 @@
   async function onSourceClick(event, source) {
     closeCyclePopover();
 
-    if (editMode) {
+    if (cellSelection.editMode) {
       clearEditSelection();
     }
 
@@ -1087,11 +1086,11 @@
   }
 
   function onCellPointerDown(event, channel, step) {
-    if (!(editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step))) {
+    if (!(cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step))) {
       return;
     }
 
-    if (editMode) {
+    if (cellSelection.editMode) {
       event.preventDefault();
       event.stopPropagation();
 
@@ -1141,7 +1140,7 @@
   }
 
   async function onCellPointerMove(event) {
-    if (editMode) {
+    if (cellSelection.editMode) {
       return;
     }
 
@@ -1205,7 +1204,7 @@
   }
 
   async function onCellPointerUp(event, cancelled = false) {
-    if (editMode) {
+    if (cellSelection.editMode) {
       return;
     }
 
@@ -1779,10 +1778,10 @@
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class={`header-button h-[41px] min-w-[58px] border px-3 text-[12px] tracking-[0.12em] ${editMode ? "border-accent bg-accent/15 text-accent" : "border-border-subtle bg-control-secondary text-text-muted"}`}
-          aria-label={editMode ? "Exit edit selection mode" : "Enter edit selection mode"}
-          aria-pressed={editMode}
-          title={editMode ? "Exit EDIT mode" : "Select cells · Option-drag to copy"}
+          class={`header-button h-[41px] min-w-[58px] border px-3 text-[12px] tracking-[0.12em] ${cellSelection.editMode ? "border-accent bg-accent/15 text-accent" : "border-border-subtle bg-control-secondary text-text-muted"}`}
+          aria-label={cellSelection.editMode ? "Exit edit selection mode" : "Enter edit selection mode"}
+          aria-pressed={cellSelection.editMode}
+          title={cellSelection.editMode ? "Exit EDIT mode" : "Select cells · Option-drag to copy"}
           onclick={toggleEditMode}
         >
           <MoveAroundIcon />
@@ -1924,7 +1923,7 @@
     role="presentation"
     onpointerdown={onGridPointerDown}
   >
-    {#if editMode && selectedCellCount > 0}
+    {#if cellSelection.editMode && selectedCellCount > 0}
       <div class="pointer-events-none absolute left-3 top-2 z-30 rounded-sm border border-accent/40 bg-app/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-accent">
         {selectedCellCount} selected{editGesture?.kind === "drag" && editGesture.didMove ? ` · ${bulkDragLabel(
           selectedCellLocations(selectedCellKeys, session.kshState.channelCount, session.kshState.stepCount),
@@ -2069,14 +2068,14 @@
               data-ksh-edit-cell
               data-channel={channel}
               data-step={step}
-              data-selected={editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) ? "true" : undefined}
-              disabled={editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
+              data-selected={cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) ? "true" : undefined}
+              disabled={cellSelection.editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={(event) => onCellPointerUp(event, true)}
             >
-              {#if !editMode && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if !cellSelection.editMode && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"

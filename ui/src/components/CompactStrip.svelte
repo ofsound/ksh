@@ -1,5 +1,6 @@
 <script>
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import CellInspector from "./CellInspector.svelte";
   import { MAX_CHANNELS } from "../lib/kshConstants.js";
   import { headerDragNextValue, headerValueForState } from "../lib/kshEditorInteractions.js";
   import {
@@ -200,6 +201,8 @@
           </div>
         </div>
       </div>
+
+      <CellInspector />
     </div>
   </section>
 </div>
