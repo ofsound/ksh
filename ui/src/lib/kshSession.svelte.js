@@ -26,6 +26,7 @@ import {
 } from "./kshEditorUtils.js";
 import {
   applyRecomposedPreview,
+  stackSourceForPreview,
 } from "./kshPreviewUtils.js";
 import {
   onBackendEvent,
@@ -111,6 +112,7 @@ let sessionStarted = false;
 let teardownHandlers = [];
 let previewSuppressionDepth = 0;
 let patternRecordHistoryBefore = null;
+let lastStackPreviewSource = null;
 
 function beginPreviewSuppression() {
   previewSuppressionDepth += 1;
@@ -924,7 +926,13 @@ export async function shiftChannelRow(channel, direction) {
     if (source === SILENT_SOURCE) {
       return;
     }
-    const steps = shiftSourceChannelRow(session.kshState, source, channel, direction);
+    const steps = shiftSourceChannelRow(
+      session.kshState,
+      source,
+      channel,
+      direction,
+      loopRangeForChannel(session.kshState, channel),
+    );
     bumpState();
     bumpOptimisticPreview();
 
@@ -1137,6 +1145,7 @@ export function initKshSession() {
   }
 
   sessionStarted = true;
+  lastStackPreviewSource = null;
 
   teardownHandlers = [
     onBackendEvent("engine_state", (payload) => {
@@ -1145,6 +1154,7 @@ export function initKshSession() {
       }
 
       const parsed = parseBackendJson(payload);
+      lastStackPreviewSource = null;
       const previousStepCount = session.kshState.stepCount;
       applyEngineState(session.kshState, parsed);
       if (parsed?.patternViewScale !== undefined) {
@@ -1169,7 +1179,15 @@ export function initKshSession() {
         return;
       }
 
-      session.previewData = parseBackendJson(payload);
+      const parsed = parseBackendJson(payload);
+      const stackSource = stackSourceForPreview(session.kshState, parsed);
+      if (stackSource === null) {
+        lastStackPreviewSource = null;
+      } else if (stackSource !== lastStackPreviewSource) {
+        session.selectedSource = stackSource;
+        lastStackPreviewSource = stackSource;
+      }
+      session.previewData = parsed;
     }),
     onBackendEvent("note_hit", handleNoteHit),
     onBackendEvent("current_step", (payload) => {

@@ -13,6 +13,35 @@ function previewSourceIndex(cell) {
   return clamp(source - 1, 0, SOURCE_COUNT - 1);
 }
 
+/**
+ * Return the source selected for the current stack window.
+ * Locked lanes are excluded because they intentionally do not follow the
+ * stack-wide source selection.
+ */
+export function stackSourceForPreview(state, preview) {
+  if (state?.generationMode !== "stack" || preview?.generationMode !== "stack") {
+    return null;
+  }
+
+  const channelCount = clamp(preview.channelCount ?? state.channelCount, 1, state.channelCount);
+  const channel = Array.from({ length: channelCount }, (_, index) => index).find(
+    (index) => (state.channels[index]?.lock ?? -1) < 0
+  );
+  if (channel === undefined) {
+    return null;
+  }
+
+  const stepCount = clamp(preview.stepCount ?? state.stepCount, 1, MAX_STEPS);
+  const currentStep = clamp(preview.currentStep ?? 1, 1, stepCount) - 1;
+  const cell = preview.generated?.[channel]?.[currentStep];
+  if (!cell) {
+    return null;
+  }
+
+  const source = previewSourceIndex(cell);
+  return source === SILENT_SOURCE ? null : source;
+}
+
 function loopRangeForSourceChannel(state, source, channel) {
   const range = state.sourceSettings?.[source]?.loopRanges?.[channel];
   const stepCount = clamp(state.sourceSettings?.[source]?.stepCount ?? state.stepCount, 1, MAX_STEPS);

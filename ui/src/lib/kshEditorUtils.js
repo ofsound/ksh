@@ -11,7 +11,7 @@ export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 320;
 export const GRID_CELL_LEFT_GAP = 34;
-export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP + 32;
+export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP;
 export const GRID_NUDGE_BUTTON_W = 26;
 export const GRID_NUDGE_GAP = 6;
 export const GRID_NUDGE_LANE_W = GRID_NUDGE_BUTTON_W * 2;
@@ -27,7 +27,7 @@ export const GRID_VERTICAL_PADDING = 32;
 export function stepLabelFontPx(scale = 1) {
   return Math.round(STEP_LABEL_FONT_PX * normalizePatternViewScale(scale));
 }
-export const EDITOR_MIN_WIDTH = 1328;
+export const EDITOR_MIN_WIDTH = 1338;
 export const PLUGIN_MIN_HEIGHT = 756;
 export const MAIN_TOP = 68;
 export const PROJECT_ROW_H = 86;
@@ -52,6 +52,14 @@ export function gridCellWidth(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT)
   }
 
   return (GRID_FULL_WIDTH_STEP_COUNT * baseWidth) / normalizedStepCount;
+}
+
+export function gridWidthForStepCount(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
+  return Math.max(1, Number(stepCount) || GRID_FULL_WIDTH_STEP_COUNT) * gridCellWidth(scale, stepCount);
+}
+
+export function gridViewportWidth(scale = 1) {
+  return gridWidthForStepCount(scale, GRID_FULL_WIDTH_STEP_COUNT);
 }
 
 export function gridCellHeight(scale = 1) {
@@ -192,7 +200,7 @@ export function mutedChannelColor(colorCss) {
 }
 
 export function editorDimensions(state, scale = 1) {
-  const gridW = state.stepCount * gridCellWidth(scale, state.stepCount);
+  const gridW = gridViewportWidth(scale);
   const width = Math.max(EDITOR_MIN_WIDTH, EDITOR_GRID_LEADING_CHROME + gridW);
   const minEditorHeight = PLUGIN_MIN_HEIGHT - compactPanelHeight();
   const normalizedScale = normalizePatternViewScale(scale);
@@ -458,24 +466,33 @@ export function lockLabel(lock) {
   return String(lock + 1);
 }
 
-export function shiftSourceChannelRow(state, source, channel, direction) {
+export function shiftSourceChannelRow(state, source, channel, direction, range = null) {
   if (state.stepCount <= 1) {
+    return [];
+  }
+
+  const start = clamp(range?.start ?? 0, 0, state.stepCount - 1);
+  const end = clamp(range?.end ?? state.stepCount - 1, start, state.stepCount - 1);
+  const length = end - start + 1;
+  if (length <= 1) {
     return [];
   }
 
   const row = state.sources[source][channel];
   const shifted = [];
 
-  for (let step = 0; step < state.stepCount; step += 1) {
-    const fromStep = direction < 0 ? (step + 1) % state.stepCount : (step - 1 + state.stepCount) % state.stepCount;
+  for (let step = start; step <= end; step += 1) {
+    const fromStep = direction < 0
+      ? (step === end ? start : step + 1)
+      : (step === start ? end : step - 1);
     shifted[step] = cloneCell(row[fromStep]);
   }
 
-  for (let step = 0; step < state.stepCount; step += 1) {
+  for (let step = start; step <= end; step += 1) {
     row[step] = shifted[step];
   }
 
-  return Array.from({length: state.stepCount}, (_, step) => step);
+  return Array.from({length}, (_, index) => start + index);
 }
 
 export function clearSourcePattern(state, source) {

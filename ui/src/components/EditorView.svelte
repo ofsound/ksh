@@ -10,6 +10,7 @@
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
   import {
     CHANNEL_LABEL_W,
+    GRID_GUTTER_PX,
     GRID_ROW_CELL_LEFT_GAP,
     GRID_SIDEBAR_W,
     GRID_NUDGE_BUTTON_W,
@@ -24,6 +25,8 @@
     gridCellInsetPx,
     gridCycleFontPx,
     gridLoopHandleWidth,
+    gridViewportWidth,
+    gridWidthForStepCount,
     gridRowPaddingY,
     gridTopPadding,
     STEP_LABEL_CELL_GAP,
@@ -136,6 +139,15 @@
   const patternScale = $derived(session.patternViewScale);
   const dims = $derived(editorDimensions(session.kshState, patternScale));
   const gridCellW = $derived(gridCellWidth(patternScale, session.kshState.stepCount));
+  const gridViewportW = $derived(gridViewportWidth(patternScale));
+  const gridContentW = $derived(gridWidthForStepCount(patternScale, session.kshState.stepCount));
+  const gridOffsetX = $derived((gridViewportW - gridContentW) / 2);
+  const gridRowLeftX = $derived(
+    GRID_GUTTER_PX + GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + gridOffsetX
+  );
+  const nudgeLaneLeft = $derived(
+    dims.width - GRID_GUTTER_PX - GRID_NUDGE_LANE_W - gridRowLeftX
+  );
   const gridCellH = $derived(gridCellHeight(patternScale));
   const channelLabelFontPx = $derived(Math.round(gridCellH * 0.45));
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
@@ -1629,7 +1641,7 @@
     <div class="shrink-0">
     <div
       class="flex items-center"
-      style={`padding-left:${GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
+      style={`padding-left:${GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + gridOffsetX}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
     >
       <div class="flex">
       {#each stepCols as step (step)}
@@ -1708,7 +1720,7 @@
           </button>
         </div>
 
-        <div class="relative flex" style={`margin-left:${GRID_ROW_CELL_LEFT_GAP}px`}>
+        <div class="relative flex" style={`margin-left:${GRID_ROW_CELL_LEFT_GAP + gridOffsetX}px`}>
           <div
             class="loop-range-brace pointer-events-none absolute top-0 z-10"
             style={loopBraceStyle(channel)}
@@ -1789,7 +1801,7 @@
           {/each}
           <div
             class="pointer-events-auto absolute top-0 z-20 flex items-center"
-            style={`left:${session.kshState.stepCount * gridCellW + GRID_NUDGE_GAP}px;width:${GRID_NUDGE_LANE_W}px;height:${gridCellH}px;`}
+            style={`left:${nudgeLaneLeft}px;width:${GRID_NUDGE_LANE_W}px;height:${gridCellH}px;`}
             role="group"
             aria-label="Shift channel pattern"
           >
