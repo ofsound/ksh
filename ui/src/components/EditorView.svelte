@@ -930,7 +930,7 @@
     const previewCell = editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
       : null;
-    if (editMode && !previewCell) {
+    if (editMode) {
       return "";
     }
 
