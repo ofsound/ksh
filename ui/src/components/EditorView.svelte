@@ -305,6 +305,39 @@
     return { channel, step };
   }
 
+  function bulkDragCellAtPoint(clientX, clientY) {
+    const target = cellAtPoint(clientX, clientY);
+    if (target || !editGesture || editGesture.kind !== "drag") {
+      return target;
+    }
+
+    const firstCell = document.querySelector("[data-ksh-edit-cell]");
+    const firstRow = document.querySelector('[data-channel-row="0"]');
+    if (!(firstCell instanceof HTMLElement) || !(firstRow instanceof HTMLElement)) {
+      return null;
+    }
+
+    const firstCellRect = firstCell.getBoundingClientRect();
+    const firstStep = Number.parseInt(firstCell.dataset.step ?? "0", 10);
+    const cellWidth = firstCellRect.width;
+    const gridLeft = firstCellRect.left - firstStep * cellWidth;
+    const gridRight = gridLeft + session.kshState.stepCount * cellWidth;
+    if (clientX < gridLeft || clientX >= gridRight) {
+      return null;
+    }
+
+    const rowRect = firstRow.getBoundingClientRect();
+    const rowHeight = rowRect.height;
+    if (rowHeight <= 0) {
+      return null;
+    }
+
+    return {
+      channel: Math.floor((clientY - rowRect.top) / rowHeight),
+      step: stepFromGridX(clientX, gridLeft, session.kshState.stepCount, cellWidth),
+    };
+  }
+
   function rectsIntersect(left, right) {
     return left.left <= right.right
       && left.right >= right.left
@@ -428,7 +461,7 @@
       return;
     }
 
-    const target = cellAtPoint(event.clientX, event.clientY);
+    const target = bulkDragCellAtPoint(event.clientX, event.clientY);
     const distance = Math.hypot(event.clientX - editGesture.startX, event.clientY - editGesture.startY);
     if (!target && !editGesture.didMove) {
       return;

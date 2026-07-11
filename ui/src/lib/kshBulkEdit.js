@@ -58,9 +58,11 @@ export function selectedCellLocations(keys, channelCount, stepCount) {
 export function wrappedCellDestinations(locations, anchor, target, channelCount, stepCount) {
   if (locations.length === 0 || channelCount < 1 || stepCount < 1) return [];
 
+  const wrap = (value, size) => ((value % size) + size) % size;
+
   return locations.map((source) => {
-    const channel = (target.channel + source.channel - anchor.channel + channelCount) % channelCount;
-    const step = (target.step + source.step - anchor.step + stepCount) % stepCount;
+    const channel = wrap(target.channel + source.channel - anchor.channel, channelCount);
+    const step = wrap(target.step + source.step - anchor.step, stepCount);
 
     return {
       source: { ...source, key: cellSelectionKey(source.channel, source.step) },
