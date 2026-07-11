@@ -1759,6 +1759,7 @@
       <HeaderDiscreteSelect
         id="swing_subdivision"
         label="Sub"
+        brightLabel
         ariaLabel="Swing subdivision"
         value={session.kshState.swingSubdivisionIndex}
         options={SWING_SUBDIVISION_OPTIONS}

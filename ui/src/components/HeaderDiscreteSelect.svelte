@@ -9,6 +9,7 @@
     resetValue = undefined,
     ariaLabel = label,
     active = false,
+    brightLabel = false,
     onBegin = () => {},
     onEnd = () => {},
     onValueChange = () => {},
@@ -80,7 +81,7 @@
 </script>
 
 <div class="flex flex-col items-start">
-  <span class="header-label">{label}</span>
+  <span class={`header-label ${brightLabel ? "text-text" : ""}`}>{label}</span>
   <button
     type="button"
     class={`header-button min-w-[42px] border tabular-nums ${active || dragging ? "border-accent text-accent" : "border-border-subtle text-text"}`}

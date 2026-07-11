@@ -18,9 +18,9 @@ export const MAX_CYCLE = 64;
 
 export const SWING_SUBDIVISION_VALUES = [0.25, 0.5, 1];
 export const SWING_SUBDIVISION_OPTIONS = [
-  { index: 0, label: ".25" },
-  { index: 1, label: ".5" },
-  { index: 2, label: "1" },
+  { index: 0, label: "1x" },
+  { index: 1, label: "2x" },
+  { index: 2, label: "4x" },
 ];
 export const DEFAULT_SWING_SUBDIVISION_INDEX = 1;
 
