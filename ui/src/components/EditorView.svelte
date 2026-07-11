@@ -212,9 +212,9 @@
   const marqueeRectStyle = $derived(editGesture?.kind === "marquee"
     ? `left:${Math.min(editGesture.startX, editGesture.currentX)}px;top:${Math.min(editGesture.startY, editGesture.currentY)}px;width:${Math.abs(editGesture.currentX - editGesture.startX)}px;height:${Math.abs(editGesture.currentY - editGesture.startY)}px;`
     : "");
-  const bulkDragPreviewKeys = $derived.by(() => {
+  const bulkDragPreviewCells = $derived.by(() => {
     if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove) {
-      return new Set();
+      return new Map();
     }
 
     const locations = selectedCellLocations(
@@ -230,8 +230,14 @@
       session.kshState.stepCount,
     );
 
-    return new Set(destinations.map(({ destination }) => destination.key));
+    return new Map(
+      destinations.map(({ source, destination }) => [
+        destination.key,
+        session.kshState.sources[session.selectedSource][source.channel][source.step],
+      ]),
+    );
   });
+  const bulkDragPreviewKeys = $derived(new Set(bulkDragPreviewCells.keys()));
 
   function stepAtClientX(clientX) {
     if (!cellDrag?.cellWidth) {
@@ -738,7 +744,10 @@
         : cellStyleFromBackground("var(--color-grid-off-strong)", "var(--color-text-muted)");
     }
 
-    const cell = session.kshState.sources[source][channel][step];
+    const previewCell = editMode
+      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
+      : null;
+    const cell = previewCell ?? session.kshState.sources[source][channel][step];
     const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
 
@@ -811,7 +820,10 @@
     const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
     const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
-    const active = !silent && !beyondSteps && cell.enabled;
+    const previewCell = editMode
+      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
+      : null;
+    const active = !silent && !beyondSteps && (previewCell ?? cell).enabled;
     const selected = editMode && selectedCellKeys.has(cellSelectionKey(channel, step));
     const previewTarget = editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
@@ -831,15 +843,18 @@
   }
 
   function cellLabel(channel, step) {
-    if (editMode) {
-      return "";
-    }
-
     if (session.selectedSource === SILENT_SOURCE) {
       return "";
     }
 
-    const cell = session.kshState.sources[session.selectedSource][channel][step];
+    const previewCell = editMode
+      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
+      : null;
+    if (editMode && !previewCell) {
+      return "";
+    }
+
+    const cell = previewCell ?? session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled) {
       return "";
     }
@@ -1951,7 +1966,7 @@
             ⋮
           </button>
           {#each allStepCols as step (step)}
-            {#if editMode || (step >= rowLoopRange.start && step <= rowLoopRange.end)}
+            {#if step >= rowLoopRange.start && step <= rowLoopRange.end}
             <button
               type="button"
               class={cellClass(channel, step)}
