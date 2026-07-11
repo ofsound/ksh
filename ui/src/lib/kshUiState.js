@@ -54,6 +54,7 @@ export function defaultSourceSettings() {
   return {
     stepCount: 16,
     rate: "16n",
+    loopRanges: Array.from({ length: MAX_CHANNELS }, () => ({ loopStart: 0, loopLength: 16 })),
   };
 }
 
@@ -97,13 +98,17 @@ export function makeDefaultKshState() {
 export const makeDefaultCompactState = makeDefaultKshState;
 
 export function resizeChannelLoopLengths(state, nextStepCount, previousStepCount = state.stepCount) {
+  const source = state.staticSource >= 0 && state.staticSource < SOURCE_COUNT ? state.staticSource : 0;
+  const settings = state.sourceSettings[source];
   for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
-    const row = state.channels[channel];
-    if ((row.loopStart ?? 0) === 0 && row.loopLength === previousStepCount) {
-      row.loopLength = nextStepCount;
+    const range = settings.loopRanges[channel];
+    if ((range.loopStart ?? 0) === 0 && range.loopLength === previousStepCount) {
+      range.loopLength = nextStepCount;
     }
-    row.loopStart = clamp(row.loopStart ?? 0, 0, nextStepCount - 1);
-    row.loopLength = clamp(row.loopLength, 1, nextStepCount - row.loopStart);
+    range.loopStart = clamp(range.loopStart ?? 0, 0, nextStepCount - 1);
+    range.loopLength = clamp(range.loopLength, 1, nextStepCount - range.loopStart);
+    state.channels[channel].loopStart = range.loopStart;
+    state.channels[channel].loopLength = range.loopLength;
   }
 }
 
@@ -163,10 +168,15 @@ export function serializePersistenceState(state) {
       channel.playbackMode,
       channel.loopStart ?? 0,
     ]),
-    sourceSettings: state.sourceSettings.map((settings) => [
-      clamp(settings.stepCount, 1, MAX_STEPS),
-      normalizeRate(settings.rate),
-    ]),
+    sourceSettings: state.sourceSettings.map((settings) => {
+      const stepCount = clamp(settings.stepCount, 1, MAX_STEPS);
+      const loopRanges = settings.loopRanges.map((range) => {
+        const loopStart = clamp(range.loopStart ?? 0, 0, stepCount - 1);
+        const loopLength = clamp(range.loopLength ?? stepCount, 1, stepCount - loopStart);
+        return [loopStart, loopLength];
+      });
+      return [stepCount, normalizeRate(settings.rate), loopRanges];
+    }),
     sourceChannelMutes: state.sourceChannelMutes.map((row) => row.map((muted) => (muted ? 1 : 0))),
     cells,
   };
@@ -228,7 +238,25 @@ export function applyPersistencePayload(state, payload) {
     state.sourceSettings[source] = {
       stepCount: clamp(stepCount, 1, MAX_STEPS),
       rate: normalizeRate(rate),
+      loopRanges: Array.from({ length: MAX_CHANNELS }, () => ({ loopStart: 0, loopLength: 16 })),
     };
+
+    const loopRangesIn = Array.isArray(row) ? row[2] : row?.loopRanges;
+    if (Array.isArray(loopRangesIn)) {
+      for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+        const rangeIn = loopRangesIn[channel];
+        if (!Array.isArray(rangeIn)) {
+          continue;
+        }
+        const range = state.sourceSettings[source].loopRanges[channel];
+        range.loopStart = clamp(rangeIn[0] ?? 0, 0, state.sourceSettings[source].stepCount - 1);
+        range.loopLength = clamp(
+          rangeIn[1] ?? state.sourceSettings[source].stepCount,
+          1,
+          state.sourceSettings[source].stepCount - range.loopStart
+        );
+      }
+    }
   }
 
   if (state.staticSource >= 0 && state.staticSource < SOURCE_COUNT) {
@@ -273,6 +301,23 @@ export function applyPersistencePayload(state, payload) {
       1,
       state.stepCount - state.channels[channel].loopStart
     );
+
+    const hasSourceRanges = Array.isArray(channelsIn[channel])
+      ? state.sourceSettings.some((settings, source) => {
+          const sourceRow = (payload.sourceSettings ?? [])[source];
+          return Array.isArray(sourceRow) ? sourceRow.length > 2 : sourceRow?.loopRanges !== undefined;
+        })
+      : false;
+    if (!hasSourceRanges) {
+      for (const settings of state.sourceSettings) {
+        settings.loopRanges[channel].loopStart = state.channels[channel].loopStart;
+        settings.loopRanges[channel].loopLength = clamp(
+          state.channels[channel].loopLength,
+          1,
+          settings.stepCount - settings.loopRanges[channel].loopStart
+        );
+      }
+    }
   }
 
   state.sourceChannelMutes = makeSourceChannelMutes();
@@ -363,8 +408,12 @@ export function applyStatusMessage(state, selector, args = []) {
     case "channel_loop_length":
     {
       const channel = clamp(values[0] - 1, 0, MAX_CHANNELS - 1);
-      state.channels[channel].loopStart = clamp(values[2] === undefined ? state.channels[channel].loopStart : values[2] - 1, 0, state.stepCount - 1);
-      state.channels[channel].loopLength = clamp(values[1], 1, state.stepCount - state.channels[channel].loopStart);
+      const source = state.staticSource >= 0 && state.staticSource < SOURCE_COUNT ? state.staticSource : 0;
+      const range = state.sourceSettings[source].loopRanges[channel];
+      range.loopStart = clamp(values[2] === undefined ? range.loopStart : values[2] - 1, 0, state.stepCount - 1);
+      range.loopLength = clamp(values[1], 1, state.stepCount - range.loopStart);
+      state.channels[channel].loopStart = range.loopStart;
+      state.channels[channel].loopLength = range.loopLength;
       break;
     }
     case "mode":
@@ -382,6 +431,13 @@ export function applyStatusMessage(state, selector, args = []) {
         state.stepCount = state.sourceSettings[state.staticSource].stepCount;
         state.rate = state.sourceSettings[state.staticSource].rate;
         state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
+        for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+          const range = state.sourceSettings[state.staticSource].loopRanges[channel];
+          range.loopStart = clamp(range.loopStart, 0, state.stepCount - 1);
+          range.loopLength = clamp(range.loopLength, 1, state.stepCount - range.loopStart);
+          state.channels[channel].loopStart = range.loopStart;
+          state.channels[channel].loopLength = range.loopLength;
+        }
       }
       break;
     case "rate":

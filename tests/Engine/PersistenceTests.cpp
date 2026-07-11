@@ -75,6 +75,29 @@ TEST_CASE ("persistence payload restores per-source resolution", "[engine][persi
     REQUIRE (std::string { restored.engine.getRate() } == "8n");
 }
 
+TEST_CASE ("persistence payload restores loop ranges per source pattern", "[engine][persistence]")
+{
+    EngineFixture original;
+    original.engine.setStepCount (16);
+    original.engine.setStaticSource (0);
+    original.engine.setChannelLoopLength (0, 3, 2);
+    original.engine.setSourceStepCount (1, 12);
+    original.engine.setStaticSource (1);
+    original.engine.setChannelLoopLength (0, 5, 4);
+
+    const auto payload = original.engine.serializeForPersistence();
+    EngineFixture restored;
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+
+    restored.engine.setStaticSource (0);
+    REQUIRE (restored.engine.channelAt (0).loopStart == 2);
+    REQUIRE (restored.engine.channelAt (0).loopLength == 3);
+
+    restored.engine.setStaticSource (1);
+    REQUIRE (restored.engine.channelAt (0).loopStart == 4);
+    REQUIRE (restored.engine.channelAt (0).loopLength == 5);
+}
+
 TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persistence]")
 {
     EngineFixture original;

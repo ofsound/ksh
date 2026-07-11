@@ -53,8 +53,12 @@ int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int p
 {
     channel = clampInt (channel, 0, Constants::maxChannels - 1);
     const auto& channelState = snapshot.channels[static_cast<size_t> (channel)];
-    const int loopStart = clampInt (channelState.loopStart, 0, snapshot.stepCount - 1);
-    const int loopLength = clampInt (channelState.loopLength, 1, snapshot.stepCount - loopStart);
+    const int source = clampInt (snapshot.staticSource, 0, Constants::sourceCount - 1);
+    auto range = snapshot.sourceSettings[static_cast<size_t> (source)].loopRanges[static_cast<size_t> (channel)];
+    range.loopStart = clampInt (range.loopStart, 0, snapshot.stepCount - 1);
+    range.loopLength = clampInt (range.loopLength, 1, snapshot.stepCount - range.loopStart);
+    const int loopStart = range.loopStart;
+    const int loopLength = range.loopLength;
     const auto mode = channelState.playbackMode;
     playbackIndex = static_cast<int> (std::floor (static_cast<double> (playbackIndex)));
 
@@ -106,9 +110,11 @@ Cell staticSourceCellForStep (const PlaybackSnapshot& snapshot, int source, int 
 
     const int sourceStepCount =
         clampInt (snapshot.sourceSettings[static_cast<size_t> (source)].stepCount, 1, Constants::maxSteps);
-    const auto& channelState = snapshot.channels[static_cast<size_t> (channel)];
-    const int loopStart = clampInt (channelState.loopStart, 0, sourceStepCount - 1);
-    const int loopLength = clampInt (channelState.loopLength, 1, sourceStepCount - loopStart);
+    auto range = snapshot.sourceSettings[static_cast<size_t> (source)].loopRanges[static_cast<size_t> (channel)];
+    range.loopStart = clampInt (range.loopStart, 0, sourceStepCount - 1);
+    range.loopLength = clampInt (range.loopLength, 1, sourceStepCount - range.loopStart);
+    const int loopStart = range.loopStart;
+    const int loopLength = range.loopLength;
     const int sourceStep = loopStart + mod (playbackStep - loopStart, loopLength);
 
     Cell cell = snapshot.sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)]

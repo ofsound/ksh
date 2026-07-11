@@ -143,6 +143,12 @@ struct Channel
     PlaybackMode playbackMode = PlaybackMode::normal;
 };
 
+struct LoopRange
+{
+    int loopStart = 0;
+    int loopLength = Constants::maxSteps;
+};
+
 [[nodiscard]] inline Channel defaultChannel (int index)
 {
     Channel channel;
@@ -159,11 +165,15 @@ struct SourceSettings
 {
     int stepCount = 16;
     std::string rate = std::string { Constants::defaultRate };
+    std::array<LoopRange, Constants::maxChannels> loopRanges {};
 };
 
 [[nodiscard]] inline SourceSettings defaultSourceSettings()
 {
-    return {};
+    SourceSettings settings;
+    for (auto& range : settings.loopRanges)
+        range.loopLength = 16;
+    return settings;
 }
 
 using SourcePattern = std::array<std::array<Cell, Constants::maxSteps>, Constants::maxChannels>;

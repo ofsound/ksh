@@ -146,6 +146,20 @@ function bumpState() {
   };
 }
 
+function syncActiveChannelLoopRanges() {
+  const source = session.kshState.staticSource;
+  if (source < 0 || source >= SOURCE_COUNT) {
+    return;
+  }
+
+  const settings = session.kshState.sourceSettings[source];
+  for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+    const range = settings.loopRanges[channel];
+    session.kshState.channels[channel].loopStart = range.loopStart;
+    session.kshState.channels[channel].loopLength = range.loopLength;
+  }
+}
+
 function createHistorySnapshot() {
   return serializePersistenceState(session.kshState);
 }
@@ -483,6 +497,12 @@ export async function selectSource(source) {
     session.kshState.stepCount = settings.stepCount;
     session.kshState.rate = settings.rate;
     session.kshState.refreshSteps = clamp(session.kshState.refreshSteps, 1, session.kshState.stepCount);
+    syncActiveChannelLoopRanges();
+    session.selectedStep = clamp(
+      session.selectedStep,
+      loopRangeForChannel(session.kshState, session.selectedChannel).start,
+      loopRangeForChannel(session.kshState, session.selectedChannel).end
+    );
   }
   bumpState();
   await sendCommand("static_source", [session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1]);
@@ -528,6 +548,7 @@ export async function copyPatternToSource(destination) {
     session.kshState.stepCount = session.kshState.sourceSettings[destination].stepCount;
     session.kshState.rate = session.kshState.sourceSettings[destination].rate;
     session.kshState.refreshSteps = clamp(session.kshState.refreshSteps, 1, session.kshState.stepCount);
+    syncActiveChannelLoopRanges();
     bumpState();
     bumpOptimisticPreview();
 
@@ -605,10 +626,16 @@ export async function setRowLoopRange(channel, start, length) {
   const nextStart = clamp(start, 0, session.kshState.stepCount - 1);
   const nextLength = clamp(length, 1, session.kshState.stepCount - nextStart);
   const row = session.kshState.channels[channel];
-  if ((row.loopStart ?? 0) === nextStart && row.loopLength === nextLength) {
+  const source = session.selectedSource;
+  const range = source >= 0 && source < SOURCE_COUNT
+    ? session.kshState.sourceSettings[source].loopRanges[channel]
+    : row;
+  if ((range.loopStart ?? 0) === nextStart && range.loopLength === nextLength) {
     return;
   }
 
+  range.loopStart = nextStart;
+  range.loopLength = nextLength;
   row.loopStart = nextStart;
   row.loopLength = nextLength;
   if (session.selectedChannel === channel) {
@@ -631,8 +658,12 @@ export async function setChannelLabel(channel, text) {
 export async function resetSourceChannelRow(source, channel) {
   await commitEditHistory("Reset channel row", async () => {
     session.kshState.sourceChannelMutes[source][channel] = 0;
-    session.kshState.channels[channel].loopStart = 0;
-    session.kshState.channels[channel].loopLength = session.kshState.stepCount;
+    session.kshState.sourceSettings[source].loopRanges[channel].loopStart = 0;
+    session.kshState.sourceSettings[source].loopRanges[channel].loopLength = session.kshState.sourceSettings[source].stepCount;
+    if (session.kshState.staticSource === source) {
+      session.kshState.channels[channel].loopStart = 0;
+      session.kshState.channels[channel].loopLength = session.kshState.stepCount;
+    }
 
     for (let step = 0; step < MAX_STEPS; step += 1) {
       session.kshState.sources[source][channel][step] = defaultCell();

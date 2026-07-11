@@ -323,11 +323,15 @@ export function stepCycleScrollIndex(index, steps) {
 
 export function loopLengthForChannel(state, channel) {
   const start = loopStartForChannel(state, channel);
-  return clamp(state.channels[channel]?.loopLength ?? state.stepCount, 1, state.stepCount - start);
+  const source = state.staticSource >= 0 && state.staticSource < SOURCE_COUNT ? state.staticSource : 0;
+  const range = state.sourceSettings?.[source]?.loopRanges?.[channel];
+  return clamp(range?.loopLength ?? state.channels[channel]?.loopLength ?? state.stepCount, 1, state.stepCount - start);
 }
 
 export function loopStartForChannel(state, channel) {
-  return clamp(state.channels[channel]?.loopStart ?? 0, 0, state.stepCount - 1);
+  const source = state.staticSource >= 0 && state.staticSource < SOURCE_COUNT ? state.staticSource : 0;
+  const range = state.sourceSettings?.[source]?.loopRanges?.[channel];
+  return clamp(range?.loopStart ?? state.channels[channel]?.loopStart ?? 0, 0, state.stepCount - 1);
 }
 
 export function loopEndForChannel(state, channel) {
@@ -336,7 +340,9 @@ export function loopEndForChannel(state, channel) {
 
 export function loopRangeForChannel(state, channel) {
   const start = loopStartForChannel(state, channel);
-  const length = clamp(state.channels[channel]?.loopLength ?? state.stepCount, 1, state.stepCount - start);
+  const source = state.staticSource >= 0 && state.staticSource < SOURCE_COUNT ? state.staticSource : 0;
+  const range = state.sourceSettings?.[source]?.loopRanges?.[channel];
+  const length = clamp(range?.loopLength ?? state.channels[channel]?.loopLength ?? state.stepCount, 1, state.stepCount - start);
   return { start, length, end: start + length - 1 };
 }
 
@@ -419,8 +425,12 @@ export function clearSourcePattern(state, source) {
 
   for (let channel = 0; channel < state.channelCount; channel += 1) {
     state.sourceChannelMutes[source][channel] = 0;
-    state.channels[channel].loopStart = 0;
-    state.channels[channel].loopLength = state.stepCount;
+    state.sourceSettings[source].loopRanges[channel].loopStart = 0;
+    state.sourceSettings[source].loopRanges[channel].loopLength = state.sourceSettings[source].stepCount;
+    if (state.staticSource === source) {
+      state.channels[channel].loopStart = 0;
+      state.channels[channel].loopLength = state.stepCount;
+    }
     state.channels[channel].lock = -1;
     state.channels[channel].playbackMode = "normal";
 
@@ -439,7 +449,10 @@ export function copySourcePattern(state, source, destination) {
     return false;
   }
 
-  state.sourceSettings[destination] = { ...state.sourceSettings[source] };
+  state.sourceSettings[destination] = {
+    ...state.sourceSettings[source],
+    loopRanges: state.sourceSettings[source].loopRanges.map((range) => ({ ...range })),
+  };
 
   for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
     state.sourceChannelMutes[destination][channel] = state.sourceChannelMutes[source][channel] ? 1 : 0;
