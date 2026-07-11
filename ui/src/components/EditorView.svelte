@@ -422,7 +422,7 @@
     document.removeEventListener("pointercancel", onEditPointerCancel);
   }
 
-  function beginMarquee(event) {
+  function beginMarquee(event, preserveSelection = false, clickedCell = null) {
     if (event.button !== 0 || editGesture) {
       return;
     }
@@ -436,7 +436,8 @@
       startY: event.clientY,
       currentX: event.clientX,
       currentY: event.clientY,
-      baseKeys: new Set(),
+      baseKeys: preserveSelection ? new Set(selectedCellKeys) : new Set(),
+      clickedCell,
     };
     updateMarqueeSelection();
     document.addEventListener("pointermove", onEditPointerMove);
@@ -520,6 +521,16 @@
     removeEditGestureListeners();
     editGesture = null;
 
+    if (gesture.kind === "marquee" && gesture.clickedCell
+      && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 5) {
+      const key = cellSelectionKey(gesture.clickedCell.channel, gesture.clickedCell.step);
+      selectedCellKeys.clear();
+      for (const baseKey of gesture.baseKeys) selectedCellKeys.add(baseKey);
+      if (gesture.baseKeys.has(key)) selectedCellKeys.delete(key);
+      else selectedCellKeys.add(key);
+      return;
+    }
+
     if (gesture.kind === "drag" && gesture.didMove) {
       gesture.mode = event.altKey ? "copy" : gesture.mode;
       await applySelectedCells(
@@ -559,6 +570,22 @@
   }
 
   function onGridPointerDown(event) {
+    if (!cellSelection.editMode && !event.shiftKey && selectedCellKeys.size > 0) {
+      const cellElement = event.target instanceof Element
+        ? event.target.closest("[data-ksh-edit-cell]")
+        : null;
+      const clickedKey = cellElement instanceof HTMLElement
+        ? cellSelectionKey(
+            Number.parseInt(cellElement.dataset.channel ?? "-1", 10),
+            Number.parseInt(cellElement.dataset.step ?? "-1", 10),
+          )
+        : null;
+
+      if (!clickedKey || !selectedCellKeys.has(clickedKey)) {
+        clearEditSelection();
+      }
+    }
+
     if (!cellSelection.editMode || event.button !== 0) {
       return;
     }
@@ -910,8 +937,7 @@
     const cell = silent ? null : displayedCell(channel, step);
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
     const active = !silent && !beyondSteps && cell.enabled;
-    const selected = cellSelection.editMode
-      && selectedCellKeys.has(cellSelectionKey(channel, step))
+    const selected = selectedCellKeys.has(cellSelectionKey(channel, step))
       && !isMovingSourceCell(channel, step);
     const previewTarget = cellSelection.editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
@@ -1104,8 +1130,8 @@
       event.stopPropagation();
 
       if (!cellSelection.editMode) {
-        cellSelection.editMode = true;
-        cellSelection.inspectorLayerActive = false;
+        beginMarquee(event, true, { channel, step });
+        return;
       }
 
       if (event.shiftKey) {
@@ -1933,7 +1959,7 @@
     role="presentation"
     onpointerdown={onGridPointerDown}
   >
-    {#if cellSelection.editMode && selectedCellCount > 0}
+    {#if selectedCellCount > 0}
       <div class="pointer-events-none absolute left-3 top-2 z-30 rounded-sm border border-accent/40 bg-app/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-accent">
         {selectedCellCount} selected{editGesture?.kind === "drag" && editGesture.didMove ? ` · ${bulkDragLabel(
           selectedCellLocations(selectedCellKeys, session.kshState.channelCount, session.kshState.stepCount),
@@ -2078,7 +2104,7 @@
               data-ksh-edit-cell
               data-channel={channel}
               data-step={step}
-              data-selected={cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
+              data-selected={selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
               disabled={cellSelection.editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
