@@ -116,7 +116,7 @@
         style={`width:${dims.width}px;`}
       >
         <span class="min-w-0 truncate font-medium normal-case tracking-normal">
-          Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
+          Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: click a cell to edit · drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
         </span>
         <div class="flex shrink-0 items-center gap-2">
           <button

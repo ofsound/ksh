@@ -1,10 +1,11 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
   import NudgeTriangleIcon from "./NudgeTriangleIcon.svelte";
+  import KshCyclePatternEditor from "./KshCyclePatternEditor.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
   import { absorbPointerDragFocus, releasePointerDragFocus } from "./pointerDragFocus.js";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
@@ -123,6 +124,9 @@
   let stepValueGesturePointerId = $state(null);
   let stepValueMenuCloseTimer = null;
   let stepValueMenuRoot = $state(null);
+  let cyclePopover = $state(null);
+  let cyclePopoverRoot = $state(null);
+  let cyclePopoverAnchor = null;
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
   const stepValueOptions = [
@@ -176,6 +180,13 @@
   const effectiveLayerMode = $derived(
     normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
   );
+  const cyclePopoverCell = $derived.by(() => {
+    if (!cyclePopover || session.selectedSource === SILENT_SOURCE) {
+      return null;
+    }
+
+    return session.kshState.sources[session.selectedSource][cyclePopover.channel][cyclePopover.step];
+  });
   const layerHeading = $derived(sourceLayerLabel(effectiveLayerMode).toLowerCase());
   const selectedStepValueOption = $derived(
     stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
@@ -541,6 +552,90 @@
     stepValueHighlightIndex = -1;
   }
 
+  function closeCyclePopover() {
+    cyclePopover = null;
+    cyclePopoverAnchor = null;
+  }
+
+  function positionCyclePopover() {
+    if (!cyclePopover || !cyclePopoverRoot || !cyclePopoverAnchor) {
+      return;
+    }
+
+    const anchorRect = cyclePopoverAnchor.getBoundingClientRect();
+    const popoverRect = cyclePopoverRoot.getBoundingClientRect();
+    const margin = 10;
+    const gap = 8;
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const width = popoverRect.width || 280;
+    const height = popoverRect.height || 76;
+
+    const left = Math.min(
+      Math.max(margin, anchorRect.left + (anchorRect.width - width) / 2),
+      Math.max(margin, viewportWidth - width - margin),
+    );
+    const belowTop = anchorRect.bottom + gap;
+    const aboveTop = anchorRect.top - height - gap;
+    const top = belowTop + height <= viewportHeight - margin || aboveTop < margin
+      ? Math.min(Math.max(margin, belowTop), Math.max(margin, viewportHeight - height - margin))
+      : aboveTop;
+
+    cyclePopover = { ...cyclePopover, left, top };
+  }
+
+  async function openCyclePopover(channel, step, anchor) {
+    cyclePopoverAnchor = anchor;
+    cyclePopover = { channel, step, left: 0, top: 0 };
+    await tick();
+    positionCyclePopover();
+  }
+
+  function onCyclePopoverDocumentPointerDown(event) {
+    if (cyclePopoverRoot?.contains(event.target)) {
+      return;
+    }
+
+    closeCyclePopover();
+  }
+
+  function onCyclePopoverKeyDown(event) {
+    if (event.key === "Escape" && cyclePopover) {
+      event.preventDefault();
+      closeCyclePopover();
+    }
+  }
+
+  function beginCyclePatternGesture() {
+    beginEditGestureHistory();
+  }
+
+  function applyCyclePattern(cycle, cycleOffset) {
+    if (!cyclePopoverCell) {
+      return false;
+    }
+
+    const nextCycle = Math.min(8, Math.max(1, Math.round(cycle)));
+    const nextOffset = Math.min(nextCycle - 1, Math.max(0, Math.round(cycleOffset)));
+    const changed = cyclePopoverCell.cycle !== nextCycle || cyclePopoverCell.cycleOffset !== nextOffset;
+    cyclePopoverCell.cycle = nextCycle;
+    cyclePopoverCell.cycleOffset = nextOffset;
+    return changed;
+  }
+
+  function previewCyclePattern(cycle, cycleOffset) {
+    if (applyCyclePattern(cycle, cycleOffset)) {
+      void sendCell(session.selectedSource, cyclePopover.channel, cyclePopover.step);
+    }
+  }
+
+  async function commitCyclePattern(cycle, cycleOffset) {
+    if (applyCyclePattern(cycle, cycleOffset)) {
+      await sendCell(session.selectedSource, cyclePopover.channel, cyclePopover.step);
+    }
+    await commitEditGestureHistory("Edit cycle pattern");
+  }
+
   function scheduleStepValueMenuClose() {
     if (stepValueGesturePointerId !== null) {
       return;
@@ -794,6 +889,8 @@
   }
 
   async function onSourceClick(event, source) {
+    closeCyclePopover();
+
     if (editMode) {
       clearEditSelection();
     }
@@ -816,8 +913,14 @@
   }
 
   async function onMutePatternClick() {
+    closeCyclePopover();
     cancelPatternCopy();
     await selectSource(SILENT_SOURCE);
+  }
+
+  function onLayerHeadingClick() {
+    closeCyclePopover();
+    cycleSourceLayerMode();
   }
 
   function headerHistoryLabel(id) {
@@ -909,6 +1012,7 @@
       ...cellDrag,
       gridLeft: rect.left - step * rect.width,
       cellWidth: rect.width,
+      element: event.currentTarget,
     };
     setSelectedCell(channel, step);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -967,7 +1071,7 @@
     }
   }
 
-  async function onCellPointerUp() {
+  async function onCellPointerUp(event, cancelled = false) {
     if (editMode) {
       return;
     }
@@ -976,14 +1080,34 @@
       return;
     }
 
-    if (!cellDrag.moved) {
-      const source = session.selectedSource;
-      toggleCellOnRelease(session.kshState, source, cellDrag);
-      await sendCell(source, cellDrag.channel, cellDrag.step);
+    const drag = cellDrag;
+    cellDrag = null;
+
+    if (cancelled) {
+      cancelEditGestureHistory();
+      return;
+    }
+
+    if (!drag.moved && normalizeSourceLayerMode(drag.layerMode) === "cycle") {
+      const cell = session.kshState.sources[drag.source][drag.channel][drag.step];
+      if (!cell.enabled) {
+        cell.enabled = 1;
+        await sendCell(drag.source, drag.channel, drag.step);
+        await commitEditGestureHistory("Enable cell");
+      } else {
+        cancelEditGestureHistory();
+      }
+
+      await openCyclePopover(drag.channel, drag.step, drag.element ?? event?.currentTarget);
+      return;
+    }
+
+    if (!drag.moved) {
+      toggleCellOnRelease(session.kshState, drag.source, drag);
+      await sendCell(drag.source, drag.channel, drag.step);
     }
 
     await commitEditGestureHistory("Edit cell");
-    cellDrag = null;
   }
 
   function beginLoopRangeDrag(channel, edge, clientX, event) {
@@ -1273,12 +1397,20 @@
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
+    window.addEventListener("resize", positionCyclePopover);
+    window.addEventListener("scroll", positionCyclePopover, true);
+    document.addEventListener("pointerdown", onCyclePopoverDocumentPointerDown, true);
+    document.addEventListener("keydown", onCyclePopoverKeyDown, true);
     document.addEventListener("pointermove", onStepValueMenuPointerMove, true);
     return () => {
       removeModifierListener();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("resize", positionCyclePopover);
+      window.removeEventListener("scroll", positionCyclePopover, true);
+      document.removeEventListener("pointerdown", onCyclePopoverDocumentPointerDown, true);
+      document.removeEventListener("keydown", onCyclePopoverKeyDown, true);
       document.removeEventListener("pointermove", onStepValueMenuPointerMove, true);
       cancelStepValueMenuClose();
       removeStepValueGestureListeners();
@@ -1471,7 +1603,7 @@
         class="col-start-1 row-start-1 h-[54px] w-full whitespace-nowrap text-left text-[54px] font-extrabold leading-none tracking-tighter text-accent-strong outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         aria-label={session.selectedSource === SILENT_SOURCE ? `Mute pattern, ${layerHeading} layer` : `Pattern ${session.selectedSource + 1}, ${layerHeading} layer`}
         title="Click to cycle layer"
-        onclick={cycleSourceLayerMode}
+        onclick={onLayerHeadingClick}
       >
         {patternHeading}: {layerHeading}
       </button>
@@ -1661,7 +1793,7 @@
         style={`padding-top:${gridRowPadY}px;padding-bottom:${gridRowPadY}px;`}
         data-channel-row={channel}
       >
-        <div class="flex shrink-0 items-center gap-0.5 pr-1 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
+        <div class="flex shrink-0 items-center pr-1 font-medium" style={`width:${GRID_SIDEBAR_W}px`}>
           <button
             type="button"
             class="row-clear-button mr-[30px]"
@@ -1699,25 +1831,28 @@
               {session.kshState.channels[channel]?.label ?? channel + 1}
             </button>
           {/if}
-          <ChannelNoteControl {channel} />
-          <PlaybackModeSelect
-            value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
-            onChange={(mode) => setChannelPlaybackMode(channel, mode)}
-          />
-          <button
-            type="button"
-            class={`channel-power-toggle ml-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
-            aria-label={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "Turn channel on" : "Turn channel off"}
-            aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "false" : "true"}
-            disabled={session.selectedSource === SILENT_SOURCE}
-            title="Shift-click to solo channel"
-            onpointerdown={(event) => onMutePointerDown(channel, event)}
-            onpointermove={onMutePointerMove}
-            onpointerup={endMuteDrag}
-            onpointercancel={endMuteDrag}
-          >
-            <RowDisableIcon class="channel-power-toggle-icon h-[21px] w-[21px]" />
-          </button>
+          <div class="ml-5 flex min-w-0 flex-1 items-center justify-between">
+            <ChannelNoteControl {channel} />
+            <PlaybackModeSelect
+              distributed
+              value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
+              onChange={(mode) => setChannelPlaybackMode(channel, mode)}
+            />
+            <button
+              type="button"
+              class={`channel-power-toggle flex h-[26px] w-[26px] shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
+              aria-label={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "Turn channel on" : "Turn channel off"}
+              aria-pressed={session.selectedSource !== SILENT_SOURCE && session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "false" : "true"}
+              disabled={session.selectedSource === SILENT_SOURCE}
+              title="Shift-click to solo channel"
+              onpointerdown={(event) => onMutePointerDown(channel, event)}
+              onpointermove={onMutePointerMove}
+              onpointerup={endMuteDrag}
+              onpointercancel={endMuteDrag}
+            >
+              <RowDisableIcon class="channel-power-toggle-icon h-[21px] w-[21px]" />
+            </button>
+          </div>
         </div>
 
         <div class="relative flex" style={`margin-left:${GRID_ROW_CELL_LEFT_GAP + gridOffsetX}px`}>
@@ -1778,7 +1913,7 @@
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
-              onpointercancel={onCellPointerUp}
+              onpointercancel={(event) => onCellPointerUp(event, true)}
             >
               {#if !editMode && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
@@ -1839,5 +1974,37 @@
       ></div>
     {/if}
   </div>
+
+  {#if cyclePopover && effectiveLayerMode === "cycle" && cyclePopoverCell}
+    <div
+      bind:this={cyclePopoverRoot}
+      class="fixed z-[80] w-[280px] rounded-md border border-border-strong bg-app/95 p-2 text-text shadow-[0_18px_42px_rgba(0,0,0,0.48)] backdrop-blur-sm"
+      style={`left:${cyclePopover.left}px;top:${cyclePopover.top}px;`}
+      role="dialog"
+      tabindex="-1"
+      aria-label={`Cycle editor for channel ${cyclePopover.channel + 1}, step ${cyclePopover.step + 1}`}
+      onpointerdown={(event) => event.stopPropagation()}
+    >
+      <div class="mb-1 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-[0.14em] text-text-muted">
+        <span>Cycle · Step {cyclePopover.step + 1}</span>
+        <button
+          type="button"
+          class="flex h-4 w-4 items-center justify-center rounded-sm text-[14px] leading-none text-text-muted outline-none hover:text-text focus-visible:ring-1 focus-visible:ring-focus-ring"
+          aria-label="Close cycle editor"
+          onclick={closeCyclePopover}
+        >
+          ×
+        </button>
+      </div>
+      <KshCyclePatternEditor
+        cycle={cyclePopoverCell.cycle}
+        cycleOffset={cyclePopoverCell.cycleOffset}
+        cycleInverted={cyclePopoverCell.cycleInverted}
+        onGestureStart={beginCyclePatternGesture}
+        onPatternPreview={previewCyclePattern}
+        onPatternCommit={commitCyclePattern}
+      />
+    </div>
+  {/if}
 
 </div>

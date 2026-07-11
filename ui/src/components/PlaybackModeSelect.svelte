@@ -9,7 +9,7 @@
   import PingPongPaddleIcon from "./PingPongPaddleIcon.svelte";
 
   /** @type {{ value?: string, onChange?: (mode: string) => void | Promise<void> }} */
-  let { value = "normal", onChange } = $props();
+  let { value = "normal", onChange, distributed = false } = $props();
 
   const reversed = $derived(playbackModeIsReversed(value));
   const pingPong = $derived(playbackModeIsPingPong(value));
@@ -32,7 +32,11 @@
   }
 </script>
 
-<div class="flex shrink-0 items-center gap-0.5" role="group" aria-label={`Playback mode: ${modeLabel}`}>
+<div
+  class={distributed ? "contents" : "flex shrink-0 items-center gap-0.5"}
+  role="group"
+  aria-label={`Playback mode: ${modeLabel}`}
+>
   <button
     type="button"
     class="flex h-[26px] w-[34px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
