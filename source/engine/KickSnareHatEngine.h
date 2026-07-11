@@ -38,7 +38,7 @@ struct EngineStateSnapshot
 {
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
-    int refreshSteps = 1;
+    int refreshSteps = 16;
     GenerationMode generationMode = GenerationMode::staticSource;
     int staticSource = 0;
     std::string rate = std::string { Constants::defaultRate };
@@ -107,7 +107,7 @@ private:
 
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
-    int refreshSteps = 1;
+    int refreshSteps = 16;
     GenerationMode generationMode = GenerationMode::staticSource;
     int staticSource = 0;
     std::string rate = std::string { Constants::defaultRate };

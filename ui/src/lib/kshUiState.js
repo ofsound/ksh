@@ -75,7 +75,7 @@ export function makeDefaultKshState() {
   return {
     stepCount: 16,
     channelCount: DEFAULT_CHANNEL_COUNT,
-    refreshSteps: 1,
+    refreshSteps: 16,
     generationMode: "static",
     staticSource: 0,
     rate: "16n",
