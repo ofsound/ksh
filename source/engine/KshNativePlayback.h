@@ -103,6 +103,7 @@ struct PlaybackSnapshot
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
     int swing = 0;
+    int swingSubdivisionIndex = Constants::defaultSwingSubdivisionIndex;
     int velocityHumanize = 0;
     int timingHumanize = 0;
     bool deviceActive = true;

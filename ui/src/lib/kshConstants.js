@@ -14,6 +14,14 @@ export const SOURCE_ROW_RESET_MS = 220;
 export const MAX_ROLL = 8;
 export const MAX_CYCLE = 64;
 
+export const SWING_SUBDIVISION_VALUES = [0.25, 0.5, 1];
+export const SWING_SUBDIVISION_OPTIONS = [
+  { index: 0, label: ".25" },
+  { index: 1, label: ".5" },
+  { index: 2, label: "1" },
+];
+export const DEFAULT_SWING_SUBDIVISION_INDEX = 1;
+
 export const VELOCITY_DRAG_THRESHOLD = 4;
 export const SOURCE_PAINT_DRAG_THRESHOLD = 4;
 export const HEADER_VALUE_DRAG_SCALE = 4;
@@ -34,6 +42,10 @@ export function clamp(value, min, max) {
     return min;
   }
   return Math.max(min, Math.min(max, n));
+}
+
+export function clampSwingSubdivisionIndex(value) {
+  return clamp(value, 0, SWING_SUBDIVISION_VALUES.length - 1);
 }
 
 export function normalizeRate(rate) {

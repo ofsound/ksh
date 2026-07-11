@@ -2,11 +2,13 @@ import {
   DEFAULT_CHANNEL_COUNT,
   DEFAULT_CHANNEL_LABELS,
   DEFAULT_CHANNEL_NOTES,
+  DEFAULT_SWING_SUBDIVISION_INDEX,
   MAX_CHANNELS,
   MAX_STEPS,
   SILENT_SOURCE,
   SOURCE_COUNT,
   clamp,
+  clampSwingSubdivisionIndex,
   normalizePlaybackMode,
   normalizeRate,
   toggleValue,
@@ -80,6 +82,7 @@ export function makeDefaultKshState() {
     staticSource: 0,
     rate: "16n",
     swing: 0,
+    swingSubdivisionIndex: DEFAULT_SWING_SUBDIVISION_INDEX,
     velocityHumanize: 0,
     timingHumanize: 0,
     deviceActive: 1,
@@ -157,6 +160,7 @@ export function serializePersistenceState(state) {
     rate: state.rate,
     tempo: state.tempo,
     swing: state.swing,
+    swingSubdivisionIndex: state.swingSubdivisionIndex,
     velocityHumanize: state.velocityHumanize,
     timingHumanize: state.timingHumanize,
     deviceActive: state.deviceActive ? 1 : 0,
@@ -197,6 +201,9 @@ export function applyPersistencePayload(state, payload) {
   state.staticSource = clamp(payload.staticSource ?? 0, SILENT_SOURCE, SOURCE_COUNT - 1);
   state.rate = normalizeRate(payload.rate);
   state.swing = clamp(payload.swing, 0, 100);
+  state.swingSubdivisionIndex = clampSwingSubdivisionIndex(
+    payload.swingSubdivisionIndex ?? DEFAULT_SWING_SUBDIVISION_INDEX,
+  );
   state.velocityHumanize = clamp(payload.velocityHumanize, 0, 100);
   state.timingHumanize = clamp(payload.timingHumanize, 0, 100);
   if (payload.deviceActive !== undefined) {
@@ -457,6 +464,9 @@ export function applyStatusMessage(state, selector, args = []) {
     }
     case "swing":
       state.swing = clamp(values[0], 0, 100);
+      break;
+    case "swing_subdivision":
+      state.swingSubdivisionIndex = clampSwingSubdivisionIndex(values[0]);
       break;
     case "velocity_humanize":
       state.velocityHumanize = clamp(values[0], 0, 100);

@@ -1,5 +1,6 @@
 import {
   DEFAULT_CHANNEL_LABELS,
+  clampSwingSubdivisionIndex,
   MAX_CHANNELS,
   MAX_STEPS,
   NOTE_HIT_FLASH_MS,
@@ -602,6 +603,13 @@ export async function setHeaderValue(id, value) {
     state.swing = next;
     bumpState();
     await sendCommand("swing", [next]);
+    return;
+  }
+
+  if (id === "swing_subdivision" && state.swingSubdivisionIndex !== next) {
+    state.swingSubdivisionIndex = clampSwingSubdivisionIndex(next);
+    bumpState();
+    await sendCommand("swing_subdivision", [state.swingSubdivisionIndex]);
     return;
   }
 

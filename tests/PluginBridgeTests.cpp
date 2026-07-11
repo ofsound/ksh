@@ -188,6 +188,15 @@ TEST_CASE ("ui bridge macro commands update host parameters", "[plugin][bridge]"
     REQUIRE (plugin.getValueTreeState().getRawParameterValue ("rate")->load() == 2.0f);
 }
 
+TEST_CASE ("ui bridge swing subdivision command updates engine state", "[plugin][bridge]")
+{
+    PluginProcessor plugin;
+
+    REQUIRE (plugin.getUiBridge().handleCommand (
+        R"({"selector":"swing_subdivision","args":[2]})"));
+    REQUIRE (plugin.engineStateSnapshot().swingSubdivisionIndex == 2);
+}
+
 TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
 {
     PluginProcessor plugin;

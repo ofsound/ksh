@@ -1,5 +1,6 @@
 #include "KickSnareHatEngine.h"
 #include "KshJson.h"
+#include "KshMath.h"
 
 #include <algorithm>
 #include <cmath>
@@ -152,6 +153,7 @@ EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
     snapshot.tempo = tempo;
     snapshot.stepIntervalMs = stepIntervalMs;
     snapshot.swing = swing;
+    snapshot.swingSubdivisionIndex = swingSubdivisionIndex;
     snapshot.velocityHumanize = velocityHumanize;
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;
@@ -420,6 +422,13 @@ void KickSnareHatEngine::setSwing (int amount)
     swing = clampInt (amount, 0, 100);
     ++playbackSnapshotVersion_;
     status ("swing " + std::to_string (swing));
+}
+
+void KickSnareHatEngine::setSwingSubdivisionIndex (int subdivisionIndex)
+{
+    swingSubdivisionIndex = clampSwingSubdivisionIndex (subdivisionIndex);
+    ++playbackSnapshotVersion_;
+    status ("swing_subdivision " + std::to_string (swingSubdivisionIndex));
 }
 
 void KickSnareHatEngine::setVelocityHumanize (int amount)
@@ -998,6 +1007,7 @@ nlohmann::json KickSnareHatEngine::snapshot() const
         { "rate", rate },
         { "tempo", tempo },
         { "swing", swing },
+        { "swingSubdivisionIndex", swingSubdivisionIndex },
         { "velocityHumanize", velocityHumanize },
         { "timingHumanize", timingHumanize },
         { "currentStep", currentStep + 1 },
@@ -1097,6 +1107,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         { "rate", rate },
         { "tempo", tempo },
         { "swing", swing },
+        { "swingSubdivisionIndex", swingSubdivisionIndex },
         { "velocityHumanize", velocityHumanize },
         { "timingHumanize", timingHumanize },
         { "deviceActive", deviceActive ? 1 : 0 },
@@ -1120,6 +1131,8 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
     rate = Constants::normalizeRate (state["rate"].get<std::string>());
     tempo = std::clamp (state.value ("tempo", tempo), 20.0, 300.0);
     swing = clampInt (state["swing"].get<int>(), 0, 100);
+    swingSubdivisionIndex = clampSwingSubdivisionIndex (
+        state.value ("swingSubdivisionIndex", Constants::defaultSwingSubdivisionIndex));
     velocityHumanize = clampInt (state["velocityHumanize"].get<int>(), 0, 100);
     timingHumanize = clampInt (state["timingHumanize"].get<int>(), 0, 100);
 

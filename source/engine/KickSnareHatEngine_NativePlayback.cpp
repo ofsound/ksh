@@ -40,6 +40,12 @@ int KickSnareHatEngine::nativePlaybackPeriod() const
             baseRows = lcmInt (baseRows, loopLength);
     }
 
+    if (swing > 0)
+    {
+        const auto swingPeriodSteps = static_cast<int> (
+            std::lround (4.0 * swingSubdivisionValueForIndex (swingSubdivisionIndex)));
+        baseRows = lcmInt (baseRows, std::max (1, swingPeriodSteps));
+    }
     period = baseRows / stepCount;
 
     for (int step = 0; step < stepCount; ++step)
@@ -106,11 +112,6 @@ int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) 
 std::string KickSnareHatEngine::cycleKey (int source, int channel, int step) const
 {
     return std::to_string (source) + ":" + std::to_string (channel) + ":" + std::to_string (step);
-}
-
-double KickSnareHatEngine::swingDelayMsForStep (int step) const
-{
-    return step % 2 == 1 ? stepIntervalMs * 0.5 * (static_cast<double> (swing) / 100.0) : 0.0;
 }
 
 double KickSnareHatEngine::playbackTimingHumanizeRangeMs() const
@@ -203,8 +204,6 @@ NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
 
     for (int step = 0; step < playbackStepCount; ++step)
     {
-        const int rowStep = mod (step, stepCount);
-
         for (int channel = 0; channel < channelCount; ++channel)
         {
             const int playbackStep = playbackStepForChannel (channel, step);
@@ -241,17 +240,19 @@ NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
             const int velocity = humanizeVelocity (cell.velocity);
             const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
             const int noteDurationMs = rollNoteDurationMs (roll);
-            const double baseDelayMs = swingDelayMsForStep (rowStep);
             const double timingOffsetMs = playbackHumanizeTimingOffsetMs();
 
             for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
             {
-                double targetPosition = 0.0;
-
-                if (rollIndex == 0)
-                    targetPosition = static_cast<double> (step) + (baseDelayMs + timingOffsetMs) / stepIntervalMs;
-                else
-                    targetPosition = static_cast<double> (step) + static_cast<double> (rollIndex) / static_cast<double> (roll);
+                const double eventPosition = static_cast<double> (step)
+                                              + static_cast<double> (rollIndex) / static_cast<double> (roll);
+                const double swingDelaySteps = swingDelayStepsForPosition (eventPosition,
+                                                                            swing,
+                                                                            swingSubdivisionIndex);
+                const double timingDelaySteps = rollIndex == 0 && stepIntervalMs > 0.0
+                                                    ? timingOffsetMs / stepIntervalMs
+                                                    : 0.0;
+                double targetPosition = eventPosition + swingDelaySteps + timingDelaySteps;
 
                 if (targetPosition < 0.0)
                     targetPosition = 0.0;
@@ -306,6 +307,7 @@ PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
     snapshot.tempo = tempo;
     snapshot.stepIntervalMs = stepIntervalMs;
     snapshot.swing = swing;
+    snapshot.swingSubdivisionIndex = swingSubdivisionIndex;
     snapshot.velocityHumanize = velocityHumanize;
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;

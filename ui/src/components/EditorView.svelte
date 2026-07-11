@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
+  import HeaderDiscreteSelect from "./HeaderDiscreteSelect.svelte";
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
   import NudgeTriangleIcon from "./NudgeTriangleIcon.svelte";
@@ -61,7 +62,16 @@
     wrappedCellDestinations,
   } from "../lib/kshBulkEdit.js";
   import { cloneCell, defaultCell } from "../lib/kshUiState.js";
-  import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SILENT_SOURCE, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
+  import {
+    CHANNEL_RENAME_MS,
+    DEFAULT_SWING_SUBDIVISION_INDEX,
+    MAX_CHANNELS,
+    MAX_STEPS,
+    SILENT_SOURCE,
+    SOURCE_COUNT,
+    SOURCE_ROW_RESET_MS,
+    SWING_SUBDIVISION_OPTIONS,
+  } from "../lib/kshConstants.js";
   import {
     auditionChannel,
     beginPatternCopy,
@@ -957,6 +967,8 @@
         return "Change refresh rate";
       case "swing":
         return "Change swing";
+      case "swing_subdivision":
+        return "Change swing subdivision";
       case "velocity_humanize":
         return "Change velocity humanize";
       case "timing_humanize":
@@ -1562,6 +1574,18 @@
         onBegin={beginHeaderDrag}
         onMove={moveHeaderDrag}
         onEnd={endHeaderDrag}
+      />
+      <HeaderDiscreteSelect
+        id="swing_subdivision"
+        label="Sub"
+        ariaLabel="Swing subdivision"
+        value={session.kshState.swingSubdivisionIndex}
+        options={SWING_SUBDIVISION_OPTIONS}
+        resetValue={DEFAULT_SWING_SUBDIVISION_INDEX}
+        active={headerDrag?.id === "swing_subdivision"}
+        onBegin={beginHeaderDrag}
+        onEnd={endHeaderDrag}
+        onValueChange={(value) => setHeaderValue("swing_subdivision", value)}
       />
       <HeaderValueDrag
         id="velocity_humanize"

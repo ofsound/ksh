@@ -1,4 +1,5 @@
 #include "KshMidiPlayback.h"
+#include "KshMath.h"
 
 #include <cmath>
 
@@ -77,13 +78,6 @@ int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int p
     }
 
     return loopStart + mod (playbackIndex, loopLength);
-}
-
-double swingDelayMsForStep (const PlaybackSnapshot& snapshot, int step)
-{
-    return step % 2 == 1
-               ? snapshot.stepIntervalMs * 0.5 * (static_cast<double> (snapshot.swing) / 100.0)
-               : 0.0;
 }
 
 double timingHumanizeRangeMs (const PlaybackSnapshot& snapshot)
@@ -303,8 +297,6 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
     if (! snapshot.deviceActive || snapshot.stepCount <= 0 || snapshot.channelCount <= 0)
         return;
 
-    const int rowStep = mod (globalStep, snapshot.stepCount);
-
     for (int channel = 0; channel < snapshot.channelCount; ++channel)
     {
         const int playbackStep = playbackStepForChannel (snapshot, channel, globalStep);
@@ -361,19 +353,21 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
 
         const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
         const int noteDurationMs = rollNoteDurationMs (snapshot, roll);
-        const double baseDelayMs = swingDelayMsForStep (snapshot, rowStep);
         const double timingRange = timingHumanizeRangeMs (snapshot);
         const double timingOffsetMs = timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : 0.0;
         const int pitch = snapshot.channels[static_cast<size_t> (channel)].note;
 
         for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
         {
-            double delayMs = 0.0;
-
-            if (rollIndex == 0)
-                delayMs = std::max (0.0, baseDelayMs + timingOffsetMs);
-            else
-                delayMs = (static_cast<double> (rollIndex) / static_cast<double> (roll)) * snapshot.stepIntervalMs;
+            const double eventPosition = static_cast<double> (globalStep)
+                                          + static_cast<double> (rollIndex) / static_cast<double> (roll);
+            const double rollDelayMs = (eventPosition - static_cast<double> (globalStep)) * snapshot.stepIntervalMs;
+            const double swingDelayMs = swingDelayStepsForPosition (eventPosition,
+                                                                     snapshot.swing,
+                                                                     snapshot.swingSubdivisionIndex)
+                                      * snapshot.stepIntervalMs;
+            const double timingDelayMs = rollIndex == 0 ? timingOffsetMs : 0.0;
+            const double delayMs = std::max (0.0, rollDelayMs + swingDelayMs + timingDelayMs);
 
             scheduleHit (stepSampleOffset,
                          numSamples,

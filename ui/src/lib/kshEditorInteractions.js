@@ -6,6 +6,7 @@ import {
   PROBABILITY_DRAG_SCALE,
   ROLL_DRAG_SCALE,
   SOURCE_PAINT_DRAG_THRESHOLD,
+  SWING_SUBDIVISION_VALUES,
   VELOCITY_DRAG_SCALE,
   VELOCITY_DRAG_THRESHOLD,
   clamp,
@@ -45,6 +46,9 @@ export function headerValueForState(state, id) {
   if (id === "swing") {
     return state.swing;
   }
+  if (id === "swing_subdivision") {
+    return state.swingSubdivisionIndex;
+  }
   if (id === "velocity_humanize") {
     return state.velocityHumanize;
   }
@@ -55,7 +59,7 @@ export function headerValueForState(state, id) {
 }
 
 export function headerValueMin(id) {
-  if (id === "swing" || id === "velocity_humanize" || id === "timing_humanize") {
+  if (id === "swing" || id === "swing_subdivision" || id === "velocity_humanize" || id === "timing_humanize") {
     return 0;
   }
   return 1;
@@ -67,6 +71,9 @@ export function headerValueMax(state, id) {
   }
   if (id === "refresh") {
     return state.stepCount;
+  }
+  if (id === "swing_subdivision") {
+    return SWING_SUBDIVISION_VALUES.length - 1;
   }
   return 100;
 }

@@ -193,6 +193,12 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "swing_subdivision")
+    {
+        engine.setSwingSubdivisionIndex (argInt (args, 0, engine.getSwingSubdivisionIndex()));
+        return true;
+    }
+
     if (selector == "velocity_humanize")
     {
         engine.setVelocityHumanize (argInt (args, 0, engine.getVelocityHumanize()));

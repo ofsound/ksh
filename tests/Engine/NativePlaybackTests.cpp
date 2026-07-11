@@ -2,6 +2,7 @@
 #include "NativePlaybackTestHelpers.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <engine/KshMath.h>
 
 using namespace ksh;
 using ksh::test::EngineFixture;
@@ -47,7 +48,7 @@ TEST_CASE ("native playback rows expand rolls inside step", "[engine][native]")
                                                                             nativeHitRow (36, 100, 28, 1, 93.75, 1, 1, 1, 1)))));
 }
 
-TEST_CASE ("native playback rows apply swing only to first roll hit", "[engine][native]")
+TEST_CASE ("native playback rows apply swing at each roll hit's absolute phase", "[engine][native]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -61,11 +62,38 @@ TEST_CASE ("native playback rows apply swing only to first roll hit", "[engine][
     const auto built = fixture.engine.buildNativePlaybackRows();
     const auto& rows = built.rows;
 
+    requireNativeRow (rows[0], concatNativeRows (
+                                        nativeHitRow (36, 80, 28, 1, 0.0, 1, 2, 1, 2),
+                                        nativeHitRow (36, 80, 28, 1, 31.25, 1, 2, 1, 2)));
     requireNativeRow (rows[1], concatNativeRows (
                                         nativeHitRow (36, 80, 28, 1, 62.5, 1, 2, 1, 2),
+                                        nativeHitRow (36, 80, 28, 1, 93.75, 1, 2, 1, 2)));
+}
+
+TEST_CASE ("native playback swing subdivisions use the sibling absolute phase", "[engine][native]")
+{
+    REQUIRE (swingDelayStepsForPosition (1.0, 100, 0) == 0.0);
+    REQUIRE (swingDelayStepsForPosition (1.0, 100, 1) == 0.5);
+    REQUIRE (swingDelayStepsForPosition (1.5, 100, 0) == 0.25);
+    REQUIRE (swingDelayStepsForPosition (2.0, 100, 2) == 1.0);
+
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (2);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setSwing (100);
+    fixture.engine.setSwingSubdivisionIndex (0);
+    fixture.engine.setCell (0, 0, 1, true, 80, 100, 1, 0, false, 4);
+
+    const auto built = fixture.engine.buildNativePlaybackRows();
+
+    requireNativeRow (built.rows[0], nativeHitRow (36, 80, 28, 1, 0.0, 1, 2, 1, 2));
+    requireNativeRow (built.rows[1], concatNativeRows (
+                                        nativeHitRow (36, 80, 28, 1, 0.0, 1, 2, 1, 2),
                                         concatNativeRows (nativeHitRow (36, 80, 28, 1, 31.25, 1, 2, 1, 2),
-                                                          concatNativeRows (nativeHitRow (36, 80, 28, 1, 62.5, 1, 2, 1, 2),
-                                                                            nativeHitRow (36, 80, 28, 1, 93.75, 1, 2, 1, 2)))));
+                                                          nativeHitRow (36, 80, 28, 1, 93.75, 1, 2, 1, 2))));
 }
 
 TEST_CASE ("native playback rows precompute cycle gates", "[engine][native]")

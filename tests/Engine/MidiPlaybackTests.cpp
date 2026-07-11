@@ -291,6 +291,58 @@ TEST_CASE ("midi playback applies swing delay within block", "[engine][transport
     REQUIRE (noteOnSample > 0);
 }
 
+TEST_CASE ("midi playback uses the selected swing subdivision phase", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (2);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setSwing (100);
+    fixture.engine.setCell (0, 0, 1, true, 80, 100, 1, 0, false, 4);
+    fixture.engine.generateWindow (0, 2, true);
+
+    ksh::MidiPlaybackRunner defaultRunner;
+    defaultRunner.prepare (44100.0);
+    const auto defaultSnapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto defaultStep0 = runPlaybackBlock (defaultRunner,
+                                                                  defaultSnapshot,
+                                                                  0.0,
+                                                                  120.0,
+                                                                  true,
+                                                                  512);
+    const auto defaultStep1 = runPlaybackBlock (defaultRunner,
+                                                defaultSnapshot,
+                                                0.25,
+                                                120.0,
+                                                true,
+                                                4096);
+
+    REQUIRE (defaultStep1.noteHitCount > 0);
+    REQUIRE (defaultStep1.noteHits[0].delayMs == 62.5);
+
+    fixture.engine.setSwingSubdivisionIndex (0);
+    ksh::MidiPlaybackRunner fineRunner;
+    fineRunner.prepare (44100.0);
+    const auto fineSnapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto fineStep0 = runPlaybackBlock (fineRunner,
+                                                               fineSnapshot,
+                                                               0.0,
+                                                               120.0,
+                                                               true,
+                                                               512);
+    const auto fineStep1 = runPlaybackBlock (fineRunner,
+                                             fineSnapshot,
+                                             0.25,
+                                             120.0,
+                                             true,
+                                             4096);
+
+    REQUIRE (fineStep1.noteHitCount > 0);
+    REQUIRE (fineStep1.noteHits[0].delayMs == 0.0);
+}
+
 TEST_CASE ("transport position does not fire while stopped", "[engine][transport]")
 {
     EngineFixture fixture;

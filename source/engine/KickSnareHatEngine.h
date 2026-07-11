@@ -45,6 +45,7 @@ struct EngineStateSnapshot
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
     int swing = 0;
+    int swingSubdivisionIndex = Constants::defaultSwingSubdivisionIndex;
     int velocityHumanize = 0;
     int timingHumanize = 0;
     bool deviceActive = true;
@@ -79,6 +80,7 @@ public:
     [[nodiscard]] std::string_view getSourceRate (int source) const;
     [[nodiscard]] double getTempo() const { return tempo; }
     [[nodiscard]] int getSwing() const { return swing; }
+    [[nodiscard]] int getSwingSubdivisionIndex() const { return swingSubdivisionIndex; }
     [[nodiscard]] int getVelocityHumanize() const { return velocityHumanize; }
     [[nodiscard]] int getTimingHumanize() const { return timingHumanize; }
     [[nodiscard]] bool isDeviceActive() const { return deviceActive; }
@@ -114,6 +116,7 @@ private:
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
     int swing = 0;
+    int swingSubdivisionIndex = Constants::defaultSwingSubdivisionIndex;
     int velocityHumanize = 0;
     int timingHumanize = 0;
     bool deviceActive = true;
@@ -146,6 +149,7 @@ public:
     void setSourceRate (int source, std::string_view rate);
     void setTempo (double bpm);
     void setSwing (int amount);
+    void setSwingSubdivisionIndex (int subdivisionIndex);
     void setVelocityHumanize (int amount);
     void setTimingHumanize (int amount);
     void setDeviceActive (bool active);
@@ -238,7 +242,6 @@ private:
     void updateStepIntervalMs();
 
     [[nodiscard]] std::string cycleKey (int source, int channel, int step) const;
-    [[nodiscard]] double swingDelayMsForStep (int step) const;
     [[nodiscard]] double playbackTimingHumanizeRangeMs() const;
     [[nodiscard]] double playbackHumanizeTimingOffsetMs();
     [[nodiscard]] int humanizeVelocity (int velocity);

@@ -104,6 +104,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     original.engine.setStepCount (8);
     original.engine.setChannelCount (2);
     original.engine.setSwing (25);
+    original.engine.setSwingSubdivisionIndex (2);
     original.engine.setCell (0, 0, 0, true, 64, 30, 1, 0, false, 3);
     original.engine.setChannelLabel (0, "Sub");
     original.engine.setChannelNote (1, 50);
@@ -113,6 +114,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (payload["stepCount"] == 8);
     REQUIRE (payload["channelCount"] == 2);
     REQUIRE (payload["swing"] == 25);
+    REQUIRE (payload["swingSubdivisionIndex"] == 2);
     REQUIRE (payload["sourceSettings"].size() == Constants::sourceCount);
     REQUIRE_FALSE (payload.contains ("nativeTiming"));
     REQUIRE (payload["cells"].size() >= 1);
@@ -126,11 +128,22 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (restored.engine.getStepCount() == 8);
     REQUIRE (restored.engine.getChannelCount() == 2);
     REQUIRE (restored.engine.getSwing() == 25);
+    REQUIRE (restored.engine.getSwingSubdivisionIndex() == 2);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).enabled);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).velocity == 64);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).roll == 3);
     REQUIRE (restored.engine.channelAt (0).label == "Sub");
     REQUIRE (restored.engine.channelAt (1).note == 50);
+}
+
+TEST_CASE ("legacy persistence defaults swing subdivision to .5", "[engine][persistence]")
+{
+    EngineFixture fixture;
+    auto payload = fixture.engine.serializeForPersistence();
+    payload.erase ("swingSubdivisionIndex");
+
+    REQUIRE (fixture.engine.deserializeForPersistence (payload));
+    REQUIRE (fixture.engine.getSwingSubdivisionIndex() == Constants::defaultSwingSubdivisionIndex);
 }
 
 TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persistence]")
