@@ -1010,10 +1010,12 @@
     ].join(";");
   }
 
-  function cycleStripBarStyle(active) {
-    return active
-      ? "background:var(--color-text);"
-      : "background:var(--color-app);";
+  function cycleStripBarStyle(channel, active) {
+    const bright = channelBrightColor(channel);
+    if (active) {
+      return `background:color-mix(in srgb, ${bright} 58%, white);`;
+    }
+    return `background:color-mix(in srgb, ${bright} 42%, var(--color-app));`;
   }
 
   function loopBraceStyle(channel) {
@@ -2156,7 +2158,7 @@
                   aria-label={`Cycle pattern: ${cyclePattern.cycle} steps`}
                 >
                   {#each Array.from({ length: cyclePattern.cycle }, (_, cycleIndex) => cycleIndex) as cycleIndex (cycleIndex)}
-                    <span style={cycleStripBarStyle(isCyclePositionActive(cyclePattern.cycle, cyclePattern.mask, cycleIndex))}></span>
+                    <span style={cycleStripBarStyle(channel, isCyclePositionActive(cyclePattern.cycle, cyclePattern.mask, cycleIndex))}></span>
                   {/each}
                 </div>
               {:else}
