@@ -117,7 +117,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
 
   async function endRandomHeaderDrag() {
     if (randomHeaderDrag) {
-      await commitEditGestureHistory("Change refresh rate");
+      await commitEditGestureHistory("Change refresh length");
     }
     randomHeaderDrag = null;
   }
@@ -166,8 +166,9 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
           </div>
           <HeaderValueDrag
             id="refresh"
-            label="Rate"
+            label="Length"
             value={session.kshState.refreshSteps}
+            suffix=" steps"
             brightLabel
             active={randomHeaderDrag?.id === "refresh"}
             onBegin={beginRandomHeaderDrag}
