@@ -5,6 +5,7 @@
   import HeaderDiscreteSelect from "./HeaderDiscreteSelect.svelte";
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
+  import MoveAroundIcon from "./MoveAroundIcon.svelte";
   import NudgeTriangleIcon from "./NudgeTriangleIcon.svelte";
   import KshCyclePatternEditor from "./KshCyclePatternEditor.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
@@ -1726,7 +1727,7 @@
           title={editMode ? "Exit EDIT mode" : "Select cells · Option-drag to copy"}
           onclick={toggleEditMode}
         >
-          EDIT
+          <MoveAroundIcon />
         </button>
         <button
           type="button"
