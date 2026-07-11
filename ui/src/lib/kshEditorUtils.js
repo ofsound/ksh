@@ -340,6 +340,9 @@ export function normalizeSourceLayerMode(mode) {
 }
 
 export function normalizeSourceValueMode(mode) {
+  if (String(mode ?? "").toLowerCase() === "cycle") {
+    return "cycle";
+  }
   return normalizeSourceLayerMode(mode);
 }
 
