@@ -914,9 +914,9 @@
 
     if (effectiveLayerMode === "probability") {
       const fillPercent = Math.max(0, Math.min(100, Math.round(layerValue)));
-      const upperZoneFill = (fillPercent * 2) / 3;
+      const upperZoneFill = fillPercent * 0.6;
       return cellStyleFromBackground(
-        `linear-gradient(to top, var(--color-app) 0%, var(--color-app) 33.333%, ${darkColor} 33.333%, ${darkColor} ${33.333 + upperZoneFill}%, var(--color-app) ${33.333 + upperZoneFill}%, var(--color-app) 100%)`,
+        `linear-gradient(to top, var(--color-app) 0%, var(--color-app) 40%, ${darkColor} 40%, ${darkColor} ${40 + upperZoneFill}%, var(--color-app) ${40 + upperZoneFill}%, var(--color-app) 100%)`,
         "var(--color-text)",
         "font-weight:700;text-shadow:0 1px 2px color-mix(in srgb, var(--color-app) 88%, transparent),0 0 1px color-mix(in srgb, var(--color-app) 72%, transparent);",
       );
@@ -1000,7 +1000,7 @@
       "left:0",
       "right:0",
       `bottom:${bottomInset}px`,
-      `height:calc(33.333% - ${heightInset}px)`,
+      `height:calc(40% - ${heightInset}px)`,
       `border:2px solid ${channelBrightColor(channel)}`,
       "border-radius:2px",
       "background:var(--color-app)",
@@ -1187,7 +1187,7 @@
     const layerMode =
       modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
     const valueMode = normalizeSourceLayerMode(layerMode) === "probability"
-      && localY >= gridCellH * (2 / 3)
+      && localY >= gridCellH * 0.6
       ? "cycle"
       : valueModeForCellInteraction(layerMode, null);
 
@@ -2149,7 +2149,7 @@
             >
               {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
-                <span class="pointer-events-none absolute inset-x-0 top-0 flex h-2/3 items-center justify-center">
+                <span class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center">
                   {session.kshState.sources[session.selectedSource][channel][step].probability}
                 </span>
                 <div

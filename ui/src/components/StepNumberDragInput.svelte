@@ -58,6 +58,7 @@
   let dragStartY = 0;
   let dragStartValue = 0;
   let dragValue = $state(0);
+  let pointerMoved = false;
 
   let displayedValue = $derived(dragging ? dragValue : value);
   let effectiveBoxChars = $derived(boxChars ?? (compact ? 3 : 4));
@@ -115,6 +116,7 @@
     dragStartY = event.clientY;
     dragStartValue = value;
     dragValue = value;
+    pointerMoved = false;
 
     if (deferCommit) {
       onGestureStart?.();
@@ -129,6 +131,7 @@
 
     if (next === dragValue) return;
 
+    pointerMoved = true;
     dragValue = next;
 
     if (deferCommit && onValueCommit) {
@@ -146,7 +149,7 @@
     dragging = false;
     event.currentTarget.releasePointerCapture(event.pointerId);
 
-    if (deferCommit && onValueCommit) {
+    if (deferCommit && onValueCommit && (!onClick || pointerMoved)) {
       onValueCommit(dragValue);
     }
 
@@ -195,7 +198,9 @@
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
-  onclick={() => onClick?.()}
+  onclick={() => {
+    if (!pointerMoved) onClick?.();
+  }}
   ondblclick={onDoubleClick}
   title={!disabled && resetValue !== undefined
     ? "Drag to change · double-click to reset"

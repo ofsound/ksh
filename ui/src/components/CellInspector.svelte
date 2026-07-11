@@ -29,6 +29,7 @@
     commitEditGestureHistory,
     sendCellsForChannel,
     session,
+    setSourceLayerMode,
   } from "../lib/kshSession.svelte.js";
 
   let velocityOffset = $state(0);
@@ -38,6 +39,8 @@
   /** @type {Map<string, number> | null} */
   let probabilityStarts = $state(null);
   let rollDragging = $state(false);
+  /** @type {Set<string> | null} */
+  let rollKeys = $state(null);
   let cycleInspectorOpen = $state(false);
   let cycleInspectorRoot = $state(null);
   let cycleInspectorAnchor = null;
@@ -101,8 +104,9 @@
   const cycleValue = $derived(commonCycle ?? 1);
   const rollValue = $derived(commonRoll ?? 1);
 
-  function focusInspectorLayer() {
+  function focusInspectorLayer(mode) {
     cellSelection.inspectorLayerActive = true;
+    setSourceLayerMode(mode === "cycle" ? "probability" : mode);
   }
 
   function formatBipolarOffset(value) {
@@ -217,9 +221,9 @@
     };
   });
 
-  async function flushSelectedCells() {
+  async function flushSelectedCells(keys = inspectorKeys) {
     const byChannel = selectedStepsByChannel(
-      inspectorKeys,
+      keys,
       session.kshState.channelCount,
       session.kshState.stepCount,
     );
@@ -341,40 +345,52 @@
     }
 
     focusInspectorLayer("roll");
+    rollKeys = new Set(inspectorKeys);
     rollDragging = true;
     beginEditGestureHistory();
   }
 
   async function previewRollValue(value) {
-    if (!inspectorActive) {
+    if (!inspectorActive || !rollKeys) {
       return;
     }
 
     applyAbsoluteCellMode(
       session.kshState,
       session.selectedSource,
-      inspectorKeys,
+      rollKeys,
       "roll",
       value,
     );
   }
 
   async function commitRollValue(value) {
-    if (!inspectorActive) {
+    if (!inspectorActive || !rollKeys) {
       rollDragging = false;
+      rollKeys = null;
       return;
     }
 
     applyAbsoluteCellMode(
       session.kshState,
       session.selectedSource,
-      inspectorKeys,
+      rollKeys,
       "roll",
       value,
     );
-    await flushSelectedCells();
+    await flushSelectedCells(rollKeys);
     await commitEditGestureHistory("Set selected roll");
     rollDragging = false;
+    rollKeys = null;
+  }
+
+  function advanceRollValue() {
+    if (!inspectorActive) {
+      return;
+    }
+
+    const next = rollValue >= MAX_ROLL ? 1 : rollValue + 1;
+    void commitRollValue(next);
   }
 </script>
 
@@ -463,6 +479,7 @@
         onGestureStart={beginRollGesture}
         onValuePreview={previewRollValue}
         onValueCommit={commitRollValue}
+        onClick={advanceRollValue}
       />
     </div>
   </div>
