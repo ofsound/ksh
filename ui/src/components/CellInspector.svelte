@@ -23,6 +23,7 @@
     commitEditGestureHistory,
     sendCellsForChannel,
     session,
+    setSourceLayerMode,
   } from "../lib/kshSession.svelte.js";
 
   let velocityOffset = $state(0);
@@ -68,6 +69,10 @@
   const cycleValue = $derived(commonCycle ?? 1);
   const rollValue = $derived(commonRoll ?? 1);
 
+  function focusInspectorLayer(mode) {
+    setSourceLayerMode(mode);
+  }
+
   function formatBipolarOffset(value) {
     const rounded = Math.round(value);
     if (rounded > 0) {
@@ -103,6 +108,7 @@
       return;
     }
 
+    focusInspectorLayer("velocity");
     beginEditGestureHistory();
     velocityStarts = captureSelectedCellValues(
       session.kshState,
@@ -155,6 +161,7 @@
       return;
     }
 
+    focusInspectorLayer("probability");
     beginEditGestureHistory();
     probabilityStarts = captureSelectedCellValues(
       session.kshState,
@@ -207,6 +214,7 @@
       return;
     }
 
+    focusInspectorLayer("cycle");
     cycleDragging = true;
     beginEditGestureHistory();
   }
@@ -248,6 +256,7 @@
       return;
     }
 
+    focusInspectorLayer("roll");
     rollDragging = true;
     beginEditGestureHistory();
   }
