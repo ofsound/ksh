@@ -45,7 +45,8 @@ enum class PlaybackMode
 {
     normal,
     reverse,
-    ping_pong
+    ping_pong,
+    reverse_ping_pong
 };
 
 [[nodiscard]] inline PlaybackMode normalizePlaybackMode (std::string_view mode)
@@ -58,6 +59,9 @@ enum class PlaybackMode
     if (normalized == "ping_pong")
         return PlaybackMode::ping_pong;
 
+    if (normalized == "reverse_ping_pong")
+        return PlaybackMode::reverse_ping_pong;
+
     return PlaybackMode::normal;
 }
 
@@ -67,10 +71,16 @@ enum class PlaybackMode
     {
         case PlaybackMode::reverse: return "reverse";
         case PlaybackMode::ping_pong: return "ping_pong";
+        case PlaybackMode::reverse_ping_pong: return "reverse_ping_pong";
         case PlaybackMode::normal: return "normal";
     }
 
     return "normal";
+}
+
+[[nodiscard]] inline bool playbackModeIsPingPong (PlaybackMode mode)
+{
+    return mode == PlaybackMode::ping_pong || mode == PlaybackMode::reverse_ping_pong;
 }
 
 [[nodiscard]] inline bool normalizeToggle (std::string_view value)

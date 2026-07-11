@@ -1,250 +1,56 @@
 <script>
-  import { onDestroy } from "svelte";
-  import { normalizePlaybackMode } from "../lib/kshConstants.js";
-  import { PLAYBACK_MODE_OPTIONS, playbackModeOption } from "../lib/kshEditorUtils.js";
-  import { absorbPointerDragFocus, releasePointerDragFocus } from "./pointerDragFocus.js";
+  import {
+    playbackModeFromFlags,
+    playbackModeIsPingPong,
+    playbackModeIsReversed,
+    playbackModeLabel,
+  } from "../lib/kshEditorUtils.js";
+  import PlaybackDirectionIcon from "./PlaybackDirectionIcon.svelte";
+  import PingPongPaddleIcon from "./PingPongPaddleIcon.svelte";
 
   /** @type {{ value?: string, onChange?: (mode: string) => void | Promise<void> }} */
   let { value = "normal", onChange } = $props();
 
-  let rootEl = $state(null);
-  let open = $state(false);
-  let highlightIndex = $state(-1);
-  let gesturePointerId = $state(null);
-  let menuStyle = $state("");
-  let menuCloseTimer = null;
+  const reversed = $derived(playbackModeIsReversed(value));
+  const pingPong = $derived(playbackModeIsPingPong(value));
+  const modeLabel = $derived(playbackModeLabel(value));
 
-  const normalizedValue = $derived(normalizePlaybackMode(value));
-  const selectedOption = $derived(playbackModeOption(normalizedValue));
-
-  function updateMenuPosition() {
-    const trigger = rootEl?.querySelector("[data-playback-mode-trigger]");
-
-    if (!(trigger instanceof HTMLElement)) {
+  async function setFlags(nextReversed, nextPingPong) {
+    const next = playbackModeFromFlags(nextReversed, nextPingPong);
+    if (next === playbackModeFromFlags(reversed, pingPong)) {
       return;
     }
-
-    const rect = trigger.getBoundingClientRect();
-    menuStyle = `left:${rect.left}px;top:${rect.bottom + 2}px;`;
+    await onChange?.(next);
   }
 
-  function removeGestureListeners() {
-    window.removeEventListener("pointermove", onWindowPointerMove);
-    window.removeEventListener("pointerup", onWindowPointerUp);
-    window.removeEventListener("pointercancel", onWindowPointerUp);
+  async function toggleDirection() {
+    await setFlags(!reversed, pingPong);
   }
 
-  function cancelMenuClose() {
-    if (menuCloseTimer !== null) {
-      clearTimeout(menuCloseTimer);
-      menuCloseTimer = null;
-    }
+  async function togglePingPong() {
+    await setFlags(reversed, !pingPong);
   }
-
-  function scheduleMenuClose() {
-    if (gesturePointerId !== null) {
-      return;
-    }
-
-    cancelMenuClose();
-    menuCloseTimer = setTimeout(() => {
-      menuCloseTimer = null;
-      if (gesturePointerId === null) {
-        closeMenu();
-      }
-    }, 120);
-  }
-
-  function closeMenu() {
-    cancelMenuClose();
-    open = false;
-    highlightIndex = -1;
-    gesturePointerId = null;
-    removeGestureListeners();
-  }
-
-  function optionIndexFromPoint(x, y) {
-    const target = document.elementFromPoint(x, y);
-    const optionEl = target?.closest?.("[data-playback-mode-option]");
-
-    if (!optionEl) {
-      return -1;
-    }
-
-    return Number.parseInt(optionEl.getAttribute("data-index") ?? "-1", 10);
-  }
-
-  async function selectIndex(index) {
-    const option = PLAYBACK_MODE_OPTIONS[index];
-
-    if (!option) {
-      closeMenu();
-      return;
-    }
-
-    if (option.value !== normalizedValue) {
-      await onChange?.(option.value);
-    }
-
-    closeMenu();
-  }
-
-  function onWindowPointerMove(event) {
-    if (gesturePointerId !== event.pointerId) {
-      return;
-    }
-
-    const index = optionIndexFromPoint(event.clientX, event.clientY);
-
-    if (index >= 0) {
-      highlightIndex = index;
-    }
-  }
-
-  async function onWindowPointerUp(event) {
-    if (gesturePointerId !== event.pointerId) {
-      return;
-    }
-
-    const index = highlightIndex >= 0 ? highlightIndex : optionIndexFromPoint(event.clientX, event.clientY);
-
-    if (index >= 0) {
-      await selectIndex(index);
-    } else {
-      gesturePointerId = null;
-      removeGestureListeners();
-    }
-
-    releasePointerDragFocus(event);
-  }
-
-  function beginGesture(event) {
-    event.stopPropagation();
-    absorbPointerDragFocus(event);
-    cancelMenuClose();
-
-    if (!open) {
-      open = true;
-      updateMenuPosition();
-    }
-
-    gesturePointerId = event.pointerId;
-
-    const index = optionIndexFromPoint(event.clientX, event.clientY);
-
-    if (index >= 0) {
-      highlightIndex = index;
-    }
-
-    removeGestureListeners();
-    window.addEventListener("pointermove", onWindowPointerMove);
-    window.addEventListener("pointerup", onWindowPointerUp);
-    window.addEventListener("pointercancel", onWindowPointerUp);
-  }
-
-  function onTriggerPointerDown(event) {
-    beginGesture(event);
-  }
-
-  function onOptionPointerDown(event) {
-    beginGesture(event);
-
-    const index = Number.parseInt(event.currentTarget.getAttribute("data-index") ?? "-1", 10);
-
-    if (index >= 0) {
-      highlightIndex = index;
-    }
-  }
-
-  function onMenuPointerMove(event) {
-    if (!open || gesturePointerId !== null) {
-      return;
-    }
-
-    const target = document.elementFromPoint(event.clientX, event.clientY);
-    if (target && rootEl?.contains(target)) {
-      cancelMenuClose();
-    } else {
-      scheduleMenuClose();
-    }
-  }
-
-  $effect(() => {
-    if (!open) {
-      return;
-    }
-
-    updateMenuPosition();
-
-    function onDocPointerDown(event) {
-      if (gesturePointerId !== null) {
-        return;
-      }
-
-      if (rootEl?.contains(event.target)) {
-        return;
-      }
-
-      closeMenu();
-    }
-
-    const timer = setTimeout(() => {
-      document.addEventListener("pointerdown", onDocPointerDown, true);
-    }, 0);
-    document.addEventListener("pointermove", onMenuPointerMove, true);
-
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("pointerdown", onDocPointerDown, true);
-      document.removeEventListener("pointermove", onMenuPointerMove, true);
-    };
-  });
-
-  onDestroy(() => {
-    cancelMenuClose();
-    removeGestureListeners();
-  });
 </script>
 
-<div
-  class="relative shrink-0"
-  bind:this={rootEl}
-  role="group"
-  aria-label="Playback mode selector"
->
+<div class="flex shrink-0 items-center gap-0.5" role="group" aria-label={`Playback mode: ${modeLabel}`}>
   <button
     type="button"
-    data-playback-mode-trigger
-    class="flex h-8 w-[5.75rem] shrink-0 items-center justify-start whitespace-nowrap rounded-sm border border-border-subtle bg-transparent px-2.5 py-2 text-left text-[13px] leading-none text-text outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
-    aria-haspopup="listbox"
-    aria-expanded={open}
-    aria-label={`Playback mode: ${selectedOption.label}`}
-    onpointerdown={onTriggerPointerDown}
+    class="flex h-[26px] w-[34px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+    aria-label={reversed ? "Direction: reverse. Click for forward." : "Direction: forward. Click for reverse."}
+    aria-pressed={reversed}
+    title={reversed ? "Reverse" : "Forward"}
+    onclick={toggleDirection}
   >
-    {selectedOption.label}
+    <PlaybackDirectionIcon {reversed} />
   </button>
-
-  {#if open}
-    <div
-      class="fixed z-50 min-w-[7.75rem] overflow-hidden border border-border-strong bg-app shadow-[0_10px_28px_rgba(0,0,0,0.36)]"
-      style={menuStyle}
-      role="listbox"
-      aria-label="Playback mode"
-    >
-      {#each PLAYBACK_MODE_OPTIONS as option, index (option.value)}
-        <button
-          type="button"
-          data-playback-mode-option
-          data-index={index}
-          class={`flex h-7 w-full items-center justify-between gap-2 px-2 text-left text-[11px] font-semibold outline-none ${highlightIndex === index ? "bg-control-secondary text-accent" : option.value === normalizedValue ? "text-accent" : "text-text"} hover:bg-control-secondary focus-visible:bg-control-secondary`}
-          role="option"
-          aria-selected={option.value === normalizedValue}
-          onpointerdown={onOptionPointerDown}
-        >
-          <span>{option.label}</span>
-          <span class="w-3 text-right text-[10px]">{option.value === normalizedValue ? "✓" : ""}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
+  <button
+    type="button"
+    class={`flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${pingPong ? "text-accent" : "text-text-faint"}`}
+    aria-label={pingPong ? "Ping-pong on. Click to turn off." : "Ping-pong off. Click to turn on."}
+    aria-pressed={pingPong}
+    title="Ping-Pong"
+    onclick={togglePingPong}
+  >
+    <PingPongPaddleIcon />
+  </button>
 </div>

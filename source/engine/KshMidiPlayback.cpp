@@ -68,10 +68,12 @@ int playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int p
         return loopStart + loopLength - 1 - activeIndex;
     }
 
-    if (mode == PlaybackMode::ping_pong)
+    if (mode == PlaybackMode::ping_pong || mode == PlaybackMode::reverse_ping_pong)
     {
-        const int activeIndex = mod (playbackIndex, loopLength * 2);
-        return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
+        const int period = loopLength * 2;
+        const int offset = mode == PlaybackMode::reverse_ping_pong ? loopLength : 0;
+        const int activeIndex = mod (playbackIndex + offset, period);
+        return loopStart + (activeIndex < loopLength ? activeIndex : period - 1 - activeIndex);
     }
 
     return loopStart + mod (playbackIndex, loopLength);

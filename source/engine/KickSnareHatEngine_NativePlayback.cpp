@@ -34,7 +34,7 @@ int KickSnareHatEngine::nativePlaybackPeriod() const
         const int loopStart = clampInt (channelState.loopStart, 0, stepCount - 1);
         const int loopLength = clampInt (channelState.loopLength, 1, stepCount - loopStart);
 
-        if (channelState.playbackMode == PlaybackMode::ping_pong)
+        if (playbackModeIsPingPong (channelState.playbackMode))
             baseRows = lcmInt (baseRows, loopLength * 2);
         else
             baseRows = lcmInt (baseRows, loopLength);
@@ -92,10 +92,12 @@ int KickSnareHatEngine::playbackStepForChannel (int channel, int playbackIndex) 
         return loopStart + loopLength - 1 - activeIndex;
     }
 
-    if (mode == PlaybackMode::ping_pong)
+    if (mode == PlaybackMode::ping_pong || mode == PlaybackMode::reverse_ping_pong)
     {
-        const int activeIndex = mod (playbackIndex, loopLength * 2);
-        return loopStart + (activeIndex < loopLength ? activeIndex : loopLength * 2 - 1 - activeIndex);
+        const int period = loopLength * 2;
+        const int offset = mode == PlaybackMode::reverse_ping_pong ? loopLength : 0;
+        const int activeIndex = mod (playbackIndex + offset, period);
+        return loopStart + (activeIndex < loopLength ? activeIndex : period - 1 - activeIndex);
     }
 
     return loopStart + mod (playbackIndex, loopLength);

@@ -4,6 +4,7 @@
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
+  import NudgeTriangleIcon from "./NudgeTriangleIcon.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
   import { absorbPointerDragFocus, releasePointerDragFocus } from "./pointerDragFocus.js";
   import { onBackendEvent, parseBackendJson } from "../lib/kshBridge.js";
@@ -1276,19 +1277,19 @@
           <div class="flex items-center">
             <button
               type="button"
-              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-[17px] leading-none text-accent"
+              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, -1)}
             >
-              ◀
+              <NudgeTriangleIcon reversed />
             </button>
             <button
               type="button"
-              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-[17px] leading-none text-accent"
+              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
               disabled={session.selectedSource === SILENT_SOURCE}
               onclick={() => shiftChannelRow(channel, 1)}
             >
-              ▶
+              <NudgeTriangleIcon />
             </button>
           </div>
           <button

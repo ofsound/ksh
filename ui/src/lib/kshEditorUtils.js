@@ -6,9 +6,9 @@ export const GRID_CELL_H = 50;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
-export const GRID_SIDEBAR_W = 308;
+export const GRID_SIDEBAR_W = 320;
 export const GRID_CELL_LEFT_GAP = 34;
-export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP + 24;
+export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP + 32;
 /** Extra breathing room after the step grid in the editor viewport. */
 export const EDITOR_GRID_TRAILING_GAP = 64;
 /** Sidebar, pre-grid gap, and trailing editor space east of the step grid. */
@@ -216,6 +216,7 @@ export const PLAYBACK_MODE_OPTIONS = [
   { value: "normal", label: "Forward" },
   { value: "reverse", label: "Reverse" },
   { value: "ping_pong", label: "Ping-Pong" },
+  { value: "reverse_ping_pong", label: "Reverse Ping-Pong" },
 ];
 
 export function playbackModeOption(mode) {
@@ -227,13 +228,21 @@ export function playbackModeLabel(mode) {
   return playbackModeOption(mode).label;
 }
 
-const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+export function playbackModeIsReversed(mode) {
+  const normalized = normalizePlaybackMode(mode);
+  return normalized === "reverse" || normalized === "reverse_ping_pong";
+}
 
-export function midiNoteLabel(note) {
-  const clamped = clamp(Math.round(note), 0, 127);
-  const name = MIDI_NOTE_NAMES[clamped % 12];
-  const octave = Math.floor(clamped / 12) - 1;
-  return `${name}${octave}`;
+export function playbackModeIsPingPong(mode) {
+  const normalized = normalizePlaybackMode(mode);
+  return normalized === "ping_pong" || normalized === "reverse_ping_pong";
+}
+
+export function playbackModeFromFlags(reversed, pingPong) {
+  if (pingPong) {
+    return reversed ? "reverse_ping_pong" : "ping_pong";
+  }
+  return reversed ? "reverse" : "normal";
 }
 
 export function nextPlaybackMode(mode) {
@@ -244,7 +253,19 @@ export function nextPlaybackMode(mode) {
   if (normalized === "reverse") {
     return "ping_pong";
   }
+  if (normalized === "ping_pong") {
+    return "reverse_ping_pong";
+  }
   return "normal";
+}
+
+const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+export function midiNoteLabel(note) {
+  const clamped = clamp(Math.round(note), 0, 127);
+  const name = MIDI_NOTE_NAMES[clamped % 12];
+  const octave = Math.floor(clamped / 12) - 1;
+  return `${name}${octave}`;
 }
 
 export function normalizeSourceLayerMode(mode) {

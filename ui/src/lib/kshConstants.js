@@ -47,6 +47,16 @@ export function normalizePlaybackMode(mode) {
     return "reverse";
   }
   if (
+    lower === "rp" ||
+    lower === "reverse_ping_pong" ||
+    lower === "reverse-ping-pong" ||
+    lower === "reverse_ping-pong" ||
+    lower === "rev_ping_pong" ||
+    lower === "rev-ping-pong"
+  ) {
+    return "reverse_ping_pong";
+  }
+  if (
     lower === "p" ||
     lower === "ping" ||
     lower === "ping-pong" ||

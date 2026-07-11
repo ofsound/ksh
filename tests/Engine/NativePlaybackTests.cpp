@@ -369,6 +369,23 @@ TEST_CASE ("ping-pong playback repeats endpoints across active length", "[engine
     REQUIRE (fixture.engine.playbackStepForChannel (0, 5) + 1 == 1);
 }
 
+TEST_CASE ("reverse ping-pong starts at the end then continues", "[engine][native]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setChannelLoopLength (0, 3);
+    fixture.engine.setChannelPlaybackMode (0, PlaybackMode::reverse_ping_pong);
+
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 0) == 2);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 1) == 1);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 2) == 0);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 3) == 0);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 4) == 1);
+    REQUIRE (fixture.engine.playbackStepForChannel (0, 5) == 2);
+}
+
 TEST_CASE ("forward playback wraps within offset loop range", "[engine][native]")
 {
     EngineFixture fixture;
