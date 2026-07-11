@@ -273,6 +273,36 @@
       0 1px 2px color-mix(in srgb, var(--color-app) 40%, transparent);
   }
 
+  .ksh-grid-cell-selected {
+    z-index: 12;
+    border-color: var(--color-text) !important;
+    box-shadow:
+      inset 0 0 0 2px color-mix(in srgb, var(--color-text) 82%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--color-accent) 82%, transparent),
+      0 0 12px color-mix(in srgb, var(--color-accent) 30%, transparent);
+    filter: brightness(1.08) saturate(1.08);
+  }
+
+  .ksh-grid-cell-preview-target {
+    z-index: 14;
+    border-color: var(--color-accent) !important;
+    border-style: dashed !important;
+    box-shadow:
+      inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 76%, transparent),
+      0 0 0 2px color-mix(in srgb, var(--color-accent) 32%, transparent),
+      0 0 16px color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  .ksh-grid-cell-preview-copy {
+    z-index: 14;
+    border-color: var(--color-info) !important;
+    border-style: dotted !important;
+    box-shadow:
+      inset 0 0 0 2px color-mix(in srgb, var(--color-info) 76%, transparent),
+      0 0 0 2px color-mix(in srgb, var(--color-info) 28%, transparent),
+      0 0 16px color-mix(in srgb, var(--color-info) 30%, transparent);
+  }
+
   .ksh-cell-text-flash,
   .ksh-cell-text-flash * {
     color: var(--color-text) !important;

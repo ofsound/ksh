@@ -43,6 +43,13 @@
     stepFromGridX,
     toggleCellOnRelease,
   } from "../lib/kshEditorInteractions.js";
+  import {
+    bulkDragLabel,
+    cellSelectionKey,
+    selectedCellLocations,
+    wrappedCellDestinations,
+  } from "../lib/kshBulkEdit.js";
+  import { cloneCell, defaultCell } from "../lib/kshUiState.js";
   import { CHANNEL_RENAME_MS, MAX_CHANNELS, MAX_STEPS, SILENT_SOURCE, SOURCE_COUNT, SOURCE_ROW_RESET_MS } from "../lib/kshConstants.js";
   import {
     auditionChannel,
@@ -89,6 +96,9 @@
 
   let headerDrag = $state(null);
   let cellDrag = $state(null);
+  let editMode = $state(false);
+  let editGesture = $state(null);
+  const selectedCellKeys = new SvelteSet();
   let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
   let muteDrag = $state(null);
@@ -150,6 +160,36 @@
   const selectedStepValueOption = $derived(
     stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
   );
+  const selectedCellCount = $derived(
+    selectedCellLocations(
+      selectedCellKeys,
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    ).length,
+  );
+  const marqueeRectStyle = $derived(editGesture?.kind === "marquee"
+    ? `left:${Math.min(editGesture.startX, editGesture.currentX)}px;top:${Math.min(editGesture.startY, editGesture.currentY)}px;width:${Math.abs(editGesture.currentX - editGesture.startX)}px;height:${Math.abs(editGesture.currentY - editGesture.startY)}px;`
+    : "");
+  const bulkDragPreviewKeys = $derived.by(() => {
+    if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove) {
+      return new Set();
+    }
+
+    const locations = selectedCellLocations(
+      selectedCellKeys,
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    );
+    const destinations = wrappedCellDestinations(
+      locations,
+      { channel: editGesture.anchorChannel, step: editGesture.anchorStep },
+      { channel: editGesture.currentChannel, step: editGesture.currentStep },
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    );
+
+    return new Set(destinations.map(({ destination }) => destination.key));
+  });
 
   function stepAtClientX(clientX) {
     if (!cellDrag?.cellWidth) {
@@ -162,6 +202,297 @@
       session.kshState.stepCount,
       cellDrag.cellWidth
     );
+  }
+
+  function clearEditSelection() {
+    selectedCellKeys.clear();
+  }
+
+  function toggleEditMode() {
+    if (editMode) {
+      cancelEditGesture();
+      clearEditSelection();
+    }
+
+    editMode = !editMode;
+  }
+
+  function cellAtPoint(clientX, clientY) {
+    const element = document.elementFromPoint(clientX, clientY)?.closest?.("[data-ksh-edit-cell]");
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+
+    const channel = Number.parseInt(element.dataset.channel ?? "-1", 10);
+    const step = Number.parseInt(element.dataset.step ?? "-1", 10);
+    if (channel < 0 || step < 0) {
+      return null;
+    }
+
+    return { channel, step };
+  }
+
+  function rectsIntersect(left, right) {
+    return left.left <= right.right
+      && left.right >= right.left
+      && left.top <= right.bottom
+      && left.bottom >= right.top;
+  }
+
+  function marqueeRect() {
+    if (!editGesture || editGesture.kind !== "marquee") {
+      return { left: 0, top: 0, right: 0, bottom: 0 };
+    }
+
+    return {
+      left: Math.min(editGesture.startX, editGesture.currentX),
+      top: Math.min(editGesture.startY, editGesture.currentY),
+      right: Math.max(editGesture.startX, editGesture.currentX),
+      bottom: Math.max(editGesture.startY, editGesture.currentY),
+    };
+  }
+
+  function updateMarqueeSelection() {
+    if (!editGesture || editGesture.kind !== "marquee") {
+      return;
+    }
+
+    const next = new SvelteSet(editGesture.baseKeys);
+    const selectionRect = marqueeRect();
+
+    for (const element of document.querySelectorAll("[data-ksh-edit-cell]")) {
+      if (!(element instanceof HTMLElement) || !rectsIntersect(element.getBoundingClientRect(), selectionRect)) {
+        continue;
+      }
+
+      const channel = Number.parseInt(element.dataset.channel ?? "-1", 10);
+      const step = Number.parseInt(element.dataset.step ?? "-1", 10);
+      if (channel >= 0 && step >= 0) {
+        next.add(cellSelectionKey(channel, step));
+      }
+    }
+
+    selectedCellKeys.clear();
+    for (const key of next) {
+      selectedCellKeys.add(key);
+    }
+  }
+
+  function removeEditGestureListeners() {
+    document.removeEventListener("pointermove", onEditPointerMove);
+    document.removeEventListener("pointerup", onEditPointerUp);
+    document.removeEventListener("pointercancel", onEditPointerCancel);
+  }
+
+  function beginMarquee(event) {
+    if (event.button !== 0 || editGesture) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    editGesture = {
+      kind: "marquee",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      baseKeys: new Set(),
+    };
+    updateMarqueeSelection();
+    document.addEventListener("pointermove", onEditPointerMove);
+    document.addEventListener("pointerup", onEditPointerUp);
+    document.addEventListener("pointercancel", onEditPointerCancel);
+  }
+
+  function toggleSelectedCell(channel, step) {
+    const key = cellSelectionKey(channel, step);
+    if (selectedCellKeys.has(key)) {
+      selectedCellKeys.delete(key);
+    } else {
+      selectedCellKeys.add(key);
+    }
+  }
+
+  function beginBulkDrag(event, channel, step) {
+    if (event.button !== 0 || editGesture || !selectedCellKeys.has(cellSelectionKey(channel, step))) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    editGesture = {
+      kind: "drag",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentChannel: channel,
+      currentStep: step,
+      anchorChannel: channel,
+      anchorStep: step,
+      mode: event.altKey ? "copy" : "move",
+      didMove: false,
+    };
+    document.addEventListener("pointermove", onEditPointerMove);
+    document.addEventListener("pointerup", onEditPointerUp);
+    document.addEventListener("pointercancel", onEditPointerCancel);
+  }
+
+  function onEditPointerMove(event) {
+    if (!editGesture || event.pointerId !== editGesture.pointerId) {
+      return;
+    }
+
+    if ((event.buttons & 1) === 0) {
+      void onEditPointerUp(event);
+      return;
+    }
+
+    if (editGesture.kind === "marquee") {
+      editGesture = { ...editGesture, currentX: event.clientX, currentY: event.clientY };
+      updateMarqueeSelection();
+      return;
+    }
+
+    const target = cellAtPoint(event.clientX, event.clientY);
+    const distance = Math.hypot(event.clientX - editGesture.startX, event.clientY - editGesture.startY);
+    if (!target && !editGesture.didMove) {
+      return;
+    }
+
+    if (distance >= 5 && !editGesture.didMove) {
+      beginEditGestureHistory();
+    }
+
+    editGesture = {
+      ...editGesture,
+      ...(target ? { currentChannel: target.channel, currentStep: target.step } : {}),
+      mode: event.altKey ? "copy" : "move",
+      didMove: editGesture.didMove || distance >= 5,
+    };
+  }
+
+  async function onEditPointerUp(event) {
+    if (!editGesture || event.pointerId !== editGesture.pointerId) {
+      return;
+    }
+
+    const gesture = editGesture;
+    removeEditGestureListeners();
+    editGesture = null;
+
+    if (gesture.kind === "drag" && gesture.didMove) {
+      gesture.mode = event.altKey ? "copy" : gesture.mode;
+      await applySelectedCells(
+        gesture.anchorChannel,
+        gesture.anchorStep,
+        gesture.currentChannel,
+        gesture.currentStep,
+        gesture.mode,
+      );
+      await commitEditGestureHistory(gesture.mode === "copy" ? "Copy selected cells" : "Move selected cells");
+    }
+  }
+
+  function onEditPointerCancel(event) {
+    if (!editGesture || event.pointerId !== editGesture.pointerId) {
+      return;
+    }
+
+    const gesture = editGesture;
+    removeEditGestureListeners();
+    editGesture = null;
+    if (gesture.kind === "marquee") {
+      selectedCellKeys.clear();
+      for (const key of gesture.baseKeys) {
+        selectedCellKeys.add(key);
+      }
+    }
+    cancelEditGestureHistory();
+  }
+
+  function cancelEditGesture() {
+    if (!editGesture) {
+      return;
+    }
+
+    onEditPointerCancel({ pointerId: editGesture.pointerId });
+  }
+
+  function onGridPointerDown(event) {
+    if (!editMode || event.button !== 0) {
+      return;
+    }
+
+    const target = event.target;
+    if (target instanceof Element && target.closest("button, input, select, textarea")) {
+      return;
+    }
+
+    beginMarquee(event);
+  }
+
+  async function applySelectedCells(anchorChannel, anchorStep, targetChannel, targetStep, mode = "move") {
+    const source = session.selectedSource;
+    if (source === SILENT_SOURCE) {
+      return;
+    }
+
+    const locations = selectedCellLocations(
+      selectedCellKeys,
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    );
+    if (locations.length === 0) {
+      return;
+    }
+
+    const destinations = wrappedCellDestinations(
+      locations,
+      { channel: anchorChannel, step: anchorStep },
+      { channel: targetChannel, step: targetStep },
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    );
+    const sourceSnapshots = new Map(
+      locations.map(({ channel, step, key }) => [key, cloneCell(session.kshState.sources[source][channel][step])]),
+    );
+    const destinationKeys = new Set(destinations.map(({ destination }) => destination.key));
+    const affectedByChannel = new Map();
+
+    const markAffected = (channel, step) => {
+      const steps = affectedByChannel.get(channel) ?? new Set();
+      steps.add(step);
+      affectedByChannel.set(channel, steps);
+    };
+
+    for (const { source: sourceLocation, destination } of destinations) {
+      session.kshState.sources[source][destination.channel][destination.step] = cloneCell(
+        sourceSnapshots.get(sourceLocation.key),
+      );
+      markAffected(destination.channel, destination.step);
+    }
+
+    if (mode === "move") {
+      for (const { channel, step, key } of locations) {
+        if (destinationKeys.has(key)) {
+          continue;
+        }
+
+        session.kshState.sources[source][channel][step] = defaultCell();
+        markAffected(channel, step);
+      }
+    }
+
+    for (const [channel, steps] of affectedByChannel) {
+      await sendCellsForChannel(source, channel, [...steps].sort((left, right) => left - right));
+    }
+
+    clearEditSelection();
+    for (const { destination } of destinations) {
+      selectedCellKeys.add(destination.key);
+    }
   }
 
   function cellStyleFromBackground(background, color, extra = "") {
@@ -299,6 +630,15 @@
     }
     [lightColor, darkColor] = [darkColor, lightColor];
 
+    if (editMode) {
+      const topLeft = cell.enabled ? darkColor : "var(--color-grid-off-strong)";
+      const bottomRight = cell.enabled ? lightColor : "var(--color-grid-off)";
+      return cellStyleFromBackground(
+        activeCellBackground(`linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%)`),
+        cell.enabled ? "var(--color-text-inverse)" : "var(--color-text-muted)",
+      );
+    }
+
     if (!cell.enabled) {
       const downbeat = step % 4 === 0;
       return downbeat
@@ -346,16 +686,29 @@
     const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
     const active = !silent && !beyondSteps && cell.enabled;
+    const selected = editMode && selectedCellKeys.has(cellSelectionKey(channel, step));
+    const previewTarget = editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
+    const previewCopy = previewTarget && editGesture?.mode === "copy";
 
     return [
       "ksh-grid-cell relative mr-0 flex overflow-hidden border border-grid-cell-border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       active ? "ksh-grid-cell-active" : "",
       flashing ? "ksh-cell-text-flash" : "",
       cycleLayer && !beyondSteps ? "cell-cycle" : "items-center justify-center",
+      selected ? "ksh-grid-cell-selected" : "",
+      previewCopy
+        ? "ksh-grid-cell-preview-copy"
+        : previewTarget
+          ? "ksh-grid-cell-preview-target"
+          : "",
     ].join(" ");
   }
 
   function cellLabel(channel, step) {
+    if (editMode) {
+      return "";
+    }
+
     if (session.selectedSource === SILENT_SOURCE) {
       return "";
     }
@@ -392,6 +745,10 @@
     return session.selectedSource !== SILENT_SOURCE && step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, channel, step);
   }
 
+  function isEditCellInteractive(channel, step) {
+    return session.selectedSource !== SILENT_SOURCE && step < session.kshState.stepCount;
+  }
+
   function stepLabelClass(step) {
     return session.playingStep > 0 && step + 1 === session.playingStep
       ? "text-text"
@@ -417,6 +774,10 @@
   }
 
   async function onSourceClick(event, source) {
+    if (editMode) {
+      clearEditSelection();
+    }
+
     if (event.shiftKey) {
       if (session.patternCopySource === source) {
         cancelPatternCopy();
@@ -481,7 +842,21 @@
   }
 
   function onCellPointerDown(event, channel, step) {
-    if (!isCellInteractive(channel, step)) {
+    if (!(editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step))) {
+      return;
+    }
+
+    if (editMode) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.shiftKey) {
+        toggleSelectedCell(channel, step);
+      } else if (selectedCellKeys.has(cellSelectionKey(channel, step))) {
+        beginBulkDrag(event, channel, step);
+      } else {
+        beginMarquee(event);
+      }
       return;
     }
 
@@ -520,6 +895,10 @@
   }
 
   async function onCellPointerMove(event) {
+    if (editMode) {
+      return;
+    }
+
     if (!cellDrag) {
       return;
     }
@@ -569,6 +948,10 @@
   }
 
   async function onCellPointerUp() {
+    if (editMode) {
+      return;
+    }
+
     if (!cellDrag) {
       return;
     }
@@ -780,6 +1163,7 @@
 
     if (event.key === "Escape") {
       cancelPatternCopy();
+      cancelEditGesture();
       cancelEditGestureHistory();
     } else if (event.key === "1") {
       setSourceLayerMode("velocity");
@@ -1077,6 +1461,16 @@
       <div class="flex items-center gap-2">
         <button
           type="button"
+          class={`header-button h-[41px] min-w-[58px] border px-3 text-[12px] tracking-[0.12em] ${editMode ? "border-accent bg-accent/15 text-accent" : "border-border-subtle bg-control-secondary text-text-muted"}`}
+          aria-label={editMode ? "Exit edit selection mode" : "Enter edit selection mode"}
+          aria-pressed={editMode}
+          title={editMode ? "Exit EDIT mode" : "Select cells · Option-drag to copy"}
+          onclick={toggleEditMode}
+        >
+          EDIT
+        </button>
+        <button
+          type="button"
           class="header-icon-button text-danger"
           aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
           aria-pressed={Boolean(session.patternRecordingEnabled)}
@@ -1206,7 +1600,23 @@
     </div>
   </header>
 
-  <div class="bg-grid-bg flex min-h-0 flex-1 flex-col overflow-hidden px-3">
+  <div
+    class="relative bg-grid-bg flex min-h-0 flex-1 flex-col overflow-hidden px-3"
+    role="presentation"
+    onpointerdown={onGridPointerDown}
+  >
+    {#if editMode && selectedCellCount > 0}
+      <div class="pointer-events-none absolute left-3 top-2 z-30 rounded-sm border border-accent/40 bg-app/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-accent">
+        {selectedCellCount} selected{editGesture?.kind === "drag" && editGesture.didMove ? ` · ${bulkDragLabel(
+          selectedCellLocations(selectedCellKeys, session.kshState.channelCount, session.kshState.stepCount),
+          { channel: editGesture.anchorChannel, step: editGesture.anchorStep },
+          { channel: editGesture.currentChannel, step: editGesture.currentStep },
+          session.kshState.channelCount,
+          session.kshState.stepCount,
+          editGesture.mode,
+        )}` : " · shift-click add/remove"}
+      </div>
+    {/if}
     <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
     <div class="shrink-0">
     <div
@@ -1347,7 +1757,7 @@
             ⋮
           </button>
           {#each allStepCols as step (step)}
-            {#if isStepBeyondLoopLength(session.kshState, channel, step)}
+            {#if isStepBeyondLoopLength(session.kshState, channel, step) && !editMode}
               <div
                 class="shrink-0"
                 style={`width:${gridCellW}px;height:${gridCellH}px;`}
@@ -1358,13 +1768,17 @@
               type="button"
               class={cellClass(channel, step)}
               style={`width:${gridCellW}px;height:${gridCellH}px;font-size:${cellFontPx}px;${cellStyle(channel, step)}`}
-              disabled={!isCellInteractive(channel, step)}
+              data-ksh-edit-cell
+              data-channel={channel}
+              data-step={step}
+              data-selected={editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) ? "true" : undefined}
+              disabled={editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={onCellPointerUp}
             >
-              {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if !editMode && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 <span
                   class="pointer-events-none absolute leading-none"
                   style={`left:${cellInsetPx}px;top:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
@@ -1388,6 +1802,13 @@
     {/each}
     </div>
     <div class="shrink-0" style={`height:${gridBottomPad}px`} aria-hidden="true"></div>
+    {#if editGesture?.kind === "marquee"}
+      <div
+        class="pointer-events-none fixed z-[9999] rounded-sm border border-accent/70 bg-accent/10 shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-accent)_18%,transparent),0_0_16px_color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
+        style={marqueeRectStyle}
+        aria-hidden="true"
+      ></div>
+    {/if}
   </div>
 
 </div>
