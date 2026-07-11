@@ -3,7 +3,7 @@
   import { MAX_CHANNELS } from "../lib/kshConstants.js";
   import { headerDragNextValue, headerValueForState } from "../lib/kshEditorInteractions.js";
   import {
-    CHANNEL_LABEL_W,
+    COMPACT_CHANNEL_LABEL_CHARS,
     compactPreviewCellWidth,
     compactPreviewPadding,
     compactPreviewGridWidth,
@@ -133,14 +133,14 @@
     <p class="absolute left-3 top-2 z-10 text-xs text-text-muted">Loading…</p>
   {/if}
 
-  <section class="px-3" style={`padding-top:${previewPad}px;padding-bottom:${previewPad}px;`}>
-    <div class="flex items-start gap-5">
+  <section class="pl-2 pr-3" style={`padding-top:${previewPad}px;padding-bottom:${previewPad}px;`}>
+    <div class="flex items-start gap-3">
       <div class="flex flex-col gap-0">
         {#each previewRows as channel (channel)}
           <div class="flex h-[18px] items-center gap-0">
             <span
               class="channel-label shrink-0 truncate text-left text-[9px] text-text-muted"
-              style={`width:${CHANNEL_LABEL_W}px`}
+              style={`width:${COMPACT_CHANNEL_LABEL_CHARS}ch`}
             >
               {session.kshState.channels[channel]?.label ?? channel + 1}
             </span>
@@ -157,7 +157,7 @@
         {/each}
       </div>
 
-      <div class="compact-random-panel flex shrink-0 flex-col gap-3 self-stretch border-l border-border-subtle pl-4">
+      <div class="compact-random-panel flex shrink-0 flex-col gap-3 self-stretch">
         <div class="flex items-end gap-6">
           <div class="flex flex-col items-start">
             <span class="header-label text-text">Random Mode</span>

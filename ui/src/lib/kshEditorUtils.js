@@ -9,6 +9,7 @@ export const GRID_FULL_WIDTH_STEP_COUNT = 16;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
 export const CHANNEL_LABEL_W = 64;
+export const COMPACT_CHANNEL_LABEL_CHARS = 9;
 export const GRID_SIDEBAR_W = 320;
 export const GRID_CELL_LEFT_GAP = 34;
 export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP;
