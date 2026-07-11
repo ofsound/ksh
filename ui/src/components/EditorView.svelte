@@ -916,7 +916,7 @@
       const fillPercent = Math.max(0, Math.min(100, Math.round(layerValue)));
       const upperZoneFill = (fillPercent * 2) / 3;
       return cellStyleFromBackground(
-        `linear-gradient(to top, color-mix(in srgb, ${darkColor} 35%, var(--color-app)) 0%, color-mix(in srgb, ${darkColor} 35%, var(--color-app)) 33.333%, ${darkColor} 33.333%, ${darkColor} ${33.333 + upperZoneFill}%, var(--color-app) ${33.333 + upperZoneFill}%, var(--color-app) 100%)`,
+        `linear-gradient(to top, var(--color-app) 0%, var(--color-app) 33.333%, ${darkColor} 33.333%, ${darkColor} ${33.333 + upperZoneFill}%, var(--color-app) ${33.333 + upperZoneFill}%, var(--color-app) 100%)`,
         "var(--color-text)",
         "font-weight:700;text-shadow:0 1px 2px color-mix(in srgb, var(--color-app) 88%, transparent),0 0 1px color-mix(in srgb, var(--color-app) 72%, transparent);",
       );
@@ -980,6 +980,40 @@
 
   function cyclePatternForCell(cell) {
     return normalizeCyclePattern(cell.cycle, cell.cycleMask);
+  }
+
+  function channelBrightColor(channel) {
+    let color = channelToneColor(channel, "light", session.dcColors);
+    if (
+      session.selectedSource !== SILENT_SOURCE
+      && session.kshState.sourceChannelMutes[session.selectedSource][channel]
+    ) {
+      color = mutedChannelColor(color);
+    }
+    return color;
+  }
+
+  function cycleStripFrameStyle(channel) {
+    const bottomInset = Math.max(2, Math.round(cellInsetPx * 0.5));
+    const heightInset = Math.max(3, Math.round(cellInsetPx * 0.5));
+    return [
+      "left:0",
+      "right:0",
+      `bottom:${bottomInset}px`,
+      `height:calc(33.333% - ${heightInset}px)`,
+      `border:2px solid ${channelBrightColor(channel)}`,
+      "border-radius:2px",
+      "background:var(--color-app)",
+      "box-sizing:border-box",
+      "padding:0",
+      "gap:1px",
+    ].join(";");
+  }
+
+  function cycleStripBarStyle(active) {
+    return active
+      ? "background:var(--color-text);"
+      : "background:var(--color-app);";
   }
 
   function loopBraceStyle(channel) {
@@ -2118,11 +2152,11 @@
                 </span>
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"
-                  style={`left:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;right:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;bottom:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;height:calc(33.333% - ${Math.max(3, Math.round(cellInsetPx * 0.5))}px);grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));gap:1px;`}
+                  style={`${cycleStripFrameStyle(channel)};grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));`}
                   aria-label={`Cycle pattern: ${cyclePattern.cycle} steps`}
                 >
                   {#each Array.from({ length: cyclePattern.cycle }, (_, cycleIndex) => cycleIndex) as cycleIndex (cycleIndex)}
-                    <span class={isCyclePositionActive(cyclePattern.cycle, cyclePattern.mask, cycleIndex) ? "bg-text-inverse" : "bg-app/60"}></span>
+                    <span style={cycleStripBarStyle(isCyclePositionActive(cyclePattern.cycle, cyclePattern.mask, cycleIndex))}></span>
                   {/each}
                 </div>
               {:else}
