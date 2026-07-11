@@ -153,6 +153,10 @@
       onValueCommit(dragValue);
     }
 
+    if (!pointerMoved) {
+      onClick?.();
+    }
+
     releasePointerDragFocus(event);
   }
 
@@ -198,9 +202,6 @@
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
-  onclick={() => {
-    if (!pointerMoved) onClick?.();
-  }}
   ondblclick={onDoubleClick}
   title={!disabled && resetValue !== undefined
     ? "Drag to change · double-click to reset"

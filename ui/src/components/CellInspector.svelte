@@ -4,11 +4,11 @@
   import KshCyclePatternEditor from "./KshCyclePatternEditor.svelte";
   import { interfaceAccent } from "./rowAccentTheme.js";
   import {
-    MAX_CYCLE_PATTERN_CELLS,
     MAX_ROLL,
     SILENT_SOURCE,
   } from "../lib/kshConstants.js";
   import {
+    applyAbsoluteCellMode,
     applyRelativeCellOffset,
     applySelectedCyclePattern,
     captureSelectedCellValues,
@@ -101,12 +101,18 @@
       : null,
   );
 
-  const cycleValue = $derived(commonCycle ?? 1);
   const rollValue = $derived(commonRoll ?? 1);
+  const cycleButtonLabel = $derived(
+    !inspectorActive || commonCycle === null ? "—" : String(commonCycle),
+  );
 
   function focusInspectorLayer(mode) {
     cellSelection.inspectorLayerActive = true;
     setSourceLayerMode(mode === "cycle" ? "probability" : mode);
+  }
+
+  function currentInspectorKeys() {
+    return new Set(currentSelectedEnabledCellLocations().map(({ key }) => key));
   }
 
   function formatBipolarOffset(value) {
@@ -141,11 +147,13 @@
     });
   }
 
-  async function openCycleInspector() {
+  async function openCycleInspector(event) {
     if (!inspectorActive || inspectorLocations.length === 0) {
       return;
     }
 
+    cycleInspectorAnchor = event.currentTarget;
+    focusInspectorLayer("cycle");
     cycleInspectorOpen = true;
     await tick();
     positionCycleInspector();
@@ -345,7 +353,7 @@
     }
 
     focusInspectorLayer("roll");
-    rollKeys = new Set(inspectorKeys);
+    rollKeys = currentInspectorKeys();
     rollDragging = true;
     beginEditGestureHistory();
   }
@@ -384,13 +392,24 @@
     rollKeys = null;
   }
 
-  function advanceRollValue() {
+  async function advanceRollValue() {
     if (!inspectorActive) {
       return;
     }
 
     const next = rollValue >= MAX_ROLL ? 1 : rollValue + 1;
-    void commitRollValue(next);
+    const keys = currentInspectorKeys();
+    applyAbsoluteCellMode(
+      session.kshState,
+      session.selectedSource,
+      keys,
+      "roll",
+      next,
+    );
+    await flushSelectedCells(keys);
+    await commitEditGestureHistory("Set selected roll");
+    rollDragging = false;
+    rollKeys = null;
   }
 </script>
 
@@ -445,22 +464,21 @@
   </div>
 
   <div class="flex items-end gap-5">
-    <div bind:this={cycleInspectorAnchor} class="relative flex flex-col items-start gap-1">
+    <div class="relative flex flex-col items-start gap-1">
       <span class="compact-inspector-field-label">Cycle</span>
-      <StepNumberDragInput
-        boxed
-        compact
-        boxChars={3}
-        accent={interfaceAccent}
-        value={cycleValue}
-        min={1}
-        max={MAX_CYCLE_PATTERN_CELLS}
+      <button
+        type="button"
+        class="mp-param-box mp-control-gradient flex h-8 items-center justify-center rounded-md border border-border text-sm font-semibold tabular-nums text-text outline-none transition-[border-color,box-shadow,filter] duration-75 hover:border-border-strong disabled:opacity-50"
+        style:--param-box-chars={3}
         disabled={!inspectorActive}
-        deferCommit
-        formatValue={(value) => formatModeValue(value, commonCycle, false)}
-        ariaLabel="Set cycle mode for selected cells"
-        onClick={openCycleInspector}
-      />
+        aria-label="Edit cycle pattern for selected cells"
+        aria-haspopup="dialog"
+        aria-expanded={cycleInspectorOpen}
+        title="Open cycle pattern editor"
+        onclick={openCycleInspector}
+      >
+        {cycleButtonLabel}
+      </button>
     </div>
     <div class="flex flex-col items-start gap-1">
       <span class="compact-inspector-field-label">Roll</span>

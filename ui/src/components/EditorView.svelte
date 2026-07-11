@@ -174,6 +174,7 @@
   const channelLabelFontPx = $derived(Math.round(gridCellH * 0.45));
   const gridRowPadY = $derived(gridRowPaddingY(patternScale));
   const cellFontPx = $derived(gridCellFontPx(patternScale, session.kshState.stepCount));
+  const probabilityFontPx = $derived(Math.max(8, Math.round(cellFontPx * 0.72)));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
   const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
   const cellInsetPx = $derived(gridCellInsetPx(patternScale, session.kshState.stepCount));
@@ -2150,7 +2151,10 @@
             >
               {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
-                <span class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center">
+                <span
+                  class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center leading-none"
+                  style={`font-size:${probabilityFontPx}px;line-height:1;`}
+                >
                   {session.kshState.sources[session.selectedSource][channel][step].probability}
                 </span>
                 <div
