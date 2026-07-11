@@ -37,7 +37,6 @@
     modifierLayerMode,
     mutedChannelColor,
     normalizeSourceLayerMode,
-    resolveCellTriangle,
     sourceLayerLabel,
     sourceLayerValue,
     valueModeForCellInteraction,
@@ -62,6 +61,7 @@
     selectedCellLocations,
     wrappedCellDestinations,
   } from "../lib/kshBulkEdit.js";
+  import { positionFloatingPopover } from "../lib/floatingPopover.js";
   import {
     cellSelection,
     clearEditSelection,
@@ -266,6 +266,35 @@
     );
   });
   const bulkDragPreviewKeys = $derived(new Set(bulkDragPreviewCells.keys()));
+  const bulkDragSourceKeys = $derived.by(() => {
+    if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove || editGesture.mode !== "move") {
+      return new Set();
+    }
+
+    return new Set(
+      selectedCellLocations(
+        selectedCellKeys,
+        session.kshState.channelCount,
+        session.kshState.stepCount,
+      ).map(({ key }) => key),
+    );
+  });
+
+  function isMovingSourceCell(channel, step) {
+    const key = cellSelectionKey(channel, step);
+    return bulkDragSourceKeys.has(key) && !bulkDragPreviewKeys.has(key);
+  }
+
+  function displayedCell(channel, step) {
+    const key = cellSelectionKey(channel, step);
+    const previewCell = bulkDragPreviewCells.get(key);
+    if (previewCell) {
+      return previewCell;
+    }
+
+    const cell = session.kshState.sources[session.selectedSource][channel][step];
+    return isMovingSourceCell(channel, step) ? defaultCell() : cell;
+  }
 
   function stepAtClientX(clientX) {
     if (!cellDrag?.cellWidth) {
@@ -640,31 +669,10 @@
       return;
     }
 
-    const anchorRect = cyclePopoverAnchor.getBoundingClientRect();
-    const popoverRect = cyclePopoverRoot.getBoundingClientRect();
-    const margin = 10;
-    const gap = 8;
-    const viewportWidth = document.documentElement.clientWidth;
-    const viewportHeight = document.documentElement.clientHeight;
-    const width = popoverRect.width || 280;
-    const height = popoverRect.height || 76;
-
-    const left = Math.min(
-      Math.max(margin, anchorRect.left + (anchorRect.width - width) / 2),
-      Math.max(margin, viewportWidth - width - margin),
-    );
-    const belowTop = anchorRect.bottom + gap;
-    const aboveTop = anchorRect.top - height - gap;
-    const placedAbove = belowTop + height > viewportHeight - margin && aboveTop >= margin;
-    const top = placedAbove
-      ? aboveTop
-      : Math.min(Math.max(margin, belowTop), Math.max(margin, viewportHeight - height - margin));
-    const pointerLeft = Math.min(
-      Math.max(10, anchorRect.left + anchorRect.width / 2 - left - 10),
-      Math.max(10, width - 30),
-    );
-
-    cyclePopover = { ...cyclePopover, left, top, pointerLeft, placement: placedAbove ? "above" : "below" };
+    cyclePopover = {
+      ...cyclePopover,
+      ...positionFloatingPopover(cyclePopoverAnchor, cyclePopoverRoot),
+    };
   }
 
   async function openCyclePopover(channel, step, anchor) {
@@ -821,10 +829,7 @@
         : cellStyleFromBackground("var(--color-grid-off-strong)", "var(--color-text-muted)");
     }
 
-    const previewCell = cellSelection.editMode
-      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
-      : null;
-    const cell = previewCell ?? session.kshState.sources[source][channel][step];
+    const cell = displayedCell(channel, step);
     const muted = session.kshState.sourceChannelMutes[source][channel];
     const beyondSteps = step >= session.kshState.stepCount;
 
@@ -882,8 +887,9 @@
 
     if (effectiveLayerMode === "probability") {
       const fillPercent = Math.max(0, Math.min(100, Math.round(layerValue)));
+      const upperZoneFill = (fillPercent * 2) / 3;
       return cellStyleFromBackground(
-        `linear-gradient(to top, ${darkColor} 0%, ${darkColor} ${fillPercent}%, var(--color-app) ${fillPercent}%, var(--color-app) 100%)`,
+        `linear-gradient(to top, color-mix(in srgb, ${darkColor} 35%, var(--color-app)) 0%, color-mix(in srgb, ${darkColor} 35%, var(--color-app)) 33.333%, ${darkColor} 33.333%, ${darkColor} ${33.333 + upperZoneFill}%, var(--color-app) ${33.333 + upperZoneFill}%, var(--color-app) 100%)`,
         "var(--color-text)",
         "font-weight:700;text-shadow:0 1px 2px color-mix(in srgb, var(--color-app) 88%, transparent),0 0 1px color-mix(in srgb, var(--color-app) 72%, transparent);",
       );
@@ -901,13 +907,12 @@
   function cellClass(channel, step) {
     const beyondSteps = step >= session.kshState.stepCount;
     const silent = session.selectedSource === SILENT_SOURCE;
-    const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
+    const cell = silent ? null : displayedCell(channel, step);
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
-    const previewCell = cellSelection.editMode
-      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
-      : null;
-    const active = !silent && !beyondSteps && (previewCell ?? cell).enabled;
-    const selected = cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step));
+    const active = !silent && !beyondSteps && cell.enabled;
+    const selected = cellSelection.editMode
+      && selectedCellKeys.has(cellSelectionKey(channel, step))
+      && !isMovingSourceCell(channel, step);
     const previewTarget = cellSelection.editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
 
@@ -1094,9 +1099,14 @@
       return;
     }
 
-    if (cellSelection.editMode) {
+    if (cellSelection.editMode || (event.shiftKey && !event.altKey)) {
       event.preventDefault();
       event.stopPropagation();
+
+      if (!cellSelection.editMode) {
+        cellSelection.editMode = true;
+        cellSelection.inspectorLayerActive = false;
+      }
 
       if (event.shiftKey) {
         toggleSelectedCell(channel, step);
@@ -1114,11 +1124,10 @@
     const localY = event.clientY - rect.top;
     const layerMode =
       modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
-    const triangle =
-      normalizeSourceLayerMode(layerMode) === "cycle"
-        ? resolveCellTriangle(localX, localY, gridCellW, gridCellH)
-        : null;
-    const valueMode = valueModeForCellInteraction(layerMode, triangle);
+    const valueMode = normalizeSourceLayerMode(layerMode) === "probability"
+      && localY >= gridCellH * (2 / 3)
+      ? "cycle"
+      : valueModeForCellInteraction(layerMode, null);
 
     const cell = session.kshState.sources[source][channel][step];
 
@@ -1156,7 +1165,7 @@
       return;
     }
 
-    if (normalizeSourceLayerMode(cellDrag.layerMode) === "cycle") {
+    if (cellDrag.valueMode === "cycle") {
       const distance = Math.hypot(
         event.clientX - cellDrag.startX,
         event.clientY - cellDrag.startY,
@@ -1224,7 +1233,7 @@
       return;
     }
 
-    if (!drag.moved && normalizeSourceLayerMode(drag.layerMode) === "cycle") {
+    if (!drag.moved && drag.valueMode === "cycle") {
       const cell = session.kshState.sources[drag.source][drag.channel][drag.step];
       if (!cell.enabled) {
         cell.enabled = 1;
@@ -1459,11 +1468,8 @@
       setSourceLayerMode("velocity");
     } else if (event.key === "2") {
       closeCyclePopover();
-      setSourceLayerMode("cycle");
-    } else if (event.key === "3") {
-      closeCyclePopover();
       setSourceLayerMode("probability");
-    } else if (event.key === "4") {
+    } else if (event.key === "3") {
       closeCyclePopover();
       setSourceLayerMode("roll");
     }
@@ -2072,18 +2078,21 @@
               data-ksh-edit-cell
               data-channel={channel}
               data-step={step}
-              data-selected={cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) ? "true" : undefined}
+              data-selected={cellSelection.editMode && selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
               disabled={cellSelection.editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={(event) => onCellPointerUp(event, true)}
             >
-              {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
+                <span class="pointer-events-none absolute inset-x-0 top-0 flex h-2/3 items-center justify-center">
+                  {session.kshState.sources[session.selectedSource][channel][step].probability}
+                </span>
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"
-                  style={`left:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;right:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;bottom:${cellInsetPx}px;height:25%;grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));gap:1px;`}
+                  style={`left:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;right:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;bottom:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;height:calc(33.333% - ${Math.max(3, Math.round(cellInsetPx * 0.5))}px);grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));gap:1px;`}
                   aria-label={`Cycle pattern: ${cyclePattern.cycle} steps`}
                 >
                   {#each Array.from({ length: cyclePattern.cycle }, (_, cycleIndex) => cycleIndex) as cycleIndex (cycleIndex)}
@@ -2143,7 +2152,7 @@
     {/if}
   </div>
 
-  {#if cyclePopover && effectiveLayerMode === "cycle" && cyclePopoverCell}
+  {#if cyclePopover && effectiveLayerMode === "probability" && cyclePopoverCell}
     <div
       bind:this={cyclePopoverRoot}
       class="fixed z-[80] w-[280px] rounded-md p-2 text-text backdrop-blur-sm"

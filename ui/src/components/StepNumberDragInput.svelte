@@ -20,6 +20,7 @@
    * @property {number} [boxChars] - Minimum character width for boxed layout (largest formatted value).
    * @property {boolean} [deferCommit] - Keep a local drag value during the gesture; preview on every move; commit on release.
    * @property {() => void} [onGestureStart] - Called at drag start when {@link deferCommit} is true.
+   * @property {() => void} [onClick] - Called after a click that does not change the value.
    * @property {(value: number) => void | Promise<void>} [onValueCommit] - Final commit on release.
    * @property {(value: number) => void | Promise<void>} [onValueChange]
    */
@@ -42,6 +43,7 @@
     boxChars = undefined,
     deferCommit = false,
     onGestureStart = undefined,
+    onClick = undefined,
     onValuePreview = undefined,
     onValueCommit = undefined,
     onValueChange = () => {},
@@ -193,6 +195,7 @@
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
+  onclick={() => onClick?.()}
   ondblclick={onDoubleClick}
   title={!disabled && resetValue !== undefined
     ? "Drag to change · double-click to reset"

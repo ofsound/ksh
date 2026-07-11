@@ -332,7 +332,8 @@ export function midiNoteLabel(note) {
 
 export function normalizeSourceLayerMode(mode) {
   const lower = String(mode ?? "velocity").toLowerCase();
-  if (lower === "cycle" || lower === "probability" || lower === "roll") {
+  if (lower === "cycle") return "probability";
+  if (lower === "probability" || lower === "roll") {
     return lower;
   }
   return "velocity";
@@ -493,7 +494,7 @@ export function copySourcePattern(state, source, destination) {
 }
 
 export function cycleLayerMode(current) {
-  const order = ["velocity", "probability", "cycle", "roll"];
+  const order = ["velocity", "probability", "roll"];
   const index = order.indexOf(normalizeSourceLayerMode(current));
   return order[(index + 1) % order.length];
 }
@@ -517,9 +518,6 @@ export function modifierLayerMode(shiftKey, altKey) {
   }
   if (altKey) {
     return "probability";
-  }
-  if (shiftKey) {
-    return "cycle";
   }
   return null;
 }

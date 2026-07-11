@@ -95,6 +95,32 @@ export function applyAbsoluteCellMode(state, source, keys, property, value) {
 }
 
 /**
+ * Apply a complete cycle pattern to every selected enabled cell.
+ *
+ * @param {object} state
+ * @param {number} source
+ * @param {Iterable<string>} keys
+ * @param {number} cycle
+ * @param {number} cycleMask
+ * @returns {boolean}
+ */
+export function applySelectedCyclePattern(state, source, keys, cycle, cycleMask) {
+  const next = normalizeCyclePattern(cycle, cycleMask);
+  let changed = false;
+
+  for (const location of selectedCellLocations(keys, state.channelCount, state.stepCount)) {
+    const cell = state.sources[source][location.channel][location.step];
+    if (cell.cycle !== next.cycle || cell.cycleMask !== next.mask) {
+      cell.cycle = next.cycle;
+      cell.cycleMask = next.mask;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/**
  * @param {object} state
  * @param {number} source
  * @param {Iterable<string>} keys

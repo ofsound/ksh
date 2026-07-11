@@ -41,3 +41,18 @@ export function currentSelectedCellLocations() {
     session.kshState.stepCount,
   );
 }
+
+/**
+ * The inspector operates only on selected cells that are currently enabled.
+ * Selection itself remains position-based so MOVE mode can still include empty
+ * destinations and preserve its existing behavior.
+ */
+export function currentSelectedEnabledCellLocations() {
+  if (session.selectedSource < 0) {
+    return [];
+  }
+
+  return currentSelectedCellLocations().filter(({ channel, step }) =>
+    Boolean(session.kshState.sources[session.selectedSource]?.[channel]?.[step]?.enabled)
+  );
+}

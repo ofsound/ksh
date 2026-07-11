@@ -1,5 +1,7 @@
 <script>
+  import { onMount, tick } from "svelte";
   import StepNumberDragInput from "./StepNumberDragInput.svelte";
+  import KshCyclePatternEditor from "./KshCyclePatternEditor.svelte";
   import { interfaceAccent } from "./rowAccentTheme.js";
   import {
     MAX_CYCLE_PATTERN_CELLS,
@@ -7,17 +9,21 @@
     SILENT_SOURCE,
   } from "../lib/kshConstants.js";
   import {
-    applyAbsoluteCellMode,
     applyRelativeCellOffset,
+    applySelectedCyclePattern,
     captureSelectedCellValues,
     commonSelectedCellValue,
     selectedStepsByChannel,
   } from "../lib/kshCellInspector.js";
   import {
     cellSelection,
-    currentSelectedCellLocations,
-    selectedCellKeys,
+    currentSelectedEnabledCellLocations,
   } from "../lib/kshCellSelection.svelte.js";
+  import {
+    channelToneColor,
+    mutedChannelColor,
+  } from "../lib/kshEditorUtils.js";
+  import { positionFloatingPopover } from "../lib/floatingPopover.js";
   import {
     beginEditGestureHistory,
     commitEditGestureHistory,
@@ -32,10 +38,39 @@
   let velocityStarts = $state(null);
   /** @type {Map<string, number> | null} */
   let probabilityStarts = $state(null);
-  let cycleDragging = $state(false);
   let rollDragging = $state(false);
+  let cycleInspectorOpen = $state(false);
+  let cycleInspectorRoot = $state(null);
+  let cycleInspectorAnchor = null;
+  let cycleInspectorPosition = $state({ left: 0, top: 0, pointerLeft: 10, placement: "above" });
 
-  const selectedCount = $derived(currentSelectedCellLocations().length);
+  const inspectorLocations = $derived(currentSelectedEnabledCellLocations());
+  const inspectorKeys = $derived(new Set(inspectorLocations.map(({ key }) => key)));
+  const selectedCount = $derived(inspectorLocations.length);
+  const cycleInspectorCell = $derived.by(() => {
+    const location = inspectorLocations[0];
+    return location
+      ? session.kshState.sources[session.selectedSource]?.[location.channel]?.[location.step] ?? null
+      : null;
+  });
+  const cycleInspectorThemeStyle = $derived.by(() => {
+    const channel = inspectorLocations[0]?.channel ?? 0;
+    const muted = session.selectedSource !== SILENT_SOURCE
+      && session.kshState.sourceChannelMutes[session.selectedSource][channel];
+    let light = channelToneColor(channel, "light", session.dcColors);
+    let dark = channelToneColor(channel, "dark", session.dcColors);
+    let divider = channelToneColor(channel, "divider", session.dcColors);
+
+    if (muted) {
+      light = mutedChannelColor(light);
+      dark = mutedChannelColor(dark);
+      divider = mutedChannelColor(divider);
+    }
+
+    const surface = `color-mix(in srgb, ${dark} 30%, var(--color-app))`;
+    const raisedSurface = `color-mix(in srgb, ${light} 12%, ${surface})`;
+    return `--cycle-row-light:${light};--cycle-row-dark:${dark};--cycle-row-divider:${divider};--cycle-row-surface:${surface};background:linear-gradient(to bottom, ${raisedSurface}, ${surface});box-shadow:0 10px 28px color-mix(in srgb, var(--color-app) 42%, rgba(0,0,0,0.45)),0 0 24px color-mix(in srgb, var(--color-text) 4%, transparent);`;
+  });
   const inspectorActive = $derived(
     cellSelection.editMode
       && session.selectedSource !== SILENT_SOURCE
@@ -50,7 +85,7 @@
       ? commonSelectedCellValue(
           session.kshState,
           session.selectedSource,
-          selectedCellKeys,
+          inspectorKeys,
           "cycle",
         )
       : null,
@@ -60,7 +95,7 @@
       ? commonSelectedCellValue(
           session.kshState,
           session.selectedSource,
-          selectedCellKeys,
+          inspectorKeys,
           "roll",
         )
       : null,
@@ -92,9 +127,103 @@
     return String(Math.round(value));
   }
 
+  function closeCycleInspector() {
+    cycleInspectorOpen = false;
+  }
+
+  function positionCycleInspector() {
+    if (!cycleInspectorOpen || !cycleInspectorRoot || !cycleInspectorAnchor) {
+      return;
+    }
+
+    cycleInspectorPosition = positionFloatingPopover(cycleInspectorAnchor, cycleInspectorRoot, {
+      preferAbove: true,
+    });
+  }
+
+  async function openCycleInspector() {
+    if (!inspectorActive || inspectorLocations.length === 0) {
+      return;
+    }
+
+    cycleInspectorOpen = true;
+    await tick();
+    positionCycleInspector();
+  }
+
+  function cycleInspectorPointerStyle() {
+    const left = `${cycleInspectorPosition.pointerLeft}px`;
+    return cycleInspectorPosition.placement === "above"
+      ? `left:${left};bottom:-8px;border-top:8px solid var(--cycle-row-divider);`
+      : `left:${left};top:-8px;border-bottom:8px solid var(--cycle-row-divider);`;
+  }
+
+  function beginCycleInspectorPatternGesture() {
+    if (inspectorActive) {
+      beginEditGestureHistory();
+    }
+  }
+
+  function previewCycleInspectorPattern(cycle, cycleMask) {
+    if (inspectorActive) {
+      applySelectedCyclePattern(
+        session.kshState,
+        session.selectedSource,
+        inspectorKeys,
+        cycle,
+        cycleMask,
+      );
+    }
+  }
+
+  async function commitCycleInspectorPattern(cycle, cycleMask) {
+    if (!inspectorActive) {
+      return;
+    }
+
+    const changed = applySelectedCyclePattern(
+      session.kshState,
+      session.selectedSource,
+      inspectorKeys,
+      cycle,
+      cycleMask,
+    );
+    if (changed) {
+      await flushSelectedCells();
+    }
+    await commitEditGestureHistory("Edit selected cycle pattern");
+  }
+
+  onMount(() => {
+    const onPointerDown = (event) => {
+      if (cycleInspectorRoot?.contains(event.target) || cycleInspectorAnchor?.contains(event.target)) {
+        return;
+      }
+      closeCycleInspector();
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && cycleInspectorOpen) {
+        event.preventDefault();
+        closeCycleInspector();
+      }
+    };
+
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", positionCycleInspector);
+    window.addEventListener("scroll", positionCycleInspector, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", positionCycleInspector);
+      window.removeEventListener("scroll", positionCycleInspector, true);
+    };
+  });
+
   async function flushSelectedCells() {
     const byChannel = selectedStepsByChannel(
-      selectedCellKeys,
+      inspectorKeys,
       session.kshState.channelCount,
       session.kshState.stepCount,
     );
@@ -114,7 +243,7 @@
     velocityStarts = captureSelectedCellValues(
       session.kshState,
       session.selectedSource,
-      selectedCellKeys,
+      inspectorKeys,
       "velocity",
     );
     velocityOffset = 0;
@@ -167,7 +296,7 @@
     probabilityStarts = captureSelectedCellValues(
       session.kshState,
       session.selectedSource,
-      selectedCellKeys,
+      inspectorKeys,
       "probability",
     );
     probabilityOffset = 0;
@@ -210,48 +339,6 @@
     probabilityStarts = null;
   }
 
-  async function beginCycleGesture() {
-    if (!inspectorActive) {
-      return;
-    }
-
-    focusInspectorLayer("cycle");
-    cycleDragging = true;
-    beginEditGestureHistory();
-  }
-
-  async function previewCycleValue(value) {
-    if (!inspectorActive) {
-      return;
-    }
-
-    applyAbsoluteCellMode(
-      session.kshState,
-      session.selectedSource,
-      selectedCellKeys,
-      "cycle",
-      value,
-    );
-  }
-
-  async function commitCycleValue(value) {
-    if (!inspectorActive) {
-      cycleDragging = false;
-      return;
-    }
-
-    applyAbsoluteCellMode(
-      session.kshState,
-      session.selectedSource,
-      selectedCellKeys,
-      "cycle",
-      value,
-    );
-    await flushSelectedCells();
-    await commitEditGestureHistory("Set selected cycle");
-    cycleDragging = false;
-  }
-
   async function beginRollGesture() {
     if (!inspectorActive) {
       return;
@@ -270,7 +357,7 @@
     applyAbsoluteCellMode(
       session.kshState,
       session.selectedSource,
-      selectedCellKeys,
+      inspectorKeys,
       "roll",
       value,
     );
@@ -285,7 +372,7 @@
     applyAbsoluteCellMode(
       session.kshState,
       session.selectedSource,
-      selectedCellKeys,
+      inspectorKeys,
       "roll",
       value,
     );
@@ -346,7 +433,7 @@
   </div>
 
   <div class="flex items-end gap-5">
-    <div class="flex flex-col items-start gap-1">
+    <div bind:this={cycleInspectorAnchor} class="relative flex flex-col items-start gap-1">
       <span class="compact-inspector-field-label">Cycle</span>
       <StepNumberDragInput
         boxed
@@ -358,11 +445,9 @@
         max={MAX_CYCLE_PATTERN_CELLS}
         disabled={!inspectorActive}
         deferCommit
-        formatValue={(value) => formatModeValue(value, commonCycle, cycleDragging)}
+        formatValue={(value) => formatModeValue(value, commonCycle, false)}
         ariaLabel="Set cycle mode for selected cells"
-        onGestureStart={beginCycleGesture}
-        onValuePreview={previewCycleValue}
-        onValueCommit={commitCycleValue}
+        onClick={openCycleInspector}
       />
     </div>
     <div class="flex flex-col items-start gap-1">
@@ -385,4 +470,41 @@
       />
     </div>
   </div>
+
+  {#if cycleInspectorOpen && inspectorActive && cycleInspectorCell}
+    <div
+      bind:this={cycleInspectorRoot}
+      class="fixed z-[80] w-[280px] rounded-md p-2 text-text backdrop-blur-sm"
+      style={`left:${cycleInspectorPosition.left}px;top:${cycleInspectorPosition.top}px;${cycleInspectorThemeStyle}`}
+      role="dialog"
+      tabindex="-1"
+      aria-label="Cycle editor for selected cells"
+      onpointerdown={(event) => event.stopPropagation()}
+    >
+      <div
+        class="pointer-events-none absolute h-0 w-0 border-x-[10px] border-x-transparent"
+        style={cycleInspectorPointerStyle()}
+        aria-hidden="true"
+      ></div>
+      <div class="mb-1 flex items-center justify-between px-1 text-[12px] font-semibold leading-none" style="color:var(--cycle-row-light);">
+        <span>Selected cells</span>
+        <button
+          type="button"
+          class="cycle-popover-focus flex h-4 w-4 items-center justify-center rounded-sm text-[14px] leading-none outline-none hover:text-text"
+          style="color:var(--cycle-row-light);"
+          aria-label="Close cycle editor"
+          onclick={closeCycleInspector}
+        >
+          ×
+        </button>
+      </div>
+      <KshCyclePatternEditor
+        cycle={cycleInspectorCell.cycle}
+        cycleMask={cycleInspectorCell.cycleMask}
+        onGestureStart={beginCycleInspectorPatternGesture}
+        onPatternPreview={previewCycleInspectorPattern}
+        onPatternCommit={commitCycleInspectorPattern}
+      />
+    </div>
+  {/if}
 </div>
