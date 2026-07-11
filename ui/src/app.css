@@ -83,6 +83,10 @@
       0 4px 14px color-mix(in srgb, var(--color-app) 28%, transparent);
   }
 
+  .compact-random-panel .header-label {
+    margin-bottom: 8px;
+  }
+
   .header-icon-button:disabled {
     @apply cursor-default text-text-faint;
   }

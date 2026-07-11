@@ -1,10 +1,12 @@
 <script>
   import HeaderValueDrag from "./HeaderValueDrag.svelte";
-import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
+  import { MAX_CHANNELS } from "../lib/kshConstants.js";
   import { headerDragNextValue, headerValueForState } from "../lib/kshEditorInteractions.js";
   import {
     CHANNEL_LABEL_W,
+    compactPreviewCellWidth,
     compactPreviewPadding,
+    compactPreviewGridWidth,
     editorDimensions,
     generationModeLabel,
   } from "../lib/kshEditorUtils.js";
@@ -18,9 +20,6 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
     setHeaderValue,
   } from "../lib/kshSession.svelte.js";
 
-  const COMPACT_CELL_W = 15;
-  const COMPACT_CELL_GAP = 3;
-
   let randomHeaderDrag = $state(null);
   let lockDrag = $state(null);
 
@@ -29,8 +28,9 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
   const previewPad = $derived(compactPreviewPadding(previewChannels));
   const previewRows = $derived(Array.from({ length: previewChannels }, (_, channel) => channel));
   const lockRows = $derived(Array.from({ length: MAX_CHANNELS }, (_, channel) => channel));
-  const stepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
-  const compactGridWidth = $derived(MAX_STEPS * (COMPACT_CELL_W + COMPACT_CELL_GAP));
+  const stepCols = $derived(Array.from({ length: session.kshState.stepCount }, (_, step) => step));
+  const compactGridWidth = compactPreviewGridWidth();
+  const compactCellWidth = $derived(compactPreviewCellWidth(session.kshState.stepCount));
 
   function channelLockLabel(channel) {
     const lock = session.kshState.channels[channel]?.lock ?? -1;
@@ -137,7 +137,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
     <div class="flex items-start gap-5">
       <div class="flex flex-col gap-0">
         {#each previewRows as channel (channel)}
-          <div class="flex h-[18px] items-center gap-2">
+          <div class="flex h-[18px] items-center gap-0">
             <span
               class="channel-label shrink-0 truncate text-left text-[9px] text-text-muted"
               style={`width:${CHANNEL_LABEL_W}px`}
@@ -147,7 +147,8 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
             <div class="flex" style={`width:${compactGridWidth}px`}>
               {#each stepCols as step (step)}
                 <div
-                  class={`mr-[3px] h-[15px] w-[15px] rounded-sm ${cellFill(channel, step)}`}
+                  class={`mr-[3px] h-[15px] shrink-0 rounded-sm ${cellFill(channel, step)}`}
+                  style={`width:${compactCellWidth}px`}
                   aria-hidden="true"
                 ></div>
               {/each}
@@ -156,7 +157,7 @@ import { MAX_CHANNELS, MAX_STEPS } from "../lib/kshConstants.js";
         {/each}
       </div>
 
-      <div class="compact-random-panel flex shrink-0 flex-col gap-3 border-l border-border-subtle pl-4">
+      <div class="compact-random-panel flex shrink-0 flex-col gap-3 self-stretch border-l border-border-subtle pl-4">
         <div class="flex items-end gap-6">
           <div class="flex flex-col items-start">
             <span class="header-label text-text">Random Mode</span>

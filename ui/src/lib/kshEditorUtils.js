@@ -149,6 +149,28 @@ export function previewPanelHeight() {
   return COMPACT_HEIGHT;
 }
 
+export const COMPACT_FULL_WIDTH_STEP_COUNT = 16;
+export const COMPACT_CELL_W = 15;
+export const COMPACT_CELL_GAP = 3;
+
+/** Keep the compact preview at the same width as its 16-step reference view. */
+export function compactPreviewGridWidth() {
+  return COMPACT_FULL_WIDTH_STEP_COUNT * (COMPACT_CELL_W + COMPACT_CELL_GAP);
+}
+
+/** Compress compact preview cells beyond 16 steps without growing the grid. */
+export function compactPreviewCellWidth(stepCount) {
+  const normalizedStepCount = Math.max(1, Number(stepCount) || COMPACT_FULL_WIDTH_STEP_COUNT);
+  if (normalizedStepCount <= COMPACT_FULL_WIDTH_STEP_COUNT) {
+    return COMPACT_CELL_W;
+  }
+
+  return Math.max(
+    1,
+    compactPreviewGridWidth() / normalizedStepCount - COMPACT_CELL_GAP,
+  );
+}
+
 export function compactPreviewHeight(channelCount) {
   return channelCount * COMPACT_ROW_H;
 }
