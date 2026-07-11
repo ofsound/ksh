@@ -15,11 +15,6 @@ constexpr int kNativeProbabilityMultiplier = 16;
 constexpr double kTimingHumanizeNativeScale = 0.2;
 constexpr double kRollNoteDurationScale = 0.9;
 
-bool cycleGateMatches (int count, int cycle, int cycleOffset, bool cycleInverted)
-{
-    const bool matches = count % cycle == cycleOffset;
-    return cycleInverted ? ! matches : matches;
-}
 } // namespace
 
 int KickSnareHatEngine::nativePlaybackPeriod() const
@@ -217,15 +212,12 @@ NativePlaybackBuild KickSnareHatEngine::buildNativePlaybackRows (
                 continue;
 
             const int cycle = clampInt (cell.cycle, 1, 64);
-            const int cycleOffset = clampInt (cell.cycleOffset, 0, cycle - 1);
-            const bool cycleInverted = cell.cycleInverted;
-
-            if (cycle > 1 || cycleInverted)
+            if (cycle > 1 || cell.cycleMask != 1)
             {
                 const int sourceStep = cell.sourceStep;
                 const auto key = cycleKey (cell.source, channel, sourceStep);
                 const int count = cycleCounters[key]++;
-                if (! cycleGateMatches (count, cycle, cycleOffset, cycleInverted))
+                if (! cycleGateMatches (count, cycle, cell.cycleMask))
                     continue;
             }
 

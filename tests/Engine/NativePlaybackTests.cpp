@@ -113,13 +113,13 @@ TEST_CASE ("native playback rows precompute cycle gates", "[engine][native]")
     requireNativeRow (rows[2], {});
 }
 
-TEST_CASE ("native playback rows precompute cycle offsets", "[engine][native]")
+TEST_CASE ("native playback rows precompute a single cycle position", "[engine][native]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (1);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 2);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 0b100);
 
     const auto built = fixture.engine.buildNativePlaybackRows();
     const auto& rows = built.rows;
@@ -130,13 +130,13 @@ TEST_CASE ("native playback rows precompute cycle offsets", "[engine][native]")
     requireNativeRow (rows[2], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
 }
 
-TEST_CASE ("native playback rows precompute cycle inversion", "[engine][native]")
+TEST_CASE ("native playback rows precompute cycle masks", "[engine][native]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (1);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0, true);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0b1110);
 
     const auto built = fixture.engine.buildNativePlaybackRows();
     const auto& rows = built.rows;
@@ -148,19 +148,17 @@ TEST_CASE ("native playback rows precompute cycle inversion", "[engine][native]"
     requireNativeRow (rows[3], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
 }
 
-TEST_CASE ("native playback rows treat inverted cycle one as muted", "[engine][native]")
+TEST_CASE ("native playback rows keep cycle one active", "[engine][native]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (1);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, true);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0);
 
     const auto built = fixture.engine.buildNativePlaybackRows();
-    const auto& rows = built.rows;
-
     REQUIRE (built.stepCount == 1);
-    requireNativeRow (rows[0], {});
+    requireNativeRow (built.rows[0], nativeHitRow (36, 100, 100, 1, 0.0, 1, 1, 1, 1));
 }
 
 TEST_CASE ("native playback rows use least common cycle period", "[engine][native]")

@@ -54,8 +54,7 @@ TEST_CASE ("Default cell matches ksh_constants.js DEFAULT_CELL", "[engine][found
     REQUIRE (cell.velocity == 100);
     REQUIRE (cell.probability == 100);
     REQUIRE (cell.cycle == 1);
-    REQUIRE (cell.cycleOffset == 0);
-    REQUIRE_FALSE (cell.cycleInverted);
+    REQUIRE (cell.cycleMask == 1);
     REQUIRE (cell.roll == 1);
     REQUIRE (cell.source == -1);
 }
@@ -67,8 +66,7 @@ TEST_CASE ("cloneCell clamps and normalizes like ksh_constants.js", "[engine][fo
     input.velocity = 200;
     input.probability = 150;
     input.cycle = 4;
-    input.cycleOffset = 99;
-    input.cycleInverted = true;
+    input.cycleMask = 99;
     input.roll = 20;
     input.source = 2;
 
@@ -78,22 +76,20 @@ TEST_CASE ("cloneCell clamps and normalizes like ksh_constants.js", "[engine][fo
     REQUIRE (cell.velocity == 127);
     REQUIRE (cell.probability == 100);
     REQUIRE (cell.cycle == 4);
-    REQUIRE (cell.cycleOffset == 3);
-    REQUIRE (cell.cycleInverted);
+    REQUIRE (cell.cycleMask == 3);
     REQUIRE (cell.roll == 8);
     REQUIRE (cell.source == 2);
 }
 
-TEST_CASE ("cloneCell preserves cycle inversion when cycle is one", "[engine][foundation]")
+TEST_CASE ("cloneCell keeps the default cycle mask when cycle is one", "[engine][foundation]")
 {
     Cell input;
     input.cycle = 1;
-    input.cycleInverted = true;
 
     const auto cell = cloneCell (input);
 
     REQUIRE (cell.cycle == 1);
-    REQUIRE (cell.cycleInverted);
+    REQUIRE (cell.cycleMask == 1);
 }
 
 TEST_CASE ("Default channel uses M4L note map", "[engine][foundation]")

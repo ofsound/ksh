@@ -481,40 +481,34 @@ TEST_CASE ("cell edits reach steps beyond sixteen", "[engine][generation]")
     REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 16).enabled);
 }
 
-TEST_CASE ("cycle offset clamps to cycle range", "[engine][generation]")
+TEST_CASE ("cycle masks clamp to the selected cycle length", "[engine][generation]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (8);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 9);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 3);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0b111111);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b1111);
 
-    fixture.engine.setCellCycleOffset (0, 0, 0, 2);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 2);
+    fixture.engine.setCellCycleMask (0, 0, 0, 0b1010);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b1010);
 
     fixture.engine.setCellCycle (0, 0, 0, 2);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 1);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b10);
 
     fixture.engine.setCellCycle (0, 0, 0, 1);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleOffset == 0);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b1);
 }
 
-TEST_CASE ("cycle inversion is allowed when cycle is one", "[engine][generation]")
+TEST_CASE ("cycle masks keep one active position when toggled empty", "[engine][generation]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (8);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0, true);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 4, 0b1110);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b1110);
 
     fixture.engine.setCellCycle (0, 0, 0, 1);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
-
-    fixture.engine.setCellCycleInverted (0, 0, 0, false);
-    REQUIRE_FALSE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
-
-    fixture.engine.setCellCycleInverted (0, 0, 0, true);
-    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleInverted);
+    REQUIRE (fixture.engine.sourceCellAt (0, 0, 0).cycleMask == 0b1);
 }

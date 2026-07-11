@@ -1,5 +1,7 @@
 export const MAX_STEPS = 32;
 export const MAX_CHANNELS = 8;
+export const MAX_CYCLE_MASK_BITS = 30;
+export const MAX_CYCLE_PATTERN_CELLS = 8;
 export const SILENT_SOURCE = -1;
 export const SOURCE_COUNT = 16;
 

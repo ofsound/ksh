@@ -91,21 +91,21 @@ TEST_CASE ("midi playback does not emit while stopped", "[engine][transport]")
     REQUIRE (result.noteHitCount == 0);
 }
 
-TEST_CASE ("midi playback treats inverted cycle one as muted", "[engine][transport]")
+TEST_CASE ("midi playback keeps cycle one active", "[engine][transport]")
 {
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (1);
     fixture.engine.setChannelCount (1);
-    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, true);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0);
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
 
     const auto result = runPlaybackBlock (runner, fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 512);
 
-    REQUIRE (countNoteOns (result.midi) == 0);
-    REQUIRE (result.noteHitCount == 0);
+    REQUIRE (countNoteOns (result.midi) == 1);
+    REQUIRE (result.noteHitCount == 1);
 }
 
 TEST_CASE ("audition note emits while transport stopped", "[engine][transport]")

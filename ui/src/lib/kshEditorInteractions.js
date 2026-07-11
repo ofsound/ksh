@@ -1,6 +1,7 @@
 import {
   CYCLE_DRAG_SCALE,
   HEADER_VALUE_DRAG_SCALE,
+  MAX_CYCLE,
   MAX_ROLL,
   MAX_STEPS,
   PROBABILITY_DRAG_SCALE,
@@ -13,13 +14,11 @@ import {
 } from "./kshConstants.js";
 import {
   GRID_CELL_W,
-  cycleScrollIndex,
-  cycleStateFromScrollIndex,
   loopRangeForChannel,
   normalizeSourceLayerMode,
   normalizeSourceValueMode,
-  stepCycleScrollIndex,
 } from "./kshEditorUtils.js";
+import { normalizeCyclePattern } from "./cyclePattern.js";
 import { cloneCell } from "./kshUiState.js";
 
 export function quantizedDragOffset(delta, scale, deadZone = VELOCITY_DRAG_THRESHOLD) {
@@ -106,8 +105,7 @@ export function createCellDrag(source, channel, step, cell, layerMode, valueMode
     startVelocity: cell.velocity,
     startProbability: cell.probability,
     startCycle: cell.cycle,
-    startCycleInverted: cell.cycleInverted ? 1 : 0,
-    startCycleOffset: cell.cycleOffset,
+    startCycleMask: cell.cycleMask,
     startRoll: cell.roll,
     paintCell: cloneCell(cell),
     layerMode: normalizeSourceLayerMode(layerMode),
@@ -155,12 +153,8 @@ export function applyPaintCellProperties(cell, paintCell) {
     cell.cycle = paintCell.cycle;
     changed = true;
   }
-  if (cell.cycleOffset !== paintCell.cycleOffset) {
-    cell.cycleOffset = paintCell.cycleOffset;
-    changed = true;
-  }
-  if (cell.cycleInverted !== paintCell.cycleInverted) {
-    cell.cycleInverted = paintCell.cycleInverted;
+  if (cell.cycleMask !== paintCell.cycleMask) {
+    cell.cycleMask = paintCell.cycleMask;
     changed = true;
   }
   if (cell.roll !== paintCell.roll) {
@@ -214,22 +208,11 @@ export function applySourceValueDrag(state, source, drag, clientY) {
 
   if (valueMode === "cycle") {
     const steps = quantizedDragOffset(delta, CYCLE_DRAG_SCALE);
-    const startIndex = cycleScrollIndex(drag.startCycle, drag.startCycleInverted);
-    const next = cycleStateFromScrollIndex(stepCycleScrollIndex(startIndex, steps));
-
-    let changed = false;
-    if (cell.cycle !== next.cycle) {
-      cell.cycle = next.cycle;
-      changed = true;
-    }
-    if (cell.cycleInverted !== next.cycleInverted) {
-      cell.cycleInverted = next.cycleInverted;
-      changed = true;
-    }
-    if (cell.cycleOffset > cell.cycle - 1) {
-      cell.cycleOffset = cell.cycle - 1;
-      changed = true;
-    }
+    const nextCycle = clamp(cell.cycle + steps, 1, MAX_CYCLE);
+    const next = normalizeCyclePattern(nextCycle, cell.cycleMask);
+    const changed = cell.cycle !== next.cycle || cell.cycleMask !== next.mask;
+    cell.cycle = next.cycle;
+    cell.cycleMask = next.mask;
     return changed || enabledChanged;
   }
 
@@ -243,11 +226,6 @@ export function applySourceValueDrag(state, source, drag, clientY) {
     scale = PROBABILITY_DRAG_SCALE;
     minValue = 0;
     maxValue = 100;
-  } else if (valueMode === "cycle_offset") {
-    startValue = drag.startCycleOffset;
-    scale = CYCLE_DRAG_SCALE;
-    minValue = 0;
-    maxValue = Math.max(0, cell.cycle - 1);
   } else if (valueMode === "roll") {
     startValue = drag.startRoll;
     scale = ROLL_DRAG_SCALE;
@@ -268,10 +246,6 @@ export function applySourceValueDrag(state, source, drag, clientY) {
 
   if (valueMode === "probability" && cell.probability !== nextValue) {
     cell.probability = nextValue;
-    return true;
-  }
-  if (valueMode === "cycle_offset" && cell.cycleOffset !== nextValue) {
-    cell.cycleOffset = nextValue;
     return true;
   }
   if (valueMode === "roll" && cell.roll !== nextValue) {

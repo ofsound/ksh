@@ -1,4 +1,4 @@
-import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_CYCLE, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
+import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
 import {cloneCell, defaultCell} from "./kshUiState.js";
 
 // 16 cells at this width match the previous 15-step reference footprint.
@@ -71,12 +71,6 @@ export function gridCellFontPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT
   const normalizedScale = normalizePatternViewScale(scale);
   const cellWidth = gridCellWidth(normalizedScale, stepCount);
   return Math.max(8, Math.min(Math.round(18 * normalizedScale), Math.floor(cellWidth * 0.42)));
-}
-
-export function gridCycleFontPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
-  const normalizedScale = normalizePatternViewScale(scale);
-  const cellWidth = gridCellWidth(normalizedScale, stepCount);
-  return Math.max(8, Math.min(Math.round(14 * normalizedScale), Math.floor(cellWidth * 0.34)));
 }
 
 export function gridCellInsetPx(scale = 1, stepCount = GRID_FULL_WIDTH_STEP_COUNT) {
@@ -345,69 +339,7 @@ export function normalizeSourceLayerMode(mode) {
 }
 
 export function normalizeSourceValueMode(mode) {
-  if (mode === "cycle_offset") {
-    return "cycle_offset";
-  }
   return normalizeSourceLayerMode(mode);
-}
-
-export function cycleOffsetLabel(value) {
-  const parsed = Number.parseInt(String(value), 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    return "1";
-  }
-  return String(parsed + 1);
-}
-
-/** @returns {number} signed index: negative = inverted (!N), positive = normal (N); zero is unused */
-export function cycleScrollIndex(cycle, cycleInverted) {
-  const magnitude = clamp(Number(cycle) || 1, 1, MAX_CYCLE);
-  return cycleInverted ? -magnitude : magnitude;
-}
-
-/** @returns {{ cycle: number, cycleInverted: number }} */
-export function cycleStateFromScrollIndex(index) {
-  const clamped = clamp(index, -MAX_CYCLE, MAX_CYCLE);
-  if (clamped <= -1) {
-    return { cycle: -clamped, cycleInverted: 1 };
-  }
-  if (clamped >= 1) {
-    return { cycle: clamped, cycleInverted: 0 };
-  }
-  return { cycle: 1, cycleInverted: 0 };
-}
-
-/** Step along ... !3, !2, !1, 1, 2, 3 ... skipping the unused zero slot. */
-export function stepCycleScrollIndex(index, steps) {
-  if (steps === 0) {
-    const state = cycleStateFromScrollIndex(index);
-    return cycleScrollIndex(state.cycle, state.cycleInverted);
-  }
-
-  let current = index;
-  const direction = steps > 0 ? 1 : -1;
-  let remaining = Math.abs(steps);
-
-  while (remaining > 0) {
-    if (direction > 0) {
-      if (current === -1) {
-        current = 1;
-      } else if (current >= MAX_CYCLE) {
-        break;
-      } else {
-        current += 1;
-      }
-    } else if (current === 1) {
-      current = -1;
-    } else if (current <= -MAX_CYCLE) {
-      break;
-    } else {
-      current -= 1;
-    }
-    remaining -= 1;
-  }
-
-  return current;
 }
 
 export function loopLengthForChannel(state, channel) {
@@ -448,10 +380,7 @@ export function resolveCellTriangle(localX, localY, cellWidth, cellHeight) {
 
 export function valueModeForCellInteraction(layerMode, triangle) {
   const normalizedLayer = normalizeSourceLayerMode(layerMode);
-  if (normalizedLayer !== "cycle") {
-    return normalizedLayer;
-  }
-  return triangle === "bottom_right" ? "cycle_offset" : "cycle";
+  return normalizedLayer;
 }
 
 export function sourceLayerValue(cell, mode) {

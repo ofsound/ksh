@@ -279,16 +279,23 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
 
     if (selector == "cell")
     {
+        const bool legacyCycleLayout = args.is_array() && args.size() >= 10;
+        const auto cycle = argInt (args, 6, 1);
+        const auto cycleMask = legacyCycleLayout
+                                   ? cycleMaskFromLegacyOffset (argInt (args, 7, 0),
+                                                                cycle,
+                                                                argBool (args, 8, false))
+                                   : argInt (args, 7, 1);
+        const auto roll = legacyCycleLayout ? argInt (args, 9, 1) : argInt (args, 8, 1);
         engine.setCell (zeroBased (argInt (args, 0, 1)),
                         zeroBased (argInt (args, 1, 1)),
                         zeroBased (argInt (args, 2, 1)),
                         argBool (args, 3, false),
                         argInt (args, 4, 100),
                         argInt (args, 5, 100),
-                        argInt (args, 6, 1),
-                        argInt (args, 7, 0),
-                        argBool (args, 8, false),
-                        argInt (args, 9, 1));
+                        cycle,
+                        cycleMask,
+                        roll);
         return true;
     }
 
@@ -328,21 +335,12 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
-    if (selector == "cell_cycle_offset")
+    if (selector == "cell_cycle_mask" || selector == "cell_cycle_offset")
     {
-        engine.setCellCycleOffset (zeroBased (argInt (args, 0, 1)),
-                                   zeroBased (argInt (args, 1, 1)),
-                                   zeroBased (argInt (args, 2, 1)),
-                                   argInt (args, 3, 0));
-        return true;
-    }
-
-    if (selector == "cell_cycle_inverted")
-    {
-        engine.setCellCycleInverted (zeroBased (argInt (args, 0, 1)),
-                                     zeroBased (argInt (args, 1, 1)),
-                                     zeroBased (argInt (args, 2, 1)),
-                                     argBool (args, 3, false));
+        engine.setCellCycleMask (zeroBased (argInt (args, 0, 1)),
+                                 zeroBased (argInt (args, 1, 1)),
+                                 zeroBased (argInt (args, 2, 1)),
+                                 argInt (args, 3, 1));
         return true;
     }
 

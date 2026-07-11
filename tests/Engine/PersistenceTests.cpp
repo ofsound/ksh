@@ -176,8 +176,7 @@ TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persis
     REQUIRE (restored.engine.sourceCellAt (1, 1, 4).velocity == 80);
     REQUIRE (restored.engine.sourceCellAt (1, 1, 4).probability == 50);
     REQUIRE (restored.engine.sourceCellAt (1, 1, 4).cycle == 4);
-    REQUIRE (restored.engine.sourceCellAt (1, 1, 4).cycleOffset == 3);
-    REQUIRE (restored.engine.sourceCellAt (1, 1, 4).cycleInverted);
+    REQUIRE (restored.engine.sourceCellAt (1, 1, 4).cycleMask == 7);
     REQUIRE (restored.engine.sourceCellAt (1, 1, 4).roll == 6);
 }
 

@@ -37,12 +37,6 @@ int stepOneBased (int globalStep, int stepCount)
     return mod (globalStep, stepCount) + 1;
 }
 
-bool cycleGateMatches (int count, int cycle, int cycleOffset, bool cycleInverted)
-{
-    const bool matches = count % cycle == cycleOffset;
-    return cycleInverted ? ! matches : matches;
-}
-
 size_t cycleCounterIndex (int source, int channel, int sourceStep)
 {
     return static_cast<size_t> (source) * Constants::maxChannels * Constants::maxSteps
@@ -316,10 +310,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
             continue;
 
         const int cycle = clampInt (cell.cycle, 1, 64);
-        const int cycleOffset = clampInt (cell.cycleOffset, 0, cycle - 1);
-        const bool cycleInverted = cell.cycleInverted;
-
-        if (cycle > 1 || cycleInverted)
+        if (cycle > 1 || cell.cycleMask != 1)
         {
             const auto index = cycleCounterIndex (cell.source, channel, cell.sourceStep);
 
@@ -327,7 +318,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                 continue;
 
             const int count = static_cast<int> (cycleCounters[index]++);
-            if (! cycleGateMatches (count, cycle, cycleOffset, cycleInverted))
+            if (! cycleGateMatches (count, cycle, cell.cycleMask))
                 continue;
         }
 

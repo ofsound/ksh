@@ -167,16 +167,28 @@ public:
                   int velocity,
                   std::optional<int> probability = std::nullopt,
                   std::optional<int> cycle = std::nullopt,
-                  std::optional<int> cycleOffset = std::nullopt,
-                  std::optional<bool> cycleInverted = std::nullopt,
+                  std::optional<int> cycleMask = std::nullopt,
                   std::optional<int> roll = std::nullopt);
+
+    /** Backward-compatible source/host call shape; offset/inversion are converted to a mask. */
+    void setCell (int source,
+                  int channel,
+                  int step,
+                  bool enabled,
+                  int velocity,
+                  std::optional<int> probability,
+                  std::optional<int> cycle,
+                  std::optional<int> legacyOffset,
+                  std::optional<bool> legacyInverted,
+                  std::optional<int> roll);
 
     void setCellEnabled (int source, int channel, int step, bool enabled);
     void setCellVelocity (int source, int channel, int step, int velocity);
     void setCellProbability (int source, int channel, int step, int probability);
     void setCellCycle (int source, int channel, int step, int cycle);
-    void setCellCycleOffset (int source, int channel, int step, int cycleOffset);
-    void setCellCycleInverted (int source, int channel, int step, bool cycleInverted);
+    void setCellCycleMask (int source, int channel, int step, int cycleMask);
+    /** Legacy bridge/API alias; the value is now a cycle-position mask. */
+    void setCellCycleOffset (int source, int channel, int step, int cycleMask);
     void setCellRoll (int source, int channel, int step, int roll);
 
     void setSourceChannelMute (int source, int channel, bool muted);

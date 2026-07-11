@@ -18,14 +18,12 @@
     GRID_NUDGE_BUTTON_W,
     GRID_NUDGE_GAP,
     GRID_NUDGE_LANE_W,
-    cycleOffsetLabel,
     editorDimensions,
     gridCellHeight,
     gridCellPadding,
     gridCellWidth,
     gridCellFontPx,
     gridCellInsetPx,
-    gridCycleFontPx,
     gridLoopHandleWidth,
     gridRowPaddingY,
     gridTopPadding,
@@ -43,6 +41,10 @@
     sourceLayerValue,
     valueModeForCellInteraction,
   } from "../lib/kshEditorUtils.js";
+  import {
+    isCyclePositionActive,
+    normalizeCyclePattern,
+  } from "../lib/cyclePattern.js";
   import {
     applySourcePaintRange,
     applySourceValueDrag,
@@ -135,6 +137,7 @@
   let cyclePopover = $state(null);
   let cyclePopoverRoot = $state(null);
   let cyclePopoverAnchor = null;
+  let shiftHeld = false;
   let clearBlink = $state({ pattern: false, rowChannel: -1 });
   let patternClearBlinkTimer = null;
   let rowClearBlinkTimer = null;
@@ -169,7 +172,6 @@
   const cellFontPx = $derived(gridCellFontPx(patternScale, session.kshState.stepCount));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
   const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
-  const cycleCellFontPx = $derived(gridCycleFontPx(patternScale, session.kshState.stepCount));
   const cellInsetPx = $derived(gridCellInsetPx(patternScale, session.kshState.stepCount));
   const loopHandleW = $derived(gridLoopHandleWidth(patternScale, session.kshState.stepCount));
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
@@ -197,6 +199,28 @@
     }
 
     return session.kshState.sources[session.selectedSource][cyclePopover.channel][cyclePopover.step];
+  });
+  const cyclePopoverTheme = $derived.by(() => {
+    const channel = cyclePopover?.channel ?? 0;
+    const muted = session.selectedSource !== SILENT_SOURCE
+      && session.kshState.sourceChannelMutes[session.selectedSource][channel];
+    let light = channelToneColor(channel, "light", session.dcColors);
+    let dark = channelToneColor(channel, "dark", session.dcColors);
+    let divider = channelToneColor(channel, "divider", session.dcColors);
+
+    if (muted) {
+      light = mutedChannelColor(light);
+      dark = mutedChannelColor(dark);
+      divider = mutedChannelColor(divider);
+    }
+
+    return { light, dark, divider };
+  });
+  const cyclePopoverThemeStyle = $derived.by(() => {
+    const { light, dark, divider } = cyclePopoverTheme;
+    const surface = `color-mix(in srgb, ${dark} 30%, var(--color-app))`;
+    const raisedSurface = `color-mix(in srgb, ${light} 12%, ${surface})`;
+    return `--cycle-row-light:${light};--cycle-row-dark:${dark};--cycle-row-divider:${divider};--cycle-row-surface:${surface};background:linear-gradient(to bottom, ${raisedSurface}, ${surface});box-shadow:0 10px 28px color-mix(in srgb, var(--color-app) 42%, rgba(0,0,0,0.45)),0 0 24px color-mix(in srgb, var(--color-text) 4%, transparent);`;
   });
   const layerHeading = $derived(sourceLayerLabel(effectiveLayerMode).toLowerCase());
   const selectedStepValueOption = $derived(
@@ -594,16 +618,21 @@
     );
     const belowTop = anchorRect.bottom + gap;
     const aboveTop = anchorRect.top - height - gap;
-    const top = belowTop + height <= viewportHeight - margin || aboveTop < margin
-      ? Math.min(Math.max(margin, belowTop), Math.max(margin, viewportHeight - height - margin))
-      : aboveTop;
+    const placedAbove = belowTop + height > viewportHeight - margin && aboveTop >= margin;
+    const top = placedAbove
+      ? aboveTop
+      : Math.min(Math.max(margin, belowTop), Math.max(margin, viewportHeight - height - margin));
+    const pointerLeft = Math.min(
+      Math.max(10, anchorRect.left + anchorRect.width / 2 - left - 10),
+      Math.max(10, width - 30),
+    );
 
-    cyclePopover = { ...cyclePopover, left, top };
+    cyclePopover = { ...cyclePopover, left, top, pointerLeft, placement: placedAbove ? "above" : "below" };
   }
 
   async function openCyclePopover(channel, step, anchor) {
     cyclePopoverAnchor = anchor;
-    cyclePopover = { channel, step, left: 0, top: 0 };
+    cyclePopover = { channel, step, left: 0, top: 0, pointerLeft: 0, placement: "below" };
     await tick();
     positionCyclePopover();
   }
@@ -623,31 +652,42 @@
     }
   }
 
+  function cyclePopoverPointerStyle() {
+    if (!cyclePopover) {
+      return "";
+    }
+
+    const left = `${cyclePopover.pointerLeft ?? 10}px`;
+    return cyclePopover.placement === "above"
+      ? `left:${left};bottom:-8px;border-top:8px solid var(--cycle-row-divider);`
+      : `left:${left};top:-8px;border-bottom:8px solid var(--cycle-row-divider);`;
+  }
+
   function beginCyclePatternGesture() {
     beginEditGestureHistory();
   }
 
-  function applyCyclePattern(cycle, cycleOffset) {
+  function applyCyclePattern(cycle, cycleMask) {
     if (!cyclePopoverCell) {
       return false;
     }
 
     const nextCycle = Math.min(8, Math.max(1, Math.round(cycle)));
-    const nextOffset = Math.min(nextCycle - 1, Math.max(0, Math.round(cycleOffset)));
-    const changed = cyclePopoverCell.cycle !== nextCycle || cyclePopoverCell.cycleOffset !== nextOffset;
+    const normalizedMask = normalizeCyclePattern(nextCycle, cycleMask).mask;
+    const changed = cyclePopoverCell.cycle !== nextCycle || cyclePopoverCell.cycleMask !== normalizedMask;
     cyclePopoverCell.cycle = nextCycle;
-    cyclePopoverCell.cycleOffset = nextOffset;
+    cyclePopoverCell.cycleMask = normalizedMask;
     return changed;
   }
 
-  function previewCyclePattern(cycle, cycleOffset) {
-    if (applyCyclePattern(cycle, cycleOffset)) {
+  function previewCyclePattern(cycle, cycleMask) {
+    if (applyCyclePattern(cycle, cycleMask)) {
       void sendCell(session.selectedSource, cyclePopover.channel, cyclePopover.step);
     }
   }
 
-  async function commitCyclePattern(cycle, cycleOffset) {
-    if (applyCyclePattern(cycle, cycleOffset)) {
+  async function commitCyclePattern(cycle, cycleMask) {
+    if (applyCyclePattern(cycle, cycleMask)) {
       await sendCell(session.selectedSource, cyclePopover.channel, cyclePopover.step);
     }
     await commitEditGestureHistory("Edit cycle pattern");
@@ -783,10 +823,8 @@
 
     const layerValue = sourceLayerValue(cell, effectiveLayerMode);
     if (effectiveLayerMode === "cycle") {
-      const topLeft = cell.cycleInverted ? lightColor : darkColor;
-      const bottomRight = cell.cycleInverted ? darkColor : lightColor;
       return cellStyleFromBackground(
-        activeCellBackground(`linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%)`),
+        activeCellBackground(`linear-gradient(to bottom, ${darkColor}, ${lightColor})`),
         "var(--color-text-inverse)"
       );
     }
@@ -818,7 +856,6 @@
     const beyondSteps = step >= session.kshState.stepCount;
     const silent = session.selectedSource === SILENT_SOURCE;
     const cell = silent ? null : session.kshState.sources[session.selectedSource][channel][step];
-    const cycleLayer = !silent && effectiveLayerMode === "cycle" && cell.enabled;
     const flashing = !silent && isEditorFlashing(session.selectedSource, channel, step);
     const previewCell = editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
@@ -832,7 +869,7 @@
       "ksh-grid-cell relative mr-0 flex overflow-hidden border border-grid-cell-border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       active ? "ksh-grid-cell-active" : "",
       flashing ? "ksh-cell-text-flash" : "",
-      cycleLayer && !beyondSteps ? "cell-cycle" : "items-center justify-center",
+      "items-center justify-center",
       selected ? "ksh-grid-cell-selected" : "",
       previewCopy
         ? "ksh-grid-cell-preview-copy"
@@ -864,17 +901,8 @@
     return String(sourceLayerValue(cell, effectiveLayerMode));
   }
 
-  function cyclePrimaryLabel(channel, step) {
-    if (session.selectedSource === SILENT_SOURCE) {
-      return "";
-    }
-
-    const cell = session.kshState.sources[session.selectedSource][channel][step];
-    if (!cell.enabled || effectiveLayerMode !== "cycle") {
-      return "";
-    }
-    const value = sourceLayerValue(cell, "cycle");
-    return `${cell.cycleInverted ? "!" : ""}${value}`;
+  function cyclePatternForCell(cell) {
+    return normalizeCyclePattern(cell.cycle, cell.cycleMask);
   }
 
   function loopBraceStyle(channel) {
@@ -1319,6 +1347,10 @@
   }
 
   function syncHoverLayerModeFromModifiers(shiftKey, altKey) {
+    if (shiftHeld && !shiftKey) {
+      closeCyclePopover();
+    }
+    shiftHeld = Boolean(shiftKey);
     hoverLayerMode = modifierLayerMode(shiftKey, altKey);
   }
 
@@ -1361,12 +1393,16 @@
       cancelEditGesture();
       cancelEditGestureHistory();
     } else if (event.key === "1") {
+      closeCyclePopover();
       setSourceLayerMode("velocity");
     } else if (event.key === "2") {
+      closeCyclePopover();
       setSourceLayerMode("cycle");
     } else if (event.key === "3") {
+      closeCyclePopover();
       setSourceLayerMode("probability");
     } else if (event.key === "4") {
+      closeCyclePopover();
       setSourceLayerMode("roll");
     }
   }
@@ -1442,6 +1478,8 @@
 
     const onBlur = () => {
       hoverLayerMode = null;
+      shiftHeld = false;
+      closeCyclePopover();
       recordPadKeysHeld.clear();
     };
 
@@ -1982,18 +2020,16 @@
               onpointercancel={(event) => onCellPointerUp(event, true)}
             >
               {#if !editMode && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
-                <span
-                  class="pointer-events-none absolute leading-none"
-                  style={`left:${cellInsetPx}px;top:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
+                {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
+                <div
+                  class="pointer-events-none absolute grid overflow-hidden"
+                  style={`left:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;right:${Math.max(2, Math.round(cellInsetPx * 0.5))}px;bottom:${cellInsetPx}px;height:25%;grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));gap:1px;`}
+                  aria-label={`Cycle pattern: ${cyclePattern.cycle} steps`}
                 >
-                  {cyclePrimaryLabel(channel, step)}
-                </span>
-                <span
-                  class="pointer-events-none absolute leading-none"
-                  style={`right:${cellInsetPx}px;bottom:${cellInsetPx}px;font-size:${cycleCellFontPx}px;`}
-                >
-                  {cycleOffsetLabel(session.kshState.sources[session.selectedSource][channel][step].cycleOffset)}
-                </span>
+                  {#each Array.from({ length: cyclePattern.cycle }, (_, cycleIndex) => cycleIndex) as cycleIndex (cycleIndex)}
+                    <span class={isCyclePositionActive(cyclePattern.cycle, cyclePattern.mask, cycleIndex) ? "bg-text-inverse" : "bg-app/60"}></span>
+                  {/each}
+                </div>
               {:else}
                 {cellLabel(channel, step)}
               {/if}
@@ -2050,18 +2086,24 @@
   {#if cyclePopover && effectiveLayerMode === "cycle" && cyclePopoverCell}
     <div
       bind:this={cyclePopoverRoot}
-      class="fixed z-[80] w-[280px] rounded-md border border-border-strong bg-app/95 p-2 text-text shadow-[0_18px_42px_rgba(0,0,0,0.48)] backdrop-blur-sm"
-      style={`left:${cyclePopover.left}px;top:${cyclePopover.top}px;`}
+      class="fixed z-[80] w-[280px] rounded-md p-2 text-text backdrop-blur-sm"
+      style={`left:${cyclePopover.left}px;top:${cyclePopover.top}px;${cyclePopoverThemeStyle}`}
       role="dialog"
       tabindex="-1"
       aria-label={`Cycle editor for channel ${cyclePopover.channel + 1}, step ${cyclePopover.step + 1}`}
       onpointerdown={(event) => event.stopPropagation()}
     >
-      <div class="mb-1 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-[0.14em] text-text-muted">
-        <span>Cycle · Step {cyclePopover.step + 1}</span>
+      <div
+        class="pointer-events-none absolute h-0 w-0 border-x-[10px] border-x-transparent"
+        style={cyclePopoverPointerStyle()}
+        aria-hidden="true"
+      ></div>
+      <div class="mb-1 flex items-center justify-between px-1 text-[12px] font-semibold leading-none" style="color:var(--cycle-row-light);">
+        <span>Step {cyclePopover.step + 1}</span>
         <button
           type="button"
-          class="flex h-4 w-4 items-center justify-center rounded-sm text-[14px] leading-none text-text-muted outline-none hover:text-text focus-visible:ring-1 focus-visible:ring-focus-ring"
+          class="cycle-popover-focus flex h-4 w-4 items-center justify-center rounded-sm text-[14px] leading-none outline-none hover:text-text"
+          style="color:var(--cycle-row-light);"
           aria-label="Close cycle editor"
           onclick={closeCyclePopover}
         >
@@ -2070,8 +2112,7 @@
       </div>
       <KshCyclePatternEditor
         cycle={cyclePopoverCell.cycle}
-        cycleOffset={cyclePopoverCell.cycleOffset}
-        cycleInverted={cyclePopoverCell.cycleInverted}
+        cycleMask={cyclePopoverCell.cycleMask}
         onGestureStart={beginCyclePatternGesture}
         onPatternPreview={previewCyclePattern}
         onPatternCommit={commitCyclePattern}

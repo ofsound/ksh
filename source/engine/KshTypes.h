@@ -96,8 +96,7 @@ struct Cell
     int velocity = 100;
     int probability = 100;
     int cycle = 1;
-    int cycleOffset = 0;
-    bool cycleInverted = false;
+    int cycleMask = 1;
     int roll = 1;
     int source = -1;
     int sourceStep = 0;
@@ -111,8 +110,7 @@ struct CellDefaults
     static constexpr int velocity = 100;
     static constexpr int probability = 100;
     static constexpr int cycle = 1;
-    static constexpr int cycleOffset = 0;
-    static constexpr bool cycleInverted = false;
+    static constexpr int cycleMask = 1;
     static constexpr int roll = 1;
     static constexpr int source = -1;
 };
@@ -120,6 +118,41 @@ struct CellDefaults
 [[nodiscard]] inline Cell defaultCell()
 {
     return {};
+}
+
+inline constexpr int maxCycleMaskBits = 30;
+
+[[nodiscard]] inline int cycleMaskForLength (int cycle)
+{
+    const auto bitCount = clampInt (cycle, 1, maxCycleMaskBits);
+    return (1 << bitCount) - 1;
+}
+
+[[nodiscard]] inline int clampCycleMask (int mask, int cycle)
+{
+    return std::max (0, mask) & cycleMaskForLength (cycle);
+}
+
+[[nodiscard]] inline int cycleMaskFromLegacyOffset (int offset, int cycle, bool inverted)
+{
+    const auto length = clampInt (cycle, 1, 64);
+    const auto phase = clampInt (offset, 0, length - 1);
+    const auto oneHot = 1 << clampInt (phase, 0, maxCycleMaskBits - 1);
+    return inverted ? cycleMaskForLength (length) & ~oneHot : oneHot;
+}
+
+[[nodiscard]] inline int normalizeCycleMask (int mask, int cycle)
+{
+    const auto normalized = clampCycleMask (mask, cycle);
+    return normalized == 0 ? 1 : normalized;
+}
+
+[[nodiscard]] inline bool cycleGateMatches (int count, int cycle, int mask)
+{
+    const auto length = clampInt (cycle, 1, 64);
+    const auto pattern = normalizeCycleMask (mask, length);
+    const auto phase = ((count % length) + length) % length;
+    return (pattern & (1 << clampInt (phase, 0, maxCycleMaskBits - 1))) != 0;
 }
 
 [[nodiscard]] inline Cell cloneCell (const Cell& cell)
@@ -130,13 +163,12 @@ struct CellDefaults
 
     const int probability = cell.probability;
     const int cycle = clampInt (cell.cycle, 1, 64);
-    const int cycleOffset = cell.cycleOffset;
+    const int cycleMask = cell.cycleMask;
     const int roll = cell.roll;
 
     out.probability = clampInt (probability, 0, 100);
     out.cycle = cycle;
-    out.cycleOffset = clampInt (cycleOffset, 0, cycle - 1);
-    out.cycleInverted = cell.cycleInverted;
+    out.cycleMask = normalizeCycleMask (cycleMask, cycle);
     out.roll = clampInt (roll, 1, Constants::maxRoll);
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;

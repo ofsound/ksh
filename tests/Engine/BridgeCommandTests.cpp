@@ -97,8 +97,7 @@ TEST_CASE ("dispatchEngineCommand copies source patterns with one-based args", "
     REQUIRE (copied.velocity == 91);
     REQUIRE (copied.probability == 37);
     REQUIRE (copied.cycle == 4);
-    REQUIRE (copied.cycleOffset == 2);
-    REQUIRE (copied.cycleInverted);
+    REQUIRE (copied.cycleMask == 11);
     REQUIRE (copied.roll == 3);
     REQUIRE (fixture.engine.sourceChannelMutedAt (1, 1));
     REQUIRE (fixture.engine.getSourceStepCount (1) == 12);

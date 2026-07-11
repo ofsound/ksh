@@ -13,6 +13,10 @@ import {
   normalizeRate,
   toggleValue,
 } from "./kshConstants.js";
+import {
+  cycleMaskFromLegacyOffset,
+  normalizeCyclePattern,
+} from "./cyclePattern.js";
 
 export function defaultCell() {
   return {
@@ -20,8 +24,7 @@ export function defaultCell() {
     velocity: 100,
     probability: 100,
     cycle: 1,
-    cycleOffset: 0,
-    cycleInverted: 0,
+    cycleMask: 1,
     roll: 1,
     source: 0,
   };
@@ -32,9 +35,11 @@ export function cloneCell(cell) {
     enabled: cell?.enabled ? 1 : 0,
     velocity: clamp(cell?.velocity ?? 100, 1, 127),
     probability: clamp(cell?.probability ?? 100, 0, 100),
-    cycle: clamp(cell?.cycle ?? 1, 1, 32),
-    cycleOffset: clamp(cell?.cycleOffset ?? 0, 0, 31),
-    cycleInverted: cell?.cycleInverted ? 1 : 0,
+    ...normalizeCyclePattern(cell?.cycle ?? 1, cell?.cycleMask ?? cycleMaskFromLegacyOffset(
+      cell?.cycleOffset ?? 0,
+      cell?.cycle ?? 1,
+      cell?.cycleInverted,
+    )),
     roll: clamp(cell?.roll ?? 1, 1, 16),
     source: clamp(cell?.source ?? 0, 0, SOURCE_COUNT - 1),
   };
@@ -127,8 +132,7 @@ export function serializePersistenceState(state) {
           cell.velocity === 100 &&
           cell.probability === 100 &&
           cell.cycle === 1 &&
-          cell.cycleOffset === 0 &&
-          !cell.cycleInverted &&
+          cell.cycleMask === 1 &&
           cell.roll === 1
         ) {
           continue;
@@ -142,8 +146,7 @@ export function serializePersistenceState(state) {
           cell.velocity,
           cell.probability,
           cell.cycle,
-          cell.cycleOffset,
-          cell.cycleInverted ? 1 : 0,
+          cell.cycleMask,
           cell.roll,
         ]);
       }
@@ -357,14 +360,16 @@ export function applyPersistencePayload(state, payload) {
       continue;
     }
 
+    const isLegacyEntry = entry.length >= 10;
     state.sources[source][channel][step] = cloneCell({
       enabled: entry[3],
       velocity: entry[4],
       probability: entry[5],
       cycle: entry[6],
-      cycleOffset: entry[7],
-      cycleInverted: entry[8],
-      roll: entry[9],
+      cycleMask: isLegacyEntry
+        ? cycleMaskFromLegacyOffset(entry[7], entry[6], entry[8])
+        : entry[7],
+      roll: isLegacyEntry ? entry[9] : entry[8],
     });
   }
 

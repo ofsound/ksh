@@ -44,17 +44,6 @@ void copyLoopRange (Channel& channel, const LoopRange& range)
     channel.loopLength = range.loopLength;
 }
 
-int normalizeCycleOffset (int cycleOffset, int cycle)
-{
-    return clampInt (cycleOffset, 0, clampInt (cycle, 1, 64) - 1);
-}
-
-bool normalizeCycleInverted (bool cycleInverted, int cycle)
-{
-    (void) cycle;
-    return cycleInverted;
-}
-
 int normalizeRoll (int roll)
 {
     return clampInt (roll, 1, Constants::maxRoll);
@@ -64,31 +53,27 @@ struct NormalizedCellParams
 {
     int probability;
     int cycle;
-    int cycleOffset;
-    bool cycleInverted;
+    int cycleMask;
     int roll;
 };
 
 NormalizedCellParams normalizeCellParams (const std::optional<int>& probability,
                                           const std::optional<int>& cycle,
-                                          const std::optional<int>& cycleOffset,
-                                          const std::optional<bool>& cycleInverted,
+                                          const std::optional<int>& cycleMask,
                                           const std::optional<int>& roll,
                                           const Cell& currentCell)
 {
     NormalizedCellParams params;
     params.probability = probability.value_or (currentCell.probability);
     params.cycle = cycle.value_or (currentCell.cycle);
-    params.cycleOffset = cycleOffset.value_or (currentCell.cycleOffset);
-    params.cycleInverted = cycleInverted.value_or (currentCell.cycleInverted);
+    params.cycleMask = cycleMask.value_or (currentCell.cycleMask);
     params.roll = roll.value_or (currentCell.roll);
     params.cycle = clampInt (params.cycle, 1, 64);
 
     return {
         clampInt (params.probability, 0, 100),
         params.cycle,
-        normalizeCycleOffset (params.cycleOffset, params.cycle),
-        normalizeCycleInverted (params.cycleInverted, params.cycle),
+        normalizeCycleMask (params.cycleMask, params.cycle),
         normalizeRoll (params.roll)
     };
 }
@@ -100,8 +85,7 @@ nlohmann::json cellToJson (const Cell& cell, bool oneBasedSource = false)
         { "velocity", cell.velocity },
         { "probability", cell.probability },
         { "cycle", cell.cycle },
-        { "cycleOffset", cell.cycleOffset },
-        { "cycleInverted", cell.cycleInverted ? 1 : 0 },
+        { "cycleMask", cell.cycleMask },
         { "roll", cell.roll },
         { "source", oneBasedSource ? cell.source + 1 : cell.source }
     };
@@ -600,8 +584,7 @@ void KickSnareHatEngine::setCell (int source,
                                   int velocity,
                                   std::optional<int> probability,
                                   std::optional<int> cycle,
-                                  std::optional<int> cycleOffset,
-                                  std::optional<bool> cycleInverted,
+                                  std::optional<int> cycleMask,
                                   std::optional<int> roll)
 {
     source = clampSource (source);
@@ -609,17 +592,34 @@ void KickSnareHatEngine::setCell (int source,
     step = clampStep (step);
 
     auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
-    const auto params = normalizeCellParams (probability, cycle, cycleOffset, cycleInverted, roll, cell);
+    const auto params = normalizeCellParams (probability, cycle, cycleMask, roll, cell);
 
     cell.enabled = enabled;
     cell.velocity = clampInt (velocity, 1, 127);
     cell.probability = params.probability;
     cell.cycle = params.cycle;
-    cell.cycleOffset = params.cycleOffset;
-    cell.cycleInverted = params.cycleInverted;
+    cell.cycleMask = params.cycleMask;
     cell.roll = params.roll;
 
     refreshGeneratedCellsForSourceEdit (source, channel, step);
+}
+
+void KickSnareHatEngine::setCell (int source,
+                                  int channel,
+                                  int step,
+                                  bool enabled,
+                                  int velocity,
+                                  std::optional<int> probability,
+                                  std::optional<int> cycle,
+                                  std::optional<int> legacyOffset,
+                                  std::optional<bool> legacyInverted,
+                                  std::optional<int> roll)
+{
+    const auto cycleLength = cycle.value_or (1);
+    const auto cycleMask = cycleMaskFromLegacyOffset (legacyOffset.value_or (0),
+                                                       cycleLength,
+                                                       legacyInverted.value_or (false));
+    setCell (source, channel, step, enabled, velocity, probability, cycle, cycleMask, roll);
 }
 
 void KickSnareHatEngine::setCellEnabled (int source, int channel, int step, bool enabled)
@@ -659,31 +659,24 @@ void KickSnareHatEngine::setCellCycle (int source, int channel, int step, int cy
 
     auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
     cell.cycle = clampInt (cycleIn, 1, 64);
-    cell.cycleOffset = normalizeCycleOffset (cell.cycleOffset, cell.cycle);
-    cell.cycleInverted = normalizeCycleInverted (cell.cycleInverted, cell.cycle);
+    cell.cycleMask = normalizeCycleMask (cell.cycleMask, cell.cycle);
     refreshGeneratedCellsForSourceEdit (source, channel, step);
 }
 
-void KickSnareHatEngine::setCellCycleOffset (int source, int channel, int step, int cycleOffset)
+void KickSnareHatEngine::setCellCycleMask (int source, int channel, int step, int cycleMask)
 {
     source = clampSource (source);
     channel = clampChannel (channel);
     step = clampStep (step);
 
     auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
-    cell.cycleOffset = normalizeCycleOffset (cycleOffset, cell.cycle);
+    cell.cycleMask = normalizeCycleMask (cycleMask, cell.cycle);
     refreshGeneratedCellsForSourceEdit (source, channel, step);
 }
 
-void KickSnareHatEngine::setCellCycleInverted (int source, int channel, int step, bool cycleInverted)
+void KickSnareHatEngine::setCellCycleOffset (int source, int channel, int step, int cycleMask)
 {
-    source = clampSource (source);
-    channel = clampChannel (channel);
-    step = clampStep (step);
-
-    auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
-    cell.cycleInverted = normalizeCycleInverted (cycleInverted, cell.cycle);
-    refreshGeneratedCellsForSourceEdit (source, channel, step);
+    setCellCycleMask (source, channel, step, cycleMask);
 }
 
 void KickSnareHatEngine::setCellRoll (int source, int channel, int step, int roll)
@@ -1037,8 +1030,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
                     && cell.velocity == 100
                     && cell.probability == 100
                     && cell.cycle == 1
-                    && cell.cycleOffset == 0
-                    && ! cell.cycleInverted
+                    && cell.cycleMask == 1
                     && cell.roll == 1)
                 {
                     continue;
@@ -1052,8 +1044,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
                     cell.velocity,
                     cell.probability,
                     cell.cycle,
-                    cell.cycleOffset,
-                    cell.cycleInverted ? 1 : 0,
+                    cell.cycleMask,
                     cell.roll
                 }));
             }
@@ -1305,15 +1296,23 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
         if (step < 0 || step >= Constants::maxSteps)
             continue;
 
+        const auto cycle = entry[6].get<int>();
+        const bool legacyLayout = entry.size() >= 10;
+        const auto cycleMask = legacyLayout
+                                 ? cycleMaskFromLegacyOffset (entry[7].get<int>(), cycle, entry[8].get<int>() != 0)
+                                 : entry.size() > 7 ? entry[7].get<int>() : 1;
+        const auto roll = legacyLayout
+                              ? entry[9].get<int>()
+                              : entry.size() > 8 ? entry[8].get<int>() : 1;
+
         sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] =
             cloneCell ({
                 .enabled = entry[3].get<int>() != 0,
                 .velocity = entry[4].get<int>(),
                 .probability = entry[5].get<int>(),
-                .cycle = entry[6].get<int>(),
-                .cycleOffset = entry.size() > 7 ? entry[7].get<int>() : 0,
-                .cycleInverted = entry.size() > 8 ? entry[8].get<int>() != 0 : false,
-                .roll = entry.size() > 9 ? entry[9].get<int>() : 1
+                .cycle = cycle,
+                .cycleMask = cycleMask,
+                .roll = roll
             });
     }
 

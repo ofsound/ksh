@@ -443,8 +443,7 @@ function cellCommandArgs(source, channel, step) {
     cell.velocity,
     cell.probability,
     cell.cycle,
-    cell.cycleOffset,
-    cell.cycleInverted,
+    cell.cycleMask,
     cell.roll,
   ];
 }
