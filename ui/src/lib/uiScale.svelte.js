@@ -2,9 +2,9 @@ export const uiDesignWidthPx = 1328;
 export const uiDesignHeightPluginPx = 828;
 export const uiDesignHeightStandalonePx = 872;
 export const uiMinScale = 0.5;
-export const uiMaxScale = 1;
+export const uiMaxScale = 1.2;
 export const uiMinScalePercent = 50;
-export const uiMaxScalePercent = 100;
+export const uiMaxScalePercent = 120;
 export const uiBaseFontSizePx = 16;
 export const uiScaleStorageKey = "kshUiScalePreset";
 
@@ -14,6 +14,7 @@ const uiScaleMinimumSizeAnchors = [
   { percent: 80, widthPx: 1062, pluginHeightPx: 670, standaloneHeightPx: 701 },
   { percent: 90, widthPx: 1195, pluginHeightPx: 749, standaloneHeightPx: 786 },
   { percent: 100, widthPx: uiDesignWidthPx, pluginHeightPx: uiDesignHeightPluginPx, standaloneHeightPx: uiDesignHeightStandalonePx },
+  { percent: 120, widthPx: 1594, pluginHeightPx: 994, standaloneHeightPx: 1046 },
 ];
 
 export const uiScaleState = $state({

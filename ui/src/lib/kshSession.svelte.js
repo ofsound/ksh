@@ -53,7 +53,6 @@ import {
   storedThemeMode,
 } from "./themeMode.js";
 import {
-  currentUiScaleMinimumSize,
   resolveInitialUiScalePercent,
   setUiScalePercent,
   setUiViewportSize,
@@ -209,10 +208,11 @@ function assignProjectMetadata(state) {
 }
 
 export async function syncEditorScaleMinimumToNative() {
-  const minimumSize = currentUiScaleMinimumSize({
-    standaloneTransportAvailable: session.kshState.standaloneTransportAvailable,
-  });
-  await setEditorScaleMinimum(minimumSize.widthPx, minimumSize.heightPx);
+  const { width, height } = combinedDimensions(session.kshState, session.patternViewScale);
+  await setEditorScaleMinimum(
+    Math.round(width * uiScaleState.scale),
+    Math.round(height * uiScaleState.scale),
+  );
 }
 
 async function syncProjectUiScaleToNative() {

@@ -844,6 +844,15 @@
       );
     }
 
+    if (effectiveLayerMode === "probability") {
+      const fillPercent = Math.max(0, Math.min(100, Math.round(layerValue)));
+      return cellStyleFromBackground(
+        `linear-gradient(to top, ${darkColor} 0%, ${darkColor} ${fillPercent}%, var(--color-app) ${fillPercent}%, var(--color-app) 100%)`,
+        "var(--color-text)",
+        "font-weight:700;text-shadow:0 1px 2px color-mix(in srgb, var(--color-app) 88%, transparent),0 0 1px color-mix(in srgb, var(--color-app) 72%, transparent);",
+      );
+    }
+
     const fill = effectiveLayerMode === "velocity" ? layerValue / 127 : layerValue / 100;
     const fillPercent = Math.round(fill * 100);
 
@@ -1831,7 +1840,7 @@
         >
           <button
             type="button"
-            class="header-button flex h-[42px] w-[250px] shrink-0 items-center justify-between gap-3 border border-border-subtle bg-transparent px-3.5 text-[16px] font-semibold text-text"
+            class="header-button flex h-[42px] w-[220px] shrink-0 items-center justify-between gap-3 border border-border-subtle bg-transparent px-3.5 text-[16px] font-semibold text-text"
             aria-haspopup="listbox"
             aria-expanded={stepValueMenuOpen}
             onpointerdown={beginStepValueGesture}
@@ -1851,7 +1860,7 @@
           </button>
           {#if stepValueMenuOpen}
             <div
-              class="absolute left-0 top-full z-30 mt-1 w-[250px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
+              class="absolute left-0 top-full z-30 mt-1 w-[220px] overflow-hidden border border-border-strong bg-app shadow-[0_14px_34px_rgba(0,0,0,0.36)]"
               role="listbox"
               aria-label="Step value"
             >

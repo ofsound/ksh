@@ -15,7 +15,7 @@
   accent={interfaceAccent}
   {value}
   min={50}
-  max={100}
+  max={120}
   resetValue={100}
   formatValue={(next) => `${Math.round(next)}%`}
   ariaLabel="UI scale percent"

@@ -72,9 +72,14 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     setResizeLimits (900, 480, 3200, 1400);
 #endif
     setResizable (true, true);
-    setSize (defaultEditorWidth,
-             processorRef.hasStandaloneTransport() ? defaultStandaloneEditorHeight
-                                                   : defaultPluginEditorHeight);
+    const auto initialEditorHeight = processorRef.hasStandaloneTransport()
+                                       ? defaultStandaloneEditorHeight
+                                       : defaultPluginEditorHeight;
+
+    if (auto* constrainer = getConstrainer())
+        constrainer->setFixedAspectRatio (static_cast<double> (defaultEditorWidth) / static_cast<double> (initialEditorHeight));
+
+    setSize (defaultEditorWidth, initialEditorHeight);
     startTimerHz (60);
 }
 
@@ -405,11 +410,28 @@ juce::var PluginEditor::handleEditorScaleMinimumRequest (const int minWidth, con
     scaleMinimumWidth = juce::jlimit (900, 2400, minWidth);
     scaleMinimumHeight = juce::jlimit (480, 1800, minHeight);
 
+    const auto aspectRatio = static_cast<double> (scaleMinimumWidth)
+                           / static_cast<double> (scaleMinimumHeight);
+    if (auto* constrainer = getConstrainer())
+        constrainer->setFixedAspectRatio (aspectRatio);
+
     applyNormalResizeLimits();
-    const auto nextWidth = followsScaleMinimum ? scaleMinimumWidth
-                                               : juce::jmax (getWidth(), scaleMinimumWidth);
-    const auto nextHeight = followsScaleMinimum ? scaleMinimumHeight
-                                                : juce::jmax (getHeight(), scaleMinimumHeight);
+    auto nextWidth = followsScaleMinimum ? scaleMinimumWidth
+                                         : juce::jmax (getWidth(), scaleMinimumWidth);
+    auto nextHeight = followsScaleMinimum ? scaleMinimumHeight
+                                          : juce::jmax (getHeight(), scaleMinimumHeight);
+
+    if (! followsScaleMinimum)
+    {
+        nextHeight = juce::roundToInt (static_cast<double> (nextWidth) / aspectRatio);
+
+        if (nextHeight < scaleMinimumHeight)
+        {
+            nextHeight = scaleMinimumHeight;
+            nextWidth = juce::roundToInt (static_cast<double> (nextHeight) * aspectRatio);
+        }
+    }
+
     setSize (nextWidth, nextHeight);
 
     auto object = std::make_unique<juce::DynamicObject>();

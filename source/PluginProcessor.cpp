@@ -1037,7 +1037,7 @@ void PluginProcessor::setPatternViewScale (double scale)
 
 void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 {
-    projectUiScalePercent = juce::jlimit (50, 100, uiScalePercent);
+    projectUiScalePercent = juce::jlimit (50, 120, uiScalePercent);
 }
 
 juce::String PluginProcessor::getProjectThemeMode() const
