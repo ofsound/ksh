@@ -1,8 +1,10 @@
 import {COMPACT_HEIGHT, MAX_CHANNELS, MAX_CYCLE, MAX_STEPS, RATES, SOURCE_COUNT, clamp, normalizePlaybackMode} from "./kshConstants.js";
 import {cloneCell, defaultCell} from "./kshUiState.js";
 
-export const GRID_CELL_W = 50;
-export const GRID_CELL_H = 50;
+// 16 cells at this width match the previous 15-step reference footprint.
+export const GRID_CELL_W = 54.375;
+export const GRID_CELL_H = 54.375;
+/** The 16-step view uses the same total footprint as the reference 15-step view. */
 export const GRID_FULL_WIDTH_STEP_COUNT = 16;
 export const GRID_ROW_GAP = 4;
 export const GRID_GUTTER_PX = 12;
@@ -10,8 +12,11 @@ export const CHANNEL_LABEL_W = 64;
 export const GRID_SIDEBAR_W = 320;
 export const GRID_CELL_LEFT_GAP = 34;
 export const GRID_ROW_CELL_LEFT_GAP = GRID_CELL_LEFT_GAP + 32;
-/** Extra breathing room after the step grid in the editor viewport. */
-export const EDITOR_GRID_TRAILING_GAP = 64;
+export const GRID_NUDGE_BUTTON_W = 26;
+export const GRID_NUDGE_GAP = 6;
+export const GRID_NUDGE_LANE_W = GRID_NUDGE_BUTTON_W * 2;
+/** Nudge lane plus the lane gap and the editor's horizontal gutters. */
+export const EDITOR_GRID_TRAILING_GAP = GRID_NUDGE_LANE_W + GRID_NUDGE_GAP + GRID_GUTTER_PX * 2;
 /** Sidebar, pre-grid gap, and trailing editor space east of the step grid. */
 export const EDITOR_GRID_LEADING_CHROME = GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + EDITOR_GRID_TRAILING_GAP;
 export const STEP_LABEL_H = 18;

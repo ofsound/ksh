@@ -12,6 +12,9 @@
     CHANNEL_LABEL_W,
     GRID_ROW_CELL_LEFT_GAP,
     GRID_SIDEBAR_W,
+    GRID_NUDGE_BUTTON_W,
+    GRID_NUDGE_GAP,
+    GRID_NUDGE_LANE_W,
     cycleOffsetLabel,
     editorDimensions,
     gridCellHeight,
@@ -1689,24 +1692,6 @@
             value={session.kshState.channels[channel]?.playbackMode ?? "normal"}
             onChange={(mode) => setChannelPlaybackMode(channel, mode)}
           />
-          <div class="flex items-center">
-            <button
-              type="button"
-              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
-              disabled={session.selectedSource === SILENT_SOURCE}
-              onclick={() => shiftChannelRow(channel, -1)}
-            >
-              <NudgeTriangleIcon reversed />
-            </button>
-            <button
-              type="button"
-              class="flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
-              disabled={session.selectedSource === SILENT_SOURCE}
-              onclick={() => shiftChannelRow(channel, 1)}
-            >
-              <NudgeTriangleIcon />
-            </button>
-          </div>
           <button
             type="button"
             class={`channel-power-toggle ml-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center border-0 bg-transparent p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${session.selectedSource === SILENT_SOURCE ? "opacity-35" : session.kshState.sourceChannelMutes[session.selectedSource][channel] ? "text-text-faint" : "text-accent"}`}
@@ -1802,6 +1787,33 @@
             </button>
             {/if}
           {/each}
+          <div
+            class="pointer-events-auto absolute top-0 z-20 flex items-center"
+            style={`left:${session.kshState.stepCount * gridCellW + GRID_NUDGE_GAP}px;width:${GRID_NUDGE_LANE_W}px;height:${gridCellH}px;`}
+            role="group"
+            aria-label="Shift channel pattern"
+          >
+            <button
+              type="button"
+              class="flex shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+              style={`width:${GRID_NUDGE_BUTTON_W}px;height:26px;`}
+              disabled={session.selectedSource === SILENT_SOURCE}
+              aria-label="Shift channel pattern left"
+              onclick={() => shiftChannelRow(channel, -1)}
+            >
+              <NudgeTriangleIcon reversed />
+            </button>
+            <button
+              type="button"
+              class="flex shrink-0 items-center justify-center p-0 text-accent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+              style={`width:${GRID_NUDGE_BUTTON_W}px;height:26px;`}
+              disabled={session.selectedSource === SILENT_SOURCE}
+              aria-label="Shift channel pattern right"
+              onclick={() => shiftChannelRow(channel, 1)}
+            >
+              <NudgeTriangleIcon />
+            </button>
+          </div>
         </div>
       </div>
     {/each}
