@@ -1824,7 +1824,7 @@
           {:else}
             <button
               type="button"
-              class="channel-label flex shrink-0 items-center truncate text-left text-accent"
+              class="channel-label flex shrink-0 items-center truncate text-left font-semibold text-accent"
               style={`width:${CHANNEL_LABEL_W}px;height:${gridCellH}px;font-size:${channelLabelFontPx}px;line-height:1;`}
               onclick={() => onLabelClick(channel)}
             >
