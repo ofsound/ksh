@@ -27,8 +27,6 @@
     gridCellInsetPx,
     gridCycleFontPx,
     gridLoopHandleWidth,
-    gridViewportWidth,
-    gridWidthForStepCount,
     gridRowPaddingY,
     gridTopPadding,
     STEP_LABEL_CELL_GAP,
@@ -156,9 +154,9 @@
   const patternScale = $derived(session.patternViewScale);
   const dims = $derived(editorDimensions(session.kshState, patternScale));
   const gridCellW = $derived(gridCellWidth(patternScale, session.kshState.stepCount));
-  const gridViewportW = $derived(gridViewportWidth(patternScale));
-  const gridContentW = $derived(gridWidthForStepCount(patternScale, session.kshState.stepCount));
-  const gridOffsetX = $derived((gridViewportW - gridContentW) / 2);
+  // Keep every brace anchored to the 16-step grid's left edge. Shorter braces
+  // should leave their unused space to the right instead of being centered.
+  const gridOffsetX = 0;
   const gridRowLeftX = $derived(
     GRID_GUTTER_PX + GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + gridOffsetX
   );
