@@ -1111,6 +1111,17 @@
       return;
     }
 
+    if (normalizeSourceLayerMode(cellDrag.layerMode) === "cycle") {
+      const distance = Math.hypot(
+        event.clientX - cellDrag.startX,
+        event.clientY - cellDrag.startY,
+      );
+      if (distance >= 5 && !cellDrag.moved) {
+        cellDrag = { ...cellDrag, moved: true };
+      }
+      return;
+    }
+
     const pointerStep = stepAtClientX(event.clientX);
 
     if (!cellDrag.mode) {
@@ -1179,6 +1190,11 @@
       }
 
       await openCyclePopover(drag.channel, drag.step, drag.element ?? event?.currentTarget);
+      return;
+    }
+
+    if (normalizeSourceLayerMode(drag.layerMode) === "cycle") {
+      cancelEditGestureHistory();
       return;
     }
 
