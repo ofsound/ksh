@@ -8,6 +8,8 @@ import { session } from "./kshSession.svelte.js";
  */
 export const cellSelection = $state({
   editMode: false,
+  /** When false, edit mode keeps the diagonal selection cell look until an inspector control is touched. */
+  inspectorLayerActive: false,
 });
 
 /** @type {SvelteSet<string>} */
@@ -22,6 +24,7 @@ export function setEditMode(next) {
     clearEditSelection();
   }
   cellSelection.editMode = Boolean(next);
+  cellSelection.inspectorLayerActive = false;
 }
 
 export function toggleEditMode() {

@@ -284,9 +284,13 @@
     if (cellSelection.editMode) {
       cancelEditGesture();
       clearEditSelection();
+      cellSelection.editMode = false;
+      cellSelection.inspectorLayerActive = false;
+      return;
     }
 
-    cellSelection.editMode = !cellSelection.editMode;
+    cellSelection.editMode = true;
+    cellSelection.inspectorLayerActive = false;
   }
 
   function cellAtPoint(clientX, clientY) {
@@ -830,11 +834,22 @@
 
     let lightColor = channelToneColor(channel, "light", session.dcColors);
     let darkColor = channelToneColor(channel, "dark", session.dcColors);
+    let dividerColor = channelToneColor(channel, "divider", session.dcColors);
     if (muted) {
       lightColor = mutedChannelColor(lightColor);
       darkColor = mutedChannelColor(darkColor);
+      dividerColor = mutedChannelColor(dividerColor);
     }
     [lightColor, darkColor] = [darkColor, lightColor];
+
+    if (cellSelection.editMode && !cellSelection.inspectorLayerActive) {
+      const topLeft = cell.enabled ? darkColor : "var(--color-grid-off-strong)";
+      const bottomRight = cell.enabled ? lightColor : "var(--color-grid-off)";
+      return cellStyleFromBackground(
+        activeCellBackground(`linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%)`),
+        cell.enabled ? "var(--color-text-inverse)" : "var(--color-text-muted)",
+      );
+    }
 
     if (!cell.enabled) {
       const downbeat = step % 4 === 0;
@@ -918,6 +933,10 @@
     const previewCell = cellSelection.editMode
       ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
       : null;
+    if (cellSelection.editMode && !cellSelection.inspectorLayerActive) {
+      return "";
+    }
+
     const cell = previewCell ?? session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled) {
       return "";
@@ -2060,7 +2079,7 @@
               onpointerup={onCellPointerUp}
               onpointercancel={(event) => onCellPointerUp(event, true)}
             >
-              {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "cycle" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"

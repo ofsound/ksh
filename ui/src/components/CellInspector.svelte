@@ -70,6 +70,7 @@
   const rollValue = $derived(commonRoll ?? 1);
 
   function focusInspectorLayer(mode) {
+    cellSelection.inspectorLayerActive = true;
     setSourceLayerMode(mode);
   }
 
