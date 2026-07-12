@@ -120,6 +120,7 @@
   let headerDrag = $state(null);
   let cellDrag = $state(null);
   let editGesture = $state(null);
+  let editorViewRoot = $state(null);
   let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
   let muteDrag = $state(null);
@@ -238,16 +239,25 @@
       session.kshState.stepCount,
     ).length,
   );
-  const marqueeRectStyle = $derived(editGesture?.kind === "marquee"
-    ? (() => {
-        const pad = 5;
-        const left = Math.min(editGesture.startX, editGesture.currentX) - pad;
-        const top = Math.min(editGesture.startY, editGesture.currentY) - pad;
-        const width = Math.abs(editGesture.currentX - editGesture.startX) + pad * 2;
-        const height = Math.abs(editGesture.currentY - editGesture.startY) + pad * 2;
-        return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
-      })()
-    : "");
+  const marqueeRectStyle = $derived.by(() => {
+    if (editGesture?.kind !== "marquee" || !(editorViewRoot instanceof HTMLElement)) {
+      return "";
+    }
+
+    const rootRect = editorViewRoot.getBoundingClientRect();
+    const scaleX = rootRect.width / editorViewRoot.offsetWidth || 1;
+    const scaleY = rootRect.height / editorViewRoot.offsetHeight || scaleX;
+    const pad = 5;
+    const left = Math.min(editGesture.startX, editGesture.currentX) - pad;
+    const top = Math.min(editGesture.startY, editGesture.currentY) - pad;
+    const width = Math.abs(editGesture.currentX - editGesture.startX) + pad * 2;
+    const height = Math.abs(editGesture.currentY - editGesture.startY) + pad * 2;
+
+    // Pointer coordinates and getBoundingClientRect() are in scaled viewport
+    // pixels, while an absolutely positioned child uses the editor's layout
+    // coordinates. Convert both the origin and the size into that space.
+    return `left:${(left - rootRect.left) / scaleX}px;top:${(top - rootRect.top) / scaleY}px;width:${width / scaleX}px;height:${height / scaleY}px;`;
+  });
   const bulkDragPreviewCells = $derived.by(() => {
     if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove) {
       return new Map();
@@ -1646,7 +1656,8 @@
 </script>
 
 <div
-  class="editor-view flex shrink-0 flex-col overflow-hidden bg-app text-text"
+  bind:this={editorViewRoot}
+  class="editor-view relative flex shrink-0 flex-col overflow-hidden bg-app text-text"
   role="application"
   aria-label="KSH pattern editor"
   style={`width:${dims.width}px;height:${dims.height}px;`}
@@ -2212,14 +2223,15 @@
     {/each}
     </div>
     <div class="shrink-0" style={`height:${gridBottomPad}px`} aria-hidden="true"></div>
-    {#if editGesture?.kind === "marquee"}
-      <div
-        class="ksh-marquee-lasso pointer-events-none fixed z-[9999] rounded-sm"
-        style={marqueeRectStyle}
-        aria-hidden="true"
-      ></div>
-    {/if}
   </div>
+
+  {#if editGesture?.kind === "marquee"}
+    <div
+      class="ksh-marquee-lasso pointer-events-none absolute z-[9999] rounded-sm"
+      style={marqueeRectStyle}
+      aria-hidden="true"
+    ></div>
+  {/if}
 
   {#if cyclePopover && effectiveLayerMode === "probability" && cyclePopoverCell}
     <div
