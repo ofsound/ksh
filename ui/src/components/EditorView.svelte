@@ -136,7 +136,7 @@
   let cyclePopover = $state(null);
   let cyclePopoverRoot = $state(null);
   let cyclePopoverAnchor = null;
-  let shiftHeld = false;
+  let shiftHeld = $state(false);
   let clearBlink = $state({ pattern: false, rowChannel: -1 });
   let patternClearBlinkTimer = null;
   let rowClearBlinkTimer = null;
@@ -222,7 +222,11 @@
     const raisedSurface = `color-mix(in srgb, ${light} 12%, ${surface})`;
     return `--cycle-row-light:${light};--cycle-row-dark:${dark};--cycle-row-divider:${divider};--cycle-row-surface:${surface};background:linear-gradient(to bottom, ${raisedSurface}, ${surface});box-shadow:0 10px 28px color-mix(in srgb, var(--color-app) 42%, rgba(0,0,0,0.45)),0 0 24px color-mix(in srgb, var(--color-text) 4%, transparent);`;
   });
-  const layerHeading = $derived(sourceLayerLabel(effectiveLayerMode).toLowerCase());
+  const layerHeading = $derived(
+    shiftHeld && hoverLayerMode === null
+      ? "select"
+      : sourceLayerLabel(effectiveLayerMode).toLowerCase()
+  );
   const selectedStepValueOption = $derived(
     stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
   );
