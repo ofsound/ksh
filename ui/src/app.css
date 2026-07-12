@@ -407,7 +407,7 @@
   }
 
   .ksh-cell-text-flash,
-  .ksh-cell-text-flash * {
+  .ksh-cell-text-flash *:not(.ksh-prob-value):not(.ksh-prob-value *) {
     color: var(--color-text) !important;
     text-shadow:
       0 1px 2px color-mix(in srgb, var(--color-app) 45%, transparent),

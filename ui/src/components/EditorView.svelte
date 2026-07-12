@@ -923,7 +923,7 @@
     return [
       "ksh-grid-cell relative mr-0 flex overflow-hidden border border-grid-cell-border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
       active ? "ksh-grid-cell-active" : "",
-      flashing ? "ksh-cell-text-flash" : "",
+      flashing && effectiveLayerMode !== "probability" ? "ksh-cell-text-flash" : "",
       "items-center justify-center",
       selected ? "ksh-grid-cell-selected" : "",
       previewCopy
@@ -1004,15 +1004,17 @@
       "right:0",
       `bottom:calc(${bottomInset}px + (40% - ${heightInset}px))`,
       "height:1px",
-      "background:var(--color-text)",
+      "background:color-mix(in srgb, var(--color-text) 25%, transparent)",
     ].join(";");
   }
 
   function cycleStripBarStyle(channel, active) {
     const { light, dark } = cycleStripColors(channel);
     if (active) {
+      const onTop = `color-mix(in srgb, ${light} 28%, var(--color-text))`;
+      const onBottom = `color-mix(in srgb, ${light} 42%, var(--color-text))`;
       return [
-        "background:linear-gradient(to bottom, var(--color-text), color-mix(in srgb, var(--color-text) 68%, var(--color-app)))",
+        `background:linear-gradient(to bottom, ${onTop}, ${onBottom})`,
         "box-shadow:inset 0 1px 0 color-mix(in srgb, white 70%, transparent), inset 0 -2px 3px color-mix(in srgb, var(--color-app) 24%, transparent)",
       ].join(";");
     }

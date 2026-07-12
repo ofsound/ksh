@@ -118,9 +118,11 @@
     }
 
     if (active) {
+      const onTop = "color-mix(in srgb, var(--cycle-row-light, var(--color-accent)) 28%, var(--color-text))";
+      const onBottom = "color-mix(in srgb, var(--cycle-row-light, var(--color-accent)) 42%, var(--color-text))";
       return [
-        "border-color:color-mix(in srgb, var(--color-text) 72%, var(--color-app))",
-        "background:linear-gradient(to bottom, var(--color-text), color-mix(in srgb, var(--color-text) 68%, var(--color-app)))",
+        `border-color:${onBottom}`,
+        `background:linear-gradient(to bottom, ${onTop}, ${onBottom})`,
         "color:var(--color-app)",
         "box-shadow:inset 0 1px 0 color-mix(in srgb, white 70%, transparent), inset 0 -2px 4px color-mix(in srgb, var(--color-app) 18%, transparent)",
       ].join(";");
