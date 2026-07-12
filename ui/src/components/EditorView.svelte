@@ -144,6 +144,8 @@
   let rowClearBlinkTimer = null;
   const recordPadCodes = ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK"];
   const recordPadKeysHeld = new SvelteSet();
+  const probabilitySectionPercent = 60;
+  const cycleSectionPercent = 40;
   const stepValueOptions = [
     { value: "4n", mark: "♩", shortLabel: "Quarter", menuLabel: "Quarter" },
     { value: "4nt", mark: "♩³", shortLabel: "Quarter Triplet", menuLabel: "Quarter Triplet" },
@@ -174,7 +176,9 @@
   const probabilityFontPx = $derived(Math.max(8, Math.round(cellFontPx * 0.72)));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
   const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
-  const cellInsetPx = $derived(gridCellInsetPx(patternScale, session.kshState.stepCount));
+  const cycleStripMarginPx = $derived(
+    Math.max(2, Math.round(gridCellInsetPx(patternScale, session.kshState.stepCount) * 0.5))
+  );
   const loopHandleW = $derived(gridLoopHandleWidth(patternScale, session.kshState.stepCount));
   const gridTopPad = $derived(gridTopPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
   const gridBottomPad = $derived(gridCellPadding(session.kshState.channelCount, dims.height, patternScale, session.kshState));
@@ -902,11 +906,9 @@
     }
 
     if (effectiveLayerMode === "probability") {
-      const fillPercent = Math.max(0, Math.min(100, Math.round(layerValue)));
-      const upperZoneFill = fillPercent * 0.6;
       return cellStyleFromBackground(
-        `linear-gradient(to top, var(--color-app) 0%, var(--color-app) 40%, ${darkColor} 40%, ${darkColor} ${40 + upperZoneFill}%, var(--color-app) ${40 + upperZoneFill}%, var(--color-app) 100%)`,
-        "var(--color-text)",
+        activeCellBackground(`linear-gradient(to bottom, ${darkColor}, ${lightColor})`),
+        "var(--color-text-inverse)",
       );
     }
 
@@ -981,40 +983,17 @@
     return { light, dark, divider };
   }
 
-  function cycleStripMetrics() {
-    return {
-      bottomInset: Math.max(2, Math.round(cellInsetPx * 0.5)),
-      heightInset: Math.max(3, Math.round(cellInsetPx * 0.5)),
-    };
-  }
-
-  function cycleStripFrameStyle(channel) {
-    const { light, dark, divider } = cycleStripColors(channel);
-    const { bottomInset, heightInset } = cycleStripMetrics();
-    // Opaque mid tone between light/dark so 2px gaps read as clear boundaries
-    const gapColor = `color-mix(in srgb, ${divider} 55%, color-mix(in srgb, ${light} 40%, ${dark}))`;
+  function cycleStripFrameStyle() {
     return [
-      "left:0",
-      "right:0",
-      `bottom:${bottomInset}px`,
-      `height:calc(40% - ${heightInset}px)`,
-      `border:2px solid ${light}`,
+      `left:${cycleStripMarginPx}px`,
+      `right:${cycleStripMarginPx}px`,
+      `bottom:${cycleStripMarginPx}px`,
+      `height:calc(${cycleSectionPercent}% - ${cycleStripMarginPx}px)`,
       "border-radius:2px",
-      `background:${gapColor}`,
+      "background:transparent",
       "box-sizing:border-box",
       "padding:0",
       "gap:2px",
-    ].join(";");
-  }
-
-  function cycleStripTopRuleStyle(channel) {
-    const { bottomInset, heightInset } = cycleStripMetrics();
-    return [
-      "left:0",
-      "right:0",
-      `bottom:calc(${bottomInset}px + (40% - ${heightInset}px))`,
-      "height:1px",
-      "background:color-mix(in srgb, var(--color-text) 25%, transparent)",
     ].join(";");
   }
 
@@ -1200,7 +1179,7 @@
     const layerMode =
       modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
     const valueMode = normalizeSourceLayerMode(layerMode) === "probability"
-      && localY >= gridCellH * 0.6
+      && localY >= gridCellH * (probabilitySectionPercent / 100)
       ? "cycle"
       : valueModeForCellInteraction(layerMode, null);
 
@@ -2156,23 +2135,19 @@
               {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
                 <span
-                  class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center leading-none"
+                  class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center leading-none"
+                  style={`height:${probabilitySectionPercent}%;`}
                 >
                   <span
-                    class="ksh-prob-value rounded-[3px] border px-[3px] py-px font-bold tabular-nums"
+                    class="font-medium tabular-nums"
                     style={`font-size:${probabilityFontPx}px;line-height:1;`}
                   >
                     {session.kshState.sources[session.selectedSource][channel][step].probability}%
                   </span>
                 </span>
-                <span
-                  class="pointer-events-none absolute"
-                  style={cycleStripTopRuleStyle(channel)}
-                  aria-hidden="true"
-                ></span>
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"
-                  style={`${cycleStripFrameStyle(channel)};grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));`}
+                  style={`${cycleStripFrameStyle()};grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));`}
                   aria-label={`Cycle pattern: ${cyclePattern.cycle} steps`}
                 >
                   {#each Array.from({ length: cyclePattern.cycle }, (_, cycleIndex) => cycleIndex) as cycleIndex (cycleIndex)}

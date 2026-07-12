@@ -163,7 +163,7 @@
   }
 
   .loop-range-brace {
-    border-top: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, var(--color-shell));
+    border-top: 1px solid color-mix(in srgb, var(--color-border-strong) 50%, var(--color-shell));
     border-bottom: 1px solid color-mix(in srgb, var(--color-app) 70%, var(--color-border-subtle));
     border-radius: 0;
     background:
@@ -399,15 +399,8 @@
       inset 0 0 0 1px color-mix(in srgb, var(--color-info) 28%, transparent);
   }
 
-  .ksh-prob-value {
-    color: var(--color-text);
-    background: color-mix(in srgb, var(--color-app) 90%, transparent);
-    border-color: color-mix(in srgb, var(--color-text) 28%, transparent);
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--color-app) 55%, transparent);
-  }
-
   .ksh-cell-text-flash,
-  .ksh-cell-text-flash *:not(.ksh-prob-value):not(.ksh-prob-value *) {
+  .ksh-cell-text-flash * {
     color: var(--color-text) !important;
     text-shadow:
       0 1px 2px color-mix(in srgb, var(--color-app) 45%, transparent),
