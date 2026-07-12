@@ -117,10 +117,15 @@
     }
 
     if (active) {
-      return "border-color:var(--cycle-row-light, var(--color-accent));background:var(--cycle-row-light, var(--color-accent));color:var(--color-text-inverse);";
+      return [
+        "border-color:color-mix(in srgb, var(--color-text) 72%, var(--color-app))",
+        "background:linear-gradient(to bottom, var(--color-text), color-mix(in srgb, var(--color-text) 68%, var(--color-app)))",
+        "color:var(--color-app)",
+        "box-shadow:inset 0 1px 0 color-mix(in srgb, white 70%, transparent), inset 0 -2px 4px color-mix(in srgb, var(--color-app) 18%, transparent)",
+      ].join(";");
     }
 
-    return "border-color:var(--cycle-row-divider, var(--color-border-strong));background:color-mix(in srgb, var(--cycle-row-dark, var(--color-surface-subtle)) 38%, var(--color-surface-subtle));color:var(--cycle-row-light, var(--color-text-muted));";
+    return "border-color:var(--cycle-row-light, var(--color-accent));background:var(--cycle-row-light, var(--color-accent));color:var(--color-text-inverse);";
   }
 
   function cycleHandleStyle(isDragging) {

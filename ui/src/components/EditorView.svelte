@@ -955,40 +955,68 @@
     return normalizeCyclePattern(cell.cycle, cell.cycleMask);
   }
 
-  function channelBrightColor(channel) {
-    let color = channelToneColor(channel, "light", session.dcColors);
-    if (
-      session.selectedSource !== SILENT_SOURCE
-      && session.kshState.sourceChannelMutes[session.selectedSource][channel]
-    ) {
-      color = mutedChannelColor(color);
+  function cycleStripColors(channel) {
+    const muted = session.selectedSource !== SILENT_SOURCE
+      && session.kshState.sourceChannelMutes[session.selectedSource][channel];
+    let light = channelToneColor(channel, "light", session.dcColors);
+    let dark = channelToneColor(channel, "dark", session.dcColors);
+    let divider = channelToneColor(channel, "divider", session.dcColors);
+
+    if (muted) {
+      light = mutedChannelColor(light);
+      dark = mutedChannelColor(dark);
+      divider = mutedChannelColor(divider);
     }
-    return color;
+
+    return { light, dark, divider };
+  }
+
+  function cycleStripMetrics() {
+    return {
+      bottomInset: Math.max(2, Math.round(cellInsetPx * 0.5)),
+      heightInset: Math.max(3, Math.round(cellInsetPx * 0.5)),
+    };
   }
 
   function cycleStripFrameStyle(channel) {
-    const bottomInset = Math.max(2, Math.round(cellInsetPx * 0.5));
-    const heightInset = Math.max(3, Math.round(cellInsetPx * 0.5));
+    const { light, dark, divider } = cycleStripColors(channel);
+    const { bottomInset, heightInset } = cycleStripMetrics();
+    // Opaque mid tone between light/dark so 2px gaps read as clear boundaries
+    const gapColor = `color-mix(in srgb, ${divider} 55%, color-mix(in srgb, ${light} 40%, ${dark}))`;
     return [
       "left:0",
       "right:0",
       `bottom:${bottomInset}px`,
       `height:calc(40% - ${heightInset}px)`,
-      `border:2px solid ${channelBrightColor(channel)}`,
+      `border:2px solid ${light}`,
       "border-radius:2px",
-      "background:var(--color-app)",
+      `background:${gapColor}`,
       "box-sizing:border-box",
       "padding:0",
-      "gap:1px",
+      "gap:2px",
+    ].join(";");
+  }
+
+  function cycleStripTopRuleStyle(channel) {
+    const { bottomInset, heightInset } = cycleStripMetrics();
+    return [
+      "left:0",
+      "right:0",
+      `bottom:calc(${bottomInset}px + (40% - ${heightInset}px))`,
+      "height:1px",
+      "background:var(--color-text)",
     ].join(";");
   }
 
   function cycleStripBarStyle(channel, active) {
-    const bright = channelBrightColor(channel);
+    const { light } = cycleStripColors(channel);
     if (active) {
-      return `background:color-mix(in srgb, ${bright} 58%, white);`;
+      return [
+        "background:linear-gradient(to bottom, var(--color-text), color-mix(in srgb, var(--color-text) 68%, var(--color-app)))",
+        "box-shadow:inset 0 1px 0 color-mix(in srgb, white 70%, transparent), inset 0 -2px 3px color-mix(in srgb, var(--color-app) 24%, transparent)",
+      ].join(";");
     }
-    return `background:color-mix(in srgb, ${bright} 42%, var(--color-app));`;
+    return `background:${light};`;
   }
 
   function loopBraceStyle(channel) {
@@ -2123,6 +2151,11 @@
                     {session.kshState.sources[session.selectedSource][channel][step].probability}%
                   </span>
                 </span>
+                <span
+                  class="pointer-events-none absolute"
+                  style={cycleStripTopRuleStyle(channel)}
+                  aria-hidden="true"
+                ></span>
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"
                   style={`${cycleStripFrameStyle(channel)};grid-template-columns:repeat(${cyclePattern.cycle},minmax(0,1fr));`}
