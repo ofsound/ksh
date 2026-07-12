@@ -112,8 +112,9 @@
   }
 
   function cycleCellStyle(inPattern, active) {
+    const outsideBg = "color-mix(in srgb, var(--cycle-row-dark, var(--color-surface)) 18%, var(--color-surface))";
     if (!inPattern) {
-      return "border-color:color-mix(in srgb, var(--cycle-row-divider, var(--color-border)) 55%, transparent);background:color-mix(in srgb, var(--cycle-row-dark, var(--color-surface)) 18%, var(--color-surface));color:var(--color-text-faint);";
+      return `border-color:color-mix(in srgb, var(--cycle-row-divider, var(--color-border)) 55%, transparent);background:${outsideBg};color:var(--color-text-faint);`;
     }
 
     if (active) {
@@ -125,7 +126,8 @@
       ].join(";");
     }
 
-    return "border-color:var(--cycle-row-light, var(--color-accent));background:var(--cycle-row-light, var(--color-accent));color:var(--color-text-inverse);";
+    const offBg = `color-mix(in srgb, var(--cycle-row-light, var(--color-accent)) 50%, ${outsideBg})`;
+    return `border-color:${offBg};background:${offBg};color:var(--color-text-inverse);`;
   }
 
   function cycleHandleStyle(isDragging) {

@@ -1009,14 +1009,15 @@
   }
 
   function cycleStripBarStyle(channel, active) {
-    const { light } = cycleStripColors(channel);
+    const { light, dark } = cycleStripColors(channel);
     if (active) {
       return [
         "background:linear-gradient(to bottom, var(--color-text), color-mix(in srgb, var(--color-text) 68%, var(--color-app)))",
         "box-shadow:inset 0 1px 0 color-mix(in srgb, white 70%, transparent), inset 0 -2px 3px color-mix(in srgb, var(--color-app) 24%, transparent)",
       ].join(";");
     }
-    return `background:${light};`;
+    const outsideBg = `color-mix(in srgb, ${dark} 18%, var(--color-surface))`;
+    return `background:color-mix(in srgb, ${light} 50%, ${outsideBg});`;
   }
 
   function loopBraceStyle(channel) {
