@@ -41,10 +41,15 @@ void KshUiBridge::emitJsonEvent (const juce::Identifier& eventId, const nlohmann
     if (webView == nullptr)
         return;
 
-    // Always ship the raw nlohmann dump as a string. Round-tripping large
-    // engine_state payloads through juce::var can drop or reshape the cells
-    // array; the UI parses payload.json and applies a destructive cell replace.
     const auto jsonText = payload.dump();
+    const auto parsed = juce::JSON::parse (jsonText);
+
+    if (! parsed.isVoid())
+    {
+        webView->emitEventIfBrowserIsVisible (eventId, parsed);
+        return;
+    }
+
     juce::DynamicObject::Ptr wrapper { new juce::DynamicObject() };
     wrapper->setProperty ("json", juce::String { jsonText });
     webView->emitEventIfBrowserIsVisible (eventId, juce::var (wrapper.get()));
@@ -60,7 +65,17 @@ void KshUiBridge::emitEngineState()
     state["projectUiScalePercent"] = processor.getProjectUiScalePercent();
     state["projectThemeMode"] = processor.getProjectThemeMode().toStdString();
     state["patternRecordingEnabled"] = processor.isPatternRecordingEnabled() ? 1 : 0;
-    emitJsonEvent ("engine_state", state);
+
+    // Persistence payloads must travel as a raw JSON string. Round-tripping the
+    // cells array through juce::var can drop/reshape entries; the UI then treats
+    // a missing cells array as "wipe the grid" unless guarded.
+    if (webView == nullptr)
+        return;
+
+    const auto jsonText = state.dump();
+    juce::DynamicObject::Ptr wrapper { new juce::DynamicObject() };
+    wrapper->setProperty ("json", juce::String { jsonText });
+    webView->emitEventIfBrowserIsVisible ("engine_state", juce::var (wrapper.get()));
 }
 
 void KshUiBridge::emitPreview (const nlohmann::json& preview)
@@ -236,6 +251,9 @@ bool KshUiBridge::handleCommand (const juce::String& commandJson)
     if (selector == "channel_audition" || selector == "pattern_record_row")
         return true;
 
-    emitPreview (processor.enginePreviewState());
+    // Do not dump/emit the full preview on the command turn — that blocked the
+    // WebView for many ms per painted cell. Snapshot publish already happened in
+    // dispatchUiEngineCommand; flush the dirty preview on the next async turn.
+    processor.scheduleUiPreviewFlush();
     return true;
 }

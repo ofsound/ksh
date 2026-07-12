@@ -441,6 +441,7 @@ function sendCellCommand(source, channel, step) {
 
 export async function sendCell(source, channel, step) {
   bumpState();
+  bumpOptimisticPreview();
   await sendCellCommand(source, channel, step);
 }
 
@@ -691,8 +692,18 @@ export async function clearSourceChannelSteps(source, channel) {
 
 export async function sendCellsForChannel(source, channel, steps) {
   bumpState();
+  bumpOptimisticPreview();
   for (const step of steps) {
     await sendCellCommand(source, channel, step);
+  }
+}
+
+/** Queue cell writes without awaiting — keeps paint/drag pointer handlers free. */
+export function queueCellsForChannel(source, channel, steps) {
+  bumpState();
+  bumpOptimisticPreview();
+  for (const step of steps) {
+    void sendCellCommand(source, channel, step);
   }
 }
 

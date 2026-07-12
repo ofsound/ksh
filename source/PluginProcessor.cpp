@@ -300,6 +300,13 @@ int PluginProcessor::emitPendingNoteHitsForUi()
     return emitted;
 }
 
+void PluginProcessor::scheduleUiPreviewFlush()
+{
+    previewFlushPending.store (true, std::memory_order_release);
+    messageThreadWorkPending.store (true, std::memory_order_release);
+    triggerAsyncUpdate();
+}
+
 void PluginProcessor::handleAsyncUpdate()
 {
     // Step 0 is the refresh boundary (step % refreshSteps == 0). Emitting note_hit
@@ -329,11 +336,9 @@ void PluginProcessor::handleAsyncUpdate()
         const int refreshSteps = std::max (1, engine.getRefreshSteps());
         const bool atRefreshBoundary = stepOneBased > 0
                                        && ((stepOneBased - 1) % refreshSteps) == 0;
-        const bool deferHeavyUi = hadHits
-                                  && (atRefreshBoundary
-                                      || engine.isPreviewDirty()
-                                      || previewFlushPending.load (std::memory_order_relaxed)
-                                      || deferredTransportPending.load (std::memory_order_relaxed));
+        // Only defer regen at the refresh boundary. Tying deferral to preview-dirty
+        // starved flushes while painting during playback (hits + dirty every turn).
+        const bool deferHeavyUi = hadHits && atRefreshBoundary;
 
         if (deferHeavyUi)
         {

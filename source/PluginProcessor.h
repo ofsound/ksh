@@ -77,6 +77,8 @@ public:
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
     /** Drain queued note-hit flashes to the WebView (safe on the message thread). */
     int emitPendingNoteHitsForUi();
+    /** Wake the message thread to flush a dirty preview without blocking a UI command. */
+    void scheduleUiPreviewFlush();
     bool hasStandaloneTransport() const;
     void setStandaloneTransportPlaying (bool shouldPlay);
     bool isStandaloneTransportPlaying() const;
