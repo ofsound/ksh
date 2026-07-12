@@ -908,7 +908,6 @@
   }
 
   function cellClass(channel, step) {
-    void session.noteFlashEpoch;
     const beyondSteps = step >= session.kshState.stepCount;
     const silent = session.selectedSource === SILENT_SOURCE;
     const cell = silent ? null : displayedCell(channel, step);
@@ -2094,7 +2093,6 @@
               data-ksh-edit-cell
               data-channel={channel}
               data-step={step}
-              data-flashing={isEditorFlashing(session.selectedSource, channel, step) ? "true" : undefined}
               data-selected={selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
               disabled={selectedCellKeys.has(cellSelectionKey(channel, step))
                 ? !isBulkCellInteractive(channel, step)

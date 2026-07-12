@@ -100,14 +100,14 @@ void KshUiBridge::emitNoteHit (const ksh::NativeHit& hit)
     if (webView == nullptr)
         return;
 
-    // Use the raw-JSON path so integer fields (especially sourceStep=1 for the
-    // first pattern cell) cannot be lost in juce::var round-trips.
-    emitJsonEvent ("note_hit", nlohmann::json {
-        { "channel", hit.uiChannel },
-        { "generatedStep", hit.uiGeneratedStep },
-        { "source", hit.uiSource },
-        { "sourceStep", hit.uiSourceStep },
-    });
+    // Prefer a flat DynamicObject so the WebView gets fields without a JSON
+    // round-trip; keep integer steps intact for the first cell (sourceStep=1).
+    auto* payload = new juce::DynamicObject();
+    payload->setProperty ("channel", hit.uiChannel);
+    payload->setProperty ("generatedStep", hit.uiGeneratedStep);
+    payload->setProperty ("source", hit.uiSource);
+    payload->setProperty ("sourceStep", hit.uiSourceStep);
+    webView->emitEventIfBrowserIsVisible ("note_hit", juce::var (payload));
 }
 
 void KshUiBridge::emitCurrentStep (int stepOneBased)
@@ -157,7 +157,8 @@ void KshUiBridge::pollModifierKeys()
 void KshUiBridge::pollTransportUi()
 {
     pollModifierKeys();
-    processor.emitPendingNoteHitsForUi();
+    // Do not drain note_hit here. Hits must go through PluginProcessor::handleAsyncUpdate
+    // so loop-start generateWindow is deferred and cannot block the first-column flash.
 
     const int step = processor.getCurrentStepForUi();
     emitCurrentStep (step);

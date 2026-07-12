@@ -172,6 +172,10 @@ private:
     std::atomic<bool> playbackResetRequested { false };
     std::atomic<bool> fullUiSyncPending { false };
     std::atomic<bool> previewFlushPending { false };
+    // Set whenever note_hit is emitted; cleared when heavy UI work is deferred so
+    // generateWindow cannot run in the same turn (pollTransportUi used to drain
+    // hits, then handleAsyncUpdate regenerated and blocked the flash by a step).
+    std::atomic<bool> noteHitDeferHeavyUi { false };
     // Loop-start regen deferred so note_hit JS can flush on a free run-loop turn.
     std::atomic<bool> deferredTransportPending { false };
     std::atomic<double> deferredTransportPpq { 0.0 };

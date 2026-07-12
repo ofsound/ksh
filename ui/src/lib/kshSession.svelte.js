@@ -87,8 +87,6 @@ const compactNoteFlashes = new SvelteMap();
 export const session = $state({
   kshState: makeDefaultKshState(),
   previewData: null,
-  /** Bumped on every note flash so grid cell classes reliably re-evaluate. */
-  noteFlashEpoch: 0,
   playingStep: 0,
   selectedSource: 0,
   selectedChannel: 0,
@@ -373,7 +371,6 @@ function scheduleFlashClear(map, key, delayMs, generation) {
       return;
     }
     map.delete(key);
-    session.noteFlashEpoch += 1;
   }, delayMs);
 }
 
@@ -403,24 +400,23 @@ function handleEditorNoteHit(payload) {
   // selectedSource after the hit is armed; source-keyed flashes then miss the
   // first column every wrap while audio still plays.
   armGridFlash(editorNoteFlashes, channel, sourceStep);
-  armGridFlash(editorNoteFlashes, channel, generatedStep);
-  session.noteFlashEpoch += 1;
+  if (generatedStep !== sourceStep) {
+    armGridFlash(editorNoteFlashes, channel, generatedStep);
+  }
 }
 
 function handleNoteHit(payload) {
-  // emitJsonEvent wraps payloads as { json: "..." }; unwrap before reading fields.
+  // Backend may send a flat object or { json: "..." }.
   const parsed = parseBackendJson(payload) ?? payload;
   handleEditorNoteHit(parsed);
   handleCompactNoteHit(parsed);
 }
 
 export function isCompactFlashing(channel, step) {
-  void session.noteFlashEpoch;
   return compactNoteFlashes.has(gridFlashKey(channel, step));
 }
 
 export function isEditorFlashing(_source, channel, step) {
-  void session.noteFlashEpoch;
   return editorNoteFlashes.has(gridFlashKey(channel, step));
 }
 
@@ -1189,9 +1185,6 @@ export function initKshSession() {
       } else if (stackSource !== lastStackPreviewSource) {
         session.selectedSource = stackSource;
         lastStackPreviewSource = stackSource;
-        // Force grid class re-eval so in-flight channel:step flashes stay visible
-        // on the newly selected pattern after loop-start regen.
-        session.noteFlashEpoch += 1;
       }
       session.previewData = parsed;
     }),

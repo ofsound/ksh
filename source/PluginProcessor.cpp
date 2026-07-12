@@ -294,17 +294,21 @@ int PluginProcessor::emitPendingNoteHitsForUi()
         ++emitted;
     }
 
+    if (emitted > 0)
+        noteHitDeferHeavyUi.store (true, std::memory_order_release);
+
     return emitted;
 }
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    // Push note flashes first, then yield before loop-start generateWindow / preview.
-    // WKWebView evaluateJavaScript often does not reach the content process until the
-    // main run loop turns; running generateWindow on the same turn blocks that and
-    // makes step-1 flashes land about a step late.
-    const int emittedHits = emitPendingNoteHitsForUi();
-    const bool deferHeavyUi = emittedHits > 0;
+    // Step 0 is the refresh boundary (step % refreshSteps == 0). Emitting note_hit
+    // and then calling generateWindow on the same turn blocks the WebView paint.
+    // Only defer that heavy work on refresh boundaries / dirty preview — deferring
+    // every note doubled message-thread work and made grid editing feel laggy.
+    emitPendingNoteHitsForUi();
+    const bool hadHits = noteHitDeferHeavyUi.exchange (false, std::memory_order_acq_rel);
+    bool scheduleDeferredTurn = false;
 
     {
         std::scoped_lock lock { engineStateMutex };
@@ -313,7 +317,6 @@ void PluginProcessor::handleAsyncUpdate()
         drainPendingMidiPatternSelectionsLocked();
         drainPendingPatternRecordEventsLocked();
 
-        // Host tempo changes (mutating the engine + emitting UI status are not realtime-safe).
         if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
         {
             const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
@@ -322,12 +325,20 @@ void PluginProcessor::handleAsyncUpdate()
                 engine.setTempo (bpm);
         }
 
+        const int stepOneBased = getCurrentStepForUi();
+        const int refreshSteps = std::max (1, engine.getRefreshSteps());
+        const bool atRefreshBoundary = stepOneBased > 0
+                                       && ((stepOneBased - 1) % refreshSteps) == 0;
+        const bool deferHeavyUi = hadHits
+                                  && (atRefreshBoundary
+                                      || engine.isPreviewDirty()
+                                      || previewFlushPending.load (std::memory_order_relaxed)
+                                      || deferredTransportPending.load (std::memory_order_relaxed));
+
         if (deferHeavyUi)
         {
             if (transportReportPending.exchange (false, std::memory_order_acquire))
             {
-                // Keep the earliest stashed position so step-0 refresh is not skipped
-                // when a later step overwrites reportedPpq before we run regen.
                 if (! deferredTransportPending.load (std::memory_order_relaxed))
                 {
                     deferredTransportPpq.store (reportedPpq.load (std::memory_order_relaxed),
@@ -341,12 +352,9 @@ void PluginProcessor::handleAsyncUpdate()
             if (engine.isPreviewDirty())
                 previewFlushPending.store (true, std::memory_order_release);
 
-            if (deferredTransportPending.load (std::memory_order_relaxed)
-                || previewFlushPending.load (std::memory_order_relaxed)
-                || fullUiSyncPending.load (std::memory_order_relaxed))
-            {
-                messageThreadWorkPending.store (true, std::memory_order_release);
-            }
+            scheduleDeferredTurn = deferredTransportPending.load (std::memory_order_relaxed)
+                                   || previewFlushPending.load (std::memory_order_relaxed)
+                                   || fullUiSyncPending.load (std::memory_order_relaxed);
         }
         else
         {
@@ -374,11 +382,21 @@ void PluginProcessor::handleAsyncUpdate()
 
     playbackMailbox.drainRetired();
 
-    // Hits queued while the lock was held still need a free run-loop turn.
     if (emitPendingNoteHitsForUi() > 0)
+    {
+        // Let the next turn decide whether regen must wait — do not force a
+        // deferred heavy pass for ordinary mid-pattern hits.
+        noteHitDeferHeavyUi.store (true, std::memory_order_release);
         messageThreadWorkPending.store (true, std::memory_order_release);
+        triggerAsyncUpdate();
+    }
+    else if (scheduleDeferredTurn)
+    {
+        messageThreadWorkPending.store (true, std::memory_order_release);
+        triggerAsyncUpdate();
+    }
 
-    if (! deferHeavyUi && fullUiSyncPending.exchange (false, std::memory_order_acquire))
+    if (! scheduleDeferredTurn && fullUiSyncPending.exchange (false, std::memory_order_acquire))
         uiBridge.syncAll();
 }
 
@@ -483,22 +501,40 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
     if (! hasStandaloneTransport())
         return;
 
-    const int nextPlaying = shouldPlay ? 1 : 0;
-    const int wasPlaying = standaloneTransportPlaying.exchange (nextPlaying, std::memory_order_relaxed);
-
-    if (nextPlaying != 0 && wasPlaying == 0)
+    if (shouldPlay)
     {
+        if (standaloneTransportPlaying.load (std::memory_order_relaxed) != 0)
+            return;
+
+        // Prepare step-0 before the audio thread is allowed to run. Setting the
+        // playing flag first let the first MIDI event fire while generateWindow
+        // still held the message thread — note_hit then painted a step late.
         standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
         standaloneTransportResetRequested.store (1, std::memory_order_release);
+        currentStepForUi.store (0, std::memory_order_relaxed);
+
+        {
+            std::scoped_lock lock { engineStateMutex };
+            engine.transportPosition (0.0, true);
+            publishPlaybackSnapshotIfChangedLocked();
+        }
+
+        standaloneTransportPlaying.store (1, std::memory_order_release);
     }
-    else if (nextPlaying == 0 && wasPlaying != 0)
+    else
     {
-        standaloneStopAllNotesRequested.store (1, std::memory_order_release);
+        const int wasPlaying = standaloneTransportPlaying.exchange (0, std::memory_order_relaxed);
+
+        if (wasPlaying != 0)
+            standaloneStopAllNotesRequested.store (1, std::memory_order_release);
+
+        currentStepForUi.store (0, std::memory_order_relaxed);
+        reportedPlaying.store (false, std::memory_order_relaxed);
+        transportReportPending.store (true, std::memory_order_release);
     }
 
-    currentStepForUi.store (nextPlaying != 0 ? currentStepForUi.load (std::memory_order_relaxed) : 0,
-                            std::memory_order_relaxed);
     messageThreadWorkPending.store (true, std::memory_order_release);
+    triggerAsyncUpdate();
 }
 
 bool PluginProcessor::isStandaloneTransportPlaying() const
@@ -655,6 +691,11 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     if (pushedHit || notify)
         messageThreadWorkPending.store (true, std::memory_order_release);
+
+    // Wake the message thread immediately for note flashes — waiting for the 120 Hz
+    // timer alone can put the first hit nearly a step behind the MIDI event.
+    if (pushedHit)
+        triggerAsyncUpdate();
 }
 
 ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
