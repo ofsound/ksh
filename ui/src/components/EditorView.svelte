@@ -897,7 +897,6 @@
       return cellStyleFromBackground(
         `linear-gradient(to top, var(--color-app) 0%, var(--color-app) 40%, ${darkColor} 40%, ${darkColor} ${40 + upperZoneFill}%, var(--color-app) ${40 + upperZoneFill}%, var(--color-app) 100%)`,
         "var(--color-text)",
-        "font-weight:700;text-shadow:0 1px 2px color-mix(in srgb, var(--color-app) 88%, transparent),0 0 1px color-mix(in srgb, var(--color-app) 72%, transparent);",
       );
     }
 
@@ -948,7 +947,8 @@
     if (effectiveLayerMode === "cycle") {
       return "";
     }
-    return String(sourceLayerValue(cell, effectiveLayerMode));
+    const value = sourceLayerValue(cell, effectiveLayerMode);
+    return effectiveLayerMode === "probability" ? `${value}%` : String(value);
   }
 
   function cyclePatternForCell(cell) {
@@ -1444,11 +1444,18 @@
   }
 
   function syncHoverLayerModeFromModifiers(shiftKey, altKey) {
-    if (shiftHeld && !shiftKey) {
+    const nextHover = modifierLayerMode(shiftKey, altKey);
+    const wasProbability =
+      normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode) === "probability";
+    const nextIsProbability =
+      normalizeSourceLayerMode(nextHover ?? session.sourceLayerMode) === "probability";
+
+    if (wasProbability && !nextIsProbability) {
       closeCyclePopover();
     }
+
     shiftHeld = Boolean(shiftKey);
-    hoverLayerMode = modifierLayerMode(shiftKey, altKey);
+    hoverLayerMode = nextHover;
   }
 
   function modifierStateFromKeyEvent(event) {
@@ -2108,9 +2115,13 @@
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
                 <span
                   class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center leading-none"
-                  style={`font-size:${probabilityFontPx}px;line-height:1;`}
                 >
-                  {session.kshState.sources[session.selectedSource][channel][step].probability}
+                  <span
+                    class="ksh-prob-value rounded-[3px] border px-[3px] py-px font-bold tabular-nums"
+                    style={`font-size:${probabilityFontPx}px;line-height:1;`}
+                  >
+                    {session.kshState.sources[session.selectedSource][channel][step].probability}%
+                  </span>
                 </span>
                 <div
                   class="pointer-events-none absolute grid overflow-hidden"
