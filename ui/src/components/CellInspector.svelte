@@ -24,6 +24,7 @@
   import {
     beginEditGestureHistory,
     commitEditGestureHistory,
+    queueCellsForChannelLive,
     sendCellsForChannel,
     session,
     setSourceLayerMode,
@@ -42,6 +43,10 @@
   let cycleInspectorRoot = $state(null);
   let cycleInspectorAnchor = null;
   let cycleInspectorPosition = $state({ left: 0, top: 0, pointerLeft: 10, placement: "above" });
+  /** @type {number} */
+  let liveFlushRaf = 0;
+  /** @type {Set<string> | null} */
+  let liveFlushKeys = null;
 
   const inspectorLocations = $derived(currentSelectedEnabledCellLocations());
   const inspectorKeys = $derived(new Set(inspectorLocations.map(({ key }) => key)));
@@ -241,6 +246,11 @@
       document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("resize", positionCycleInspector);
       window.removeEventListener("scroll", positionCycleInspector, true);
+      if (liveFlushRaf !== 0) {
+        cancelAnimationFrame(liveFlushRaf);
+        liveFlushRaf = 0;
+      }
+      liveFlushKeys = null;
     };
   });
 
@@ -254,6 +264,38 @@
     for (const [channel, steps] of byChannel) {
       await sendCellsForChannel(session.selectedSource, channel, steps);
     }
+  }
+
+  /**
+   * Live-preview flush: bump grid paint every call; coalesce native cell writes to one frame.
+   * @param {Iterable<string>} keys
+   */
+  function queueSelectedCellsLive(keys) {
+    // Immediate visual nudge so fills update even when native flush is rAF-coalesced.
+    session.gridVisualEpoch += 1;
+    liveFlushKeys = keys instanceof Set ? keys : new Set(keys);
+    if (liveFlushRaf !== 0) {
+      return;
+    }
+
+    liveFlushRaf = requestAnimationFrame(() => {
+      liveFlushRaf = 0;
+      const keysToFlush = liveFlushKeys;
+      liveFlushKeys = null;
+      if (!keysToFlush) {
+        return;
+      }
+
+      const byChannel = selectedStepsByChannel(
+        keysToFlush,
+        session.kshState.channelCount,
+        session.kshState.stepCount,
+      );
+
+      for (const [channel, steps] of byChannel) {
+        queueCellsForChannelLive(session.selectedSource, channel, steps);
+      }
+    });
   }
 
   function beginVelocityGesture() {
@@ -278,13 +320,16 @@
     }
 
     velocityOffset = offset;
-    applyRelativeCellOffset(
+    const changed = applyRelativeCellOffset(
       session.kshState,
       session.selectedSource,
       velocityStarts,
       "velocity",
       offset,
     );
+    if (changed) {
+      queueSelectedCellsLive(inspectorKeys);
+    }
   }
 
   async function commitVelocityOffset(offset) {
@@ -332,13 +377,16 @@
     }
 
     probabilityOffset = offset;
-    applyRelativeCellOffset(
+    const changed = applyRelativeCellOffset(
       session.kshState,
       session.selectedSource,
       probabilityStarts,
       "probability",
       offset,
     );
+    if (changed) {
+      queueSelectedCellsLive(inspectorKeys);
+    }
   }
 
   async function commitProbabilityOffset(offset) {
@@ -380,13 +428,16 @@
       return;
     }
 
-    applyAbsoluteCellMode(
+    const changed = applyAbsoluteCellMode(
       session.kshState,
       session.selectedSource,
       rollKeys,
       "roll",
       value,
     );
+    if (changed) {
+      queueSelectedCellsLive(rollKeys);
+    }
   }
 
   async function commitRollValue(value) {

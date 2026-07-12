@@ -112,6 +112,8 @@ export const session = $state({
   projectOperationError: "",
   bridgeError: "",
   ready: false,
+  /** Nudges grid cell styles when cells mutate without bumpState (inspector live preview). */
+  gridVisualEpoch: 0,
 });
 let sessionStarted = false;
 /** @type {Array<() => void>} */
@@ -702,6 +704,15 @@ export async function sendCellsForChannel(source, channel, steps) {
 export function queueCellsForChannel(source, channel, steps) {
   bumpState();
   bumpOptimisticPreview();
+  for (const step of steps) {
+    void sendCellCommand(source, channel, step);
+  }
+}
+
+/** Live cell writes without deep-cloning all sources (inspector/paint preview). */
+export function queueCellsForChannelLive(source, channel, steps) {
+  bumpOptimisticPreview();
+  session.gridVisualEpoch += 1;
   for (const step of steps) {
     void sendCellCommand(source, channel, step);
   }

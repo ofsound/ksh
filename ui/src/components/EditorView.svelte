@@ -569,6 +569,7 @@
 
       if (!clickedKey || !selectedCellKeys.has(clickedKey)) {
         clearCellSelection();
+        return;
       }
     }
 
@@ -835,6 +836,7 @@
   }
 
   function cellStyle(channel, step) {
+    void session.gridVisualEpoch;
     const source = session.selectedSource;
     if (source === SILENT_SOURCE) {
       return step >= session.kshState.stepCount
@@ -1134,6 +1136,14 @@
       event.preventDefault();
       event.stopPropagation();
       beginMarquee(event, true, { channel, step });
+      return;
+    }
+
+    // First click outside a multi-cell selection only clears it (no paint/drag).
+    if (!event.shiftKey && selectedCellKeys.size > 0 && !selected) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearCellSelection();
       return;
     }
 
