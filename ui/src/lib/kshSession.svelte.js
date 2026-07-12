@@ -1,3 +1,4 @@
+import { SvelteMap } from "svelte/reactivity";
 import {
   DEFAULT_CHANNEL_LABELS,
   clampSwingSubdivisionIndex,
@@ -75,12 +76,19 @@ export const redoStack = $state([]);
 /** @type {ReturnType<typeof createHistorySnapshot> | null} */
 let gestureHistoryBefore = null;
 let historyApplying = false;
+/** Ignore N incoming engine_state events (async syncAll echoes after undo/redo). */
+let pendingEngineStateIgnores = 0;
+
+/** View-relative editor flashes: channel:step (survives stack source switches at loop start). */
+const editorNoteFlashes = new SvelteMap();
+/** Compact preview flashes: channel:step */
+const compactNoteFlashes = new SvelteMap();
 
 export const session = $state({
   kshState: makeDefaultKshState(),
   previewData: null,
-  compactNoteFlashes: {},
-  editorNoteFlashes: {},
+  /** Bumped on every note flash so grid cell classes reliably re-evaluate. */
+  noteFlashEpoch: 0,
   playingStep: 0,
   selectedSource: 0,
   selectedChannel: 0,
@@ -316,6 +324,9 @@ export async function commitEditGestureHistory(label) {
 
 async function applyHistorySnapshot(snapshot) {
   historyApplying = true;
+  // apply_persistence → syncAll emits engine_state via async evaluateJavascript
+  // after this function's await resolves; ignore that echo so it cannot wipe UI.
+  pendingEngineStateIgnores += 1;
 
   try {
     const previousStepCount = session.kshState.stepCount;
@@ -352,85 +363,65 @@ export async function redoEdit() {
   await applyHistorySnapshot(entry.after);
 }
 
-function compactFlashKey(channel, step) {
+function gridFlashKey(channel, step) {
   return `${channel}:${step}`;
 }
 
-function editorFlashKey(source, channel, step) {
-  return `${source}:${channel}:${step}`;
+function scheduleFlashClear(map, key, delayMs, generation) {
+  window.setTimeout(() => {
+    if (map.get(key) !== generation) {
+      return;
+    }
+    map.delete(key);
+    session.noteFlashEpoch += 1;
+  }, delayMs);
 }
 
-function scheduleFlashClear(key, store, delayMs) {
-  window.setTimeout(() => {
-    if (store === "compact") {
-      if (session.compactNoteFlashes[key] !== undefined) {
-        const next = { ...session.compactNoteFlashes };
-        delete next[key];
-        session.compactNoteFlashes = next;
-      }
-      return;
-    }
+function armGridFlash(map, channel, step) {
+  if (channel < 0 || channel >= MAX_CHANNELS || step < 0 || step >= MAX_STEPS) {
+    return;
+  }
 
-    const [source, channel, step] = key.split(":").map(Number);
-    const sourceRow = session.editorNoteFlashes[source];
-    if (!sourceRow?.[channel]?.[step]) {
-      return;
-    }
-
-    const next = { ...session.editorNoteFlashes };
-    next[source] = { ...next[source] };
-    next[source][channel] = { ...next[source][channel] };
-    delete next[source][channel][step];
-    session.editorNoteFlashes = next;
-  }, delayMs + 5);
+  const key = gridFlashKey(channel, step);
+  const generation = (map.get(key) ?? 0) + 1;
+  map.set(key, generation);
+  scheduleFlashClear(map, key, NOTE_HIT_FLASH_MS, generation);
 }
 
 function handleCompactNoteHit(payload) {
   const channel = clamp(Number(payload?.channel ?? 0), 1, MAX_CHANNELS) - 1;
   const step = clamp(Number(payload?.generatedStep ?? 0), 1, MAX_STEPS) - 1;
-  const key = compactFlashKey(channel, step);
-  session.compactNoteFlashes = {
-    ...session.compactNoteFlashes,
-    [key]: Date.now() + NOTE_HIT_FLASH_MS,
-  };
-  scheduleFlashClear(key, "compact", NOTE_HIT_FLASH_MS);
+  armGridFlash(compactNoteFlashes, channel, step);
 }
 
 function handleEditorNoteHit(payload) {
-  const source = clamp(Number(payload?.source ?? 0), 1, SOURCE_COUNT) - 1;
   const channel = clamp(Number(payload?.channel ?? 0), 1, MAX_CHANNELS) - 1;
-  const step = clamp(Number(payload?.sourceStep ?? 0), 1, MAX_STEPS) - 1;
-  const key = editorFlashKey(source, channel, step);
-  const until = Date.now() + NOTE_HIT_FLASH_MS;
+  const sourceStep = clamp(Number(payload?.sourceStep ?? 0), 1, MAX_STEPS) - 1;
+  const generatedStep = clamp(Number(payload?.generatedStep ?? 0), 1, MAX_STEPS) - 1;
 
-  session.editorNoteFlashes = {
-    ...session.editorNoteFlashes,
-    [source]: {
-      ...(session.editorNoteFlashes[source] ?? {}),
-      [channel]: {
-        ...((session.editorNoteFlashes[source] ?? {})[channel] ?? {}),
-        [step]: until,
-      },
-    },
-  };
-  scheduleFlashClear(key, "editor", NOTE_HIT_FLASH_MS);
+  // Key by channel:step only (not source). Loop-start stack regen can switch
+  // selectedSource after the hit is armed; source-keyed flashes then miss the
+  // first column every wrap while audio still plays.
+  armGridFlash(editorNoteFlashes, channel, sourceStep);
+  armGridFlash(editorNoteFlashes, channel, generatedStep);
+  session.noteFlashEpoch += 1;
 }
 
 function handleNoteHit(payload) {
-  // Both the editor grid and the compact preview strip are always visible, so
-  // flash both simultaneously.
-  handleEditorNoteHit(payload);
-  handleCompactNoteHit(payload);
+  // emitJsonEvent wraps payloads as { json: "..." }; unwrap before reading fields.
+  const parsed = parseBackendJson(payload) ?? payload;
+  handleEditorNoteHit(parsed);
+  handleCompactNoteHit(parsed);
 }
 
 export function isCompactFlashing(channel, step) {
-  const until = session.compactNoteFlashes[compactFlashKey(channel, step)];
-  return until !== undefined && until > Date.now();
+  void session.noteFlashEpoch;
+  return compactNoteFlashes.has(gridFlashKey(channel, step));
 }
 
-export function isEditorFlashing(source, channel, step) {
-  const until = session.editorNoteFlashes[source]?.[channel]?.[step];
-  return until !== undefined && until > Date.now();
+export function isEditorFlashing(_source, channel, step) {
+  void session.noteFlashEpoch;
+  return editorNoteFlashes.has(gridFlashKey(channel, step));
 }
 
 function cellCommandArgs(source, channel, step) {
@@ -1156,7 +1147,12 @@ export function initKshSession() {
 
   teardownHandlers = [
     onBackendEvent("engine_state", (payload) => {
-      if (historyApplying) {
+      if (historyApplying || gestureHistoryBefore) {
+        return;
+      }
+
+      if (pendingEngineStateIgnores > 0) {
+        pendingEngineStateIgnores -= 1;
         return;
       }
 
@@ -1193,6 +1189,9 @@ export function initKshSession() {
       } else if (stackSource !== lastStackPreviewSource) {
         session.selectedSource = stackSource;
         lastStackPreviewSource = stackSource;
+        // Force grid class re-eval so in-flight channel:step flashes stay visible
+        // on the newly selected pattern after loop-start regen.
+        session.noteFlashEpoch += 1;
       }
       session.previewData = parsed;
     }),

@@ -1020,9 +1020,11 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
+        const int sourceSteps = sourceSettings[static_cast<size_t> (source)].stepCount;
+
         for (int channel = 0; channel < channelCount; ++channel)
         {
-            for (int step = 0; step < stepCount; ++step)
+            for (int step = 0; step < sourceSteps; ++step)
             {
                 const auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
 

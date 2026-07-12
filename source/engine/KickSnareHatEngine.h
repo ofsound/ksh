@@ -226,6 +226,7 @@ public:
     void transportPosition (double songBeats, bool isPlaying);
     void syncNativePlaybackTable();
     void flushPreview();
+    [[nodiscard]] bool isPreviewDirty() const { return previewDirty; }
 
     [[nodiscard]] static int mod (int value, int divisor);
 

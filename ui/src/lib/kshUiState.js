@@ -275,10 +275,16 @@ export function applyPersistencePayload(state, payload) {
     state.refreshSteps = clamp(state.refreshSteps, 1, state.stepCount);
   }
 
-  for (let source = 0; source < SOURCE_COUNT; source += 1) {
-    for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
-      for (let step = 0; step < MAX_STEPS; step += 1) {
-        state.sources[source][channel][step] = defaultCell();
+  // Only wipe/rebuild cells when the payload includes a real cells array.
+  // Missing or malformed `cells` (e.g. lost in a bridge round-trip) must not
+  // blank the grid — applyPersistencePayload always resets before repopulating.
+  const cellsIn = Array.isArray(payload.cells) ? payload.cells : null;
+  if (cellsIn) {
+    for (let source = 0; source < SOURCE_COUNT; source += 1) {
+      for (let channel = 0; channel < MAX_CHANNELS; channel += 1) {
+        for (let step = 0; step < MAX_STEPS; step += 1) {
+          state.sources[source][channel][step] = defaultCell();
+        }
       }
     }
   }
@@ -339,38 +345,39 @@ export function applyPersistencePayload(state, payload) {
     }
   }
 
-  const cellsIn = payload.cells ?? [];
-  for (let cellIndex = 0; cellIndex < cellsIn.length; cellIndex += 1) {
-    const entry = cellsIn[cellIndex];
-    if (!entry || entry.length < 7) {
-      continue;
-    }
+  if (cellsIn) {
+    for (let cellIndex = 0; cellIndex < cellsIn.length; cellIndex += 1) {
+      const entry = cellsIn[cellIndex];
+      if (!entry || entry.length < 7) {
+        continue;
+      }
 
-    const source = entry[0];
-    const channel = entry[1];
-    const step = entry[2];
-    if (
-      source < 0 ||
-      source >= SOURCE_COUNT ||
-      channel < 0 ||
-      channel >= MAX_CHANNELS ||
-      step < 0 ||
-      step >= MAX_STEPS
-    ) {
-      continue;
-    }
+      const source = entry[0];
+      const channel = entry[1];
+      const step = entry[2];
+      if (
+        source < 0 ||
+        source >= SOURCE_COUNT ||
+        channel < 0 ||
+        channel >= MAX_CHANNELS ||
+        step < 0 ||
+        step >= MAX_STEPS
+      ) {
+        continue;
+      }
 
-    const isLegacyEntry = entry.length >= 10;
-    state.sources[source][channel][step] = cloneCell({
-      enabled: entry[3],
-      velocity: entry[4],
-      probability: entry[5],
-      cycle: entry[6],
-      cycleMask: isLegacyEntry
-        ? cycleMaskFromLegacyOffset(entry[7], entry[6], entry[8])
-        : entry[7],
-      roll: isLegacyEntry ? entry[9] : entry[8],
-    });
+      const isLegacyEntry = entry.length >= 10;
+      state.sources[source][channel][step] = cloneCell({
+        enabled: entry[3],
+        velocity: entry[4],
+        probability: entry[5],
+        cycle: entry[6],
+        cycleMask: isLegacyEntry
+          ? cycleMaskFromLegacyOffset(entry[7], entry[6], entry[8])
+          : entry[7],
+        roll: isLegacyEntry ? entry[9] : entry[8],
+      });
+    }
   }
 
   return true;

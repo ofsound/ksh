@@ -908,6 +908,7 @@
   }
 
   function cellClass(channel, step) {
+    void session.noteFlashEpoch;
     const beyondSteps = step >= session.kshState.stepCount;
     const silent = session.selectedSource === SILENT_SOURCE;
     const cell = silent ? null : displayedCell(channel, step);
@@ -918,18 +919,27 @@
     const previewTarget = bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
 
-    return [
-      "ksh-grid-cell relative mr-0 flex overflow-hidden border border-grid-cell-border font-medium leading-none outline-none focus:outline-none focus-visible:outline-none",
-      active ? "ksh-grid-cell-active" : "",
-      flashing ? "ksh-cell-text-flash" : "",
-      "items-center justify-center",
-      selected ? "ksh-grid-cell-selected" : "",
-      previewCopy
-        ? "ksh-grid-cell-preview-copy"
-        : previewTarget
-          ? "ksh-grid-cell-preview-target"
-          : "",
-    ].join(" ");
+    return {
+      "ksh-grid-cell": true,
+      "relative": true,
+      "mr-0": true,
+      "flex": true,
+      "overflow-hidden": true,
+      "border": true,
+      "border-grid-cell-border": true,
+      "font-medium": true,
+      "leading-none": true,
+      "outline-none": true,
+      "focus:outline-none": true,
+      "focus-visible:outline-none": true,
+      "items-center": true,
+      "justify-center": true,
+      "ksh-grid-cell-active": active,
+      "ksh-cell-text-flash": flashing,
+      "ksh-grid-cell-selected": selected,
+      "ksh-grid-cell-preview-copy": previewCopy,
+      "ksh-grid-cell-preview-target": previewTarget && !previewCopy,
+    };
   }
 
   function cellLabel(channel, step) {
@@ -2075,7 +2085,7 @@
             onpointercancel={endLoopRangeDrag}
           >
           </button>
-          {#each allStepCols as step (step)}
+          {#each allStepCols as step (`s${step}`)}
             {#if step >= rowLoopRange.start && step <= rowLoopRange.end}
             <button
               type="button"
@@ -2084,6 +2094,7 @@
               data-ksh-edit-cell
               data-channel={channel}
               data-step={step}
+              data-flashing={isEditorFlashing(session.selectedSource, channel, step) ? "true" : undefined}
               data-selected={selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
               disabled={selectedCellKeys.has(cellSelectionKey(channel, step))
                 ? !isBulkCellInteractive(channel, step)

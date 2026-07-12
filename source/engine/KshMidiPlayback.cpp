@@ -533,6 +533,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
         {
             clearPending();
             resetCycleCounters();
+            // Seek/jump: do not emit the landing step (avoids a rogue note on locate).
+            // Continuous pattern loops never hit this path — global steps advance by 1.
             lastEmittedGlobalStep = globalStepStart;
             return result;
         }

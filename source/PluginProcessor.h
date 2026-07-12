@@ -75,6 +75,8 @@ public:
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
+    /** Drain queued note-hit flashes to the WebView (safe on the message thread). */
+    int emitPendingNoteHitsForUi();
     bool hasStandaloneTransport() const;
     void setStandaloneTransportPlaying (bool shouldPlay);
     bool isStandaloneTransportPlaying() const;
@@ -169,6 +171,11 @@ private:
     std::atomic<bool> messageThreadWorkPending { false };
     std::atomic<bool> playbackResetRequested { false };
     std::atomic<bool> fullUiSyncPending { false };
+    std::atomic<bool> previewFlushPending { false };
+    // Loop-start regen deferred so note_hit JS can flush on a free run-loop turn.
+    std::atomic<bool> deferredTransportPending { false };
+    std::atomic<double> deferredTransportPpq { 0.0 };
+    std::atomic<bool> deferredTransportPlaying { false };
     std::atomic<bool> macroParametersDirty { false };
     std::atomic<bool> suppressParameterCallbacks { false };
     std::atomic<int> standaloneTransportPlaying { 0 };

@@ -283,8 +283,29 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
     return callbacks;
 }
 
+int PluginProcessor::emitPendingNoteHitsForUi()
+{
+    int emitted = 0;
+    ksh::NativeHit hit;
+
+    while (noteHitsForUi.try_dequeue (hit))
+    {
+        uiBridge.emitNoteHit (hit);
+        ++emitted;
+    }
+
+    return emitted;
+}
+
 void PluginProcessor::handleAsyncUpdate()
 {
+    // Push note flashes first, then yield before loop-start generateWindow / preview.
+    // WKWebView evaluateJavaScript often does not reach the content process until the
+    // main run loop turns; running generateWindow on the same turn blocks that and
+    // makes step-1 flashes land about a step late.
+    const int emittedHits = emitPendingNoteHitsForUi();
+    const bool deferHeavyUi = emittedHits > 0;
+
     {
         std::scoped_lock lock { engineStateMutex };
 
@@ -301,26 +322,63 @@ void PluginProcessor::handleAsyncUpdate()
                 engine.setTempo (bpm);
         }
 
-        // Advance generative regeneration from the transport position reported by the audio thread.
-        if (transportReportPending.exchange (false, std::memory_order_acquire))
+        if (deferHeavyUi)
         {
-            const auto ppq = reportedPpq.load (std::memory_order_relaxed);
-            const auto playing = reportedPlaying.load (std::memory_order_relaxed);
-            engine.transportPosition (ppq, playing);
-        }
+            if (transportReportPending.exchange (false, std::memory_order_acquire))
+            {
+                // Keep the earliest stashed position so step-0 refresh is not skipped
+                // when a later step overwrites reportedPpq before we run regen.
+                if (! deferredTransportPending.load (std::memory_order_relaxed))
+                {
+                    deferredTransportPpq.store (reportedPpq.load (std::memory_order_relaxed),
+                                               std::memory_order_relaxed);
+                    deferredTransportPlaying.store (reportedPlaying.load (std::memory_order_relaxed),
+                                                    std::memory_order_relaxed);
+                    deferredTransportPending.store (true, std::memory_order_release);
+                }
+            }
 
-        publishPlaybackSnapshotIfChangedLocked();
-        engine.flushPreview();
+            if (engine.isPreviewDirty())
+                previewFlushPending.store (true, std::memory_order_release);
+
+            if (deferredTransportPending.load (std::memory_order_relaxed)
+                || previewFlushPending.load (std::memory_order_relaxed)
+                || fullUiSyncPending.load (std::memory_order_relaxed))
+            {
+                messageThreadWorkPending.store (true, std::memory_order_release);
+            }
+        }
+        else
+        {
+            if (deferredTransportPending.exchange (false, std::memory_order_acq_rel))
+            {
+                engine.transportPosition (deferredTransportPpq.load (std::memory_order_relaxed),
+                                         deferredTransportPlaying.load (std::memory_order_relaxed));
+            }
+
+            if (transportReportPending.exchange (false, std::memory_order_acquire))
+            {
+                engine.transportPosition (reportedPpq.load (std::memory_order_relaxed),
+                                         reportedPlaying.load (std::memory_order_relaxed));
+            }
+
+            if (previewFlushPending.exchange (false, std::memory_order_acq_rel))
+                engine.flushPreview();
+
+            publishPlaybackSnapshotIfChangedLocked();
+
+            if (engine.isPreviewDirty())
+                engine.flushPreview();
+        }
     }
 
     playbackMailbox.drainRetired();
 
-    ksh::NativeHit hit;
+    // Hits queued while the lock was held still need a free run-loop turn.
+    if (emitPendingNoteHitsForUi() > 0)
+        messageThreadWorkPending.store (true, std::memory_order_release);
 
-    while (noteHitsForUi.try_dequeue (hit))
-        uiBridge.emitNoteHit (hit);
-
-    if (fullUiSyncPending.exchange (false, std::memory_order_acquire))
+    if (! deferHeavyUi && fullUiSyncPending.exchange (false, std::memory_order_acquire))
         uiBridge.syncAll();
 }
 
@@ -460,12 +518,10 @@ void PluginProcessor::setStandaloneTempoBpm (double bpm)
 
         if (std::abs (engine.getTempo() - bpm) > 0.01)
         {
-            engine.setTempo (bpm);
+            engine.setTempo (bpm); // emits tempo status; avoid full engine_state resync
             publishPlaybackSnapshotIfChangedLocked();
         }
     }
-
-    uiBridge.emitEngineState();
 }
 
 double PluginProcessor::getStandaloneTempoBpm()
@@ -926,7 +982,10 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
                                     ? (args[0].is_boolean() ? args[0].get<bool>() : args[0].get<int>() != 0)
                                     : false;
         setStandaloneTransportPlaying (shouldPlay);
-        uiBridge.emitEngineState();
+        // Transport-only: never push a full engine_state. A destructive persistence
+        // apply can wipe optimistic UI cells if the engine snapshot is empty/stale.
+        uiBridge.emitStatus (std::string { "standalone_transport_playing " }
+                             + (isStandaloneTransportPlaying() ? "1" : "0"));
         return hasStandaloneTransport();
     }
 

@@ -52,6 +52,42 @@ TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
     REQUIRE (restored.engine.sourceChannelMutedAt (1, 0));
 }
 
+TEST_CASE ("persistence serializes cells beyond the active pattern step count", "[engine][persistence]")
+{
+    EngineFixture original;
+    EngineFixture restored;
+
+    original.engine.setStepCount (8);
+    original.engine.setStaticSource (0);
+    original.engine.setSourceStepCount (1, 16);
+    original.engine.setCell (0, 0, 3, true, 80, 100, 1);
+    original.engine.setCell (1, 1, 12, true, 90, 100, 1);
+
+    const auto payload = original.engine.serializeForPersistence();
+    REQUIRE (payload["stepCount"] == 8);
+    REQUIRE (payload["cells"].size() >= 2);
+
+    bool foundLongPatternCell = false;
+    for (const auto& entry : payload["cells"])
+    {
+        if (entry.is_array() && entry.size() >= 4
+            && entry[0].get<int>() == 1
+            && entry[1].get<int>() == 1
+            && entry[2].get<int>() == 12
+            && entry[3].get<int>() == 1)
+        {
+            foundLongPatternCell = true;
+            break;
+        }
+    }
+    REQUIRE (foundLongPatternCell);
+
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    REQUIRE (restored.engine.sourceCellAt (0, 0, 3).enabled);
+    REQUIRE (restored.engine.sourceCellAt (1, 1, 12).enabled);
+    REQUIRE (restored.engine.sourceCellAt (1, 1, 12).velocity == 90);
+}
+
 TEST_CASE ("persistence payload restores per-source resolution", "[engine][persistence]")
 {
     EngineFixture original;

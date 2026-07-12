@@ -407,6 +407,19 @@
       0 0 7px color-mix(in srgb, var(--color-text) 45%, transparent);
   }
 
+  .ksh-grid-cell.ksh-cell-text-flash {
+    animation: ksh-cell-hit-flash 200ms ease-out;
+  }
+
+  @keyframes ksh-cell-hit-flash {
+    0% {
+      filter: brightness(1.55) saturate(1.15);
+    }
+    100% {
+      filter: brightness(1) saturate(1);
+    }
+  }
+
   .ksh-pattern-copy-source {
     position: relative;
     box-shadow:

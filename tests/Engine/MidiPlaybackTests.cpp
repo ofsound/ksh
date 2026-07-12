@@ -139,6 +139,48 @@ TEST_CASE ("midi playback does not emit when device inactive", "[engine][transpo
     REQUIRE (countNoteOns (result.midi) == 0);
 }
 
+TEST_CASE ("midi playback emits note_hit for step 1 on every loop wrap", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 2, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 4, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const double beatsPerStep = snapshot.beatsPerStep;
+    int step1Hits = 0;
+
+    for (int globalStep = 0; globalStep < 12; ++globalStep)
+    {
+        const auto result = runPlaybackBlock (runner,
+                                              snapshot,
+                                              static_cast<double> (globalStep) * beatsPerStep,
+                                              120.0,
+                                              true,
+                                              512);
+
+        if (globalStep % 4 == 0)
+        {
+            REQUIRE (countNoteOns (result.midi) == 1);
+            REQUIRE (result.noteHitCount == 1);
+            REQUIRE (result.noteHits[0].uiGeneratedStep == 1);
+            REQUIRE (result.noteHits[0].uiSourceStep == 1);
+            ++step1Hits;
+        }
+    }
+
+    REQUIRE (step1Hits == 3);
+}
+
 TEST_CASE ("midi playback does not emit on transport jump", "[engine][transport]")
 {
     EngineFixture fixture;

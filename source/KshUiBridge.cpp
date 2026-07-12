@@ -41,15 +41,10 @@ void KshUiBridge::emitJsonEvent (const juce::Identifier& eventId, const nlohmann
     if (webView == nullptr)
         return;
 
+    // Always ship the raw nlohmann dump as a string. Round-tripping large
+    // engine_state payloads through juce::var can drop or reshape the cells
+    // array; the UI parses payload.json and applies a destructive cell replace.
     const auto jsonText = payload.dump();
-    const auto parsed = juce::JSON::parse (jsonText);
-
-    if (! parsed.isVoid())
-    {
-        webView->emitEventIfBrowserIsVisible (eventId, parsed);
-        return;
-    }
-
     juce::DynamicObject::Ptr wrapper { new juce::DynamicObject() };
     wrapper->setProperty ("json", juce::String { jsonText });
     webView->emitEventIfBrowserIsVisible (eventId, juce::var (wrapper.get()));
@@ -105,12 +100,14 @@ void KshUiBridge::emitNoteHit (const ksh::NativeHit& hit)
     if (webView == nullptr)
         return;
 
-    auto* payload = new juce::DynamicObject();
-    payload->setProperty ("channel", hit.uiChannel);
-    payload->setProperty ("generatedStep", hit.uiGeneratedStep);
-    payload->setProperty ("source", hit.uiSource);
-    payload->setProperty ("sourceStep", hit.uiSourceStep);
-    webView->emitEventIfBrowserIsVisible ("note_hit", juce::var (payload));
+    // Use the raw-JSON path so integer fields (especially sourceStep=1 for the
+    // first pattern cell) cannot be lost in juce::var round-trips.
+    emitJsonEvent ("note_hit", nlohmann::json {
+        { "channel", hit.uiChannel },
+        { "generatedStep", hit.uiGeneratedStep },
+        { "source", hit.uiSource },
+        { "sourceStep", hit.uiSourceStep },
+    });
 }
 
 void KshUiBridge::emitCurrentStep (int stepOneBased)
@@ -160,6 +157,7 @@ void KshUiBridge::pollModifierKeys()
 void KshUiBridge::pollTransportUi()
 {
     pollModifierKeys();
+    processor.emitPendingNoteHitsForUi();
 
     const int step = processor.getCurrentStepForUi();
     emitCurrentStep (step);

@@ -138,6 +138,18 @@
     restoreDefaultInspectorLayer();
   }
 
+  function onCycleInspectorPointerLeave(event) {
+    // pointerleave does not fire when moving between children; skip mid-drag leaves
+    // (e.g. cycle-length handle with pointer capture outside the dialog bounds).
+    if (event.buttons !== 0) {
+      return;
+    }
+    if (cycleInspectorRoot?.contains(/** @type {Node | null} */ (event.relatedTarget))) {
+      return;
+    }
+    closeCycleInspector();
+  }
+
   function positionCycleInspector() {
     if (!cycleInspectorOpen || !cycleInspectorRoot || !cycleInspectorAnchor) {
       return;
@@ -518,6 +530,7 @@
       tabindex="-1"
       aria-label="Cycle editor for selected cells"
       onpointerdown={(event) => event.stopPropagation()}
+      onpointerleave={onCycleInspectorPointerLeave}
     >
       <div
         class="pointer-events-none absolute h-0 w-0 border-x-[10px] border-x-transparent"

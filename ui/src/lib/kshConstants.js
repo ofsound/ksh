@@ -8,7 +8,7 @@ export const SOURCE_COUNT = 16;
 export const COMPACT_HEIGHT = 200;
 
 export const EXPORT_BAR_VALUES = [1, 2, 4, 8, 16, 32];
-export const NOTE_HIT_FLASH_MS = 80;
+export const NOTE_HIT_FLASH_MS = 200;
 export const CHANNEL_RENAME_MS = 450;
 /** Max gap between mute-button taps to reset a channel row (tighter than rename). */
 export const SOURCE_ROW_RESET_MS = 220;
