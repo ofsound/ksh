@@ -15,10 +15,7 @@
     commonSelectedCellValue,
     selectedStepsByChannel,
   } from "../lib/kshCellInspector.js";
-  import {
-    cellSelection,
-    currentSelectedEnabledCellLocations,
-  } from "../lib/kshCellSelection.svelte.js";
+  import { currentSelectedEnabledCellLocations } from "../lib/kshCellSelection.svelte.js";
   import {
     channelToneColor,
     mutedChannelColor,
@@ -107,8 +104,11 @@
   );
 
   function focusInspectorLayer(mode) {
-    cellSelection.inspectorLayerActive = true;
     setSourceLayerMode(mode === "cycle" ? "probability" : mode);
+  }
+
+  function restoreDefaultInspectorLayer() {
+    setSourceLayerMode("velocity");
   }
 
   function currentInspectorKeys() {
@@ -135,6 +135,7 @@
 
   function closeCycleInspector() {
     cycleInspectorOpen = false;
+    restoreDefaultInspectorLayer();
   }
 
   function positionCycleInspector() {
@@ -168,6 +169,7 @@
 
   function beginCycleInspectorPatternGesture() {
     if (inspectorActive) {
+      focusInspectorLayer("cycle");
       beginEditGestureHistory();
     }
   }
@@ -185,6 +187,7 @@
   }
 
   async function commitCycleInspectorPattern(cycle, cycleMask) {
+    restoreDefaultInspectorLayer();
     if (!inspectorActive) {
       return;
     }
@@ -273,6 +276,7 @@
   }
 
   async function commitVelocityOffset(offset) {
+    restoreDefaultInspectorLayer();
     if (!inspectorActive || !velocityStarts) {
       velocityOffset = 0;
       velocityStarts = null;
@@ -326,6 +330,7 @@
   }
 
   async function commitProbabilityOffset(offset) {
+    restoreDefaultInspectorLayer();
     if (!inspectorActive || !probabilityStarts) {
       probabilityOffset = 0;
       probabilityStarts = null;
@@ -373,6 +378,7 @@
   }
 
   async function commitRollValue(value) {
+    restoreDefaultInspectorLayer();
     if (!inspectorActive || !rollKeys) {
       rollDragging = false;
       rollKeys = null;
@@ -393,6 +399,7 @@
   }
 
   async function advanceRollValue() {
+    restoreDefaultInspectorLayer();
     if (!inspectorActive) {
       return;
     }

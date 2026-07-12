@@ -5,7 +5,6 @@
   import HeaderDiscreteSelect from "./HeaderDiscreteSelect.svelte";
   import ChannelNoteControl from "./ChannelNoteControl.svelte";
   import PlaybackModeSelect from "./PlaybackModeSelect.svelte";
-  import MoveAroundIcon from "./MoveAroundIcon.svelte";
   import NudgeTriangleIcon from "./NudgeTriangleIcon.svelte";
   import KshCyclePatternEditor from "./KshCyclePatternEditor.svelte";
   import RowDisableIcon from "./RowDisableIcon.svelte";
@@ -62,11 +61,7 @@
     wrappedCellDestinations,
   } from "../lib/kshBulkEdit.js";
   import { positionFloatingPopover } from "../lib/floatingPopover.js";
-  import {
-    cellSelection,
-    clearEditSelection,
-    selectedCellKeys,
-  } from "../lib/kshCellSelection.svelte.js";
+  import { clearCellSelection, selectedCellKeys } from "../lib/kshCellSelection.svelte.js";
   import { cloneCell, defaultCell } from "../lib/kshUiState.js";
   import {
     CHANNEL_RENAME_MS,
@@ -310,19 +305,6 @@
     );
   }
 
-  function toggleEditMode() {
-    if (cellSelection.editMode) {
-      cancelEditGesture();
-      clearEditSelection();
-      cellSelection.editMode = false;
-      cellSelection.inspectorLayerActive = false;
-      return;
-    }
-
-    cellSelection.editMode = true;
-    cellSelection.inspectorLayerActive = false;
-  }
-
   function cellAtPoint(clientX, clientY) {
     const element = document.elementFromPoint(clientX, clientY)?.closest?.("[data-ksh-edit-cell]");
     if (!(element instanceof HTMLElement)) {
@@ -446,15 +428,6 @@
     document.addEventListener("pointercancel", onEditPointerCancel);
   }
 
-  function toggleSelectedCell(channel, step) {
-    const key = cellSelectionKey(channel, step);
-    if (selectedCellKeys.has(key)) {
-      selectedCellKeys.delete(key);
-    } else {
-      selectedCellKeys.add(key);
-    }
-  }
-
   function beginBulkDrag(event, channel, step) {
     if (event.button !== 0 || editGesture || !selectedCellKeys.has(cellSelectionKey(channel, step))) {
       return;
@@ -571,7 +544,7 @@
   }
 
   function onGridPointerDown(event) {
-    if (!cellSelection.editMode && !event.shiftKey && selectedCellKeys.size > 0) {
+    if (!event.shiftKey && selectedCellKeys.size > 0) {
       const cellElement = event.target instanceof Element
         ? event.target.closest("[data-ksh-edit-cell]")
         : null;
@@ -583,11 +556,11 @@
         : null;
 
       if (!clickedKey || !selectedCellKeys.has(clickedKey)) {
-        clearEditSelection();
+        clearCellSelection();
       }
     }
 
-    if (!cellSelection.editMode || event.button !== 0) {
+    if (event.button !== 0 || !event.shiftKey || event.altKey) {
       return;
     }
 
@@ -596,7 +569,7 @@
       return;
     }
 
-    beginMarquee(event);
+    beginMarquee(event, true);
   }
 
   async function applySelectedCells(anchorChannel, anchorStep, targetChannel, targetStep, mode = "move") {
@@ -655,7 +628,7 @@
       await sendCellsForChannel(source, channel, [...steps].sort((left, right) => left - right));
     }
 
-    clearEditSelection();
+    clearCellSelection();
     for (const { destination } of destinations) {
       selectedCellKeys.add(destination.key);
     }
@@ -875,15 +848,6 @@
     }
     [lightColor, darkColor] = [darkColor, lightColor];
 
-    if (cellSelection.editMode && !cellSelection.inspectorLayerActive) {
-      const topLeft = cell.enabled ? darkColor : "var(--color-grid-off-strong)";
-      const bottomRight = cell.enabled ? lightColor : "var(--color-grid-off)";
-      return cellStyleFromBackground(
-        activeCellBackground(`linear-gradient(to bottom right, ${topLeft} 0%, ${topLeft} calc(50% - 0.5px), ${dividerColor} calc(50% - 0.5px), ${dividerColor} calc(50% + 0.5px), ${bottomRight} calc(50% + 0.5px), ${bottomRight} 100%)`),
-        cell.enabled ? "var(--color-text-inverse)" : "var(--color-text-muted)",
-      );
-    }
-
     if (!cell.enabled) {
       const downbeat = step % 4 === 0;
       return downbeat
@@ -940,7 +904,7 @@
     const active = !silent && !beyondSteps && cell.enabled;
     const selected = selectedCellKeys.has(cellSelectionKey(channel, step))
       && !isMovingSourceCell(channel, step);
-    const previewTarget = cellSelection.editMode && bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
+    const previewTarget = bulkDragPreviewKeys.has(cellSelectionKey(channel, step));
     const previewCopy = previewTarget && editGesture?.mode === "copy";
 
     return [
@@ -962,13 +926,7 @@
       return "";
     }
 
-    const previewCell = cellSelection.editMode
-      ? bulkDragPreviewCells.get(cellSelectionKey(channel, step))
-      : null;
-    if (cellSelection.editMode && !cellSelection.inspectorLayerActive) {
-      return "";
-    }
-
+    const previewCell = bulkDragPreviewCells.get(cellSelectionKey(channel, step));
     const cell = previewCell ?? session.kshState.sources[session.selectedSource][channel][step];
     if (!cell.enabled) {
       return "";
@@ -1028,7 +986,7 @@
     return session.selectedSource !== SILENT_SOURCE && step < session.kshState.stepCount && !isStepBeyondLoopLength(session.kshState, channel, step);
   }
 
-  function isEditCellInteractive(channel, step) {
+  function isBulkCellInteractive(channel, step) {
     return session.selectedSource !== SILENT_SOURCE && step < session.kshState.stepCount;
   }
 
@@ -1058,10 +1016,6 @@
 
   async function onSourceClick(event, source) {
     closeCyclePopover();
-
-    if (cellSelection.editMode) {
-      clearEditSelection();
-    }
 
     if (event.shiftKey) {
       if (session.patternCopySource === source) {
@@ -1158,26 +1112,21 @@
   }
 
   function onCellPointerDown(event, channel, step) {
-    if (!(cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step))) {
+    const key = cellSelectionKey(channel, step);
+    const selected = selectedCellKeys.has(key);
+    if (!(selected ? isBulkCellInteractive(channel, step) : isCellInteractive(channel, step))) {
       return;
     }
 
-    if (cellSelection.editMode || (event.shiftKey && !event.altKey)) {
+    if (event.shiftKey && !event.altKey) {
       event.preventDefault();
       event.stopPropagation();
+      beginMarquee(event, true, { channel, step });
+      return;
+    }
 
-      if (!cellSelection.editMode) {
-        beginMarquee(event, true, { channel, step });
-        return;
-      }
-
-      if (event.shiftKey) {
-        toggleSelectedCell(channel, step);
-      } else if (selectedCellKeys.has(cellSelectionKey(channel, step))) {
-        beginBulkDrag(event, channel, step);
-      } else {
-        beginMarquee(event);
-      }
+    if (selected && normalizeSourceLayerMode(session.sourceLayerMode) === "velocity") {
+      beginBulkDrag(event, channel, step);
       return;
     }
 
@@ -1216,10 +1165,6 @@
   }
 
   async function onCellPointerMove(event) {
-    if (cellSelection.editMode) {
-      return;
-    }
-
     if (!cellDrag) {
       return;
     }
@@ -1280,10 +1225,6 @@
   }
 
   async function onCellPointerUp(event, cancelled = false) {
-    if (cellSelection.editMode) {
-      return;
-    }
-
     if (!cellDrag) {
       return;
     }
@@ -1852,16 +1793,6 @@
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class={`header-button h-[41px] min-w-[58px] border px-3 text-[12px] tracking-[0.12em] ${cellSelection.editMode ? "border-accent bg-accent/15 text-accent" : "border-border-subtle bg-control-secondary text-text-muted"}`}
-          aria-label={cellSelection.editMode ? "Exit edit selection mode" : "Enter edit selection mode"}
-          aria-pressed={cellSelection.editMode}
-          title={cellSelection.editMode ? "Exit EDIT mode" : "Select cells · Option-drag to copy"}
-          onclick={toggleEditMode}
-        >
-          <MoveAroundIcon />
-        </button>
-        <button
-          type="button"
           class="header-icon-button text-danger"
           aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
           aria-pressed={Boolean(session.patternRecordingEnabled)}
@@ -2143,13 +2074,15 @@
               data-channel={channel}
               data-step={step}
               data-selected={selectedCellKeys.has(cellSelectionKey(channel, step)) && !isMovingSourceCell(channel, step) ? "true" : undefined}
-              disabled={cellSelection.editMode ? !isEditCellInteractive(channel, step) : !isCellInteractive(channel, step)}
+              disabled={selectedCellKeys.has(cellSelectionKey(channel, step))
+                ? !isBulkCellInteractive(channel, step)
+                : !isCellInteractive(channel, step)}
               onpointerdown={(event) => onCellPointerDown(event, channel, step)}
               onpointermove={onCellPointerMove}
               onpointerup={onCellPointerUp}
               onpointercancel={(event) => onCellPointerUp(event, true)}
             >
-              {#if !(cellSelection.editMode && !cellSelection.inspectorLayerActive) && session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && (cellSelection.editMode ? isEditCellInteractive(channel, step) : isCellInteractive(channel, step)) && session.kshState.sources[session.selectedSource][channel][step].enabled}
+              {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "probability" && isCellInteractive(channel, step) && session.kshState.sources[session.selectedSource][channel][step].enabled}
                 {@const cyclePattern = cyclePatternForCell(session.kshState.sources[session.selectedSource][channel][step])}
                 <span
                   class="pointer-events-none absolute inset-x-0 top-0 flex h-[60%] items-center justify-center leading-none"
