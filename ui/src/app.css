@@ -374,6 +374,15 @@
     filter: brightness(1.02) saturate(1.02);
   }
 
+  .ksh-marquee-lasso {
+    border: 2px solid color-mix(in srgb, var(--color-accent) 92%, white);
+    background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent),
+      0 0 24px color-mix(in srgb, var(--color-accent) 38%, transparent),
+      inset 0 0 18px color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
   .ksh-grid-cell-preview-target {
     z-index: 14;
     border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-grid-cell-border)) !important;

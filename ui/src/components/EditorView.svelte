@@ -238,7 +238,14 @@
     ).length,
   );
   const marqueeRectStyle = $derived(editGesture?.kind === "marquee"
-    ? `left:${Math.min(editGesture.startX, editGesture.currentX)}px;top:${Math.min(editGesture.startY, editGesture.currentY)}px;width:${Math.abs(editGesture.currentX - editGesture.startX)}px;height:${Math.abs(editGesture.currentY - editGesture.startY)}px;`
+    ? (() => {
+        const pad = 5;
+        const left = Math.min(editGesture.startX, editGesture.currentX) - pad;
+        const top = Math.min(editGesture.startY, editGesture.currentY) - pad;
+        const width = Math.abs(editGesture.currentX - editGesture.startX) + pad * 2;
+        const height = Math.abs(editGesture.currentY - editGesture.startY) + pad * 2;
+        return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
+      })()
     : "");
   const bulkDragPreviewCells = $derived.by(() => {
     if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove) {
@@ -2149,7 +2156,7 @@
     <div class="shrink-0" style={`height:${gridBottomPad}px`} aria-hidden="true"></div>
     {#if editGesture?.kind === "marquee"}
       <div
-        class="pointer-events-none fixed z-[9999] rounded-sm border border-accent/70 bg-accent/10 shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-accent)_18%,transparent),0_0_16px_color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
+        class="ksh-marquee-lasso pointer-events-none fixed z-[9999] rounded-sm"
         style={marqueeRectStyle}
         aria-hidden="true"
       ></div>
