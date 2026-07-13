@@ -21,6 +21,62 @@ export function captureSelectedCellValues(state, source, keys, property) {
 }
 
 /**
+ * @param {object} state
+ * @param {number} source
+ * @param {Iterable<string>} keys
+ * @returns {Map<string, { cycle: number, cycleMask: number }>}
+ */
+export function captureSelectedCyclePatterns(state, source, keys) {
+  const startPatterns = new Map();
+
+  for (const location of selectedCellLocations(keys, state.channelCount, state.stepCount)) {
+    const cell = state.sources[source][location.channel][location.step];
+    startPatterns.set(location.key, {
+      cycle: cell.cycle,
+      cycleMask: cell.cycleMask,
+    });
+  }
+
+  return startPatterns;
+}
+
+/**
+ * Apply one relative cycle-length offset to every selected pattern.
+ *
+ * @param {object} state
+ * @param {number} source
+ * @param {Map<string, { cycle: number, cycleMask: number }>} startPatterns
+ * @param {number} offset
+ * @returns {boolean}
+ */
+export function applyRelativeCycleOffset(state, source, startPatterns, offset) {
+  let changed = false;
+
+  for (const [key, start] of startPatterns) {
+    const [channelText, stepText] = key.split(":");
+    const channel = Number.parseInt(channelText ?? "-1", 10);
+    const step = Number.parseInt(stepText ?? "-1", 10);
+    if (channel < 0 || step < 0) {
+      continue;
+    }
+
+    const cell = state.sources[source]?.[channel]?.[step];
+    if (!cell) {
+      continue;
+    }
+
+    const next = normalizeCyclePattern(start.cycle + offset, start.cycleMask);
+    if (cell.cycle !== next.cycle || cell.cycleMask !== next.mask) {
+      cell.cycle = next.cycle;
+      cell.cycleMask = next.mask;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/**
  * Relative bipolar adjust: each selected cell becomes startValue + offset.
  *
  * @param {object} state

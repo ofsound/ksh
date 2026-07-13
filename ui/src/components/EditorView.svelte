@@ -50,6 +50,7 @@
     createCellDrag,
     headerDragNextValue,
     headerValueForState,
+    quantizedDragOffset,
     resolveCellDragMode,
     stepFromGridX,
     toggleCellOnRelease,
@@ -60,18 +61,29 @@
     selectedCellLocations,
     wrappedCellDestinations,
   } from "../lib/kshBulkEdit.js";
+  import {
+    applyRelativeCellOffset,
+    applyRelativeCycleOffset,
+    captureSelectedCyclePatterns,
+    captureSelectedCellValues,
+    selectedStepsByChannel,
+  } from "../lib/kshCellInspector.js";
   import { positionFloatingPopover } from "../lib/floatingPopover.js";
   import { clearCellSelection, selectedCellKeys } from "../lib/kshCellSelection.svelte.js";
   import { cloneCell, defaultCell } from "../lib/kshUiState.js";
   import {
     CHANNEL_RENAME_MS,
+    CYCLE_DRAG_SCALE,
     DEFAULT_SWING_SUBDIVISION_INDEX,
     MAX_CHANNELS,
     MAX_STEPS,
+    PROBABILITY_DRAG_SCALE,
+    ROLL_DRAG_SCALE,
     SILENT_SOURCE,
     SOURCE_COUNT,
     SOURCE_ROW_RESET_MS,
     SWING_SUBDIVISION_OPTIONS,
+    VELOCITY_DRAG_SCALE,
   } from "../lib/kshConstants.js";
   import {
     auditionChannel,
@@ -122,6 +134,7 @@
   let velocityLineDrag = $state(null);
   let velocityLineHandlesHidden = $state(false);
   let editGesture = $state(null);
+  let moveModeEnabled = $state(false);
   let editorViewRoot = $state(null);
   let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
@@ -201,7 +214,11 @@
   );
   const patternHeadingWidthLabel = "P16: velocity";
   const effectiveLayerMode = $derived(
-    normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
+    editGesture?.kind === "drag"
+      && editGesture.didMove
+      && (editGesture.mode === "move" || editGesture.mode === "copy")
+      ? "velocity"
+      : normalizeSourceLayerMode(hoverLayerMode ?? session.sourceLayerMode)
   );
   const cyclePopoverCell = $derived.by(() => {
     if (!cyclePopover || session.selectedSource === SILENT_SOURCE) {
@@ -260,7 +277,12 @@
     return `left:${(left - rootRect.left) / scaleX}px;top:${(top - rootRect.top) / scaleY}px;width:${width / scaleX}px;height:${height / scaleY}px;`;
   });
   const bulkDragPreviewCells = $derived.by(() => {
-    if (!editGesture || editGesture.kind !== "drag" || !editGesture.didMove) {
+    if (
+      !editGesture
+      || editGesture.kind !== "drag"
+      || !editGesture.didMove
+      || (editGesture.mode !== "move" && editGesture.mode !== "copy")
+    ) {
       return new Map();
     }
 
@@ -451,7 +473,7 @@
     document.addEventListener("pointercancel", onEditPointerCancel);
   }
 
-  function beginBulkDrag(event, channel, step) {
+  function beginBulkDrag(event, channel, step, valueMode) {
     if (event.button !== 0 || editGesture || !selectedCellKeys.has(cellSelectionKey(channel, step))) {
       return;
     }
@@ -467,12 +489,91 @@
       currentStep: step,
       anchorChannel: channel,
       anchorStep: step,
-      mode: event.altKey ? "copy" : "move",
+      mode: "pending",
       didMove: false,
+      valueMode,
+      valueStarts: valueMode === "cycle"
+        ? captureSelectedCyclePatterns(session.kshState, session.selectedSource, selectedCellKeys)
+        : captureSelectedCellValues(session.kshState, session.selectedSource, selectedCellKeys, valueMode),
+      valueOffset: 0,
+      element: event.currentTarget,
     };
     document.addEventListener("pointermove", onEditPointerMove);
     document.addEventListener("pointerup", onEditPointerUp);
     document.addEventListener("pointercancel", onEditPointerCancel);
+  }
+
+  function queueSelectedValueCells() {
+    const byChannel = selectedStepsByChannel(
+      selectedCellKeys,
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    );
+
+    for (const [channel, steps] of byChannel) {
+      queueCellsForChannel(session.selectedSource, channel, steps);
+    }
+  }
+
+  function bulkValueDragScale(valueMode) {
+    if (valueMode === "probability") return PROBABILITY_DRAG_SCALE;
+    if (valueMode === "cycle") return CYCLE_DRAG_SCALE;
+    if (valueMode === "roll") return ROLL_DRAG_SCALE;
+    return VELOCITY_DRAG_SCALE;
+  }
+
+  function applyBulkValueOffset(drag, clientY) {
+    const offset = quantizedDragOffset(
+      drag.startY - clientY,
+      bulkValueDragScale(drag.valueMode),
+    );
+    if (offset === drag.valueOffset) {
+      return drag;
+    }
+
+    const changed = drag.valueMode === "cycle"
+      ? applyRelativeCycleOffset(
+          session.kshState,
+          session.selectedSource,
+          drag.valueStarts,
+          offset,
+        )
+      : applyRelativeCellOffset(
+          session.kshState,
+          session.selectedSource,
+          drag.valueStarts,
+          drag.valueMode,
+          offset,
+        );
+    if (changed) {
+      queueSelectedValueCells();
+    }
+
+    return { ...drag, valueOffset: offset };
+  }
+
+  function bulkValueHistoryLabel(valueMode) {
+    const labels = {
+      velocity: "velocities",
+      probability: "probability",
+      roll: "roll",
+      cycle: "cycle steps",
+    };
+    return `Adjust selected ${labels[valueMode] ?? valueMode}`;
+  }
+
+  function resolveBulkGestureMode(event, gesture) {
+    const distance = Math.hypot(
+      event.clientX - gesture.startX,
+      event.clientY - gesture.startY,
+    );
+    if (distance < 5) {
+      return "pending";
+    }
+    if (!moveModeEnabled) {
+      return "value";
+    }
+    return event.altKey ? "copy" : "move";
   }
 
   function onEditPointerMove(event) {
@@ -492,21 +593,41 @@
     }
 
     const target = bulkDragCellAtPoint(event.clientX, event.clientY);
-    const distance = Math.hypot(event.clientX - editGesture.startX, event.clientY - editGesture.startY);
-    if (!target && !editGesture.didMove) {
+
+    let nextGesture = editGesture;
+    if (!editGesture.didMove) {
+      const mode = resolveBulkGestureMode(event, editGesture);
+      if (mode === "pending") {
+        return;
+      }
+
+      beginEditGestureHistory();
+      nextGesture = {
+        ...editGesture,
+        mode,
+        didMove: true,
+      };
+    } else if (editGesture.mode !== "value") {
+      nextGesture = {
+        ...editGesture,
+        mode: event.altKey ? "copy" : "move",
+      };
+    }
+
+    if (target) {
+      nextGesture = {
+        ...nextGesture,
+        currentChannel: target.channel,
+        currentStep: target.step,
+      };
+    }
+
+    if (nextGesture.mode === "value") {
+      editGesture = applyBulkValueOffset(nextGesture, event.clientY);
       return;
     }
 
-    if (distance >= 5 && !editGesture.didMove) {
-      beginEditGestureHistory();
-    }
-
-    editGesture = {
-      ...editGesture,
-      ...(target ? { currentChannel: target.channel, currentStep: target.step } : {}),
-      mode: event.altKey ? "copy" : "move",
-      didMove: editGesture.didMove || distance >= 5,
-    };
+    editGesture = nextGesture;
   }
 
   async function onEditPointerUp(event) {
@@ -528,7 +649,17 @@
       return;
     }
 
+    if (gesture.kind === "drag" && !gesture.didMove && gesture.valueMode === "cycle") {
+      await openCyclePopover(gesture.anchorChannel, gesture.anchorStep, gesture.element);
+      return;
+    }
+
     if (gesture.kind === "drag" && gesture.didMove) {
+      if (gesture.mode === "value") {
+        await commitEditGestureHistory(bulkValueHistoryLabel(gesture.valueMode));
+        return;
+      }
+
       gesture.mode = event.altKey ? "copy" : gesture.mode;
       await applySelectedCells(
         gesture.anchorChannel,
@@ -536,6 +667,7 @@
         gesture.currentChannel,
         gesture.currentStep,
         gesture.mode,
+        new Set(selectedCellKeys),
       );
       await commitEditGestureHistory(gesture.mode === "copy" ? "Copy selected cells" : "Move selected cells");
     }
@@ -553,6 +685,25 @@
       selectedCellKeys.clear();
       for (const key of gesture.baseKeys) {
         selectedCellKeys.add(key);
+      }
+    }
+    if (gesture.kind === "drag" && gesture.mode === "value") {
+      const restored = gesture.valueMode === "cycle"
+        ? applyRelativeCycleOffset(
+            session.kshState,
+            session.selectedSource,
+            gesture.valueStarts,
+            0,
+          )
+        : applyRelativeCellOffset(
+            session.kshState,
+            session.selectedSource,
+            gesture.valueStarts,
+            gesture.valueMode,
+            0,
+          );
+      if (restored) {
+        queueSelectedValueCells();
       }
     }
     cancelEditGestureHistory();
@@ -596,14 +747,21 @@
     beginMarquee(event, true);
   }
 
-  async function applySelectedCells(anchorChannel, anchorStep, targetChannel, targetStep, mode = "move") {
+  async function applySelectedCells(
+    anchorChannel,
+    anchorStep,
+    targetChannel,
+    targetStep,
+    mode = "move",
+    keys = selectedCellKeys,
+  ) {
     const source = session.selectedSource;
     if (source === SILENT_SOURCE) {
       return;
     }
 
     const locations = selectedCellLocations(
-      selectedCellKeys,
+      keys,
       session.kshState.channelCount,
       session.kshState.stepCount,
     );
@@ -648,13 +806,13 @@
       }
     }
 
+    // Drop the visual selection before any awaited native writes. Do not
+    // reselect destinations: a completed move/copy should leave no gesture
+    // indication behind.
+    clearCellSelection();
+
     for (const [channel, steps] of affectedByChannel) {
       await sendCellsForChannel(source, channel, [...steps].sort((left, right) => left - right));
-    }
-
-    clearCellSelection();
-    for (const { destination } of destinations) {
-      selectedCellKeys.add(destination.key);
     }
   }
 
@@ -1164,14 +1322,8 @@
       return;
     }
 
-    if (selected && normalizeSourceLayerMode(session.sourceLayerMode) === "velocity") {
-      beginBulkDrag(event, channel, step);
-      return;
-    }
-
     const source = session.selectedSource;
     const rect = event.currentTarget.getBoundingClientRect();
-    const localX = event.clientX - rect.left;
     const localY = event.clientY - rect.top;
     const layerMode =
       modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
@@ -1179,6 +1331,11 @@
       && localY >= gridCellH * (probabilitySectionPercent / 100)
       ? "cycle"
       : valueModeForCellInteraction(layerMode, null);
+
+    if (selected) {
+      beginBulkDrag(event, channel, step, valueMode);
+      return;
+    }
 
     const cell = session.kshState.sources[source][channel][step];
 
@@ -1975,6 +2132,19 @@
     </div>
     <div class="flex h-full flex-1 items-center justify-center">
       <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class={`header-button h-[41px] border px-3 text-[11px] font-bold tracking-[0.08em] ${moveModeEnabled ? "border-accent-strong bg-accent-strong text-text-inverse" : "border-border-subtle bg-control-secondary text-text-muted"}`}
+          aria-label="Toggle selected-cell move mode"
+          aria-pressed={moveModeEnabled}
+          title={moveModeEnabled ? "MOVE mode on: drag selected cells to move; Option-drag to copy" : "MOVE mode off: drag selected cells to adjust their values"}
+          onclick={() => {
+            moveModeEnabled = !moveModeEnabled;
+            closeCyclePopover();
+          }}
+        >
+          MOVE
+        </button>
         <button
           type="button"
           class="header-icon-button"
