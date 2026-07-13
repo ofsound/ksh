@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "./semantic-theme.generated.css";
 
+/* UI font experiment point: update this token and the Google Fonts link in ui/index.html. */
+@theme {
+  --font-sans: "Familjen Grotesk", ui-sans-serif, system-ui, sans-serif;
+}
+
 @layer base {
   *,
   *::before,
