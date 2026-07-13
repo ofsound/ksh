@@ -811,10 +811,12 @@
       }
     }
 
-    // Drop the visual selection before any awaited native writes. Do not
-    // reselect destinations: a completed move/copy should leave no gesture
-    // indication behind.
-    clearCellSelection();
+    // Transfer the visual selection before any awaited native writes so a
+    // completed move/copy remains selected at its destination.
+    selectedCellKeys.clear();
+    for (const key of destinationKeys) {
+      selectedCellKeys.add(key);
+    }
 
     for (const [channel, steps] of affectedByChannel) {
       await sendCellsForChannel(source, channel, [...steps].sort((left, right) => left - right));
@@ -1111,8 +1113,7 @@
       return "";
     }
 
-    const previewCell = bulkDragPreviewCells.get(cellSelectionKey(channel, step));
-    const cell = previewCell ?? session.kshState.sources[session.selectedSource][channel][step];
+    const cell = displayedCell(channel, step);
     if (!cell.enabled) {
       return "";
     }
