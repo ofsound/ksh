@@ -384,7 +384,6 @@
   .velocity-line-zone {
     width: 12px;
     transform: translateX(-6px);
-    cursor: crosshair;
     background: transparent;
     border: 0;
     padding: 0;

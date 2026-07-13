@@ -55,6 +55,6 @@
     title="Ping-Pong"
     onclick={togglePingPong}
   >
-    <PingPongUturnIcon />
+    <PingPongUturnIcon {reversed} />
   </button>
 </div>
