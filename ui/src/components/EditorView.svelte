@@ -1944,6 +1944,20 @@
       <div class="flex items-center gap-2">
         <button
           type="button"
+          class={`header-icon-button ${clearBlink.pattern ? "ksh-clear-blink" : ""}`}
+          disabled={session.selectedSource === SILENT_SOURCE}
+          aria-label="Clear pattern"
+          title="Double-click to clear this pattern"
+          onclick={() => triggerClearBlink("pattern")}
+          ondblclick={(event) => {
+            event.currentTarget.blur();
+            clearPattern();
+          }}
+        >
+          ×
+        </button>
+        <button
+          type="button"
           class="header-icon-button text-danger"
           aria-label={session.patternRecordingEnabled ? "Stop pattern recording" : "Record pattern"}
           aria-pressed={Boolean(session.patternRecordingEnabled)}
@@ -1957,20 +1971,6 @@
         </button>
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(-1)}>◀</button>
         <button type="button" class="header-icon-button" disabled={session.selectedSource === SILENT_SOURCE} onclick={() => shiftPattern(1)}>▶</button>
-        <button
-          type="button"
-          class={`header-icon-button ${clearBlink.pattern ? "ksh-clear-blink" : ""}`}
-          disabled={session.selectedSource === SILENT_SOURCE}
-          aria-label="Clear pattern"
-          title="Double-click to clear this pattern"
-          onclick={() => triggerClearBlink("pattern")}
-          ondblclick={(event) => {
-            event.currentTarget.blur();
-            clearPattern();
-          }}
-        >
-          ×
-        </button>
       </div>
     </div>
     <div class="flex h-full flex-1 items-center justify-center">
