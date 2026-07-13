@@ -47,12 +47,14 @@
   import {
     applySourcePaintRange,
     applySourceValueDrag,
+    applyVelocityLine,
     createCellDrag,
     headerDragNextValue,
     headerValueForState,
     resolveCellDragMode,
     stepFromGridX,
     toggleCellOnRelease,
+    velocityFromCellY,
   } from "../lib/kshEditorInteractions.js";
   import {
     bulkDragLabel,
@@ -119,6 +121,7 @@
 
   let headerDrag = $state(null);
   let cellDrag = $state(null);
+  let velocityLineDrag = $state(null);
   let editGesture = $state(null);
   let editorViewRoot = $state(null);
   let loopRangeDrag = $state(null);
@@ -1206,6 +1209,79 @@
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
+  function beginVelocityLine(event, channel, step) {
+    if (!isCellInteractive(channel, step) || effectiveLayerMode !== "velocity") {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const row = event.currentTarget.parentElement;
+    const rect = row.getBoundingClientRect();
+    const startVelocity = velocityFromCellY(event.clientY, rect.top, rect.height);
+    beginEditGestureHistory();
+    velocityLineDrag = {
+      source: session.selectedSource,
+      channel,
+      startStep: step,
+      endStep: step,
+      startVelocity,
+      endVelocity: startVelocity,
+      rowLeft: rect.left,
+      rowTop: rect.top,
+      rowHeight: rect.height,
+      pointerId: event.pointerId,
+      element: event.currentTarget,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveVelocityLine(event) {
+    if (!velocityLineDrag || (event.buttons & 1) === 0) {
+      return;
+    }
+
+    const endStep = Math.max(0, Math.min(
+      session.kshState.stepCount - 1,
+      Math.round((event.clientX - velocityLineDrag.rowLeft) / gridCellW),
+    ));
+    const endVelocity = velocityFromCellY(
+      event.clientY,
+      velocityLineDrag.rowTop,
+      velocityLineDrag.rowHeight,
+    );
+    velocityLineDrag = { ...velocityLineDrag, endStep, endVelocity };
+    const changed = applyVelocityLine(
+      session.kshState,
+      velocityLineDrag.source,
+      velocityLineDrag.channel,
+      velocityLineDrag.startStep,
+      velocityLineDrag.startVelocity,
+      endStep,
+      endVelocity,
+    );
+    if (changed.length > 0) {
+      queueCellsForChannel(velocityLineDrag.source, velocityLineDrag.channel, changed);
+    }
+  }
+
+  async function endVelocityLine(cancelled = false) {
+    if (!velocityLineDrag) {
+      return;
+    }
+    velocityLineDrag = null;
+    if (cancelled) {
+      cancelEditGestureHistory();
+      return;
+    }
+    await commitEditGestureHistory("Draw velocity line");
+  }
+
+  function trackVelocityZoneHover(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.style.setProperty("--velocity-handle-y", `${event.clientY - rect.top}px`);
+  }
+
   async function onCellPointerMove(event) {
     if (!cellDrag) {
       return;
@@ -2166,6 +2242,30 @@
               ></div>
             {/if}
           {/each}
+          {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "velocity"}
+            {#each stepCols as step (`velocity-zone-${step}`)}
+              <button
+                type="button"
+                class={`velocity-line-zone absolute top-0 z-30 ${velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step ? "velocity-line-zone-snapped" : ""}`}
+                style={`left:${step * gridCellW}px;height:${gridCellH}px;`}
+                aria-label={`Draw velocity line from step ${step + 1}`}
+                title="Hold, then drag to draw a velocity line"
+                onpointerenter={trackVelocityZoneHover}
+                onpointermove={(event) => {
+                  trackVelocityZoneHover(event);
+                  moveVelocityLine(event);
+                }}
+                onpointerdown={(event) => beginVelocityLine(event, channel, step)}
+                onpointerup={() => endVelocityLine(false)}
+                onpointercancel={() => endVelocityLine(true)}
+              ><span
+                aria-hidden="true"
+                style={velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step
+                  ? `--velocity-handle-y:${((127 - velocityLineDrag.endVelocity) / 126) * gridCellH}px;`
+                  : undefined}
+              ></span></button>
+            {/each}
+          {/if}
           <div
             class="pointer-events-auto absolute top-0 z-20 flex items-center"
             style={`left:${nudgeLaneLeft}px;width:${GRID_NUDGE_LANE_W}px;height:${gridCellH}px;`}

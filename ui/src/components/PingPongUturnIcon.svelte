@@ -1,7 +1,7 @@
 <script>
   /** Forward path that turns 180 degrees and returns parallel in the opposite direction. */
   /** @type {{ class?: string }} */
-  let { class: className = "h-[21px] w-[21px]" } = $props();
+  let { class: className = "h-[23px] w-[24px]" } = $props();
 </script>
 
 <svg
@@ -15,11 +15,11 @@
     stroke="currentColor"
     stroke-linecap="round"
     stroke-linejoin="round"
-    stroke-width="2.4"
-    d="M3 7h12c3.3 0 6 2.2 6 5s-2.7 5-6 5H7"
+    stroke-width="2.8"
+    d="M2.5 6.5h12c3.6 0 6.5 2.4 6.5 5.5s-2.9 5.5-6.5 5.5H9"
   />
   <path
     fill="currentColor"
-    d="M7 12.5 2 17l5 4.5Z"
+    d="M9.5 10.2 1.2 17l8.3 6.8Z"
   />
 </svg>

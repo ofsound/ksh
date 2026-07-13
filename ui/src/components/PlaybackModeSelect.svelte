@@ -49,7 +49,7 @@
   </button>
   <button
     type="button"
-    class={`flex h-[26px] w-[26px] shrink-0 items-center justify-center p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${pingPong ? "text-accent" : "text-text-faint"}`}
+    class={`flex h-[26px] w-[28px] shrink-0 items-center justify-center p-0 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${pingPong ? "text-accent" : "text-text-faint"}`}
     aria-label={pingPong ? "Ping-pong on. Click to turn off." : "Ping-pong off. Click to turn on."}
     aria-pressed={pingPong}
     title="Ping-Pong"

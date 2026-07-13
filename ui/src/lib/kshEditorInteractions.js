@@ -35,6 +35,31 @@ export function stepFromGridX(clientX, gridLeft, stepCount, cellWidth = GRID_CEL
   return clamp(Math.floor((clientX - gridLeft) / cellWidth), 0, stepCount - 1);
 }
 
+export function velocityFromCellY(clientY, cellTop, cellHeight) {
+  const normalized = 1 - (clientY - cellTop) / Math.max(1, cellHeight);
+  return clamp(Math.round(1 + normalized * 126), 1, 127);
+}
+
+/** Apply an inclusive, linear velocity ramp and return the changed steps. */
+export function applyVelocityLine(state, source, channel, startStep, startVelocity, endStep, endVelocity) {
+  const lo = Math.min(startStep, endStep);
+  const hi = Math.max(startStep, endStep);
+  const span = Math.max(1, Math.abs(endStep - startStep));
+  const changedSteps = [];
+
+  for (let step = lo; step <= hi; step += 1) {
+    const progress = Math.abs(step - startStep) / span;
+    const velocity = clamp(Math.round(startVelocity + (endVelocity - startVelocity) * progress), 1, 127);
+    const cell = state.sources[source][channel][step];
+    if (cell.velocity !== velocity) {
+      cell.velocity = velocity;
+      changedSteps.push(step);
+    }
+  }
+
+  return changedSteps;
+}
+
 export function headerValueForState(state, id) {
   if (id === "steps") {
     return state.stepCount;

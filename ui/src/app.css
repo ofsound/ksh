@@ -364,6 +364,46 @@
       0 1px 2px color-mix(in srgb, var(--color-app) 40%, transparent);
   }
 
+  .velocity-line-zone {
+    width: 12px;
+    transform: translateX(-6px);
+    cursor: crosshair;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+
+  .velocity-line-zone span {
+    position: absolute;
+    left: 50%;
+    top: var(--velocity-handle-y, 50%);
+    width: 10px;
+    height: 10px;
+    transform: translate(-50%, -50%) scale(0.25);
+    border: 2px solid color-mix(in srgb, var(--color-text) 85%, var(--color-accent));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-app) 72%, transparent);
+    opacity: 0;
+    transition: opacity 120ms ease 420ms, transform 120ms ease 420ms;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-app) 45%, transparent);
+  }
+
+  .velocity-line-zone:hover span,
+  .velocity-line-zone:focus-visible span,
+  .velocity-line-zone-snapped span {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .velocity-line-zone-snapped {
+    background: linear-gradient(to right, transparent 5px, color-mix(in srgb, var(--color-accent) 75%, transparent) 5px, color-mix(in srgb, var(--color-accent) 75%, transparent) 7px, transparent 7px);
+  }
+
+  .velocity-line-zone-snapped span {
+    transition-delay: 0ms;
+    background: var(--color-accent);
+  }
+
   .ksh-grid-cell-selected {
     z-index: 12;
     border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-grid-cell-border)) !important;
