@@ -426,13 +426,59 @@ TEST_CASE ("midi playback survives velocity humanize", "[engine][transport]")
     REQUIRE (countNoteOns (result.midi) == 1);
 }
 
-TEST_CASE ("plugin processor initializes with playable default pattern", "[processor][transport]")
+TEST_CASE ("midi pattern selection plays selected source on beat one", "[engine][transport]")
+{
+    auto runSelectionCase = [] (bool setStaticSourceFirst)
+    {
+        EngineFixture fixture;
+        fixture.clearAll();
+        fixture.engine.setStepCount (16);
+        fixture.engine.setChannelCount (8);
+        fixture.engine.setGenerationMode (GenerationMode::staticSource);
+        fixture.engine.setRate ("16n");
+        fixture.engine.setTempo (120.0);
+
+        if (setStaticSourceFirst)
+        {
+            fixture.engine.setStaticSource (4);
+            fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+        }
+        else
+        {
+            fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+            fixture.engine.setStaticSource (4);
+        }
+
+        fixture.engine.generateWindow (0, 16, true);
+
+        ksh::MidiPlaybackRunner runner;
+        runner.prepare (44100.0);
+
+        juce::MidiBuffer midi;
+        MidiPatternSelectionBlock selections;
+        selections.add (0, 0);
+        const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(),
+                                                 0.0,
+                                                 120.0,
+                                                 true,
+                                                 512,
+                                                 midi,
+                                                 selections);
+
+        return containsNoteOn (midi, 36) && result.noteHitCount == 1;
+    };
+
+    REQUIRE (runSelectionCase (false));
+    REQUIRE (runSelectionCase (true));
+}
+
+TEST_CASE ("plugin processor initializes with blank default pattern", "[processor][transport]")
 {
     PluginProcessor processor;
     const auto engine = processor.engineStateSnapshot();
 
     REQUIRE (engine.deviceActive);
-    REQUIRE (engine.sources[0][0][0].enabled);
+    REQUIRE_FALSE (engine.sources[0][0][0].enabled);
 }
 
 TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")

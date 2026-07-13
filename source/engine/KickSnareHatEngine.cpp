@@ -558,8 +558,6 @@ void KickSnareHatEngine::refreshGeneratedCellsForSourceEdit (int source, int cha
     if (sourceStep < loopStart || sourceStep >= loopStart + loopLength)
         return;
 
-    bool changed = false;
-
     for (int generatedStep = 0; generatedStep < stepCount; ++generatedStep)
     {
         if (loopStart + mod (generatedStep - loopStart, loopLength) != sourceStep)
@@ -569,12 +567,12 @@ void KickSnareHatEngine::refreshGeneratedCellsForSourceEdit (int source, int cha
         {
             generated[static_cast<size_t> (channel)][static_cast<size_t> (generatedStep)] =
                 generatedCellFromSource (source, channel, generatedStep);
-            changed = true;
         }
     }
 
-    if (changed)
-        markPreviewDirty (false);
+    // Static-source playback reads sources[] directly, so any source edit must
+    // republish even when the active generated window points at another source.
+    markPreviewDirty (false);
 }
 
 void KickSnareHatEngine::setCell (int source,

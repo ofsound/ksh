@@ -140,7 +140,6 @@ nlohmann::json makeDefaultPersistenceState()
     defaults.setChannelCount (ksh::Constants::defaultChannelCount);
     defaults.setRate ("16n");
     defaults.setTempo (120.0);
-    defaults.setCell (0, 0, 0, true, 100, 100, 1);
     return defaults.serializeForPersistence();
 }
 } // namespace
@@ -192,7 +191,6 @@ void PluginProcessor::initializeDefaultPattern()
     engine.setChannelCount (ksh::Constants::defaultChannelCount);
     engine.setRate ("16n");
     engine.setTempo (120.0);
-    engine.setCell (0, 0, 0, true, 100, 100, 1);
 }
 
 //==============================================================================

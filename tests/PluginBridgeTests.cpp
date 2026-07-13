@@ -91,7 +91,7 @@ TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge
 
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.stepCount == 16);
-    REQUIRE (engine.sources[0][0][0].enabled);
+    REQUIRE_FALSE (engine.sources[0][0][0].enabled);
 }
 
 TEST_CASE ("ui bridge handleCommand parses sync_all json", "[plugin][bridge]")
@@ -158,6 +158,8 @@ TEST_CASE ("ui playback edits do not retrigger the current step", "[plugin][brid
     FixedPlayHead playHead;
     plugin.setPlayHead (&playHead);
     plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
@@ -305,6 +307,7 @@ TEST_CASE ("incoming MIDI source selector affects beat one playback immediately"
     plugin.prepareToPlay (44100.0, 512);
 
     REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { 5 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
@@ -343,6 +346,8 @@ TEST_CASE ("incoming row MIDI notes monitor when pattern recording is off", "[pl
 {
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
+
+    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"cell","args":[1,1,1,1,100,100,1]})"));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;

@@ -257,7 +257,7 @@ TEST_CASE ("resetProject restores default project-owned state", "[plugin][persis
     REQUIRE (plugin.getPatternViewScale() == 1.0);
     REQUIRE (plugin.getProjectThemeMode() == "dark");
     REQUIRE (state.channelCount == ksh::Constants::defaultChannelCount);
-    REQUIRE (state.sources[0][0][0].enabled);
+    REQUIRE_FALSE (state.sources[0][0][0].enabled);
     REQUIRE_FALSE (state.sources[0][1][4].enabled);
 }
 

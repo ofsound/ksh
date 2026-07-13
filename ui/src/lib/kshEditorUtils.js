@@ -96,12 +96,8 @@ export function gridRowPaddingY(scale = 1) {
   return gridRowGap(scale) / 2;
 }
 
-export function stepLabelOuterMargin(scale = 1) {
-  return STEP_LABEL_CELL_GAP + gridRowPaddingY(scale);
-}
-
 export function stepLabelBandHeight(scale = 1) {
-  return stepLabelOuterMargin(scale) + STEP_LABEL_H + STEP_LABEL_CELL_GAP;
+  return STEP_LABEL_H + STEP_LABEL_CELL_GAP;
 }
 
 export function gridBodyHeight(channelCount, scale = 1) {

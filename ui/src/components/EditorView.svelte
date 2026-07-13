@@ -29,7 +29,6 @@
     gridTopPadding,
     STEP_LABEL_CELL_GAP,
     stepLabelFontPx,
-    stepLabelOuterMargin,
     isStepBeyondLoopLength,
     channelToneColor,
     loopRangeForChannel,
@@ -178,7 +177,6 @@
   const cellFontPx = $derived(gridCellFontPx(patternScale, session.kshState.stepCount));
   const probabilityFontPx = $derived(Math.max(8, Math.round(cellFontPx * 0.72)));
   const stepLabelFontSize = $derived(stepLabelFontPx(patternScale));
-  const stepLabelMargin = $derived(stepLabelOuterMargin(patternScale));
   const cycleStripMarginPx = $derived(
     Math.max(2, Math.round(gridCellInsetPx(patternScale, session.kshState.stepCount) * 0.5))
   );
@@ -2085,7 +2083,7 @@
     <div class="shrink-0">
     <div
       class="flex items-center"
-      style={`padding-left:${GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + gridOffsetX}px;margin-top:${stepLabelMargin}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
+      style={`padding-left:${GRID_SIDEBAR_W + GRID_ROW_CELL_LEFT_GAP + gridOffsetX}px;margin-bottom:${STEP_LABEL_CELL_GAP}px`}
     >
       <div class="flex">
       {#each stepCols as step (step)}
