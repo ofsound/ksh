@@ -388,7 +388,7 @@
 </script>
 
 <div
-  class="compact-cell-inspector-panel flex shrink-0 flex-col gap-3 self-stretch"
+  class="compact-panel-surface compact-cell-inspector-panel flex shrink-0 flex-col gap-3 self-stretch"
   class:compact-cell-inspector-panel-inactive={!inspectorActive}
   class:compact-cell-inspector-panel-active={inspectorActive}
   aria-label="Cell inspector"

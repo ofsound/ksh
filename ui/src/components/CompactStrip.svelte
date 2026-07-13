@@ -158,7 +158,7 @@
         {/each}
       </div>
 
-      <div class="compact-random-panel flex shrink-0 flex-col gap-3 self-stretch">
+      <div class="compact-panel-surface compact-random-panel flex shrink-0 flex-col gap-3 self-stretch">
         <div class="flex items-end gap-6">
           <div class="flex flex-col items-start">
             <span class="header-label text-text">Random Mode</span>

@@ -68,8 +68,7 @@
     @apply border-accent bg-accent/15 text-accent;
   }
 
-  .compact-random-panel,
-  .compact-cell-inspector-panel {
+  .compact-panel-surface {
     border-radius: 6px;
     padding: 18px 16px 12px;
     border: 1px solid color-mix(in srgb, var(--color-border-subtle) 72%, transparent);
@@ -86,8 +85,7 @@
       0 0 24px color-mix(in srgb, var(--color-text) 4%, transparent);
   }
 
-  .compact-random-panel .header-label,
-  .compact-cell-inspector-panel .header-label {
+  .compact-panel-surface .header-label {
     margin-bottom: 8px;
   }
 
