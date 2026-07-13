@@ -173,7 +173,7 @@ export function compactPreviewHeight(channelCount) {
 /** Equal top/bottom padding for the generated preview grid in the compact strip. */
 export function compactPreviewPadding(channelCount) {
   const slack = COMPACT_HEIGHT - compactPreviewHeight(channelCount);
-  return Math.max(0, Math.floor(slack / 2));
+  return Math.min(8, Math.max(0, Math.floor(slack / 2)));
 }
 
 function channelColorToken(channel, dcColors = true) {

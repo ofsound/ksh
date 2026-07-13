@@ -5,6 +5,8 @@
   import ThemeModeToggle from "./components/ThemeModeToggle.svelte";
   import UiScaleDragInput from "./components/UiScaleDragInput.svelte";
   import { SILENT_SOURCE } from "./lib/kshConstants.js";
+  import { selectedCellLocations } from "./lib/kshBulkEdit.js";
+  import { selectedCellKeys } from "./lib/kshCellSelection.svelte.js";
   import { combinedDimensions, previewPanelHeight } from "./lib/kshEditorUtils.js";
   import {
     initKshSession,
@@ -66,6 +68,13 @@
     width: Math.round(dims.width * uiScaleState.scale),
     height: Math.round(dims.height * uiScaleState.scale),
   });
+  const selectedCellCount = $derived(
+    selectedCellLocations(
+      selectedCellKeys,
+      session.kshState.channelCount,
+      session.kshState.stepCount,
+    ).length,
+  );
 </script>
 
 <main class="bg-app" bind:this={appRoot}>
@@ -115,6 +124,10 @@
         style={`width:${dims.width}px;`}
       >
         <span class="min-w-0 truncate font-medium normal-case tracking-normal">
+          {#if selectedCellCount > 0}
+            <span class="font-bold uppercase tracking-[0.14em] text-accent">{selectedCellCount} selected · shift-click add/remove</span>
+            <span class="text-text-muted"> · </span>
+          {/if}
           Source {session.selectedSource === SILENT_SOURCE ? "M" : session.selectedSource + 1} · {session.kshState.channelCount} channel(s) · cycle layer: click a cell to edit · drag ↖ cycle ↘ offset · Shift/Opt/Opt+Shift layers
         </span>
         <div class="flex shrink-0 items-center gap-2">

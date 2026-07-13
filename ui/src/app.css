@@ -71,7 +71,7 @@
   .compact-random-panel,
   .compact-cell-inspector-panel {
     border-radius: 6px;
-    padding: 10px 16px 12px;
+    padding: 18px 16px 12px;
     border: 1px solid color-mix(in srgb, var(--color-border-subtle) 72%, transparent);
     background:
       linear-gradient(
@@ -92,11 +92,30 @@
   }
 
   .compact-cell-inspector-panel {
-    min-width: 168px;
+    width: 360px;
+    min-width: 360px;
   }
 
   .compact-cell-inspector-panel-inactive {
-    opacity: 0.55;
+    opacity: 1;
+  }
+
+  .compact-cell-inspector-panel-active {
+    border-color: color-mix(in srgb, var(--color-accent) 68%, var(--color-border-subtle));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--color-accent) 22%, transparent),
+      0 4px 16px color-mix(in srgb, var(--color-app) 30%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent),
+      0 0 22px color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+
+  .cycle-inspector-neutral {
+    --cycle-row-light: var(--color-text-muted);
+    --cycle-row-dark: var(--color-app);
+    --cycle-row-divider: var(--color-border-subtle);
+    --cycle-row-surface: var(--color-app);
+    background: var(--color-app);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-text) 7%, transparent);
   }
 
   .header-icon-button:disabled {
@@ -417,6 +436,12 @@
     background: var(--color-accent);
   }
 
+  .velocity-line-zone.velocity-line-zone-handles-hidden span {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.25);
+    transition: none;
+  }
+
   .ksh-grid-cell-selected {
     z-index: 12;
     border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-grid-cell-border)) !important;
@@ -543,15 +568,15 @@
   .preview-branding-steps {
     position: absolute;
     right: 72px;
-    top: 62px;
+    top: 48px;
     display: flex;
-    gap: 7px;
+    gap: 5px;
     transform: rotate(-5deg);
   }
 
   .preview-branding-steps span {
-    width: 18px;
-    height: 18px;
+    width: 14px;
+    height: 14px;
     border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
     border-radius: 2px;
     background: color-mix(in srgb, var(--color-grid-off-strong) 42%, transparent);
@@ -561,14 +586,15 @@
   .preview-branding-steps span.is-downbeat {
     border-color: color-mix(in srgb, var(--color-drum-kick) 45%, transparent);
     box-shadow:
-      inset 0 -12px 0 color-mix(in srgb, var(--color-drum-kick) 44%, transparent),
+      inset 0 -9px 0 color-mix(in srgb, var(--color-drum-kick) 44%, transparent),
       0 0 14px color-mix(in srgb, var(--color-drum-kick) 14%, transparent);
   }
 
   .preview-branding-lockup {
     position: absolute;
-    right: 84px;
-    top: 82px;
+    right: 12px;
+    top: auto;
+    bottom: 16px;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -578,7 +604,7 @@
   .preview-branding-maker {
     padding-right: 6px;
     color: color-mix(in srgb, var(--color-text) 64%, transparent);
-    font-size: 14px;
+    font-size: 11px;
     font-weight: 800;
     line-height: 1;
     letter-spacing: 0;
@@ -590,7 +616,7 @@
     gap: 8px;
     margin-top: 6px;
     color: var(--color-text);
-    font-size: 128px;
+    font-size: 84px;
     font-weight: 950;
     line-height: 0.72;
     letter-spacing: 0;
@@ -612,12 +638,12 @@
   }
 
   .preview-branding-legend {
-    display: flex;
+    display: none;
     gap: 10px;
     margin-top: 12px;
     padding-right: 7px;
     color: color-mix(in srgb, var(--color-text) 46%, transparent);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 750;
     line-height: 1;
     letter-spacing: 0;
@@ -642,12 +668,7 @@
   }
 
   .preview-branding-drums {
-    position: absolute;
-    right: 440px;
-    top: 112px;
-    width: 210px;
-    height: 150px;
-    opacity: 0.78;
+    display: none;
   }
 
   .drum-icon,
@@ -720,7 +741,7 @@
 
   @media (max-width: 920px) {
     .preview-branding-lockup {
-      right: 42px;
+      right: 12px;
     }
 
     .preview-branding-drums {

@@ -57,7 +57,6 @@
     velocityFromCellY,
   } from "../lib/kshEditorInteractions.js";
   import {
-    bulkDragLabel,
     cellSelectionKey,
     selectedCellLocations,
     wrappedCellDestinations,
@@ -122,6 +121,7 @@
   let headerDrag = $state(null);
   let cellDrag = $state(null);
   let velocityLineDrag = $state(null);
+  let velocityLineHandlesHidden = $state(false);
   let editGesture = $state(null);
   let editorViewRoot = $state(null);
   let loopRangeDrag = $state(null);
@@ -241,13 +241,6 @@
   );
   const selectedStepValueOption = $derived(
     stepValueOptions.find((option) => option.value === session.kshState.rate) ?? stepValueOptions[4]
-  );
-  const selectedCellCount = $derived(
-    selectedCellLocations(
-      selectedCellKeys,
-      session.kshState.channelCount,
-      session.kshState.stepCount,
-    ).length,
   );
   const marqueeRectStyle = $derived.by(() => {
     if (editGesture?.kind !== "marquee" || !(editorViewRoot instanceof HTMLElement)) {
@@ -1217,6 +1210,7 @@
       return;
     }
 
+    velocityLineHandlesHidden = false;
     event.preventDefault();
     event.stopPropagation();
     const row = event.currentTarget.parentElement;
@@ -1297,6 +1291,7 @@
       return;
     }
     velocityLineDrag = null;
+    velocityLineHandlesHidden = true;
     if (cancelled) {
       cancelEditGestureHistory();
       return;
@@ -1307,6 +1302,11 @@
   function trackVelocityZoneHover(event) {
     const rect = event.currentTarget.getBoundingClientRect();
     event.currentTarget.style.setProperty("--velocity-handle-y", `${event.clientY - rect.top}px`);
+  }
+
+  function enterVelocityZone(event) {
+    velocityLineHandlesHidden = false;
+    trackVelocityZoneHover(event);
   }
 
   async function onCellPointerMove(event) {
@@ -2081,18 +2081,6 @@
     role="presentation"
     onpointerdown={onGridPointerDown}
   >
-    {#if selectedCellCount > 0}
-      <div class="pointer-events-none absolute left-3 top-2 z-30 rounded-sm border border-accent/40 bg-app/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-accent">
-        {selectedCellCount} selected{editGesture?.kind === "drag" && editGesture.didMove ? ` · ${bulkDragLabel(
-          selectedCellLocations(selectedCellKeys, session.kshState.channelCount, session.kshState.stepCount),
-          { channel: editGesture.anchorChannel, step: editGesture.anchorStep },
-          { channel: editGesture.currentChannel, step: editGesture.currentStep },
-          session.kshState.channelCount,
-          session.kshState.stepCount,
-          editGesture.mode,
-        )}` : " · shift-click add/remove"}
-      </div>
-    {/if}
     <div class="shrink-0" style={`height:${gridTopPad}px`} aria-hidden="true"></div>
     <div class="shrink-0">
     <div
@@ -2273,11 +2261,11 @@
             {#each velocityBoundaryCols as step (`velocity-zone-${step}`)}
               <button
                 type="button"
-                class={`velocity-line-zone absolute top-0 z-30 ${velocityLineDrag ? "velocity-line-zone-dragging" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.startStep === step ? "velocity-line-zone-start" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step ? "velocity-line-zone-snapped" : ""}`}
+                class={`velocity-line-zone absolute top-0 z-30 ${velocityLineDrag ? "velocity-line-zone-dragging" : ""} ${velocityLineHandlesHidden ? "velocity-line-zone-handles-hidden" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.startStep === step ? "velocity-line-zone-start" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step ? "velocity-line-zone-snapped" : ""}`}
                 style={`left:${step * gridCellW}px;height:${gridCellH}px;`}
                 aria-label={`Draw velocity line from step ${step + 1}`}
                 title="Hold, then drag to draw a velocity line"
-                onpointerenter={trackVelocityZoneHover}
+                onpointerenter={enterVelocityZone}
                 onpointermove={(event) => {
                   trackVelocityZoneHover(event);
                   moveVelocityLine(event);

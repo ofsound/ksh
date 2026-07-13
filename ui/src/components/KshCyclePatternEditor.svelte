@@ -13,6 +13,7 @@
    * @typedef {Object} Props
    * @property {number} [cycle]
    * @property {number} [cycleMask]
+   * @property {boolean} [disabled]
    * @property {() => void} [onGestureStart]
    * @property {(cycle: number, cycleMask: number) => void | Promise<void>} [onPatternPreview]
    * @property {(cycle: number, cycleMask: number) => void | Promise<void>} [onPatternCommit]
@@ -22,6 +23,7 @@
   let {
     cycle = 1,
     cycleMask = 1,
+    disabled = false,
     onGestureStart = () => {},
     onPatternPreview = () => {},
     onPatternCommit = () => {},
@@ -73,7 +75,7 @@
   }
 
   function onCellPointerDown(index) {
-    if (draggingLength) return;
+    if (disabled || draggingLength) return;
 
     onGestureStart();
     if (index >= draftCycle) {
@@ -86,6 +88,8 @@
   }
 
   function onHandlePointerDown(event) {
+    if (disabled) return;
+
     absorbPointerDragFocus(event);
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -156,8 +160,9 @@
           type="button"
           {@attach registerCell(index)}
           data-cursor="pointer"
-          class="cycle-popover-focus relative z-[1] h-8 border outline-none transition-colors hover:brightness-110"
+          class="cycle-popover-focus relative z-[1] h-8 border outline-none transition-colors hover:brightness-110 disabled:cursor-default disabled:opacity-50 disabled:hover:brightness-100"
           style={cycleCellStyle(inPattern, active)}
+          disabled={disabled}
           aria-label={inPattern
             ? `Cycle step ${index + 1}, ${active ? "on" : "off"}`
             : `Cycle step ${index + 1}, extend pattern`}
@@ -171,10 +176,11 @@
       <div class="pointer-events-none flex items-stretch justify-end" style:grid-column={draftCycle}>
         <div
           data-cursor="horizontal-drag"
-          class="cycle-popover-focus pointer-events-auto z-10 flex h-8 w-3.5 translate-x-1/2 touch-none select-none items-center justify-center rounded-sm border shadow-sm outline-none hover:brightness-110 {draggingLength ? 'shadow-[0_0_10px_color-mix(in_srgb,var(--cycle-row-light,var(--color-accent))_35%,transparent)]' : ''}"
+          class="cycle-popover-focus pointer-events-auto z-10 flex h-8 w-3.5 translate-x-1/2 touch-none select-none items-center justify-center rounded-sm border shadow-sm outline-none hover:brightness-110 {draggingLength ? 'shadow-[0_0_10px_color-mix(in_srgb,var(--cycle-row-light,var(--color-accent))_35%,transparent)]' : ''} {disabled ? 'pointer-events-none opacity-50' : ''}"
           style={cycleHandleStyle(draggingLength)}
           role="slider"
-          tabindex="0"
+          tabindex={disabled ? -1 : 0}
+          aria-disabled={disabled}
           aria-label="Cycle length"
           aria-valuemin="1"
           aria-valuemax={maxCyclePatternCells}
