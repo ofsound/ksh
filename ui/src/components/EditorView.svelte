@@ -134,7 +134,6 @@
   let velocityLineDrag = $state(null);
   let velocityLineHandlesHidden = $state(false);
   let editGesture = $state(null);
-  let moveModeEnabled = $state(false);
   let editorViewRoot = $state(null);
   let loopRangeDrag = $state(null);
   /** @type {{ source: number, lastChannel: number } | null} */
@@ -497,6 +496,7 @@
         : captureSelectedCellValues(session.kshState, session.selectedSource, selectedCellKeys, valueMode),
       valueOffset: 0,
       element: event.currentTarget,
+      shiftAtStart: event.shiftKey,
     };
     document.addEventListener("pointermove", onEditPointerMove);
     document.addEventListener("pointerup", onEditPointerUp);
@@ -570,7 +570,7 @@
     if (distance < 5) {
       return "pending";
     }
-    if (!moveModeEnabled) {
+    if (!event.shiftKey) {
       return "value";
     }
     return event.altKey ? "copy" : "move";
@@ -646,6 +646,11 @@
       for (const baseKey of gesture.baseKeys) selectedCellKeys.add(baseKey);
       if (gesture.baseKeys.has(key)) selectedCellKeys.delete(key);
       else selectedCellKeys.add(key);
+      return;
+    }
+
+    if (gesture.kind === "drag" && !gesture.didMove && gesture.shiftAtStart) {
+      selectedCellKeys.delete(cellSelectionKey(gesture.anchorChannel, gesture.anchorStep));
       return;
     }
 
@@ -1307,6 +1312,20 @@
       return;
     }
 
+    const rect = event.currentTarget.getBoundingClientRect();
+    const localY = event.clientY - rect.top;
+    const layerMode =
+      modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
+    const valueMode = normalizeSourceLayerMode(layerMode) === "probability"
+      && localY >= gridCellH * (probabilitySectionPercent / 100)
+      ? "cycle"
+      : valueModeForCellInteraction(layerMode, null);
+
+    if (selected) {
+      beginBulkDrag(event, channel, step, valueMode);
+      return;
+    }
+
     if (event.shiftKey && !event.altKey) {
       event.preventDefault();
       event.stopPropagation();
@@ -1323,20 +1342,6 @@
     }
 
     const source = session.selectedSource;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const localY = event.clientY - rect.top;
-    const layerMode =
-      modifierLayerMode(event.shiftKey, event.altKey) ?? session.sourceLayerMode;
-    const valueMode = normalizeSourceLayerMode(layerMode) === "probability"
-      && localY >= gridCellH * (probabilitySectionPercent / 100)
-      ? "cycle"
-      : valueModeForCellInteraction(layerMode, null);
-
-    if (selected) {
-      beginBulkDrag(event, channel, step, valueMode);
-      return;
-    }
-
     const cell = session.kshState.sources[source][channel][step];
 
     beginEditGestureHistory();
@@ -2132,19 +2137,6 @@
     </div>
     <div class="flex h-full flex-1 items-center justify-center">
       <div class="flex items-center gap-2">
-        <button
-          type="button"
-          class={`header-button h-[41px] border px-3 text-[11px] font-bold tracking-[0.08em] ${moveModeEnabled ? "border-accent-strong bg-accent-strong text-text-inverse" : "border-border-subtle bg-control-secondary text-text-muted"}`}
-          aria-label="Toggle selected-cell move mode"
-          aria-pressed={moveModeEnabled}
-          title={moveModeEnabled ? "MOVE mode on: drag selected cells to move; Option-drag to copy" : "MOVE mode off: drag selected cells to adjust their values"}
-          onclick={() => {
-            moveModeEnabled = !moveModeEnabled;
-            closeCyclePopover();
-          }}
-        >
-          MOVE
-        </button>
         <button
           type="button"
           class="header-icon-button"
