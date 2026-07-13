@@ -127,6 +127,7 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
 {
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
+    lastCycleDefinitionVersion = std::nullopt;
     pendingNoteOffCount = 0;
     pendingNoteOnCount = 0;
     pendingStaticSourceOverride = -1;
@@ -482,6 +483,13 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
     if (numSamples <= 0)
         return result;
+
+    if (! lastCycleDefinitionVersion.has_value()
+        || *lastCycleDefinitionVersion != snapshot.cycleDefinitionVersion)
+    {
+        resetCycleCounters();
+        lastCycleDefinitionVersion = snapshot.cycleDefinitionVersion;
+    }
 
     if (snapshot.generationMode == GenerationMode::staticSource && patternSelections.count > 0)
     {

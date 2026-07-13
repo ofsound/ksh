@@ -162,6 +162,7 @@ public:
 
     void shutdown() override
     {
+        saveCurrentPluginState();
         pluginHolder = nullptr;
         mainWindow = nullptr;
         appProperties.saveIfNeeded();
@@ -169,11 +170,7 @@ public:
 
     void systemRequestedQuit() override
     {
-        if (pluginHolder != nullptr)
-            pluginHolder->savePluginState();
-
-        if (mainWindow != nullptr)
-            mainWindow->pluginHolder->savePluginState();
+        saveCurrentPluginState();
 
         if (ModalComponentManager::getInstance()->cancelAllModalComponents())
         {
@@ -193,6 +190,17 @@ protected:
     std::unique_ptr<StandaloneFilterWindow> mainWindow;
 
 private:
+    void saveCurrentPluginState()
+    {
+        if (pluginHolder != nullptr)
+            pluginHolder->savePluginState();
+
+        if (mainWindow != nullptr && mainWindow->pluginHolder != nullptr)
+            mainWindow->pluginHolder->savePluginState();
+
+        appProperties.saveIfNeeded();
+    }
+
     std::unique_ptr<StandalonePluginHolder> pluginHolder;
 };
 } // namespace juce

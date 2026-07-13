@@ -272,3 +272,21 @@ TEST_CASE ("invalid plugin state is ignored", "[plugin][persistence]")
     setPluginStateText (plugin, R"({"v":1,"stepCount":8,"channelCount":2,"cells":})");
     REQUIRE (plugin.engineStateSnapshot().sources[0][1][4].enabled);
 }
+
+TEST_CASE ("structurally invalid cells cannot wipe the current pattern", "[plugin][persistence]")
+{
+    PluginProcessor plugin;
+    configureSnarePattern (plugin);
+
+    const auto saved = getPluginState (plugin);
+    auto payload = nlohmann::json::parse (
+        std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
+
+    payload["projectName"] = "Metadata that survived";
+    payload["cells"] = nlohmann::json::object();
+    setPluginStateText (plugin, payload.dump());
+
+    const auto state = plugin.engineStateSnapshot();
+    REQUIRE (state.sources[0][1][4].enabled);
+    REQUIRE (state.sources[0][1][4].velocity == 90);
+}

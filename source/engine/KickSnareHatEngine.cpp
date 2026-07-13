@@ -899,6 +899,9 @@ void KickSnareHatEngine::markPreviewDirty (bool forceEmit)
     previewDirty = true;
     ++playbackSnapshotVersion_;
 
+    if (! nativeTransportRefreshInProgress)
+        ++cycleDefinitionVersion_;
+
     if (forceEmit)
         flushPreview();
 }
@@ -1111,7 +1114,16 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 
 bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
 {
-    if (! state.contains ("v") || state["v"].get<int>() != 1)
+    if (! state.is_object()
+        || ! state.contains ("v")
+        || ! state["v"].is_number_integer()
+        || state["v"].get<int>() != 1
+        || ! state.contains ("channels")
+        || ! state["channels"].is_array()
+        || ! state.contains ("sourceChannelMutes")
+        || ! state["sourceChannelMutes"].is_array()
+        || ! state.contains ("cells")
+        || ! state["cells"].is_array())
         return false;
 
     stepCount = clampInt (state["stepCount"].get<int>(), 1, Constants::maxSteps);

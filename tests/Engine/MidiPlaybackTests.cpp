@@ -108,6 +108,120 @@ TEST_CASE ("midi playback keeps cycle one active", "[engine][transport]")
     REQUIRE (result.noteHitCount == 1);
 }
 
+TEST_CASE ("midi playback applies an inspector cycle pattern independently to multiple steps", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+
+    for (int step = 2; step <= 5; ++step)
+        fixture.engine.setCell (0, 0, step, true, 100, 100, 3, 0b100);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const double beatsPerStep = snapshot.beatsPerStep;
+    std::vector<int> hitSteps;
+
+    for (int step = 0; step < 24; ++step)
+    {
+        const auto result = runPlaybackBlock (runner,
+                                              snapshot,
+                                              static_cast<double> (step) * beatsPerStep,
+                                              120.0,
+                                              true,
+                                              512);
+
+        if (countNoteOns (result.midi) > 0)
+            hitSteps.push_back (step);
+    }
+
+    REQUIRE (hitSteps == std::vector<int> { 18, 19, 20, 21 });
+}
+
+TEST_CASE ("midi playback resets cycle phases when the playback definition changes", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (2);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 0b001);
+    fixture.engine.setCell (0, 0, 1, true, 100, 100, 1, 0b001);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto initialSnapshot = fixture.engine.makePlaybackSnapshot();
+    const double beatsPerStep = initialSnapshot.beatsPerStep;
+
+    [[maybe_unused]] const auto first = runPlaybackBlock (runner, initialSnapshot, 0.0, 120.0, true, 512);
+    [[maybe_unused]] const auto second = runPlaybackBlock (runner, initialSnapshot, beatsPerStep, 120.0, true, 512);
+    [[maybe_unused]] const auto third = runPlaybackBlock (runner, initialSnapshot, 2.0 * beatsPerStep, 120.0, true, 512);
+
+    fixture.engine.setCellCycleMask (0, 0, 0, 0b100);
+    fixture.engine.setCellCycle (0, 0, 1, 3);
+    fixture.engine.setCellCycleMask (0, 0, 1, 0b100);
+    const auto updatedSnapshot = fixture.engine.makePlaybackSnapshot();
+    std::vector<int> hitSteps;
+
+    for (int step = 3; step <= 8; ++step)
+    {
+        const auto result = runPlaybackBlock (runner,
+                                              updatedSnapshot,
+                                              static_cast<double> (step) * beatsPerStep,
+                                              120.0,
+                                              true,
+                                              512);
+
+        if (countNoteOns (result.midi) > 0)
+            hitSteps.push_back (step);
+    }
+
+    REQUIRE (hitSteps == std::vector<int> { 7, 8 });
+}
+
+TEST_CASE ("midi playback preserves cycle phases across transport window refreshes", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (1);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 0b001);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const double beatsPerStep = fixture.engine.beatsPerStep();
+    std::vector<int> hitSteps;
+
+    for (int step = 0; step < 6; ++step)
+    {
+        fixture.engine.transportPosition (static_cast<double> (step) * beatsPerStep, true);
+        const auto result = runPlaybackBlock (runner,
+                                              fixture.engine.makePlaybackSnapshot(),
+                                              static_cast<double> (step) * beatsPerStep,
+                                              120.0,
+                                              true,
+                                              512);
+
+        if (countNoteOns (result.midi) > 0)
+            hitSteps.push_back (step);
+    }
+
+    REQUIRE (hitSteps == std::vector<int> { 0, 3 });
+}
+
 TEST_CASE ("audition note emits while transport stopped", "[engine][transport]")
 {
     EngineFixture fixture;

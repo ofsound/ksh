@@ -867,22 +867,37 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         std::scoped_lock lock { engineStateMutex };
         const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
+        const auto previousEngineState = engine.serializeForPersistence();
+        bool restored = false;
 
         try
         {
-            if (! engine.deserializeForPersistence (*payload))
-            {
-                suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
-                return;
-            }
+            restored = engine.deserializeForPersistence (*payload);
         }
         catch (...)
         {
-            suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
-            return;
+            restored = false;
+        }
+
+        if (! restored)
+        {
+            try
+            {
+                const auto rollbackSucceeded = engine.deserializeForPersistence (previousEngineState);
+                if (! rollbackSucceeded)
+                    jassertfalse;
+            }
+            catch (...)
+            {
+                jassertfalse;
+            }
         }
 
         suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
+
+        if (! restored)
+            return;
+
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
     }
@@ -969,6 +984,7 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
 
     std::scoped_lock lock { engineStateMutex };
     const auto previousSuppression = suppressEngineCallbacks.exchange (true, std::memory_order_acq_rel);
+    const auto previousEngineState = engine.serializeForPersistence();
 
     bool ok = false;
 
@@ -979,6 +995,20 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
     catch (...)
     {
         ok = false;
+    }
+
+    if (! ok)
+    {
+        try
+        {
+            const auto rollbackSucceeded = engine.deserializeForPersistence (previousEngineState);
+            if (! rollbackSucceeded)
+                jassertfalse;
+        }
+        catch (...)
+        {
+            jassertfalse;
+        }
     }
 
     suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);

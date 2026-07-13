@@ -90,6 +90,7 @@ struct NativePlaybackBuild
     Built on the message thread and handed to the audio thread via a lock-free mailbox. */
 struct PlaybackSnapshot
 {
+    unsigned long cycleDefinitionVersion = 0;
     GeneratedPattern generated {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
     std::array<SourceSettings, Constants::sourceCount> sourceSettings {};

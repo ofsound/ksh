@@ -237,6 +237,7 @@ private:
     bool previewDirty = false;
     bool nativeTransportRefreshInProgress = false;
     unsigned long playbackSnapshotVersion_ = 0;
+    unsigned long cycleDefinitionVersion_ = 0;
 
     void initChannels();
     void initSources();

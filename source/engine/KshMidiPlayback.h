@@ -111,6 +111,7 @@ private:
     double sampleRate = 44100.0;
     bool wasPlaying = false;
     std::optional<int> lastEmittedGlobalStep;
+    std::optional<unsigned long> lastCycleDefinitionVersion;
     std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
     size_t pendingNoteOffCount = 0;
     std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};

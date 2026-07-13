@@ -286,6 +286,7 @@ void KickSnareHatEngine::commitNativePlaybackBuild (NativePlaybackBuild build)
 PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
 {
     PlaybackSnapshot snapshot;
+    snapshot.cycleDefinitionVersion = cycleDefinitionVersion_;
     snapshot.generated = generated;
     snapshot.sources = sources;
     snapshot.sourceSettings = sourceSettings;
