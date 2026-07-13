@@ -193,6 +193,9 @@
   const stepCols = $derived(
     Array.from({ length: session.kshState.stepCount }, (_, step) => step)
   );
+  const velocityBoundaryCols = $derived(
+    Array.from({ length: session.kshState.stepCount + 1 }, (_, boundary) => boundary)
+  );
   const projectDateLabel = $derived(formatProjectDate(session.projectModifiedAt || session.projectCreatedAt));
   const allStepCols = $derived(Array.from({ length: MAX_STEPS }, (_, step) => step));
   const patternHeading = $derived(
@@ -1210,7 +1213,7 @@
   }
 
   function beginVelocityLine(event, channel, step) {
-    if (!isCellInteractive(channel, step) || effectiveLayerMode !== "velocity") {
+    if (session.selectedSource === SILENT_SOURCE || effectiveLayerMode !== "velocity") {
       return;
     }
 
@@ -1218,6 +1221,8 @@
     event.stopPropagation();
     const row = event.currentTarget.parentElement;
     const rect = row.getBoundingClientRect();
+    const renderedCell = row.querySelector("[data-ksh-edit-cell]");
+    const renderedCellWidth = renderedCell?.getBoundingClientRect().width ?? gridCellW;
     const startVelocity = velocityFromCellY(event.clientY, rect.top, rect.height);
     beginEditGestureHistory();
     velocityLineDrag = {
@@ -1230,8 +1235,11 @@
       rowLeft: rect.left,
       rowTop: rect.top,
       rowHeight: rect.height,
+      cellWidth: renderedCellWidth,
       pointerId: event.pointerId,
       element: event.currentTarget,
+      originalVelocities: session.kshState.sources[session.selectedSource][channel]
+        .map((cell) => cell.velocity),
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -1242,24 +1250,43 @@
     }
 
     const endStep = Math.max(0, Math.min(
-      session.kshState.stepCount - 1,
-      Math.round((event.clientX - velocityLineDrag.rowLeft) / gridCellW),
+      session.kshState.stepCount,
+      Math.round((event.clientX - velocityLineDrag.rowLeft) / velocityLineDrag.cellWidth),
     ));
     const endVelocity = velocityFromCellY(
       event.clientY,
       velocityLineDrag.rowTop,
       velocityLineDrag.rowHeight,
     );
-    velocityLineDrag = { ...velocityLineDrag, endStep, endVelocity };
-    const changed = applyVelocityLine(
-      session.kshState,
-      velocityLineDrag.source,
-      velocityLineDrag.channel,
-      velocityLineDrag.startStep,
-      velocityLineDrag.startVelocity,
-      endStep,
-      endVelocity,
-    );
+    const drag = velocityLineDrag;
+    const row = session.kshState.sources[drag.source][drag.channel];
+    const changedSet = new SvelteSet();
+    for (let step = 0; step < session.kshState.stepCount; step += 1) {
+      if (row[step].velocity !== drag.originalVelocities[step]) {
+        row[step].velocity = drag.originalVelocities[step];
+        changedSet.add(step);
+      }
+    }
+
+    velocityLineDrag = { ...drag, endStep, endVelocity };
+    if (endStep !== drag.startStep) {
+      const movingRight = endStep > drag.startStep;
+      const startCell = movingRight ? drag.startStep : drag.startStep - 1;
+      const endCell = movingRight ? endStep - 1 : endStep;
+      const rampChanged = applyVelocityLine(
+        session.kshState,
+        drag.source,
+        drag.channel,
+        startCell,
+        drag.startVelocity,
+        endCell,
+        endVelocity,
+      );
+      for (const step of rampChanged) {
+        changedSet.add(step);
+      }
+    }
+    const changed = [...changedSet];
     if (changed.length > 0) {
       queueCellsForChannel(velocityLineDrag.source, velocityLineDrag.channel, changed);
     }
@@ -2243,10 +2270,10 @@
             {/if}
           {/each}
           {#if session.selectedSource !== SILENT_SOURCE && effectiveLayerMode === "velocity"}
-            {#each stepCols as step (`velocity-zone-${step}`)}
+            {#each velocityBoundaryCols as step (`velocity-zone-${step}`)}
               <button
                 type="button"
-                class={`velocity-line-zone absolute top-0 z-30 ${velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step ? "velocity-line-zone-snapped" : ""}`}
+                class={`velocity-line-zone absolute top-0 z-30 ${velocityLineDrag ? "velocity-line-zone-dragging" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.startStep === step ? "velocity-line-zone-start" : ""} ${velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step ? "velocity-line-zone-snapped" : ""}`}
                 style={`left:${step * gridCellW}px;height:${gridCellH}px;`}
                 aria-label={`Draw velocity line from step ${step + 1}`}
                 title="Hold, then drag to draw a velocity line"
@@ -2260,9 +2287,11 @@
                 onpointercancel={() => endVelocityLine(true)}
               ><span
                 aria-hidden="true"
-                style={velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step
-                  ? `--velocity-handle-y:${((127 - velocityLineDrag.endVelocity) / 126) * gridCellH}px;`
-                  : undefined}
+                style={velocityLineDrag?.channel === channel && velocityLineDrag?.startStep === step
+                  ? `--velocity-handle-y:${((127 - velocityLineDrag.startVelocity) / 126) * gridCellH}px;`
+                  : velocityLineDrag?.channel === channel && velocityLineDrag?.endStep === step
+                    ? `--velocity-handle-y:${((127 - velocityLineDrag.endVelocity) / 126) * gridCellH}px;`
+                    : undefined}
               ></span></button>
             {/each}
           {/if}

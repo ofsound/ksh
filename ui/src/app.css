@@ -390,13 +390,26 @@
 
   .velocity-line-zone:hover span,
   .velocity-line-zone:focus-visible span,
+  .velocity-line-zone-start span,
   .velocity-line-zone-snapped span {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
 
+  .velocity-line-zone-dragging span {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.25);
+    transition: none;
+  }
+
+  .velocity-line-zone-dragging.velocity-line-zone-start span,
+  .velocity-line-zone-dragging.velocity-line-zone-snapped span {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
   .velocity-line-zone-snapped {
-    background: linear-gradient(to right, transparent 5px, color-mix(in srgb, var(--color-accent) 75%, transparent) 5px, color-mix(in srgb, var(--color-accent) 75%, transparent) 7px, transparent 7px);
+    background: transparent;
   }
 
   .velocity-line-zone-snapped span {
