@@ -119,16 +119,17 @@
       return;
     }
 
-    const changed = applySelectedCyclePattern(
+    // The editor applies the draft through onPatternPreview before this
+    // callback runs, so this second application is normally unchanged. The
+    // commit still must flush the already-previewed values to the engine.
+    applySelectedCyclePattern(
       session.kshState,
       session.selectedSource,
       inspectorKeys,
       cycle,
       cycleMask,
     );
-    if (changed) {
-      await flushSelectedCells();
-    }
+    await flushSelectedCells();
     await commitEditGestureHistory("Edit selected cycle pattern");
   }
 

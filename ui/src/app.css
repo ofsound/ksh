@@ -1,9 +1,9 @@
 @import "tailwindcss";
 @import "./semantic-theme.generated.css";
 
-/* UI font experiment point: update this token and the Google Fonts link in ui/index.html. */
+/* Keep the UI font token in sync with the Google Fonts link in ui/index.html. */
 @theme {
-  --font-sans: "Familjen Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Gantari", ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
@@ -22,6 +22,7 @@
     min-height: 100vh;
     background: var(--color-app);
     color: var(--color-text);
+    font-family: var(--font-sans);
   }
 
   input:not([type="checkbox"]):not([type="radio"]),
@@ -481,23 +482,12 @@
 
   .ksh-cell-text-flash,
   .ksh-cell-text-flash * {
+    /* The flash is intentionally color/glow-only; avoid filter animation
+       because it can make the value text shimmer while the transport runs. */
     color: var(--color-text) !important;
     text-shadow:
       0 1px 2px color-mix(in srgb, var(--color-app) 45%, transparent),
       0 0 7px color-mix(in srgb, var(--color-text) 45%, transparent);
-  }
-
-  .ksh-grid-cell.ksh-cell-text-flash {
-    animation: ksh-cell-hit-flash 200ms ease-out;
-  }
-
-  @keyframes ksh-cell-hit-flash {
-    0% {
-      filter: brightness(1.55) saturate(1.15);
-    }
-    100% {
-      filter: brightness(1) saturate(1);
-    }
   }
 
   .ksh-pattern-copy-source {
@@ -605,38 +595,57 @@
 
   .preview-branding-maker {
     padding-right: 6px;
-    color: color-mix(in srgb, var(--color-text) 64%, transparent);
+    color: var(--color-drum-snare);
     font-size: 11px;
     font-weight: 800;
     line-height: 1;
     letter-spacing: 0;
+    transform: translate(8px, -8px);
   }
 
   .preview-branding-title {
     display: flex;
     align-items: flex-end;
-    gap: 8px;
+    gap: 5px;
     margin-top: 6px;
     color: var(--color-text);
-    font-size: 84px;
-    font-weight: 950;
-    line-height: 0.72;
-    letter-spacing: 0;
+    font-family: var(--font-sans);
+    font-size: 88px;
+    font-weight: 1000;
+    line-height: 0.7;
+    letter-spacing: -0.055em;
+    transform: scale(1.13);
+    transform-origin: right bottom;
+    filter: drop-shadow(0 14px 12px rgb(0 0 0 / 38%));
+  }
+
+  .preview-branding-title span {
+    position: relative;
+    display: inline-block;
+    -webkit-text-stroke: 1px color-mix(in srgb, currentcolor 84%, white);
     text-shadow:
-      0 7px 0 color-mix(in srgb, var(--color-app) 70%, transparent),
-      0 0 28px color-mix(in srgb, var(--color-drum-hat) 16%, transparent);
+      1px 1px 0 color-mix(in srgb, currentcolor 48%, black),
+      2px 2px 0 color-mix(in srgb, currentcolor 44%, black),
+      3px 3px 0 color-mix(in srgb, currentcolor 40%, black),
+      4px 4px 0 color-mix(in srgb, currentcolor 36%, black),
+      5px 5px 0 color-mix(in srgb, currentcolor 32%, black),
+      7px 9px 0 color-mix(in srgb, var(--color-app) 88%, black),
+      0 0 22px color-mix(in srgb, currentcolor 25%, transparent);
   }
 
   .preview-branding-title span:nth-child(1) {
     color: var(--color-drum-kick);
+    transform: scale(1.12, 1.12);
   }
 
   .preview-branding-title span:nth-child(2) {
     color: var(--color-drum-snare);
+    transform: scale(1.12, 1.12);
   }
 
   .preview-branding-title span:nth-child(3) {
     color: var(--color-drum-hat);
+    transform: scale(1.12, 1.12);
   }
 
   .preview-branding-legend {
