@@ -599,6 +599,7 @@ TEST_CASE ("midi playback emits after velocity humanize", "[engine][transport]")
 {
     PluginProcessor processor;
     processor.prepareToPlay (44100.0, 512);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
     REQUIRE (processor.dispatchUiEngineCommand ("velocity_humanize", { 10 }));
     REQUIRE (processor.engineStateSnapshot().deviceActive);
 

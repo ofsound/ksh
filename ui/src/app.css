@@ -39,7 +39,7 @@
   }
 
   .header-label {
-    @apply mb-1 block cursor-default text-[9px] font-semibold leading-none text-text-muted;
+    @apply mb-1 block cursor-default text-[10px] font-semibold leading-none text-text-muted;
   }
 
   .header-label-horizontal {

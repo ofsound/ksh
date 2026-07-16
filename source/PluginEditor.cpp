@@ -43,15 +43,15 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 
     auto onPageLoaded = [this]
     {
+        processorRef.getUiBridge().attachWebView (webView.get());
         processorRef.getUiBridge().syncAll();
     };
 
     webView = std::make_unique<KshWebBrowserComponent> (WebViewResources::makeBrowserOptions (processorRef, *this),
                                                         onPageLoaded);
     addAndMakeVisible (*webView);
-    processorRef.getUiBridge().attachWebView (webView.get());
 
-   #if JUCE_DEBUG
+   #if JUCE_DEBUG && ! JUCE_IOS
     webView->goToURL ("http://localhost:5173");
    #else
     webView->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());

@@ -7,8 +7,19 @@ include (PamplejuceVersion)
 # Modern concise way to add dependencies to your project
 include (CPM)
 
-# Configures universal binaries and decides which version of macOS to support
-include(PamplejuceMacOS)
+# The shared Pamplejuce helper forces a macOS deployment target, which is not
+# valid when cross-compiling for iOS. Keep that helper unchanged and configure
+# the iOS minimum here so a clean checkout remains reproducible.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum supported iOS version")
+    endif()
+
+    set(CMAKE_XCODE_GENERATE_SCHEME OFF)
+else()
+    # Configures universal binaries and decides which version of macOS to support
+    include(PamplejuceMacOS)
+endif()
 
 # Couple tweaks that IMO should be JUCE defaults
 include(JUCEDefaults)
@@ -18,8 +29,19 @@ set(PRODUCT_NAME "KSH")
 set(COMPANY_NAME "ofsound")
 set(BUNDLE_ID "com.ofsound.ksh")
 
-# Valid choices: AAX Unity VST VST3 AU AUv3 Standalone
-set(FORMATS Standalone AU VST3 AUv3)
+# iOS ships a containing app with an embedded AUv3 extension. Desktop-only
+# formats remain enabled for the normal macOS build.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(FORMATS Standalone AUv3)
+    set(KSH_COPY_PLUGIN_AFTER_BUILD FALSE)
+    set(KSH_BACKGROUND_AUDIO_ENABLED TRUE)
+    set(KSH_TARGETED_DEVICE_FAMILY "2")
+else()
+    set(FORMATS Standalone AU VST3 AUv3)
+    set(KSH_COPY_PLUGIN_AFTER_BUILD TRUE)
+    set(KSH_BACKGROUND_AUDIO_ENABLED FALSE)
+    set(KSH_TARGETED_DEVICE_FAMILY "1,2")
+endif()
 
 # Force JUCE to work with sccache
 # instruct MSVC to embed debug info (/Z7) instead of emitting a .pdb
@@ -38,8 +60,10 @@ include(PamplejuceLog)
 # On Github Actions, this is done as a part of actions/checkout
 add_subdirectory(JUCE)
 
-# Add CLAP format
-add_subdirectory(modules/clap-juce-extensions EXCLUDE_FROM_ALL)
+# CLAP is a desktop format and its wrapper is not part of the iOS app.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_subdirectory(modules/clap-juce-extensions EXCLUDE_FROM_ALL)
+endif()
 
 # Add any other modules you want modules here, before the juce_add_plugin call
 # juce_add_module(modules/my_module)
@@ -52,8 +76,23 @@ juce_add_plugin("${PROJECT_NAME}"
     COMPANY_NAME "${COMPANY_NAME}"
     BUNDLE_ID "${BUNDLE_ID}"
 
-    # On MacOS, plugin is copied to /Users/yourname/Library/Audio/Plug-Ins/
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    # On macOS, plugins are copied to /Users/yourname/Library/Audio/Plug-Ins/.
+    COPY_PLUGIN_AFTER_BUILD ${KSH_COPY_PLUGIN_AFTER_BUILD}
+
+    # The standalone app publishes a virtual MIDI output on iOS. JUCE requires
+    # the audio background mode for that endpoint to be created successfully.
+    BACKGROUND_AUDIO_ENABLED ${KSH_BACKGROUND_AUDIO_ENABLED}
+    TARGETED_DEVICE_FAMILY ${KSH_TARGETED_DEVICE_FAMILY}
+    IPHONE_SCREEN_ORIENTATIONS
+        UIInterfaceOrientationPortrait
+        UIInterfaceOrientationPortraitUpsideDown
+        UIInterfaceOrientationLandscapeLeft
+        UIInterfaceOrientationLandscapeRight
+    IPAD_SCREEN_ORIENTATIONS
+        UIInterfaceOrientationPortrait
+        UIInterfaceOrientationPortraitUpsideDown
+        UIInterfaceOrientationLandscapeLeft
+        UIInterfaceOrientationLandscapeRight
 
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
@@ -75,9 +114,11 @@ juce_add_plugin("${PROJECT_NAME}"
 # Without running into ODR violations
 add_library(SharedCode INTERFACE)
 
-clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
-    CLAP_ID "${BUNDLE_ID}"
-    CLAP_FEATURES midi-effect)
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
+        CLAP_ID "${BUNDLE_ID}"
+        CLAP_FEATURES midi-effect)
+endif()
 
 include(IconBundleGuard)
 
@@ -106,8 +147,19 @@ if (TARGET WebViewUIBuild)
     add_dependencies(Assets WebViewUIBuild)
 endif()
 
-# MacOS only: Cleans up folder and target organization on Xcode.
-include(XcodePrettify)
+# The desktop helper assigns plugin schemes to the macOS AudioPluginHost. On
+# iOS, generate only the two useful device schemes without that executable.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    foreach (target Standalone AUv3)
+        if (TARGET "${PROJECT_NAME}_${target}")
+            set_target_properties("${PROJECT_NAME}_${target}" PROPERTIES
+                FOLDER "Targets"
+                XCODE_GENERATE_SCHEME ON)
+        endif()
+    endforeach()
+else()
+    include(XcodePrettify)
+endif()
 
 # This is where you can set preprocessor definitions for JUCE and your plugin
 target_compile_definitions(SharedCode
@@ -168,11 +220,16 @@ endif()
 # IPP support (SIMD DSP) — not needed for KSH
 # include(PamplejuceIPP)
 
-# Everything related to the tests target
-include(Tests)
+# Tests and benchmarks are desktop executables. Keeping them out of the iOS
+# project avoids non-app targets that Xcode cannot sign or run on an iPad.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    include(Tests)
+endif()
 
 # A separate target for Benchmarks (keeps the Tests target fast)
-include(Benchmarks)
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    include(Benchmarks)
+endif()
 
 # Output some config for CI (like our PRODUCT_NAME)
 include(GitHubENV)
