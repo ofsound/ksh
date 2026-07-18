@@ -58,7 +58,15 @@ int rateIndexForValue (std::string_view rate)
 
 bool isMidiPatternSelectionNoteNumber (int noteNumber)
 {
-    return noteNumber >= 0 && noteNumber < ksh::Constants::sourceCount;
+    // P1-P16 use notes 0-15; the sequentially following note 16 selects M.
+    return noteNumber >= 0 && noteNumber <= ksh::Constants::sourceCount;
+}
+
+int sourceForMidiPatternSelectionNoteNumber (int noteNumber)
+{
+    return noteNumber == ksh::Constants::sourceCount
+               ? ksh::Constants::mutedStaticSource
+               : noteNumber;
 }
 
 int modInt (int value, int divisor)
@@ -760,8 +768,9 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
 
         if (message.isNoteOn() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
         {
-            [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (message.getNoteNumber());
-            selections.add (metadata.samplePosition, message.getNoteNumber());
+            const int source = sourceForMidiPatternSelectionNoteNumber (message.getNoteNumber());
+            [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (source);
+            selections.add (metadata.samplePosition, source);
             shouldFilter = true;
         }
         else if (message.isNoteOff() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))

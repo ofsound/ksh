@@ -586,6 +586,37 @@ TEST_CASE ("midi pattern selection plays selected source on beat one", "[engine]
     REQUIRE (runSelectionCase (true));
 }
 
+TEST_CASE ("midi M selection mutes beat one immediately", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setStaticSource (15);
+    fixture.engine.setCell (15, 0, 0, true, 100, 100, 1);
+    fixture.engine.generateWindow (0, 16, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    juce::MidiBuffer midi;
+    MidiPatternSelectionBlock selections;
+    selections.add (0, Constants::mutedStaticSource);
+    const auto result = runner.processBlock (fixture.engine.makePlaybackSnapshot(),
+                                             0.0,
+                                             120.0,
+                                             true,
+                                             512,
+                                             midi,
+                                             selections);
+
+    REQUIRE (countNoteOns (midi) == 0);
+    REQUIRE (result.noteHitCount == 0);
+}
+
 TEST_CASE ("plugin processor initializes with blank default pattern", "[processor][transport]")
 {
     PluginProcessor processor;

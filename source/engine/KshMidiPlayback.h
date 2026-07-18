@@ -118,7 +118,8 @@ private:
     size_t pendingNoteOnCount = 0;
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
     uint32_t rngState = 0x12345678u;
-    int pendingStaticSourceOverride = -1;
+    static constexpr int noStaticSourceOverride = Constants::mutedStaticSource - 1;
+    int pendingStaticSourceOverride = noStaticSourceOverride;
 
     [[nodiscard]] int sampleOffsetForGlobalStep (const PlaybackSnapshot& snapshot,
                                                  double blockStartPpq,

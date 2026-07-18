@@ -271,7 +271,7 @@ TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][br
     REQUIRE (engine.sources[1][2][0].velocity == 91);
 }
 
-TEST_CASE ("incoming MIDI notes 0-7 select source patterns", "[plugin][bridge][midi-input]")
+TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][bridge][midi-input]")
 {
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
@@ -297,6 +297,26 @@ TEST_CASE ("incoming MIDI notes 0-7 select source patterns", "[plugin][bridge][m
 
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 7);
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 15, static_cast<juce::uint8> (100)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 15));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 15);
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 16, static_cast<juce::uint8> (100)), 0);
+
+    plugin.processBlock (buffer, midi);
+
+    REQUIRE_FALSE (containsNoteOn (midi, 16));
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.engineStateSnapshot().staticSource == ksh::Constants::mutedStaticSource);
 }
 
 TEST_CASE ("incoming MIDI source selector affects beat one playback immediately", "[plugin][bridge][midi-input]")
@@ -330,12 +350,12 @@ TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve ot
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
-    midi.addEvent (juce::MidiMessage::noteOff (1, 0), 0);
+    midi.addEvent (juce::MidiMessage::noteOff (1, 16), 0);
     midi.addEvent (juce::MidiMessage::noteOn (1, 64, static_cast<juce::uint8> (100)), 8);
 
     plugin.processBlock (buffer, midi);
 
-    REQUIRE_FALSE (containsNoteOff (midi, 0));
+    REQUIRE_FALSE (containsNoteOff (midi, 16));
     REQUIRE (containsNoteOn (midi, 64));
 
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
