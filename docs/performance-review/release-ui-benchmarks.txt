@@ -1,0 +1,37 @@
+Filters: "Native editor performance"
+Randomness seeded to: 2140232658
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Benchmarks is a Catch2 v3.8.1 host application.
+Run with -? for options
+
+-------------------------------------------------------------------------------
+Native editor performance
+-------------------------------------------------------------------------------
+/Users/ben/Dev/JUCE/ksh/benchmarks/Benchmarks.cpp:34
+...............................................................................
+
+benchmark name                       samples       iterations    est run time
+                                     mean          low mean      high mean
+                                     std dev       low std dev   high std dev
+-------------------------------------------------------------------------------
+Dense 32-step full native paint                 20             1    388.853 ms 
+                                        19.7896 ms    19.5993 ms    20.1707 ms 
+                                        588.869 us    286.392 us    961.443 us 
+                                                                               
+Eight-channel flash strip repaint               20             1    21.6438 ms 
+                                        1.09267 ms    1.07135 ms    1.12718 ms 
+                                        60.4447 us    38.5197 us    100.675 us 
+                                                                               
+Native idle state poll                          20          3952     316.16 us 
+                                        4.18292 ns    4.17343 ns    4.21298 ns 
+                                      0.0353203 ns  0.0105266 ns  0.0689355 ns 
+                                                                               
+32-cell edit and publish                        20             1    46.8205 ms 
+                                        2.50716 ms    2.45962 ms    2.54975 ms 
+                                        102.921 us    82.2567 us    129.288 us 
+                                                                               
+
+===============================================================================
+All tests passed (1 assertion in 1 test case)
+

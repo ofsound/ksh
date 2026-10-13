@@ -1,56 +1,21 @@
-# UI and engine sync contract
+# Native editor and engine contract
 
-The C++ engine is the source of truth. Svelte mirrors engine state and sends commands; it does not persist an independent model.
+The C++ engine is authoritative. `PluginProcessor::nativeUiState()` copies an immutable playback snapshot, refresh length, revision and document epoch under the engine mutex. No painting calls the engine or builds JSON.
 
-## Engine to UI
+`KshUiBridge` is a message-thread notification boundary. Engine callbacks increment its revision; they never call an editor while the engine mutex is held. The processor alone drains the audio hit FIFO and delivers typed `NativeHit` notifications. The native controller registers for its lifetime and removes its callback on destruction. Audio processing remains snapshot-only and lock-free.
 
-| Event | Payload | Thread |
-| --- | --- | --- |
-| `engine_state` | Strict `v:1` JSON: globals, channels, source settings, source cells, mutes | Message |
-| `preview` | Generated grid + dimensions | Message |
-| `current_step` | 1-based step index, 0 when stopped | Message |
-| `note_hit` | `channel`, `generatedStep`, `source`, `sourceStep` | Message |
-| `status` | Incremental selector + args, e.g. `steps 16` | Message |
+The visible editor polls at 60 Hz. Only changed state or flash/playhead regions repaint. Pending cell edits carry their original expected values and document epoch. `applyNativeCellEdits` validates the entire batch before applying it and publishes one coherent snapshot. Recording wins conflicts; replacement documents cancel drafts and clear history.
 
-The audio thread never emits WebView events. It enqueues note-hit metadata into a lock-free FIFO, stores transport/tempo reports in atomics, and sets a pending-work flag. A message-thread timer drains that work and calls the bridge.
+The audio callback only enqueues hit notifications and sets work flags. The processor drains them on its 120 Hz message-thread timer, including with the editor closed. The visible editor also asks the processor to drain hits immediately before its playback repaint pass. Audio processing never calls `triggerAsyncUpdate()` to wake the UI.
 
-## UI to Engine
+`RealtimeMailbox` coalesces unconsumed updates through one lock-free atomic pointer. A new publication replaces and recycles the previous pending snapshot, while the consumer's current snapshot remains immutable. Retired slots are recycled on the producer side; all producer operations are serialized by the engine mutex. Bursts while audio processing is suspended still deliver the latest state on the next callback.
 
-Commands use JSON `{ selector, args }` through `kshSendCommand`. Indexes crossing the JS/C++ boundary are 1-based for M4L message compatibility.
+Deferred MIDI note-ons and note-offs use absolute deadlines on a monotonic callback sample timeline. Block sizes can change without shifting an event's deadline. Host seeks retain the existing cancellation rules, and playback reset clears the pending events and sample timeline together.
 
-**Low-latency row triggers** use a separate native function `kshTriggerRow(channelZeroBased, velocity)` that bypasses the serialized command bus and JSON parse. It reads a lock-free cache of channel notes from the last published playback snapshot, queues an audition note for the next audio block, and (when pattern recording is armed) enqueues a quantized cell write for the message thread. The UI must not wait on the global `sendCommand` chain for QWERTY / pad hits.
+Discrete commands go directly to `dispatchUiEngineCommand`, without JavaScript or serialized command messages. Convert native zero-based indices to the engine's one-based command indices once at this boundary. Numeric APVTS gestures pair begin/end callbacks. Row audition calls `triggerRowFromUi` directly through the existing realtime queue.
 
-- Globals: `channels`, `refresh_steps`, `mode`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`, `static_source`
-- Pattern resolution: `source_steps`, `source_rate` (legacy `steps`/`rate` still target the active pattern)
-- Channel: `channel_label`, `channel_note`, `channel_lock`, `channel_loop_length`, `channel_playback_mode`, `channel_audition`
-- Source grid: `cell`, `cell_enabled`, `cell_velocity`, `cell_probability`, `cell_cycle`, `cell_cycle_offset`, `cell_cycle_inverted`, `cell_roll`
-- Source/channel utilities: `source_channel_mute`, `source_channel_reset`
-- Sync: `sync_all`, `request_state`, `reset`
+History groups a gesture into one action and conditionally merges only its changed fields. External changes are rebased out of active transactions; undo/cancel preserve unrelated recording and automation. Histories are capped at 128 entries. Text fields retain their native text undo. Project loads use the existing strict v:1 persistence validator and atomic file replacement.
 
-Message/host-side commands mutate the engine, then publish a new immutable playback snapshot only if `playbackSnapshotVersion()` changed. Metadata-only edits such as `channel_label` do not reset audio playback.
+`KshLayout` supplies cell bounds and hit tests. The grid and generated preview remain together in one native editor. Overall scale is stored in project/host metadata at 50–120%. Imported theme metadata remains readable; all rendering uses the fixed Alternative palette and newly saved projects use `alt`.
 
-## State Shape
-
-Use channel naming in UI state:
-
-- `channelCount`
-- `channels`
-- `sourceSettings`
-- `selectedChannel`
-- `MAX_CHANNELS`
-
-The persisted JSON also uses `channelCount`, `channels`, and per-pattern `sourceSettings`. Legacy UI `laneCount`/`lanes` naming should not come back.
-
-## Editor and compact preview
-
-The editor and compact preview are stacked in a single window and are always both visible (there is no view toggle — that was a leftover from the M4L device's second window).
-
-- The editor (top) shows the source grid and channel controls; source cells flash using `source` + `sourceStep`.
-- The compact preview strip (bottom) shows the generated preview and flashes generated cells from `note_hit`.
-- A single `note_hit` event flashes both grids simultaneously.
-- The window is sized via `combinedDimensions()` (editor height + gap + compact strip height); it resizes when the step count changes.
-- Cell edits are optimistic in the UI, then sent to the engine as `cell` or focused cell setter commands.
-
-## Persistence
-
-The bridge syncs direct `v:1` JSON only. Legacy M4L wrapper/chunk formats are rejected by persistence parsing.
+The string command adapter is retained solely for the existing command-contract tests and compatibility with internal callers. It has no web transport, resources or browser objects.

@@ -4,6 +4,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+class PluginProcessorTestPeer
+{
+public:
+    static bool asyncUpdatePending (const PluginProcessor& processor) { return processor.isUpdatePending(); }
+    static void tick (PluginProcessor& processor) { processor.timerCallback(); }
+};
+
 namespace
 {
 class FixedPlayHead final : public juce::AudioPlayHead
@@ -82,6 +89,51 @@ bool containsNoteOff (const juce::MidiBuffer& midi, int pitch)
     return false;
 }
 } // namespace
+
+TEST_CASE ("audio note hits reach the UI timer without posting an async update", "[plugin][bridge][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    int hits = 0;
+    plugin.getUiBridge().onNoteHit = [&] (const ksh::NativeHit&) { ++hits; };
+    REQUIRE_FALSE (PluginProcessorTestPeer::asyncUpdatePending (plugin));
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOn (midi, 36));
+    REQUIRE_FALSE (PluginProcessorTestPeer::asyncUpdatePending (plugin));
+    REQUIRE (hits == 0);
+    PluginProcessorTestPeer::tick (plugin);
+    REQUIRE (hits == 1);
+    REQUIRE (plugin.emitPendingNoteHitsForUi() == 0);
+    plugin.getUiBridge().onNoteHit = {};
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("MIDI uses the final edit after a burst while audio processing is suspended", "[plugin][bridge][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOn (midi, 36));
+    for (int note = 60; note <= 80; ++note)
+        REQUIRE (plugin.dispatchUiEngineCommand ("channel_note", { 1, note }));
+    // No further edit or message-thread retry is needed for the latest state.
+    plugin.releaseResources();
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOn (midi, 80));
+    REQUIRE_FALSE (containsNoteOn (midi, 60));
+    plugin.setPlayHead (nullptr);
+}
 
 TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge]")
 {

@@ -1,0 +1,5 @@
+JUCE v8.0.13
+Randomness seeded to: 1984651390
+===============================================================================
+All tests passed (2555 assertions in 153 test cases)
+

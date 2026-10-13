@@ -62,6 +62,19 @@ public:
     [[nodiscard]] nlohmann::json enginePreviewState();
     [[nodiscard]] ksh::EngineStateSnapshot engineStateSnapshot();
     [[nodiscard]] ksh::PlaybackSnapshot enginePlaybackSnapshot();
+    struct UiState
+    {
+        ksh::PlaybackSnapshot playback;
+        int refreshSteps = 16;
+        uint64_t revision = 0, documentEpoch = 0;
+    };
+    struct CellEdit
+    {
+        int source = 0, channel = 0, step = 0;
+        ksh::Cell expected, value;
+    };
+    [[nodiscard]] UiState nativeUiState();
+    [[nodiscard]] bool applyNativeCellEdits (const std::vector<CellEdit>& edits, uint64_t epoch);
     [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
     [[nodiscard]] bool applyPersistenceFromUi (const nlohmann::json& state);
 
@@ -75,7 +88,7 @@ public:
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
-    /** Drain queued note-hit flashes to the WebView (safe on the message thread). */
+    /** Drain queued note-hit flashes to the native editor (safe on the message thread). */
     int emitPendingNoteHitsForUi();
     /** Wake the message thread to flush a dirty preview without blocking a UI command. */
     void scheduleUiPreviewFlush();
@@ -105,6 +118,7 @@ public:
     [[nodiscard]] juce::String getProjectModifiedAt() const;
 
 private:
+    friend class PluginProcessorTestPeer;
     static BusesProperties createBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void initializeDefaultPattern();
@@ -217,7 +231,7 @@ private:
     juce::String projectDescription;
     juce::String projectCreatedAt;
     juce::String projectModifiedAt;
-    juce::String projectThemeMode { "dark" };
+    juce::String projectThemeMode { "alt" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

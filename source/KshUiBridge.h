@@ -1,41 +1,38 @@
 #pragma once
-
 #include "engine/KickSnareHatEngine.h"
-#include "engine/KshNativePlayback.h"
-
-#include <juce_gui_extra/juce_gui_extra.h>
-
-#include <nlohmann/json.hpp>
+#include <atomic>
+#include <juce_gui_basics/juce_gui_basics.h>
 
 class PluginProcessor;
 
-/** Message-thread bridge between the WebView UI and {@link PluginProcessor}. */
+/** Native message-thread notification boundary. Engine callbacks only invalidate state;
+    they never call editor code while the engine mutex is held. */
 class KshUiBridge
 {
 public:
-    explicit KshUiBridge (PluginProcessor& processorIn);
-
-    void attachWebView (juce::WebBrowserComponent* browser);
-    void detachWebView();
-
+    explicit KshUiBridge (PluginProcessor& p) : processor (p) {}
     [[nodiscard]] bool handleCommand (const juce::String& commandJson);
-
-    void syncAll();
-    void requestState();
-    void emitEngineState();
-    void emitPreview (const nlohmann::json& preview);
-    void emitStatus (const std::string& message);
-    void emitNoteHit (const ksh::NativeHit& hit);
-    void emitCurrentStep (int stepOneBased);
-    void pollModifierKeys();
-    void pollTransportUi();
+    void syncAll() { invalidate(); }
+    void requestState() { invalidate(); }
+    void emitEngineState() { invalidate(); }
+    void emitPreview (const nlohmann::json&) { invalidate(); }
+    void emitStatus (const std::string&) { invalidate(); }
+    void emitNoteHit (const ksh::NativeHit& hit)
+    {
+        if (onNoteHit)
+            onNoteHit (hit);
+    }
+    void invalidate() { revision.fetch_add (1, std::memory_order_release); }
+    void documentReplaced()
+    {
+        documentEpoch.fetch_add (1, std::memory_order_release);
+        invalidate();
+    }
+    uint64_t getRevision() const { return revision.load (std::memory_order_acquire); }
+    uint64_t getDocumentEpoch() const { return documentEpoch.load (std::memory_order_acquire); }
+    std::function<void (const ksh::NativeHit&)> onNoteHit;
 
 private:
     PluginProcessor& processor;
-    juce::Component::SafePointer<juce::WebBrowserComponent> webView;
-    int lastEmittedStep = 0;
-    int lastEmittedModifierMask = -1;
-
-    void emitJsonEvent (const juce::Identifier& eventId, const nlohmann::json& payload);
-    void emitStatusSelector (const std::string& message);
+    std::atomic<uint64_t> revision { 1 }, documentEpoch { 1 };
 };

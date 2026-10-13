@@ -49,61 +49,38 @@ Built plugins are copied to `~/Library/Audio/Plug-Ins/` when `COPY_PLUGIN_AFTER_
 
 Builds default to **Debug** for development (faster builds, better debugging). Use **Release** if you hit audio dropouts or high CPU in a DAW.
 
-## WebView UI (Svelte + Vite + Tailwind)
+## Native JUCE frontend
 
-The plugin editor is a JUCE 8 `WebBrowserComponent` ([overview](https://juce.com/blog/juce-8-feature-overview-webview-uis/)). Frontend lives in `ui/`.
+The complete editor lives in `source/ui/`. It uses a fixed Alternative palette with orange accents, native components and custom grid painting. There is no Svelte project, npm build, browser resource provider, or embedded web bundle. `JUCE_WEB_BROWSER=0` is required.
 
-```bash
-# Hot reload (Debug plugin loads http://localhost:5173)
-cd ui && npm install && npm run dev
+- `KshStyle.h`: palette, embedded Gantari typography, vector icons, native controls.
+- `KshLayout.h`: shared rendering/hit-test geometry; one root UI-scale transform.
+- `KshEditorController`: typed snapshots, batched edits, conditional undo/redo, selection and gestures.
+- `KshPatternGrid`, `KshCycleEditor`, `KshPreviewPanel`, `KshNativeEditor`: native interface.
+- `KshUiBridge`: message-thread revision and note-hit notifications; no browser dependency.
 
-# Static Svelte diagnostics
-cd ui && npm run check
-
-# Production bundle → assets/webview/ui.zip (embedded via BinaryData)
-cd ui && npm run build
-```
-
-`cmake --build Builds` runs the UI build automatically when `ui/` sources change (requires `npm`).
-
-JUCE JS helpers: `JUCE/modules/juce_gui_extra/native/javascript/` (Vite alias `@juce`).
-
-Melatonin Inspector was removed — it only applies to native JUCE widgets, not WebView UIs.
-
-## Svelte 5 (`ui/`)
-
-All `.svelte` files use **runes mode** (Svelte 5). Cursor rule `.cursor/rules/svelte-ui.mdc` applies when editing `ui/**`.
-
-**Use:** `$props()`, `$state()`, `$derived` / `$derived.by`, `onclick` / `onpointerdown` (not `on:click`), callback props, keyed `{#each}` with stable ids, and `SvelteSet` / `SvelteMap` from `svelte/reactivity` when mutating collections in place.
-
-**Avoid:** Svelte 4 `export let`, `$:`, `<slot>` / `$$slots`, `on:event`, `createEventDispatcher`, stores for local component state, `svelte:component`, and unnecessary `$effect`. Prefer event handlers and `$derived`; use `$effect` only for browser/API side effects that cannot be modeled directly.
-
-**Svelte MCP:** When asked about Svelte or SvelteKit, call `list-sections` first, fetch all relevant docs with `get-documentation`, and run `svelte-autofixer` before finishing any Svelte code change. Do not generate a playground link for code written into this repo.
-
-**Before finishing any `ui/` change:** run `cd ui && npm run check`, then `cmake --build Builds` so all plugin formats embed a fresh `assets/webview/ui.zip`.
+Preserve strict `v:1` projects, host parameter IDs, audio-thread isolation, gesture cancellation, and external-recording conflict checks. See `docs/ui-sync.md` and `docs/native-ui-migration-plan.md`.
 
 ## Agent workflow (rebuild every time)
 
-After any change to `source/`, `CMakeLists.txt`, `ui/`, or plugin-related CMake modules:
+After any change to `source/`, `CMakeLists.txt`, or plugin-related CMake modules:
 
 1. Reconfigure only if CMake changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
-2. If **`ui/`** changed: `cd ui && npm run check`
-3. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
-4. Fix compile/check warnings before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
+2. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
+3. Fix compile/check warnings before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
 
 Run `./Builds/Tests` when test or processor behavior changes.
 
 ## Project Structure
 
-- `source/` - Plugin source code (PluginProcessor, PluginEditor, WebViewResourceProvider)
-- `ui/` - Svelte/Vite/Tailwind WebView frontend
-- `cmake_project/` - Project-specific CMake (WebViewUI.cmake)
+- `source/` - Plugin source code (PluginProcessor, PluginEditor, engine, native UI)
+- `cmake_project/` - Project-specific CMake (native assets, icons)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
 - `modules/` - Git submodules: clap-juce-extensions
 - `JUCE/` - JUCE framework (git submodule)
-- `assets/` - Binary resources (auto-included via juce_add_binary_data; WebView bundle in `assets/webview/ui.zip`)
+- `assets/` - Binary resources (explicit native font list via juce_add_binary_data)
 - `packaging/` - Installer resources and scripts
 
 ## Architecture

@@ -1,0 +1,12 @@
+[0/2] Re-checking globbed directories...
+ninja: no work to do.
+Timing block=64 expected on=0,3000 off=2688,5688 actual: on=0 off=2688 on=3000 off=5688
+Timing block=128 expected on=0,3000 off=2688,5688 actual: on=0 off=2688 on=3000 off=5688
+Timing block=512 expected on=0,3000 off=2688,5688 actual: on=0 off=2688 on=3000 off=5688
+Timing block=1024 expected on=0,3000 off=2688,5688 actual: on=0 off=2688 on=3000 off=5688
+Mailbox latest after publishing 1..10 without consumption: 10
+Mailbox after retiring and rereading: 10
+Dense runner block=64 mean_us=0.830262 p99_us=1.25 max_us=45.417 hits=158720
+Dense runner block=128 mean_us=1.07755 p99_us=1.5 max_us=58.541 hits=317440
+Dense runner block=512 mean_us=6.81706 p99_us=17.75 max_us=66.583 hits=1269760
+Dense runner block=1024 mean_us=27.9921 p99_us=56 max_us=116.917 hits=2539520

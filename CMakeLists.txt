@@ -38,7 +38,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(KSH_TARGETED_DEVICE_FAMILY "2")
 else()
     set(FORMATS Standalone AU VST3 AUv3)
-    set(KSH_COPY_PLUGIN_AFTER_BUILD TRUE)
+    option(KSH_COPY_PLUGIN_AFTER_BUILD "Install desktop plugins after building" ON)
     set(KSH_BACKGROUND_AUDIO_ENABLED FALSE)
     set(KSH_TARGETED_DEVICE_FAMILY "1,2")
 endif()
@@ -94,8 +94,6 @@ juce_add_plugin("${PROJECT_NAME}"
         UIInterfaceOrientationLandscapeLeft
         UIInterfaceOrientationLandscapeRight
 
-    NEEDS_WEB_BROWSER TRUE
-    NEEDS_WEBVIEW2 TRUE
 
     PLUGIN_MANUFACTURER_CODE Osnd
     PLUGIN_CODE Ksh1
@@ -105,6 +103,7 @@ juce_add_plugin("${PROJECT_NAME}"
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
     IS_MIDI_EFFECT TRUE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     # Live treats VST3 "Fx" + audio inputs as post-instrument audio FX; Fx|Instrument loads like Cthulhu/Scaler.
     VST3_CATEGORIES Fx Instrument
 
@@ -138,14 +137,10 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/source/engine/*.h")
 target_sources(SharedCode INTERFACE ${SourceFiles})
 
-include(WebViewUI)
 
 # Adds a BinaryData target for embedding assets into the binary
 include(KshAssets)
 
-if (TARGET WebViewUIBuild)
-    add_dependencies(Assets WebViewUIBuild)
-endif()
 
 # The desktop helper assigns plugin schemes to the macOS AudioPluginHost. On
 # iOS, generate only the two useful device schemes without that executable.
@@ -165,8 +160,8 @@ endif()
 target_compile_definitions(SharedCode
     INTERFACE
 
-    JUCE_WEB_BROWSER=1
-    JUCE_USE_CURL=1
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 
     # Uncomment if you are paying for a an Indie/Pro license or releasing under GPLv3
@@ -179,6 +174,7 @@ target_compile_definitions(SharedCode
     # JucePlugin_Name is for some reason doesn't use the nicer PRODUCT_NAME
     PRODUCT_NAME_WITHOUT_VERSION="KSH"
 )
+
 
 # Link to any other modules you added (with juce_add_module) here!
 # Usually JUCE modules must have PRIVATE visibility

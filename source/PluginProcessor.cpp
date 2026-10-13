@@ -316,7 +316,7 @@ void PluginProcessor::scheduleUiPreviewFlush()
 void PluginProcessor::handleAsyncUpdate()
 {
     // Step 0 is the refresh boundary (step % refreshSteps == 0). Emitting note_hit
-    // and then calling generateWindow on the same turn blocks the WebView paint.
+    // and then calling generateWindow on the same turn blocks editor painting.
     // Only defer that heavy work on refresh boundaries / dirty preview — deferring
     // every note doubled message-thread work and made grid editing feel laggy.
     emitPendingNoteHitsForUi();
@@ -389,9 +389,10 @@ void PluginProcessor::handleAsyncUpdate()
             if (engine.isPreviewDirty())
                 engine.flushPreview();
         }
-    }
 
-    playbackMailbox.drainRetired();
+        // Keep all mailbox producer operations serialized with host state restore.
+        playbackMailbox.drainRetired();
+    }
 
     if (emitPendingNoteHitsForUi() > 0)
     {
@@ -703,10 +704,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (pushedHit || notify)
         messageThreadWorkPending.store (true, std::memory_order_release);
 
-    // Wake the message thread immediately for note flashes — waiting for the 120 Hz
-    // timer alone can put the first hit nearly a step behind the MIDI event.
-    if (pushedHit)
-        triggerAsyncUpdate();
+    // The message-thread timer drains these flags/FIFOs. Posting an OS message
+    // here (triggerAsyncUpdate) can block the audio thread.
 }
 
 ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
@@ -909,6 +908,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
+        uiBridge.documentReplaced();
     }
 
     applyProjectMetadataFromState (*payload);
@@ -950,7 +950,7 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         state["projectDescription"] = projectDescription.toStdString();
         state["projectCreatedAt"] = projectCreatedAt.toStdString();
         state["projectModifiedAt"] = projectModifiedAt.toStdString();
-        state["projectThemeMode"] = projectThemeMode.toStdString();
+        state["projectThemeMode"] = "alt";
     }
     state["patternViewScale"] = patternViewScale;
     state["projectUiScalePercent"] = projectUiScalePercent;
@@ -1025,7 +1025,7 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
     if (! ok)
         return false;
 
-    syncMacroParametersFromEngineLocked (false);
+    syncMacroParametersFromEngineLocked (true);
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -1082,6 +1082,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
     std::scoped_lock lock { engineStateMutex };
 
     const bool ok = ksh::dispatchEngineCommand (engine, selector, args);
+    if (ok) uiBridge.invalidate();
 
     if (! ok)
         return false;
@@ -1179,7 +1180,12 @@ void PluginProcessor::setPatternViewScale (double scale)
 
 void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 {
-    projectUiScalePercent = juce::jlimit (50, 120, uiScalePercent);
+    const auto next = juce::jlimit (50, 120, uiScalePercent);
+    if (projectUiScalePercent != next)
+    {
+        projectUiScalePercent = next;
+        uiBridge.invalidate();
+    }
 }
 
 juce::String PluginProcessor::getProjectThemeMode() const
@@ -1362,7 +1368,7 @@ void PluginProcessor::applyProjectMetadataFromState (const nlohmann::json& state
     catch (...)
     {
         setProjectMetadata ("Untitled Project", {}, {}, {});
-        setProjectThemeMode ("dark");
+        setProjectThemeMode ("alt");
     }
 }
 
@@ -1384,12 +1390,13 @@ void PluginProcessor::resetProject()
         suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
+        uiBridge.documentReplaced();
     }
 
     setProjectMetadata ("Untitled Project", {}, {}, {});
     setPatternViewScale (1.0);
     setProjectUiScalePercent (100);
-    setProjectThemeMode ("dark");
+    setProjectThemeMode ("alt");
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
@@ -1414,4 +1421,38 @@ void PluginProcessor::requestEditorSize (int width, int height)
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new PluginProcessor();
+}
+
+PluginProcessor::UiState PluginProcessor::nativeUiState()
+{
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    publishPlaybackSnapshotIfChangedLocked();
+    return { engine.makePlaybackSnapshot(), engine.getRefreshSteps(),
+             uiBridge.getRevision(), uiBridge.getDocumentEpoch() };
+}
+
+bool PluginProcessor::applyNativeCellEdits (const std::vector<CellEdit>& edits, uint64_t epoch)
+{
+    if (edits.size() > 16 * 8 * 32) return false;
+    std::scoped_lock lock { engineStateMutex };
+    if (epoch != uiBridge.getDocumentEpoch()) return false;
+    for (const auto& edit : edits)
+    {
+        if (edit.source < 0 || edit.source >= 16 || edit.channel < 0 || edit.channel >= 8
+            || edit.step < 0 || edit.step >= 32
+            || engine.sourceCellAt (edit.source, edit.channel, edit.step) != edit.expected)
+            return false;
+    }
+    for (const auto& edit : edits)
+    {
+        const auto& c = edit.value;
+        engine.setCell (edit.source, edit.channel, edit.step, c.enabled, c.velocity,
+                        c.probability, c.cycle, c.cycleMask, c.roll);
+    }
+    publishPlaybackSnapshotIfChangedLocked();
+    uiBridge.invalidate();
+    previewFlushPending.store (true, std::memory_order_release);
+    messageThreadWorkPending.store (true, std::memory_order_release);
+    return true;
 }

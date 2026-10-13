@@ -1,6 +1,6 @@
 # KSH
 
-KSH by ofsound is a JUCE 8 MIDI effect plugin port of a Max for Live prototype. It uses the Pamplejuce CMake layout, a pure C++ engine in `source/engine/`, and a Svelte/Vite WebView UI in `ui/`.
+KSH by ofsound is a JUCE 8 MIDI effect plugin port of a Max for Live prototype. It uses the Pamplejuce CMake layout, a pure C++ engine in `source/engine/`, and a fully native JUCE frontend in `source/ui/`.
 
 ## Formats
 
@@ -17,24 +17,22 @@ cmake --build Builds
 ./Builds/Tests
 ```
 
-The build copies plugin formats into the local macOS plugin folders when `COPY_PLUGIN_AFTER_BUILD` is enabled.
+The build copies plugin formats into the local macOS plugin folders when `KSH_COPY_PLUGIN_AFTER_BUILD` is enabled (the default). Desktop AUv3 requires the Xcode generator.
 
-For WebView hot reload in a Debug plugin:
+The frontend uses JUCE components, custom grid painting, embedded Gantari fonts, and the fixed orange Alternative palette. Node, npm, a browser, and a UI server are not required.
 
-```sh
-cd ui
-npm install
-npm run dev
-```
+## Native editor
 
-Production UI assets are bundled into `assets/webview/ui.zip` by:
-
-```sh
-cd ui
-npm run build
-```
-
-`cmake --build Builds` runs the UI build automatically when UI sources change.
+- Click cells to toggle; drag horizontally to paint or vertically to edit values.
+- Shift selects cells; drag a selection to move it, Option-drag to copy it, and Shift-drag to change its values.
+- Option temporarily edits probability; Shift-Option edits roll. Keys 1–4 choose a layer.
+- Right-click a cell opens its cycle editor. Drag loop handles to resize a channel loop.
+- Shift-click a pattern chooses a copy source; click a destination to copy it.
+- Click channel labels to audition; double-click to rename. ASDFGHJK plays channels.
+- Click/drag channel power controls to mute; Shift-click solos; right-click resets a row.
+- Numeric controls support dragging, scrolling, arrow keys, double-click entry, and right-click reset.
+- Cmd-Z / Cmd-Shift-Z undo/redo; Escape cancels a grid gesture; Delete clears selected cells.
+- Standalone provides Play/Stop, tempo, and Space transport. The DC control switches channel colors; UI scale is 50–120%.
 
 ## Architecture
 
@@ -50,12 +48,13 @@ npm run build
 See:
 
 - [docs/ui-sync.md](docs/ui-sync.md)
+- [Native frontend implementation and validation](docs/native-ui-implementation-report.md)
 - [docs/native-playback.md](docs/native-playback.md)
 - [docs/port-plan.md](docs/port-plan.md)
 
 ## Verification
 
-After changes to `source/`, `ui/`, plugin CMake, or CMakeLists:
+After changes to `source/`, plugin CMake, or CMakeLists:
 
 ```sh
 cmake --build Builds

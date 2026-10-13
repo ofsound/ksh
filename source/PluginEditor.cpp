@@ -1,99 +1,61 @@
 #include "PluginEditor.h"
-
 #include "engine/KshPersistence.h"
 
-#include <algorithm>
-
-#if JUCE_WEB_BROWSER
-
-namespace
+PluginEditor::PluginEditor (PluginProcessor& p) : AudioProcessorEditor (&p), processorRef (p)
 {
-constexpr int defaultEditorWidth = 1328;
-constexpr int defaultPluginEditorHeight = 828;
-constexpr int defaultStandaloneEditorHeight = 872;
-} // namespace
-
-KshWebBrowserComponent::KshWebBrowserComponent (const Options& options,
-                                                std::function<void()> onPageLoadedIn)
-    : juce::WebBrowserComponent (options),
-      onPageLoaded (std::move (onPageLoadedIn))
-{
-}
-
-void KshWebBrowserComponent::pageFinishedLoading (const juce::String& url)
-{
-    juce::WebBrowserComponent::pageFinishedLoading (url);
-
-    if (onPageLoaded != nullptr)
-        onPageLoaded();
-}
-
-#endif
-
-//==============================================================================
-PluginEditor::PluginEditor (PluginProcessor& p)
-    : AudioProcessorEditor (&p),
-      processorRef (p)
-{
-#if JUCE_WEB_BROWSER
-    processorRef.setEditorResizeCallback ([this] (int width, int height)
-    {
-        setSize (width, height);
-    });
-
-    auto onPageLoaded = [this]
-    {
-        processorRef.getUiBridge().attachWebView (webView.get());
-        processorRef.getUiBridge().syncAll();
+    nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
+    addAndMakeVisible (*nativeView);
+    nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
+    nativeView->projectAction = [this] (int action) {
+        const juce::Component::SafePointer<PluginEditor> safe (this);
+        auto completed = [safe] (juce::var result) {
+            if (safe == nullptr)
+                return;
+            const auto error = result["error"].toString();
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "KSH project", error);
+            safe->nativeView->controller.refresh();
+            safe->updateNativeSize();
+        };
+        if (action == 0)
+            createNewProject (completed);
+        else if (action == 1)
+            showLoadProjectDialog (completed);
+        else if (action == 2)
+            showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription(), processorRef.getProjectUiScalePercent() }, completed);
+        else
+            cycleProject (action == 3 ? -1 : 1, completed);
     };
-
-    webView = std::make_unique<KshWebBrowserComponent> (WebViewResources::makeBrowserOptions (processorRef, *this),
-                                                        onPageLoaded);
-    addAndMakeVisible (*webView);
-
-   #if JUCE_DEBUG && ! JUCE_IOS
-    webView->goToURL ("http://localhost:5173");
-   #else
-    webView->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
-   #endif
-#else
-    fallbackLabel.setText ("WebView is not available on this platform.\nEnable JUCE_WEB_BROWSER.",
-                           juce::dontSendNotification);
-    fallbackLabel.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (fallbackLabel);
-#endif
-
-#if JUCE_WEB_BROWSER
-    scaleMinimumWidth = defaultEditorWidth;
-    scaleMinimumHeight = processorRef.hasStandaloneTransport() ? defaultStandaloneEditorHeight
-                                                               : defaultPluginEditorHeight;
-    applyNormalResizeLimits();
-#else
-    setResizeLimits (900, 480, 3200, 1400);
-#endif
     setResizable (true, true);
-    const auto initialEditorHeight = processorRef.hasStandaloneTransport()
-                                       ? defaultStandaloneEditorHeight
-                                       : defaultPluginEditorHeight;
-
-    if (auto* constrainer = getConstrainer())
-        constrainer->setFixedAspectRatio (static_cast<double> (defaultEditorWidth) / static_cast<double> (initialEditorHeight));
-
-    setSize (defaultEditorWidth, initialEditorHeight);
-    startTimerHz (60);
+    updateNativeSize();
 }
-
 PluginEditor::~PluginEditor()
 {
-#if JUCE_WEB_BROWSER
-    processorRef.getUiBridge().detachWebView();
-#endif
+    processorRef.setEditorResizeCallback ({});
+    nativeView.reset();
 }
-
-#if JUCE_WEB_BROWSER
-void PluginEditor::applyNormalResizeLimits()
+void PluginEditor::updateNativeSize()
 {
-    setResizeLimits (scaleMinimumWidth, scaleMinimumHeight, 4096, 2400);
+    const auto& layout = nativeView->layout;
+    const float scale = static_cast<float> (processorRef.getProjectUiScalePercent()) / 100.0f;
+    setResizeLimits (juce::roundToInt (layout.width() * 0.5f), juce::roundToInt (layout.height() * 0.5f), juce::roundToInt (layout.width() * 1.2f), juce::roundToInt (layout.height() * 1.2f));
+    if (auto* limits = getConstrainer())
+        limits->setFixedAspectRatio (static_cast<double> (layout.width() / layout.height()));
+    setSize (juce::roundToInt (layout.width() * scale), juce::roundToInt (layout.height() * scale));
+    resized();
+}
+void PluginEditor::paint (juce::Graphics& g) { g.fillAll (ksh::ui::Palette::app); }
+void PluginEditor::resized()
+{
+    if (!nativeView)
+        return;
+    const auto& layout = nativeView->layout;
+    const float scale = juce::jmin (static_cast<float> (getWidth()) / layout.width(), static_cast<float> (getHeight()) / layout.height());
+    const int percent = juce::jlimit (50, 120, juce::roundToInt (scale * 100));
+    if (percent != processorRef.getProjectUiScalePercent())
+        processorRef.setProjectUiScalePercent (percent);
+    nativeView->setTransform (juce::AffineTransform::scale (scale));
+    nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }
 
 juce::File PluginEditor::getDefaultProjectsDirectory() const
@@ -113,8 +75,7 @@ juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
     if (directory.isDirectory())
         directory.findChildFiles (files, juce::File::findFiles, false, "*.kshproject");
 
-    std::sort (files.begin(), files.end(), [] (const juce::File& left, const juce::File& right)
-    {
+    std::sort (files.begin(), files.end(), [] (const juce::File& left, const juce::File& right) {
         return left.getFileName().compareNatural (right.getFileName(), true) < 0;
     });
     return files;
@@ -136,7 +97,7 @@ juce::String PluginEditor::getCurrentProjectFileName() const
 }
 
 juce::var PluginEditor::projectOperationResult (const bool success,
-                                                const juce::String& errorMessage) const
+    const juce::String& errorMessage) const
 {
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty ("success", success ? 1 : 0);
@@ -162,7 +123,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
 {
     constexpr juce::uint64 maximumProjectBytes = 16 * 1024 * 1024;
 
-    if (! file.existsAsFile())
+    if (!file.existsAsFile())
     {
         errorMessage = "That project file no longer exists.";
         return false;
@@ -175,7 +136,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
     }
 
     juce::MemoryBlock data;
-    if (! file.loadFileAsData (data))
+    if (!file.loadFileAsData (data))
     {
         errorMessage = "The project file could not be read.";
         return false;
@@ -183,7 +144,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
 
     const auto parsed = ksh::parsePersistencePayload (
         std::string_view (static_cast<const char*> (data.getData()), data.getSize()));
-    if (! parsed.has_value())
+    if (!parsed.has_value())
     {
         errorMessage = "The selected file is not a KSH project.";
         return false;
@@ -192,21 +153,21 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
     processorRef.setStateInformation (data.getData(), static_cast<int> (data.getSize()));
     currentProjectFile = file;
 
-    if (! parsed->contains ("projectName"))
+    if (!parsed->contains ("projectName"))
     {
         processorRef.setProjectMetadata (file.getFileNameWithoutExtension(),
-                                         {},
-                                         {},
-                                         {});
+            {},
+            {},
+            {});
     }
     else if (processorRef.getProjectName() == "Untitled Project"
              && file.getFileNameWithoutExtension().isNotEmpty()
              && file.getFileNameWithoutExtension() != "Untitled Project")
     {
         processorRef.setProjectMetadata (file.getFileNameWithoutExtension(),
-                                         processorRef.getProjectDescription(),
-                                         processorRef.getProjectCreatedAt(),
-                                         processorRef.getProjectModifiedAt());
+            processorRef.getProjectDescription(),
+            processorRef.getProjectCreatedAt(),
+            processorRef.getProjectModifiedAt());
     }
 
     return true;
@@ -214,7 +175,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
 
 bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorMessage)
 {
-    if (! file.getParentDirectory().createDirectory())
+    if (!file.getParentDirectory().createDirectory())
     {
         errorMessage = "The project folder could not be created.";
         return false;
@@ -224,8 +185,8 @@ bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorM
     processorRef.getStateInformation (data);
     juce::TemporaryFile temporaryFile (file);
 
-    if (! temporaryFile.getFile().replaceWithData (data.getData(), data.getSize())
-        || ! temporaryFile.overwriteTargetFileWithTemporary())
+    if (!temporaryFile.getFile().replaceWithData (data.getData(), data.getSize())
+        || !temporaryFile.overwriteTargetFileWithTemporary())
     {
         errorMessage = "The project file could not be written.";
         return false;
@@ -237,7 +198,7 @@ bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorM
 
 void PluginEditor::showSaveProjectDialog (
     const juce::Array<juce::var>& args,
-    juce::WebBrowserComponent::NativeFunctionCompletion complete)
+    std::function<void (juce::var)> complete)
 {
     if (projectFileChooser != nullptr)
     {
@@ -272,13 +233,12 @@ void PluginEditor::showSaveProjectDialog (
         juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
             | juce::FileBrowserComponent::warnAboutOverwriting,
         [safeThis,
-         completion = std::move (complete),
-         name,
-         description,
-         createdAt,
-         now,
-         scale] (const juce::FileChooser& chooser) mutable
-        {
+            completion = std::move (complete),
+            name,
+            description,
+            createdAt,
+            now,
+            scale] (const juce::FileChooser& chooser) mutable {
             if (safeThis == nullptr)
                 return;
 
@@ -290,11 +250,11 @@ void PluginEditor::showSaveProjectDialog (
                 return;
             }
 
-            if (! file.hasFileExtension (".kshproject"))
+            if (!file.hasFileExtension (".kshproject"))
                 file = file.withFileExtension (".kshproject");
 
             const auto previousProjectFile = safeThis->currentProjectFile;
-            const auto savedToNewPath = ! previousProjectFile.existsAsFile()
+            const auto savedToNewPath = !previousProjectFile.existsAsFile()
                                         || previousProjectFile != file;
             const auto projectNameToSave = savedToNewPath ? file.getFileNameWithoutExtension()
                                                           : name;
@@ -309,7 +269,7 @@ void PluginEditor::showSaveProjectDialog (
 }
 
 void PluginEditor::showLoadProjectDialog (
-    juce::WebBrowserComponent::NativeFunctionCompletion complete)
+    std::function<void (juce::var)> complete)
 {
     if (projectFileChooser != nullptr)
     {
@@ -324,8 +284,7 @@ void PluginEditor::showLoadProjectDialog (
     const juce::Component::SafePointer<PluginEditor> safeThis (this);
     projectFileChooser->launchAsync (
         juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-        [safeThis, completion = std::move (complete)] (const juce::FileChooser& chooser) mutable
-        {
+        [safeThis, completion = std::move (complete)] (const juce::FileChooser& chooser) mutable {
             if (safeThis == nullptr)
                 return;
 
@@ -344,7 +303,7 @@ void PluginEditor::showLoadProjectDialog (
 }
 
 void PluginEditor::createNewProject (
-    juce::WebBrowserComponent::NativeFunctionCompletion complete)
+    std::function<void (juce::var)> complete)
 {
     if (projectFileChooser != nullptr)
     {
@@ -359,7 +318,7 @@ void PluginEditor::createNewProject (
 
 void PluginEditor::cycleProject (
     const int direction,
-    juce::WebBrowserComponent::NativeFunctionCompletion complete)
+    std::function<void (juce::var)> complete)
 {
     const auto files = getSiblingProjectFiles();
 
@@ -398,66 +357,4 @@ void PluginEditor::cycleProject (
     juce::String error;
     const auto loaded = loadProjectFile (files[nextIndex], error);
     complete (projectOperationResult (loaded, error));
-}
-
-juce::var PluginEditor::handleEditorScaleMinimumRequest (const int minWidth, const int minHeight)
-{
-    const auto previousMinimumWidth = scaleMinimumWidth;
-    const auto previousMinimumHeight = scaleMinimumHeight;
-    const auto followsScaleMinimum = getWidth() == previousMinimumWidth
-                                  && getHeight() == previousMinimumHeight;
-
-    scaleMinimumWidth = juce::jlimit (900, 2400, minWidth);
-    scaleMinimumHeight = juce::jlimit (480, 1800, minHeight);
-
-    const auto aspectRatio = static_cast<double> (scaleMinimumWidth)
-                           / static_cast<double> (scaleMinimumHeight);
-    if (auto* constrainer = getConstrainer())
-        constrainer->setFixedAspectRatio (aspectRatio);
-
-    applyNormalResizeLimits();
-    auto nextWidth = followsScaleMinimum ? scaleMinimumWidth
-                                         : juce::jmax (getWidth(), scaleMinimumWidth);
-    auto nextHeight = followsScaleMinimum ? scaleMinimumHeight
-                                          : juce::jmax (getHeight(), scaleMinimumHeight);
-
-    if (! followsScaleMinimum)
-    {
-        nextHeight = juce::roundToInt (static_cast<double> (nextWidth) / aspectRatio);
-
-        if (nextHeight < scaleMinimumHeight)
-        {
-            nextHeight = scaleMinimumHeight;
-            nextWidth = juce::roundToInt (static_cast<double> (nextHeight) * aspectRatio);
-        }
-    }
-
-    setSize (nextWidth, nextHeight);
-
-    auto object = std::make_unique<juce::DynamicObject>();
-    object->setProperty ("available", 1);
-    object->setProperty ("minWidth", scaleMinimumWidth);
-    object->setProperty ("minHeight", scaleMinimumHeight);
-    return juce::var (object.release());
-}
-#endif
-
-void PluginEditor::paint (juce::Graphics& g)
-{
-    g.fillAll (juce::Colour (0xff1a1a1a));
-}
-
-void PluginEditor::resized()
-{
-#if JUCE_WEB_BROWSER
-    if (webView != nullptr)
-        webView->setBounds (getLocalBounds());
-#else
-    fallbackLabel.setBounds (getLocalBounds());
-#endif
-}
-
-void PluginEditor::timerCallback()
-{
-    processorRef.getUiBridge().pollTransportUi();
 }

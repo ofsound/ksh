@@ -91,14 +91,14 @@ private:
 
     struct PendingNoteOff
     {
-        int sampleOffset = 0;
+        int64_t samplePosition = 0;
         int midiChannel = 1;
         int pitch = 0;
     };
 
     struct PendingNoteOn
     {
-        int sampleOffset = 0;
+        int64_t samplePosition = 0;
         NativeHit hit {};
     };
 
@@ -109,6 +109,9 @@ private:
         static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
 
     double sampleRate = 44100.0;
+    // Monotonic callback sample timeline, independent of host seeks and block size.
+    int64_t blockStartSample = 0;
+    int64_t nextBlockStartSample = 0;
     bool wasPlaying = false;
     std::optional<int> lastEmittedGlobalStep;
     std::optional<unsigned long> lastCycleDefinitionVersion;

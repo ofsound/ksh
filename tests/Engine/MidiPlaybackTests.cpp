@@ -4,6 +4,7 @@
 #include <engine/KshMidiPlayback.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace ksh;
 using ksh::test::EngineFixture;
@@ -54,6 +55,93 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
     return false;
 }
 } // namespace
+
+TEST_CASE ("deferred roll notes and gates keep exact sample timing across buffer boundaries", "[engine][transport][realtime]")
+{
+    const int blockSize = GENERATE (64, 128, 512, 1024, 3000);
+    const bool variableBlocks = GENERATE (false, true);
+    CAPTURE (blockSize, variableBlocks);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (16);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, false, 2);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    std::vector<int> ons, offs;
+    int block = 0;
+    for (int sample = 0; sample < 7500; ++block)
+    {
+        const int size = variableBlocks && block % 2 != 0 ? 73 : blockSize;
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (sample) / 24000.0, 120.0, true, size);
+        for (const auto event : result.midi)
+        {
+            const auto message = event.getMessage();
+            if (message.isNoteOn())
+                ons.push_back (sample + event.samplePosition);
+            else if (message.isNoteOff())
+                offs.push_back (sample + event.samplePosition);
+        }
+        sample += size;
+    }
+    REQUIRE (ons == std::vector<int> { 0, 3000 });
+    REQUIRE (offs == std::vector<int> { 2688, 5688 });
+}
+
+TEST_CASE ("deferred swing and humanize timing matches a single block", "[engine][transport][realtime]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (16);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (100);
+    fixture.engine.setTimingHumanize (80);
+    fixture.engine.setCell (0, 0, 1, true, 100, 100, 1, 0, false, 4);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    auto timestamps = [&] (int blockSize) {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<std::pair<int, bool>> events;
+        for (int sample = 0; sample < 18000; sample += blockSize)
+        {
+            const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (sample) / 24000.0, 120.0, true, blockSize);
+            for (const auto event : result.midi)
+                events.emplace_back (sample + event.samplePosition, event.getMessage().isNoteOn());
+        }
+        return events;
+    };
+    const auto expected = timestamps (18000);
+    REQUIRE (expected.size() == 8);
+    REQUIRE (timestamps (64) == expected);
+    REQUIRE (timestamps (512) == expected);
+    REQUIRE (timestamps (3000) == expected);
+}
+
+TEST_CASE ("audition note gate expires at its exact sample deadline", "[engine][transport][realtime]")
+{
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    runner.queueAuditionNote ({ 42, 100, 1, 100, 0.0 });
+    PlaybackSnapshot snapshot;
+    std::vector<int> offs;
+    int sample = 0;
+    for (const int blockSize : { 512, 128, 1024, 64, 2048, 2048 })
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, 0.0, 120.0, false, blockSize);
+        for (const auto event : result.midi)
+            if (event.getMessage().isNoteOff())
+                offs.push_back (sample + event.samplePosition);
+        sample += blockSize;
+    }
+    REQUIRE (offs == std::vector<int> { 4800 });
+}
 
 TEST_CASE ("midi playback emits kick on first transport step", "[engine][transport]")
 {

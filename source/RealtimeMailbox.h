@@ -3,6 +3,7 @@
 #include <readerwriterqueue.h>
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <utility>
 
@@ -22,10 +23,6 @@ public:
     {
         T* ptr = nullptr;
 
-        while (toConsumer.try_dequeue (ptr))
-        {
-        }
-
         while (toProducer.try_dequeue (ptr))
         {
         }
@@ -34,19 +31,20 @@ public:
     RealtimeMailbox (const RealtimeMailbox&) = delete;
     RealtimeMailbox& operator= (const RealtimeMailbox&) = delete;
 
-    /** Producer thread: publish a new value into a preallocated slot. */
+    /** Producer thread: publish a new value, recycling any update not yet consumed.
+        Producer calls (including drainRetired) must be serialized by the caller. */
     void publish (T value)
     {
         drainRetired();
 
-        if (freeSlotCount == 0)
-            return;
-
+        // At most three slots are held by the consumer, in transit, or pending.
+        // The fourth remains available after retired slots have been drained.
+        assert (freeSlotCount > 0);
         auto* ptr = freeSlots[--freeSlotCount];
         *ptr = std::move (value);
 
-        if (! toConsumer.try_enqueue (ptr))
-            freeSlots[freeSlotCount++] = ptr; // queue full: drop this update; the consumer keeps the previous value
+        if (auto* superseded = pending.exchange (ptr, std::memory_order_acq_rel))
+            freeSlots[freeSlotCount++] = superseded;
     }
 
     /** Producer thread: free any values the consumer has finished with. */
@@ -64,13 +62,11 @@ public:
     /** Consumer (audio) thread: most recent published value, or nullptr if nothing published yet. */
     const T* current()
     {
-        T* ptr = nullptr;
-
-        while (toConsumer.try_dequeue (ptr))
+        if (auto* ptr = pending.exchange (nullptr, std::memory_order_acq_rel))
         {
             if (held != nullptr)
             {
-                const bool retired = toProducer.try_enqueue (held);
+                [[maybe_unused]] const bool retired = toProducer.try_enqueue (held);
                 assert (retired);
             }
 
@@ -83,7 +79,8 @@ public:
 private:
     static constexpr size_t slotCount = 4;
 
-    moodycamel::ReaderWriterQueue<T*> toConsumer { slotCount * 2 };
+    static_assert (std::atomic<T*>::is_always_lock_free);
+    std::atomic<T*> pending { nullptr };
     moodycamel::ReaderWriterQueue<T*> toProducer { slotCount * 2 };
     std::array<T, slotCount> storage {};
     std::array<T*, slotCount> freeSlots { &storage[0], &storage[1], &storage[2], &storage[3] };

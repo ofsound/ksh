@@ -1,0 +1,10 @@
+Timing block=64 expected on=0,3000 off=2688,5688 actual: on=0 off=2752 on=3064 off=5752
+Timing block=128 expected on=0,3000 off=2688,5688 actual: on=0 off=2816 on=3128 off=5816
+Timing block=512 expected on=0,3000 off=2688,5688 actual: on=0 off=3200 on=3512 off=6200
+Timing block=1024 expected on=0,3000 off=2688,5688 actual: on=0 off=3712 on=4024 off=6712
+Mailbox latest after publishing 1..10 without consumption: 4
+Mailbox after retiring and rereading: 4
+Dense runner block=64 mean_us=0.838067 p99_us=1.5 max_us=43.167 hits=158720
+Dense runner block=128 mean_us=1.14508 p99_us=2.209 max_us=41.334 hits=317432
+Dense runner block=512 mean_us=8.55573 p99_us=32.958 max_us=1138.5 hits=1269720
+Dense runner block=1024 mean_us=30.7874 p99_us=68.375 max_us=122.584 hits=2539504

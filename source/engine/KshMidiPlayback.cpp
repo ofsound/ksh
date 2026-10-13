@@ -125,6 +125,8 @@ void MidiPlaybackRunner::prepare (double sampleRateIn)
 
 void MidiPlaybackRunner::reset (bool clearAuditions)
 {
+    blockStartSample = 0;
+    nextBlockStartSample = 0;
     wasPlaying = false;
     lastEmittedGlobalStep = std::nullopt;
     lastCycleDefinitionVersion = std::nullopt;
@@ -172,7 +174,7 @@ void MidiPlaybackRunner::dropPendingNoteOnsAtOrAfter (int sampleOffset)
     {
         const auto pending = pendingNoteOns[i];
 
-        if (pending.sampleOffset < sampleOffset)
+        if (pending.samplePosition < blockStartSample + sampleOffset)
             pendingNoteOns[writeIndex++] = pending;
     }
 
@@ -390,7 +392,7 @@ void MidiPlaybackRunner::addPendingNoteOff (int sampleOffset, int midiChannel, i
     if (pendingNoteOffCount >= pendingNoteOffs.size())
         return;
 
-    pendingNoteOffs[pendingNoteOffCount++] = { sampleOffset, midiChannel, pitch };
+    pendingNoteOffs[pendingNoteOffCount++] = { blockStartSample + sampleOffset, midiChannel, pitch };
 }
 
 void MidiPlaybackRunner::addPendingNoteOn (int sampleOffset, const NativeHit& hit)
@@ -398,7 +400,7 @@ void MidiPlaybackRunner::addPendingNoteOn (int sampleOffset, const NativeHit& hi
     if (pendingNoteOnCount >= pendingNoteOns.size())
         return;
 
-    pendingNoteOns[pendingNoteOnCount++] = { sampleOffset, hit };
+    pendingNoteOns[pendingNoteOnCount++] = { blockStartSample + sampleOffset, hit };
 }
 
 void MidiPlaybackRunner::flushPendingNoteOns (int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result)
@@ -411,14 +413,15 @@ void MidiPlaybackRunner::flushPendingNoteOns (int numSamples, juce::MidiBuffer& 
     for (size_t i = 0; i < pendingNoteOnCount; ++i)
     {
         const auto pending = pendingNoteOns[i];
+        const auto offset = pending.samplePosition - blockStartSample;
 
-        if (pending.sampleOffset < numSamples)
+        if (offset < numSamples)
         {
-            emitHitAtSample (pending.sampleOffset, numSamples, pending.hit, midiOut, result);
+            emitHitAtSample (static_cast<int> (std::max<int64_t> (0, offset)), numSamples, pending.hit, midiOut, result);
         }
         else
         {
-            pendingNoteOns[writeIndex++] = { pending.sampleOffset - numSamples, pending.hit };
+            pendingNoteOns[writeIndex++] = pending;
         }
     }
 
@@ -461,15 +464,16 @@ void MidiPlaybackRunner::flushPendingNoteOffs (int numSamples, juce::MidiBuffer&
     for (size_t i = 0; i < pendingNoteOffCount; ++i)
     {
         const auto pending = pendingNoteOffs[i];
+        const auto offset = pending.samplePosition - blockStartSample;
 
-        if (pending.sampleOffset < numSamples)
+        if (offset < numSamples)
         {
             midi.addEvent (juce::MidiMessage::noteOff (pending.midiChannel, pending.pitch),
-                           std::clamp (pending.sampleOffset, 0, std::max (0, numSamples - 1)));
+                           static_cast<int> (std::max<int64_t> (0, offset)));
         }
         else
         {
-            pendingNoteOffs[writeIndex++] = { pending.sampleOffset - numSamples, pending.midiChannel, pending.pitch };
+            pendingNoteOffs[writeIndex++] = pending;
         }
     }
 
@@ -488,6 +492,9 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
     if (numSamples <= 0)
         return result;
+
+    blockStartSample = nextBlockStartSample;
+    nextBlockStartSample += numSamples;
 
     if (! lastCycleDefinitionVersion.has_value()
         || *lastCycleDefinitionVersion != snapshot.cycleDefinitionVersion)
