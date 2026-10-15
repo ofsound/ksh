@@ -35,6 +35,7 @@ namespace ksh::ui
         }
         ~CycleEditor() override { handle.cancel(); }
         std::function<std::vector<Location>()> locations = [] { return std::vector<Location>(); };
+        bool inlineLayout = false;
         void sync()
         {
             const auto list = locations();
@@ -49,15 +50,40 @@ namespace ksh::ui
                 bit.setToggleState (i < c.cycle && (c.cycleMask & (1 << i)) != 0, juce::dontSendNotification);
                 bit.repaint();
             }
+            updatePlayback();
             repaint();
+        }
+        void updatePlayback()
+        {
+            const auto list = locations();
+            const auto now = juce::Time::getMillisecondCounterHiRes();
+            for (int i = 0; i < 8; ++i)
+            {
+                const bool flashing = controller.playingStep > 0 && std::any_of (list.begin(), list.end(), [&] (Location p)
+                {
+                    return controller.sourceFlashes[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] > now
+                        && controller.sourceCycleSteps[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] == i + 1;
+                });
+                auto& bit = bits[static_cast<size_t> (i)];
+                if (bit.flashing != flashing)
+                {
+                    bit.flashing = flashing;
+                    bit.repaint();
+                }
+            }
         }
         void resized() override
         {
             const int w = (getWidth() - 20) / 8;
+            const int top = inlineLayout ? 4 : 10;
+            const int height = juce::jmax (24, getHeight() - (inlineLayout ? 8 : 56));
             for (int i = 0; i < 8; ++i)
-                bits[static_cast<size_t> (i)].setBounds (10 + i * w, 10, w - 4, juce::jmax (24, getHeight() - 56));
+            {
+                bits[static_cast<size_t> (i)].fontHeight = inlineLayout ? 20.0f : 14.0f;
+                bits[static_cast<size_t> (i)].setBounds (10 + i * w, top, w - 4, height);
+            }
             const int edge = 10 + juce::jlimit (1, 8, cycleLength) * w - 4;
-            handle.setBounds (edge - 4, 10, 9, juce::jmax (24, getHeight() - 56));
+            handle.setBounds (edge - 4, top, 9, height);
             handle.toFront (false);
         }
         void paint (juce::Graphics& g) override
@@ -71,7 +97,8 @@ namespace ksh::ui
             g.fillRoundedRectangle (range, 6);
             g.setColour (Palette::accent.withAlpha (0.55f * alpha));
             g.drawRoundedRectangle (range, 6, 1);
-            text (g, "CYCLE", { 120.0f, static_cast<float> (getHeight() - 30), static_cast<float> (getWidth() - 132), 20.0f }, 10, Palette::muted, true, juce::Justification::centredRight);
+            if (!inlineLayout)
+                text (g, "CYCLE", { 120.0f, static_cast<float> (getHeight() - 30), static_cast<float> (getWidth() - 132), 20.0f }, 10, Palette::muted, true, juce::Justification::centredRight);
         }
 
     private:
@@ -165,12 +192,15 @@ namespace ksh::ui
         class CycleBit : public juce::TextButton
         {
         public:
-            bool inCycle = false;
+            bool inCycle = false, flashing = false;
+            float fontHeight = 14;
             void paintButton (juce::Graphics& g, bool hover, bool down) override
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 const bool on = getToggleState();
                 auto background = on ? Palette::strong : inCycle ? Palette::raised.interpolatedWith (Palette::accent, 0.22f) : Palette::app;
+                if (flashing)
+                    background = Palette::text;
                 if (isEnabled() && (hover || down))
                     background = background.brighter (0.12f);
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
@@ -180,8 +210,8 @@ namespace ksh::ui
                     g.setColour (Palette::accent.withAlpha (hasKeyboardFocus (true) ? 1.0f : 0.3f));
                     g.drawRoundedRectangle (r, 4, 1);
                 }
-                ksh::ui::text (g, getButtonText(), r, juce::jmin (14.0f, r.getHeight() * 0.45f),
-                      on ? Palette::app : inCycle ? Palette::text : Palette::faint, true);
+                ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getHeight() * 0.45f),
+                      (on || flashing) ? Palette::app : inCycle ? Palette::text : Palette::faint, true);
             }
         };
         std::array<CycleBit, 8> bits;

@@ -60,7 +60,7 @@ namespace ksh::ui
                 return;
             }
             g.setColour (Palette::app);
-            g.fillRoundedRectangle (editor.getLocalBounds().toFloat().reduced (0.5f), 4.0f);
+            g.fillRoundedRectangle (editor.getLocalBounds().toFloat().reduced (1.0f), 4.0f);
         }
         void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
         {
@@ -70,7 +70,7 @@ namespace ksh::ui
                 return;
             }
             g.setColour (editor.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
-            g.drawRoundedRectangle (editor.getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+            g.drawRoundedRectangle (editor.getLocalBounds().toFloat().reduced (1.0f), 4.0f, 1.0f);
         }
         juce::Font getPopupMenuFont() override { return font (13); }
         juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font (juce::jmin (14.0f, static_cast<float> (height) * 0.45f), true); }
@@ -232,6 +232,7 @@ namespace ksh::ui
         }
         int value = 0, minimum = 0, maximum = 100, resetValue = 0;
         float sensitivity = 4;
+        float valueFontSize = 14, captionFontSize = 10;
         juce::String suffix, caption;
         bool mixed = false;
         std::function<juce::String (int)> format;
@@ -250,20 +251,20 @@ namespace ksh::ui
             auto r = getLocalBounds().toFloat();
             if (caption.isNotEmpty())
             {
-                text (g, caption, r.removeFromTop (18), 10, Palette::text, true, juce::Justification::centredLeft);
+                text (g, caption, r.removeFromTop (18), captionFontSize, Palette::text, true, juce::Justification::centredLeft);
             }
             surface (g, r.reduced (0.5f), dragging || hasKeyboardFocus (true), isMouseOver());
             text (g, mixed ? juce::String (juce::String::fromUTF8 ("—")) : format ? format (value)
                                                                                   : juce::String (value) + suffix,
                 r,
-                14,
+                valueFontSize,
                 isEnabled() ? Palette::text : Palette::faint,
                 true);
         }
         void resized() override
         {
             input.setBounds (getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 : 0));
-            input.setFont (font (14));
+            input.setFont (font (valueFontSize));
         }
         void mouseDown (const juce::MouseEvent& e) override
         {

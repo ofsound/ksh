@@ -227,6 +227,8 @@ TEST_CASE ("midi playback applies an inspector cycle pattern independently to mu
 
         if (countNoteOns (result.midi) > 0)
             hitSteps.push_back (step);
+        for (size_t hit = 0; hit < result.noteHitCount; ++hit)
+            CHECK (result.noteHits[hit].uiCycleStep == 3);
     }
 
     REQUIRE (hitSteps == std::vector<int> { 18, 19, 20, 21 });

@@ -914,8 +914,6 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     applyProjectMetadataFromState (*payload);
     if (payload->contains ("patternViewScale"))
         setPatternViewScale (payload->value ("patternViewScale", patternViewScale));
-    if (payload->contains ("projectUiScalePercent"))
-        setProjectUiScalePercent (payload->value ("projectUiScalePercent", projectUiScalePercent));
 
     if (payload->contains ("standaloneTransportPlaying"))
     {
@@ -953,7 +951,6 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         state["projectThemeMode"] = "alt";
     }
     state["patternViewScale"] = patternViewScale;
-    state["projectUiScalePercent"] = projectUiScalePercent;
     state["standaloneTransportPlaying"] = isStandaloneTransportPlaying() ? 1 : 0;
     state["standaloneTempo"] = clampStandaloneTempoBpm (engine.getTempo());
     return state;
@@ -1395,7 +1392,6 @@ void PluginProcessor::resetProject()
 
     setProjectMetadata ("Untitled Project", {}, {}, {});
     setPatternViewScale (1.0);
-    setProjectUiScalePercent (100);
     setProjectThemeMode ("alt");
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);

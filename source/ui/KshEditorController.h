@@ -73,6 +73,7 @@ namespace ksh::ui
         int copySource = -1;
         std::function<void()> changed;
         std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {};
+        std::array<std::array<int, 32>, 8> sourceCycleSteps {};
         int playingStep = 0;
 
         int source() const { return state.playback.staticSource; }

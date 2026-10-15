@@ -158,6 +158,7 @@ TEST_CASE ("Native layout and gesture constants match reference", "[native-ui]")
 TEST_CASE ("Native editor constructs renders and tears down without a browser", "[native-ui][render]")
 {
     PluginProcessor processor;
+    processor.setProjectMetadata ("Untitled Project", "", "2026-10-14T12:00:00Z", "2026-10-14T23:15:00Z");
     for (int ch = 0; ch < 4; ++ch)
         for (int s = 0; s < 16; ++s)
             if ((s + ch) % (ch + 2) == 0)
@@ -268,6 +269,44 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
             REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
         }
     }
+}
+
+TEST_CASE ("Random controls overlay the grid without resizing the editor", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
+    REQUIRE (view != nullptr);
+    juce::TextButton* toggle = nullptr;
+    PatternGrid* grid = nullptr;
+    PreviewPanel* panel = nullptr;
+    for (auto* child : view->getChildren())
+    {
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "Random")
+            toggle = button;
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+        if (auto* candidate = dynamic_cast<PreviewPanel*> (child); candidate && !candidate->isVisible())
+            panel = candidate;
+    }
+    REQUIRE (toggle != nullptr);
+    REQUIRE (grid != nullptr);
+    REQUIRE (panel != nullptr);
+    const auto editorBounds = editor->getBounds();
+    const auto gridBounds = grid->getBounds();
+    toggle->onClick();
+    CHECK (panel->isVisible());
+    CHECK (panel->getBounds().intersects (gridBounds));
+    CHECK (panel->getX() == 0);
+    CHECK (panel->getRight() == view->getWidth());
+    CHECK (panel->getBottom() == view->getHeight());
+    CHECK (toggle->getBottom() <= view->layout.toolbarY());
+    CHECK (view->getIndexOfChildComponent (panel) > view->getIndexOfChildComponent (grid));
+    CHECK (grid->getBounds() == gridBounds);
+    CHECK (editor->getBounds() == editorBounds);
+    toggle->onClick();
+    CHECK_FALSE (panel->isVisible());
+    CHECK (grid->getBounds() == gridBounds);
 }
 
 TEST_CASE ("Selected value controls temporarily switch the editing layer", "[native-ui]")

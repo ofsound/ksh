@@ -6,7 +6,7 @@ namespace ksh::ui
     {
         int channels = 8, steps = 16;
         float patternScale = 1.0f;
-        bool standalone = false;
+        bool standalone = false, randomVisible = false;
         float transportHeight() const { return standalone ? 44.0f : 0.0f; }
         float toolbarY() const { return transportHeight() + 86; }
         float gridY() const { return toolbarY() + 68; }

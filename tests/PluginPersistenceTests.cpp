@@ -290,3 +290,24 @@ TEST_CASE ("structurally invalid cells cannot wipe the current pattern", "[plugi
     REQUIRE (state.sources[0][1][4].enabled);
     REQUIRE (state.sources[0][1][4].velocity == 90);
 }
+
+TEST_CASE ("UI scale is independent of saved and legacy projects", "[plugin][persistence]")
+{
+    PluginProcessor plugin;
+    plugin.setProjectUiScalePercent (75);
+    const auto saved = getPluginState (plugin);
+    auto payload = nlohmann::json::parse (
+        std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
+    REQUIRE_FALSE (payload.contains ("projectUiScalePercent"));
+
+    plugin.setProjectUiScalePercent (110);
+    setPluginState (plugin, saved);
+    CHECK (plugin.getProjectUiScalePercent() == 110);
+
+    payload["projectUiScalePercent"] = 50;
+    setPluginStateText (plugin, payload.dump());
+    CHECK (plugin.getProjectUiScalePercent() == 110);
+
+    plugin.resetProject();
+    CHECK (plugin.getProjectUiScalePercent() == 110);
+}

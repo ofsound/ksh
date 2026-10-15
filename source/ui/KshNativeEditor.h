@@ -26,11 +26,12 @@ namespace ksh::ui
         LookAndFeel look;
         juce::TooltipWindow tooltips { this, 600 };
         PatternGrid grid;
-        PreviewPanel preview;
+        PreviewPanel preview, randomPanel;
         std::array<juce::TextButton, 16> patterns;
         std::array<juce::TextButton, 5> projectButtons;
         juce::TextEditor title, description;
         juce::TextButton mutePattern { "M" }, heading, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
+        juce::TextButton randomButton { "Random" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::unique_ptr<CycleEditor> popup;
         Location popupLocation;

@@ -318,6 +318,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
             continue;
 
         const int cycle = clampInt (cell.cycle, 1, 64);
+        int cycleStep = 1;
         if (cycle > 1 || cell.cycleMask != 1)
         {
             const auto index = cycleCounterIndex (cell.source, channel, cell.sourceStep);
@@ -326,6 +327,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                 continue;
 
             const int count = static_cast<int> (cycleCounters[index]++);
+            cycleStep = count % cycle + 1;
             if (! cycleGateMatches (count, cycle, cell.cycleMask))
                 continue;
         }
@@ -379,7 +381,8 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                              channel + 1,
                              playbackStep + 1,
                              cell.source + 1,
-                             cell.sourceStep + 1
+                             cell.sourceStep + 1,
+                             cycleStep
                          },
                          midiOut,
                          result);

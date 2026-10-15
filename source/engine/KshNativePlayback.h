@@ -21,6 +21,7 @@ struct NativeHit
     int uiGeneratedStep = 0;
     int uiSource = 0;
     int uiSourceStep = 0;
+    int uiCycleStep = 0; ///< One-based cycle gate position for this emitted note.
 
     [[nodiscard]] bool operator== (const NativeHit&) const = default;
 };

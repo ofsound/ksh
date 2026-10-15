@@ -22,7 +22,7 @@ PluginEditor::PluginEditor (PluginProcessor& p) : AudioProcessorEditor (&p), pro
         else if (action == 1)
             showLoadProjectDialog (completed);
         else if (action == 2)
-            showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription(), processorRef.getProjectUiScalePercent() }, completed);
+            showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription() }, completed);
         else
             cycleProject (action == 3 ? -1 : 1, completed);
     };
@@ -209,7 +209,6 @@ void PluginEditor::showSaveProjectDialog (
     const auto now = juce::Time::getCurrentTime().toISO8601 (true);
     const auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
     const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
-    const auto scale = args.size() > 2 ? static_cast<int> (args[2]) : processorRef.getProjectUiScalePercent();
     const auto createdAt = processorRef.getProjectCreatedAt().isNotEmpty()
                                ? processorRef.getProjectCreatedAt()
                                : now;
@@ -237,8 +236,7 @@ void PluginEditor::showSaveProjectDialog (
             name,
             description,
             createdAt,
-            now,
-            scale] (const juce::FileChooser& chooser) mutable {
+            now] (const juce::FileChooser& chooser) mutable {
             if (safeThis == nullptr)
                 return;
 
@@ -261,7 +259,6 @@ void PluginEditor::showSaveProjectDialog (
 
             safeThis->processorRef.setProjectMetadata (
                 projectNameToSave, description, createdAt, now);
-            safeThis->processorRef.setProjectUiScalePercent (scale);
             juce::String error;
             const auto saved = safeThis->saveProjectFile (file, error);
             completion (safeThis->projectOperationResult (saved, error));

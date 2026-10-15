@@ -1,7 +1,7 @@
 #include "KshNativeEditor.h"
 namespace ksh::ui
 {
-    NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller)
+    NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true)
     {
         setLookAndFeel (&look);
         setOpaque (true);
@@ -9,6 +9,22 @@ namespace ksh::ui
         addMouseListener (this, true);
         addAndMakeVisible (grid);
         addAndMakeVisible (preview);
+        addChildComponent (randomPanel);
+        addAndMakeVisible (randomButton);
+        randomButton.setTooltip ("Show random mode, refresh length, and channel locks");
+        randomButton.onClick = [this]
+        {
+            controller.commit();
+            grid.cancelGesture();
+            popup.reset();
+            layout.randomVisible = !layout.randomVisible;
+            randomButton.setToggleState (layout.randomVisible, juce::dontSendNotification);
+            randomPanel.setVisible (layout.randomVisible);
+            if (layout.randomVisible)
+                randomPanel.toFront (false);
+            resized();
+            repaint();
+        };
         const std::array<juce::String, 5> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶") };
         for (int i = 0; i < 5; ++i)
         {
@@ -72,7 +88,9 @@ namespace ksh::ui
         configureValue (steps, "", 1, 32, "source_steps");
         steps.suffix = " steps";
         steps.resetValue = 16;
-        configureValue (tempo, "BPM", 20, 300, "standalone_tempo");
+        configureValue (tempo, "", 20, 300, "standalone_tempo");
+        tempo.suffix = " BPM";
+        tempo.setTitle ("Tempo BPM");
         tempo.resetValue = 120;
         addAndMakeVisible (scale);
         scale.setTitle ("UI scale percent");
@@ -159,9 +177,11 @@ namespace ksh::ui
             description.setText (controller.processor.getProjectDescription(), false);
         grid.sync();
         preview.sync();
+        randomPanel.sync();
         if (popup)
             popup->sync();
         resized();
+        repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
         repaint (0, getHeight() - 40, getWidth(), 40);
         syncing = false;
         if ((scaleChanged || std::abs (oldHeight - layout.height()) > 0.01f || std::abs (oldWidth - layout.width()) > 0.01f) && preferredSizeChanged)
@@ -190,12 +210,15 @@ namespace ksh::ui
         record.setBounds (355, y + 13, 40, 41);
         left.setBounds (405, y + 13, 40, 41);
         right.setBounds (455, y + 13, 40, 41);
+        randomButton.setBounds (852, top + 27, 66, 32);
         undoButton.setBounds (686, y + 13, 40, 41);
         redoButton.setBounds (736, y + 13, 40, 41);
         steps.setBounds (getWidth() - 374, y + 13, 120, 41);
         rate.setBounds (getWidth() - 246, y + 13, 220, 41);
         play.setBounds (getWidth() - 184, 8, 64, 28);
-        tempo.setBounds (getWidth() - 110, 2, 98, 39);
+        tempo.setBounds (getWidth() - 110, play.getY(), 98, play.getHeight());
+        const int randomY = juce::roundToInt (layout.toolbarY() + 68);
+        randomPanel.setBounds (0, randomY, getWidth(), getHeight() - randomY);
         grid.setBounds (0, static_cast<int> (layout.gridY()), getWidth(), static_cast<int> (layout.gridHeight()));
         preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 200);
         dc.setBounds (getWidth() - 128, getHeight() - 36, 36, 32);
@@ -207,10 +230,9 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - 40 })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        text (g, "Patterns:", { 864, layout.transportHeight() + 30, 58, 24 }, 11, Palette::text, true);
         text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option probability / copy · Shift+Option roll · Right-click cycle"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
-        const auto date = controller.processor.getProjectModifiedAt();
-        text (g, date.substring (0, 10), { 550, layout.transportHeight() + 30, 42, 24 }, 8, Palette::faint);
+        const auto date = controller.processor.getProjectModifiedAt().substring (0, 10);
+        text (g, date, { 404, layout.transportHeight() + 63, 186, 16 }, 9, Palette::muted, false, juce::Justification::centredRight);
     }
     void NativeEditor::rateMenu()
     {
@@ -326,6 +348,10 @@ namespace ksh::ui
             sync();
         grid.updatePlayback();
         preview.updatePlayback();
+        if (layout.randomVisible)
+            randomPanel.updatePlayback();
+        if (popup)
+            popup->updatePlayback();
         keyStateChanged (false);
     }
 }

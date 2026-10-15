@@ -131,7 +131,8 @@ namespace ksh::ui
         const auto& p = controller.state.playback;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
-        const bool fullPaint = displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors;
+        const bool fullPaint = displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
+                               || displayedSelection.any() != controller.selected.any();
         displayedSteps = layout.steps;
         displayedLayer = displayLayer();
         displayedColors = controller.drumColors;
@@ -193,6 +194,8 @@ namespace ksh::ui
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
                 accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (layout.cell ({ ch, step }).toNearestInt());
+        const float gridRight = layout.cell ({ 0, layout.steps - 1 }).getRight() + 16.0f;
+        const int arrowsX = juce::roundToInt ((gridRight + static_cast<float> (getWidth()) - 52.0f) * 0.5f);
         for (int ch = 0; ch < 8; ++ch)
         {
             auto& r = rows[static_cast<size_t> (ch)];
@@ -203,8 +206,8 @@ namespace ksh::ui
             r.reverse.setBounds (207, y, 34, 32);
             r.ping.setBounds (259, y, 28, 32);
             r.mute.setBounds (305, y, 24, 32);
-            r.left.setBounds (getWidth() - 58, y, 26, 32);
-            r.right.setBounds (getWidth() - 32, y, 26, 32);
+            r.left.setBounds (arrowsX, y, 26, 32);
+            r.right.setBounds (arrowsX + 26, y, 26, 32);
         }
     }
     void PatternGrid::paint (juce::Graphics& g)
@@ -212,6 +215,7 @@ namespace ksh::ui
         g.fillAll (Palette::shell.interpolatedWith (Palette::app, 0.28f));
         const auto layer = displayLayer();
         const auto now = juce::Time::getMillisecondCounterHiRes();
+        const bool hasSelection = controller.selected.any();
         for (int step = 0; step < layout.steps; ++step)
         {
             auto r = layout.cell ({ 0, step });
@@ -233,30 +237,47 @@ namespace ksh::ui
                     continue;
                 const auto& c = controller.cell (pos);
                 auto r = layout.cell (pos).reduced (0.8f);
+                const bool selected = controller.selected.test (static_cast<size_t> (pos.key()));
+                const bool dimmed = hasSelection && !selected;
+                const bool groupStart = step % 4 == 0;
                 const bool inLoop = step >= range.loopStart && step < range.loopStart + range.loopLength;
                 auto colour = Palette::channel (ch, controller.drumColors);
+                if (groupStart)
+                    colour = colour.interpolatedWith (Palette::app, 0.12f);
                 if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                     colour = colour.interpolatedWith (Palette::surface, 0.58f);
+                if (dimmed)
+                    colour = colour.withSaturation (0.0f);
                 const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
-                const auto dark = colour.interpolatedWith (Palette::app, 0.18f), light = colour.brighter (0.18f);
+                const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
+                const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
+                const auto light = colour.brighter (0.18f);
+                const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
                 juce::Graphics::ScopedSaveState save (g);
                 if (!inLoop)
                     g.beginTransparencyLayer (0.33f);
+                if (dimmed)
+                    g.beginTransparencyLayer (0.38f);
                 surface (g, r);
+                if (groupStart && !c.enabled)
+                {
+                    g.setColour (juce::Colours::black.withAlpha (0.22f));
+                    g.fillRoundedRectangle (r.reduced (0.5f), 5);
+                }
                 if (c.enabled)
                 {
                     juce::Path clip;
                     clip.addRoundedRectangle (r, 5);
                     g.saveState();
                     g.reduceClipRegion (clip);
-                    g.setGradientFill (juce::ColourGradient (flash ? Palette::text : light, r.getTopLeft(), flash ? Palette::text : dark, r.getBottomLeft(), false));
+                    g.setGradientFill (juce::ColourGradient (light, r.getTopLeft(), fillBottom, r.getBottomLeft(), false));
                     g.fillRect (r);
-                    if (layer == Layer::velocity && !flash)
+                    if (layer == Layer::velocity)
                     {
-                        g.setColour (dark.withAlpha (0.48f));
+                        g.setColour (dark);
                         g.fillRect (r.withHeight (r.getHeight() * (1.0f - static_cast<float> (c.velocity) / 127.0f)));
                     }
-                    if (layer == Layer::roll && !flash)
+                    if (layer == Layer::roll)
                         for (int part = 0; part < c.roll; part += 2)
                         {
                             g.setColour (dark);
@@ -267,7 +288,7 @@ namespace ksh::ui
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                     if (layer == Layer::cycle)
                     {
-                        text (g, juce::String (c.probability) + "%", r.removeFromTop (r.getHeight() * 0.6f), layout.steps > 16 ? 9.0f : 12.0f, Palette::app);
+                        text (g, juce::String (c.probability) + "%", r.removeFromTop (r.getHeight() * 0.6f), layout.steps > 16 ? 9.0f : 12.0f, valueColour);
                         const int bits = juce::jmin (c.cycle, 30);
                         auto strip = r.reduced (3, 4);
                         for (int i = 0; i < bits; ++i)
@@ -277,15 +298,23 @@ namespace ksh::ui
                         }
                     }
                     else
-                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::probability ? "%" : ""), r, juce::jmin (18.0f, layout.cellWidth() * (layer == Layer::probability ? 0.33f : 0.42f)), Palette::app);
+                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::probability ? "%" : ""), r, juce::jmin (18.0f, layout.cellWidth() * (layer == Layer::probability ? 0.33f : 0.42f)), valueColour);
                 }
-                if (controller.selected.test (static_cast<size_t> (pos.key())))
-                {
-                    g.setColour (Palette::accent);
-                    g.drawRoundedRectangle (layout.cell (pos).reduced (1.5f), 4, 2);
-                }
+                if (dimmed)
+                    g.endTransparencyLayer();
                 if (!inLoop)
                     g.endTransparencyLayer();
+                // Keep selection clear even for disabled cells or steps outside the loop.
+                if (selected)
+                {
+                    const auto frame = layout.cell (pos).reduced (2);
+                    g.setColour (Palette::accent.withAlpha (0.3f));
+                    g.drawRoundedRectangle (frame, 5, 6);
+                    g.setColour (Palette::app);
+                    g.drawRoundedRectangle (frame.reduced (1), 4, 4);
+                    g.setColour (Palette::text);
+                    g.drawRoundedRectangle (frame.reduced (1), 4, 2);
+                }
             }
             // Keep the loop boundary and handles above cells outside the loop.
             g.setColour (Palette::accent.withAlpha (0.42f));

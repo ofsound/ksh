@@ -12,7 +12,10 @@ namespace ksh::ui
             if (hit.uiGeneratedStep > 0 && hit.uiGeneratedStep <= 32)
                 generatedFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiGeneratedStep - 1)] = until;
             if (hit.uiSource == source() + 1 && hit.uiSourceStep > 0 && hit.uiSourceStep <= 32)
+            {
                 sourceFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = until;
+                sourceCycleSteps[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = hit.uiCycleStep;
+            }
         };
     }
     EditorController::~EditorController()
