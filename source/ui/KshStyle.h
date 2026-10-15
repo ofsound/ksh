@@ -77,7 +77,17 @@ namespace ksh::ui
         void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down) override
         {
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-            if (b.getProperties().contains ("icon") || b.getProperties().contains ("heading"))
+            if (b.getProperties().contains ("heading"))
+            {
+                g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
+                g.fillRoundedRectangle (r, 7);
+                g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
+                g.drawRoundedRectangle (r, 7, 1);
+                g.setColour (Palette::border.withAlpha (0.6f));
+                g.drawVerticalLine (b.getWidth() / 2, 11, static_cast<float> (b.getHeight() - 11));
+                return;
+            }
+            if (b.getProperties().contains ("icon"))
             {
                 if (hover || down || b.hasKeyboardFocus (true))
                 {
@@ -166,14 +176,11 @@ namespace ksh::ui
             }
             if (b.getProperties().contains ("heading"))
             {
-                static auto headingFace = juce::Typeface::createSystemTypefaceFor (BinaryData::GantariExtrabold_ttf, BinaryData::GantariExtrabold_ttfSize);
-                g.setFont (juce::Font (juce::FontOptions (headingFace).withHeight (34.0f)));
-                g.setColour (Palette::accent);
-                g.drawFittedText (b.getProperties()["patternLabel"].toString(), { 0, 0, 68, b.getHeight() }, juce::Justification::centredLeft, 1, 0.8f);
                 for (int choice = 0; choice < 2; ++choice)
                 {
                     const bool active = b.getToggleState() == (choice == 1);
-                    const juce::Rectangle<float> bounds { choice == 0 ? 74.0f : 178.0f, 7, choice == 0 ? 98.0f : 88.0f, 38 };
+                    const float width = static_cast<float> (b.getWidth()) * 0.5f;
+                    const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 4, 4, width - 8, static_cast<float> (b.getHeight() - 8) };
                     if (active)
                     {
                         g.setColour (Palette::accent.withAlpha (0.14f));
@@ -181,7 +188,7 @@ namespace ksh::ui
                         g.setColour (Palette::accent.withAlpha (0.6f));
                         g.drawRoundedRectangle (bounds.reduced (0.5f), 5, 1);
                     }
-                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 20, active ? Palette::accent : Palette::muted, true);
+                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 19, active ? Palette::accent : Palette::muted, true);
                 }
                 return;
             }

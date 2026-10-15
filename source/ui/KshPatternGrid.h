@@ -17,6 +17,7 @@ namespace ksh::ui
         void mouseDrag (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
         void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
         void modifierKeysChanged (const juce::ModifierKeys&) override;
         void cancelGesture();
         Layer displayLayer() const;
@@ -58,6 +59,9 @@ namespace ksh::ui
             velocityLine };
         Drag drag = Drag::none;
         Location anchor, target;
+        Location hoverCell;
+        juce::Point<float> hoverPosition;
+        bool hoverMarkerVisible = false;
         juce::Point<float> origin, current;
         Cell original;
         Layer dragLayer = Layer::velocity;
@@ -78,6 +82,8 @@ namespace ksh::ui
         int previousStep = 0;
         int boundary = 0, lineVelocity = 100;
         void updateSelection();
+        Location velocityHintAt (juce::Point<float>) const;
+        void clearHoverMarker();
         void timerCallback() override;
     };
 }

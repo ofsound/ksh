@@ -57,6 +57,13 @@ namespace ksh::ui
             b.onClick = [this, i] { controller.selectSource (i, juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown()); };
         }
         heading.getProperties().set ("heading", true);
+        addAndMakeVisible (patternHeading);
+        static auto headingFace = juce::Typeface::createSystemTypefaceFor (BinaryData::GantariExtrabold_ttf, BinaryData::GantariExtrabold_ttfSize);
+        patternHeading.setFont (juce::Font (juce::FontOptions (headingFace).withHeight (56.6f)));
+        patternHeading.setColour (juce::Label::textColourId, Palette::accent);
+        patternHeading.setBorderSize (juce::BorderSize<int> (0));
+        patternHeading.setInterceptsMouseClicks (false, false);
+        patternHeading.setTitle ("Current pattern");
         const std::array<std::pair<juce::TextButton*, const char*>, 8> icons { { { &clear, "clear" }, { &record, "record" }, { &left, "previous" }, { &right, "next" }, { &undoButton, "undo" }, { &redoButton, "redo" }, { &projectButtons[3], "previous" }, { &projectButtons[4], "next" } } };
         for (auto [button, icon] : icons)
         {
@@ -148,9 +155,9 @@ namespace ksh::ui
             patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
         static const std::array<juce::String, 2> layers { "velocity", "chance" };
-        const auto patternLabel = controller.source() < 0 ? juce::String ("M") : "P" + juce::String (controller.source() + 1);
-        heading.getProperties().set ("patternLabel", patternLabel);
-        heading.setButtonText (patternLabel + ": Velocity / Chance");
+        const auto patternLabel = controller.source() < 0 ? juce::String ("M") : "Pattern " + juce::String (controller.source() + 1);
+        patternHeading.setText (patternLabel, juce::dontSendNotification);
+        heading.setButtonText ("Velocity / Chance");
         heading.setToggleState (grid.displayLayer() == Layer::chance, juce::dontSendNotification);
         heading.setTitle (patternLabel + " editing layer: " + layers[static_cast<size_t> (grid.displayLayer())] + " active");
         for (auto* b : { &clear, &record, &left, &right, &rate })
@@ -209,11 +216,13 @@ namespace ksh::ui
             patterns[static_cast<size_t> (i)].setBounds (926 + (i % 8) * 42, top + 10 + (i / 8) * 36, 36, 30);
         mutePattern.setBounds (1268, top + 10, 58, 66);
         const int y = static_cast<int> (layout.toolbarY());
-        heading.setBounds (12, y + 8, 266, 52);
-        clear.setBounds (305, y + 13, 40, 41);
-        record.setBounds (355, y + 13, 40, 41);
-        left.setBounds (405, y + 13, 40, 41);
-        right.setBounds (455, y + 13, 40, 41);
+        patternHeading.setBounds (12, y + 8, 280, 52);
+        heading.setBounds (juce::roundToInt (layout.gridLeft() + layout.gridWidth() * 0.5f) - 92,
+            juce::roundToInt (layout.gridY() + layout.gridHeight()) - 66, 184, 44);
+        record.setBounds (305, y + 13, 40, 41);
+        left.setBounds (355, y + 13, 40, 41);
+        right.setBounds (405, y + 13, 40, 41);
+        clear.setBounds (455, y + 13, 40, 41);
         randomButton.setBounds (852, top + 27, 66, 32);
         undoButton.setBounds (686, y + 13, 40, 41);
         redoButton.setBounds (736, y + 13, 40, 41);

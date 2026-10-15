@@ -122,15 +122,52 @@ namespace ksh::ui
         if (modifiers != m)
         {
             modifiers = m;
+            if (hoverCell.valid() && !velocityHintAt (hoverPosition).valid())
+                clearHoverMarker();
             repaint();
         }
     }
-    void PatternGrid::mouseMove (const juce::MouseEvent& e) { modifierKeysChanged (e.mods); }
+    Location PatternGrid::velocityHintAt (juce::Point<float> point) const
+    {
+        if (controller.source() < 0 || displayLayer() != Layer::velocity || controller.selected.any()
+            || modifiers.isShiftDown() || modifiers.isAnyMouseButtonDown())
+            return {};
+        const auto location = layout.at (point);
+        if (!location.valid() || std::abs (point.x - layout.cell (location).getX()) >= 4)
+            return {};
+        const auto loop = controller.loop (location.channel);
+        return location.step >= loop.loopStart && location.step < loop.loopStart + loop.loopLength ? location : Location {};
+    }
+    void PatternGrid::clearHoverMarker()
+    {
+        if (hoverCell.valid() && drag == Drag::none)
+            stopTimer();
+        hoverCell = {};
+        if (hoverMarkerVisible)
+        {
+            hoverMarkerVisible = false;
+            repaint();
+        }
+    }
+    void PatternGrid::mouseMove (const juce::MouseEvent& e)
+    {
+        modifierKeysChanged (e.mods);
+        clearHoverMarker();
+        if (drag != Drag::none)
+            return;
+        hoverPosition = e.position;
+        hoverCell = velocityHintAt (hoverPosition);
+        if (hoverCell.valid())
+            startTimer (450);
+    }
+    void PatternGrid::mouseExit (const juce::MouseEvent&) { clearHoverMarker(); }
     void PatternGrid::sync()
     {
         const auto& p = controller.state.playback;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
+        if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
+            clearHoverMarker();
         const bool fullPaint = displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
                                || displayedSelection.any() != controller.selected.any();
         displayedSteps = layout.steps;
@@ -339,6 +376,27 @@ namespace ksh::ui
                     g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
                 }
         }
+        const auto paintMarker = [&g] (juce::Point<float> point)
+        {
+            const juce::Rectangle<float> marker (point.x - 5, point.y - 5, 10, 10);
+            g.setColour (Palette::app);
+            g.fillEllipse (marker.expanded (1));
+            g.setColour (Palette::accent);
+            g.drawEllipse (marker, 2);
+        };
+        if (hoverMarkerVisible && velocityHintAt (hoverPosition) == hoverCell)
+            paintMarker ({ layout.cell (hoverCell).getX(), hoverPosition.y });
+        if (drag == Drag::velocityLine && anchor.valid())
+        {
+            const auto row = layout.cell (anchor);
+            const int endBoundary = juce::jlimit (0, layout.steps, jsRound ((current.x - layout.gridLeft()) / layout.cellWidth()));
+            const auto start = juce::Point<float> (layout.gridLeft() + static_cast<float> (boundary) * layout.cellWidth(),
+                row.getBottom() - static_cast<float> (lineVelocity - 1) / 126.0f * row.getHeight());
+            const auto end = juce::Point<float> (layout.gridLeft() + static_cast<float> (endBoundary) * layout.cellWidth(),
+                juce::jlimit (row.getY(), row.getBottom(), current.y));
+            for (const auto point : { start, end })
+                paintMarker (point);
+        }
         if (drag == Drag::marquee)
         {
             auto r = juce::Rectangle<float> (origin, current);
@@ -378,6 +436,7 @@ namespace ksh::ui
     void PatternGrid::mouseDown (const juce::MouseEvent& e)
     {
         stopTimer();
+        clearHoverMarker();
         if (controller.source() < 0)
             return;
         if (isShowing())
@@ -447,6 +506,7 @@ namespace ksh::ui
             for (int s = 0; s < layout.steps; ++s)
                 originals.emplace_back (Location { anchor.channel, s }, controller.cell ({ anchor.channel, s }));
             controller.begin ("Draw velocity line");
+            repaint();
             return;
         }
         drag = Drag::pending;
@@ -456,6 +516,12 @@ namespace ksh::ui
     void PatternGrid::timerCallback()
     {
         stopTimer();
+        if (drag == Drag::none && hoverCell.valid() && velocityHintAt (hoverPosition) == hoverCell)
+        {
+            hoverMarkerVisible = true;
+            repaint();
+            return;
+        }
         if (drag != Drag::pending || !anchor.valid() || controller.source() < 0)
             return;
         // Use the same additive selection toggle as Shift-click, without editing the cell.
@@ -560,6 +626,8 @@ namespace ksh::ui
                     controller.editCell ({ anchor.channel, s }, c);
                 }
             }
+            // The endpoints can move even when no cell value changes.
+            repaint();
         }
         controller.notify();
     }
@@ -595,6 +663,7 @@ namespace ksh::ui
     void PatternGrid::cancelGesture()
     {
         stopTimer();
+        clearHoverMarker();
         drag = Drag::none;
         mutePainting = false;
         controller.cancel();

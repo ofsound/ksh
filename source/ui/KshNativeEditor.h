@@ -26,6 +26,7 @@ namespace ksh::ui
         LookAndFeel look;
         juce::TooltipWindow tooltips { this, 600 };
         PatternGrid grid;
+        juce::Label patternHeading;
         PreviewPanel preview, randomPanel;
         std::array<juce::TextButton, 16> patterns;
         std::array<juce::TextButton, 5> projectButtons;
