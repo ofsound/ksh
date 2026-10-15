@@ -21,7 +21,9 @@ namespace ksh::ui
         {
             addAndMakeVisible (*edit);
             edit->setFont (font (12, edit == &title));
-            edit->setIndents (8, 4);
+            edit->setIndents (10, 0);
+            edit->setJustification (juce::Justification::centredLeft);
+            edit->getProperties().set ("projectMetadata", true);
             edit->onFocusLost = [this] { if (! syncing) controller.processor.setProjectMetadata (title.getText(), description.getText(), controller.processor.getProjectCreatedAt(), controller.processor.getProjectModifiedAt()); };
         }
         title.setTextToShowWhenEmpty ("Untitled Project", Palette::faint);
@@ -172,8 +174,8 @@ namespace ksh::ui
         projectButtons[1].setBounds (74, top + 27, 54, 32);
         projectButtons[2].setBounds (136, top + 27, 54, 32);
         projectButtons[3].setBounds (198, top + 27, 30, 32);
-        title.setBounds (236, top + 25, 140, 36);
-        description.setBounds (376, top + 25, 170, 36);
+        title.setBounds (236, top + 27, 160, 32);
+        description.setBounds (404, top + 27, 186, 32);
         projectButtons[4].setBounds (598, top + 27, 30, 32);
         swing.setBounds (650, top + 19, 42, 43);
         subdivision.setBounds (700, top + 19, 42, 43);

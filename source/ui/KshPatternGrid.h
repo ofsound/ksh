@@ -3,7 +3,7 @@
 #include "KshStyle.h"
 namespace ksh::ui
 {
-    class PatternGrid : public juce::Component
+    class PatternGrid : public juce::Component, private juce::Timer
     {
     public:
         explicit PatternGrid (EditorController&);
@@ -78,5 +78,6 @@ namespace ksh::ui
         int previousStep = 0;
         int boundary = 0, lineVelocity = 100;
         void updateSelection();
+        void timerCallback() override;
     };
 }

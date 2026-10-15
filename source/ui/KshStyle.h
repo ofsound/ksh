@@ -52,6 +52,26 @@ namespace ksh::ui
             setColour (juce::TooltipWindow::backgroundColourId, Palette::raised);
             setColour (juce::TooltipWindow::textColourId, Palette::text);
         }
+        void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+        {
+            if (!editor.getProperties().contains ("projectMetadata"))
+            {
+                juce::LookAndFeel_V4::fillTextEditorBackground (g, width, height, editor);
+                return;
+            }
+            g.setColour (Palette::app);
+            g.fillRoundedRectangle (editor.getLocalBounds().toFloat().reduced (0.5f), 4.0f);
+        }
+        void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+        {
+            if (!editor.getProperties().contains ("projectMetadata"))
+            {
+                juce::LookAndFeel_V4::drawTextEditorOutline (g, width, height, editor);
+                return;
+            }
+            g.setColour (editor.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
+            g.drawRoundedRectangle (editor.getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+        }
         juce::Font getPopupMenuFont() override { return font (13); }
         juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font (juce::jmin (14.0f, static_cast<float> (height) * 0.45f), true); }
         void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down) override

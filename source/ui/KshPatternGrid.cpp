@@ -5,7 +5,7 @@ namespace ksh::ui
     {
         setWantsKeyboardFocus (true);
         setTitle ("Pattern grid");
-        setDescription ("Select cells with Shift, drag to paint or change values; Option copies selected cells.");
+        setDescription ("Select cells with Shift-click or a long press, drag to paint or change values; Option copies selected cells.");
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
             {
@@ -226,14 +226,6 @@ namespace ksh::ui
             auto brace = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth()).expanded (16, 1);
             g.setColour (Palette::accent.withAlpha (0.08f));
             g.fillRoundedRectangle (brace, 6);
-            g.setColour (Palette::accent.withAlpha (0.42f));
-            g.drawRoundedRectangle (brace, 6, 1);
-            for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
-                for (int dot = -2; dot <= 2; ++dot)
-                {
-                    g.setColour (Palette::muted);
-                    g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
-                }
             for (int step = 0; step < layout.steps; ++step)
             {
                 const Location pos { ch, step };
@@ -249,7 +241,7 @@ namespace ksh::ui
                 const auto dark = colour.interpolatedWith (Palette::app, 0.18f), light = colour.brighter (0.18f);
                 juce::Graphics::ScopedSaveState save (g);
                 if (!inLoop)
-                    g.setOpacity (0.33f);
+                    g.beginTransparencyLayer (0.33f);
                 surface (g, r);
                 if (c.enabled)
                 {
@@ -292,7 +284,18 @@ namespace ksh::ui
                     g.setColour (Palette::accent);
                     g.drawRoundedRectangle (layout.cell (pos).reduced (1.5f), 4, 2);
                 }
+                if (!inLoop)
+                    g.endTransparencyLayer();
             }
+            // Keep the loop boundary and handles above cells outside the loop.
+            g.setColour (Palette::accent.withAlpha (0.42f));
+            g.drawRoundedRectangle (brace, 6, 1);
+            for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
+                for (int dot = -2; dot <= 2; ++dot)
+                {
+                    g.setColour (Palette::muted);
+                    g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
+                }
         }
         if (drag == Drag::marquee)
         {
@@ -332,6 +335,7 @@ namespace ksh::ui
     }
     void PatternGrid::mouseDown (const juce::MouseEvent& e)
     {
+        stopTimer();
         if (controller.source() < 0)
             return;
         if (isShowing())
@@ -396,6 +400,19 @@ namespace ksh::ui
             return;
         }
         drag = Drag::pending;
+        if (e.mods.isLeftButtonDown() && !additive)
+            startTimer (500);
+    }
+    void PatternGrid::timerCallback()
+    {
+        stopTimer();
+        if (drag != Drag::pending || !anchor.valid() || controller.source() < 0)
+            return;
+        // Use the same additive selection toggle as Shift-click, without editing the cell.
+        additive = true;
+        current = origin;
+        drag = Drag::none;
+        updateSelection();
     }
     void PatternGrid::updateSelection()
     {
@@ -415,6 +432,8 @@ namespace ksh::ui
     {
         current = e.position;
         modifiers = e.mods;
+        if (origin.getDistanceFrom (current) >= 4.0f)
+            stopTimer();
         if (drag == Drag::none)
             return;
         if (drag == Drag::marquee)
@@ -496,6 +515,7 @@ namespace ksh::ui
     }
     void PatternGrid::mouseUp (const juce::MouseEvent&)
     {
+        stopTimer();
         if (drag == Drag::pending && anchor.valid())
         {
             if (selectedAtStart && additive)
@@ -524,6 +544,7 @@ namespace ksh::ui
     }
     void PatternGrid::cancelGesture()
     {
+        stopTimer();
         drag = Drag::none;
         mutePainting = false;
         controller.cancel();
