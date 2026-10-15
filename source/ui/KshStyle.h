@@ -83,8 +83,6 @@ namespace ksh::ui
                 g.fillRoundedRectangle (r, 7);
                 g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
                 g.drawRoundedRectangle (r, 7, 1);
-                g.setColour (Palette::border.withAlpha (0.6f));
-                g.drawVerticalLine (b.getWidth() / 2, 11, static_cast<float> (b.getHeight() - 11));
                 return;
             }
             if (b.getProperties().contains ("icon"))
@@ -180,7 +178,7 @@ namespace ksh::ui
                 {
                     const bool active = b.getToggleState() == (choice == 1);
                     const float width = static_cast<float> (b.getWidth()) * 0.5f;
-                    const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 4, 4, width - 8, static_cast<float> (b.getHeight() - 8) };
+                    const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 3, 3, width - 6, static_cast<float> (b.getHeight() - 6) };
                     if (active)
                     {
                         g.setColour (Palette::accent.withAlpha (0.14f));
@@ -188,7 +186,7 @@ namespace ksh::ui
                         g.setColour (Palette::accent.withAlpha (0.6f));
                         g.drawRoundedRectangle (bounds.reduced (0.5f), 5, 1);
                     }
-                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 19, active ? Palette::accent : Palette::muted, true);
+                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 13.3f, active ? Palette::accent : Palette::muted, true);
                 }
                 return;
             }

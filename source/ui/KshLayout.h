@@ -16,13 +16,14 @@ namespace ksh::ui
         float gridLeft() const { return 322.0f; }
         float gridWidth() const { return 870.0f * patternScale; }
         float width() const { return juce::jmax (1338.0f, 436.0f + gridWidth()); }
-        float gridHeight() const { return 142.0f + static_cast<float> (channels) * rowHeight(); }
+        float cellsY() const { return 58.0f; }
+        float gridHeight() const { return cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
         float previewY() const { return gridY() + gridHeight(); }
         float height() const { return previewY() + 204; }
-        juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step) * cellWidth(), 58 + static_cast<float> (p.channel) * rowHeight(), cellWidth(), cellHeight() }; }
+        juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step) * cellWidth(), cellsY() + static_cast<float> (p.channel) * rowHeight(), cellWidth(), cellHeight() }; }
         Location at (juce::Point<float> point) const
         {
-            const int ch = static_cast<int> (std::floor ((point.y - 58) / rowHeight()));
+            const int ch = static_cast<int> (std::floor ((point.y - cellsY()) / rowHeight()));
             const int step = static_cast<int> (std::floor ((point.x - gridLeft()) / cellWidth()));
             return ch >= 0 && ch < channels && step >= 0 && step < steps && cell ({ ch, step }).contains (point) ? Location { ch, step } : Location {};
         }

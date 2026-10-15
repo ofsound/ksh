@@ -19,7 +19,6 @@ namespace ksh::ui
         void resized() override;
         bool keyPressed (const juce::KeyPress&) override;
         bool keyStateChanged (bool) override;
-        void mouseDown (const juce::MouseEvent&) override;
         void focusLost (FocusChangeType) override;
 
     private:
@@ -34,16 +33,12 @@ namespace ksh::ui
         juce::TextButton mutePattern { "M" }, heading, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
         juce::TextButton randomButton { "Random" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
-        std::unique_ptr<CycleEditor> popup;
-        Location popupLocation;
         std::bitset<8> heldPads;
-        int previousSource = -2, previousScale = 100;
-        uint64_t previousDocument = 0;
+        int previousScale = 100;
         bool syncing = false;
         void timerCallback() override;
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
-        void showCycle (Location, juce::Rectangle<int>);
         bool textFocused() const;
     };
 }

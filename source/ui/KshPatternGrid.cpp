@@ -98,7 +98,7 @@ namespace ksh::ui
             r.mute.dragged = [this] (const juce::MouseEvent& e) {
                 if (!mutePainting)
                     return;
-                const int row = static_cast<int> (std::floor ((e.getEventRelativeTo (this).position.y - 58) / layout.rowHeight()));
+                const int row = static_cast<int> (std::floor ((e.getEventRelativeTo (this).position.y - layout.cellsY()) / layout.rowHeight()));
                 if (row >= 0 && row < layout.channels && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (row)] != muteValue)
                     controller.command ("source_channel_mute", { controller.source() + 1, row + 1, muteValue });
             };
@@ -121,10 +121,13 @@ namespace ksh::ui
     {
         if (modifiers != m)
         {
+            const auto previousLayer = displayLayer();
             modifiers = m;
             if (hoverCell.valid() && !velocityHintAt (hoverPosition).valid())
                 clearHoverMarker();
             repaint();
+            if (previousLayer != displayLayer() && displayLayerChanged)
+                displayLayerChanged();
         }
     }
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
@@ -256,7 +259,7 @@ namespace ksh::ui
         for (int step = 0; step < layout.steps; ++step)
         {
             auto r = layout.cell ({ 0, step });
-            r.setY (26);
+            r.setY (layout.cellsY() - 32);
             r.setHeight (22);
             text (g, juce::String (step + 1), r, 10, step + 1 == controller.playingStep ? Palette::accent : Palette::muted);
         }
@@ -437,7 +440,7 @@ namespace ksh::ui
     {
         stopTimer();
         clearHoverMarker();
-        if (controller.source() < 0)
+        if (controller.source() < 0 || e.mods.isPopupMenu())
             return;
         if (isShowing())
             grabKeyboardFocus();
@@ -447,7 +450,7 @@ namespace ksh::ui
         dragLayer = displayLayer();
         initialSelection = controller.selected;
         additive = e.mods.isShiftDown();
-        const int row = static_cast<int> (std::floor ((e.position.y - 58) / layout.rowHeight()));
+        const int row = static_cast<int> (std::floor ((e.position.y - layout.cellsY()) / layout.rowHeight()));
         if (row >= 0 && row < layout.channels)
         {
             const auto loop = controller.loop (row);
@@ -461,12 +464,6 @@ namespace ksh::ui
                 controller.begin ("Change loop range");
                 return;
             }
-        }
-        if (e.mods.isPopupMenu() && anchor.valid())
-        {
-            if (showCycle)
-                showCycle (anchor, layout.cell (anchor).toNearestInt());
-            return;
         }
         const bool rightBoundary = row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < 4;
         if (rightBoundary && dragLayer == Layer::velocity)
@@ -568,12 +565,14 @@ namespace ksh::ui
             controller.command ("channel_loop_length", { anchor.channel + 1, end - start + 1, start + 1 });
             return;
         }
-        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - 58) / layout.rowHeight()))), juce::jlimit (0, layout.steps - 1, static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
+        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - layout.cellsY()) / layout.rowHeight()))), juce::jlimit (0, layout.steps - 1, static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
         if (drag == Drag::pending)
         {
             if (origin.getDistanceFrom (current) < (selectedAtStart ? 5.0f : 4.0f))
                 return;
-            if (selectedAtStart)
+            if (dragLayer == Layer::chance)
+                drag = Drag::value;
+            else if (selectedAtStart)
                 drag = e.mods.isShiftDown() ? Drag::value : (e.mods.isAltDown() ? Drag::copy : Drag::move);
             else
                 drag = std::abs (current.x - origin.x) > std::abs (current.y - origin.y) ? Drag::paint : Drag::value;
@@ -640,12 +639,7 @@ namespace ksh::ui
             {
                 controller.selected.reset (static_cast<size_t> (anchor.key()));
             }
-            else if (dragLayer == Layer::chance)
-            {
-                if (showCycle)
-                    showCycle (anchor, layout.cell (anchor).toNearestInt());
-            }
-            else
+            else if (dragLayer == Layer::velocity)
             {
                 controller.begin ("Toggle cell");
                 auto c = controller.cell (anchor);

@@ -220,10 +220,12 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     CHECK (controller.cell ({ 0, 0 }).velocity == 108);
     grid.cancelGesture();
     CHECK_FALSE (controller.cell ({ 0, 0 }).enabled);
-    bool opened = false;
-    grid.showCycle = [&] (Location location, juce::Rectangle<int>) { opened = location == Location { 0, 0 }; };
-    grid.mouseDown (gridEvent (grid, start, start, juce::ModifierKeys::rightButtonModifier));
-    CHECK (opened);
+    const auto beforeRightClick = controller.cell ({ 0, 0 });
+    const auto rightClick = gridEvent (grid, start, start, juce::ModifierKeys::rightButtonModifier);
+    grid.mouseDown (rightClick);
+    grid.mouseUp (rightClick);
+    CHECK (controller.cell ({ 0, 0 }) == beforeRightClick);
+    CHECK_FALSE (controller.canUndo());
 }
 
 TEST_CASE ("Grid clicks outside a selection deselect without editing cells", "[native-ui]")
@@ -387,6 +389,37 @@ TEST_CASE ("Selected value controls temporarily switch the editing layer", "[nat
     }
 }
 
+TEST_CASE ("Layer toggle follows Option changes delivered directly to the grid", "[native-ui]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    PatternGrid* grid = nullptr;
+    juce::TextButton* toggle = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("heading"))
+            toggle = button;
+    }
+    REQUIRE (grid != nullptr);
+    REQUIRE (toggle != nullptr);
+    CHECK_FALSE (toggle->getToggleState());
+    grid->modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+    CHECK (grid->displayLayer() == Layer::chance);
+    CHECK (toggle->getToggleState());
+    CHECK (toggle->getTitle().contains ("chance active"));
+    grid->modifierKeysChanged ({});
+    CHECK (grid->displayLayer() == Layer::velocity);
+    CHECK_FALSE (toggle->getToggleState());
+    const auto position = grid->layout.cell ({ 0, 0 }).getCentre();
+    grid->mouseMove (gridEvent (*grid, position, position, juce::ModifierKeys::altModifier));
+    CHECK (toggle->getToggleState());
+    grid->mouseMove (gridEvent (*grid, position, position, 0));
+    CHECK_FALSE (toggle->getToggleState());
+    CHECK (editor.controller.layer == Layer::velocity);
+}
+
 TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")
 {
     PluginProcessor processor;
@@ -453,11 +486,13 @@ TEST_CASE ("Chance grid drags adjust probability and preserve cycle and roll", "
         controller.selected.set (0);
         controller.selected.set (1);
     }
-    const auto start = grid.layout.cell ({ 0, 0 }).getCentre();
-    const int modifiers = juce::ModifierKeys::leftButtonModifier | (selected ? juce::ModifierKeys::shiftModifier : 0);
+    const auto bounds = grid.layout.cell ({ 0, 0 });
+    const auto start = juce::Point<float> (bounds.getX() + GENERATE (2.0f, 27.0f, 52.0f), bounds.getY() + GENERATE (2.0f, 27.0f, 52.0f));
+    const int modifiers = juce::ModifierKeys::leftButtonModifier;
+    const float horizontalDrag = GENERATE (0.0f, 30.0f);
     const auto down = gridEvent (grid, start, start, modifiers);
     grid.mouseDown (down);
-    grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, modifiers, true));
+    grid.mouseDrag (gridEvent (grid, start.translated (horizontalDrag, -20), start, modifiers, true));
     grid.mouseUp (down);
     auto expected = before;
     expected.probability += 8;
