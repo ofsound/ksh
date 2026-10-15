@@ -64,8 +64,8 @@ namespace ksh::ui
             button->setTitle (icon);
         }
         mutePattern.onClick = [this] { controller.selectSource (-1); };
-        heading.onClick = [this] { controller.layer = static_cast<Layer> ((static_cast<int> (controller.layer) + 1) % 4); sync(); };
-        heading.setTooltip (juce::String::fromUTF8 ("Cycle editing layer • 1 velocity, 2 probability, 3 roll, 4 cycle"));
+        heading.onClick = [this] { controller.layer = static_cast<Layer> ((static_cast<int> (controller.layer) + 1) % 2); sync(); };
+        heading.setTooltip (juce::String::fromUTF8 ("Switch editing layer • 1 velocity, 2 chance • Roll in inspector"));
         clear.setTooltip ("Double-click to clear pattern");
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
         record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
@@ -147,8 +147,12 @@ namespace ksh::ui
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
-        static const std::array<juce::String, 4> layers { "velocity", "probability", "roll", "cycle" };
-        heading.setButtonText ((controller.source() < 0 ? juce::String ("M") : "P" + juce::String (controller.source() + 1)) + ": " + layers[static_cast<size_t> (grid.displayLayer())]);
+        static const std::array<juce::String, 2> layers { "velocity", "chance" };
+        const auto patternLabel = controller.source() < 0 ? juce::String ("M") : "P" + juce::String (controller.source() + 1);
+        heading.getProperties().set ("patternLabel", patternLabel);
+        heading.setButtonText (patternLabel + ": Velocity / Chance");
+        heading.setToggleState (grid.displayLayer() == Layer::chance, juce::dontSendNotification);
+        heading.setTitle (patternLabel + " editing layer: " + layers[static_cast<size_t> (grid.displayLayer())] + " active");
         for (auto* b : { &clear, &record, &left, &right, &rate })
             b->setEnabled (controller.source() >= 0);
         steps.setEnabled (controller.source() >= 0);
@@ -220,8 +224,8 @@ namespace ksh::ui
         const int randomY = juce::roundToInt (layout.toolbarY() + 68);
         randomPanel.setBounds (0, randomY, getWidth(), getHeight() - randomY);
         grid.setBounds (0, static_cast<int> (layout.gridY()), getWidth(), static_cast<int> (layout.gridHeight()));
-        preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 200);
-        preview.setInspectorBounds (juce::Rectangle<float> (layout.gridLeft(), 30, layout.gridWidth() + 16.0f, 140).toNearestInt());
+        preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 164);
+        preview.setInspectorBounds (juce::Rectangle<float> (layout.gridLeft() - 16.0f, 12, layout.gridWidth() + 32.0f, 140).toNearestInt());
         dc.setBounds (getWidth() - 128, getHeight() - 36, 36, 32);
         scale.setBounds (getWidth() - 78, getHeight() - 36, 66, 32);
     }
@@ -231,7 +235,7 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - 40 })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option probability / copy · Shift+Option roll · Right-click cycle"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
+        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option chance / copy · Right-click cycle"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
         const auto date = controller.processor.getProjectModifiedAt().substring (0, 10);
         text (g, date, { 404, layout.transportHeight() + 63, 186, 16 }, 9, Palette::muted, false, juce::Justification::centredRight);
     }
@@ -293,7 +297,7 @@ namespace ksh::ui
             return true;
         }
         const auto character = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
-        if (character >= '1' && character <= '4')
+        if (character >= '1' && character <= '2')
         {
             controller.layer = static_cast<Layer> (character - '1');
             popup.reset();

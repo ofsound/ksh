@@ -1,6 +1,57 @@
 #include "KshPreviewPanel.h"
 namespace ksh::ui
 {
+    namespace
+    {
+        void paintWordmark (juce::Graphics& g)
+        {
+            const juce::Graphics::ScopedSaveState savedState (g);
+            g.addTransform (juce::AffineTransform::scale (0.8f).translated (-3.2f, 16.4f));
+            // Broad, hand-shaped letters with rounded corners and a short solid extrusion.
+            static const auto letters = []
+            {
+                std::array<juce::Path, 3> paths;
+                auto& k = paths[0];
+                k.startNewSubPath (16, 12);
+                k.lineTo (16, 86);
+                k.startNewSubPath (64, 10);
+                k.lineTo (18, 52);
+                k.lineTo (68, 86);
+                juce::Path kFace;
+                juce::PathStrokeType (25, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (kFace, k);
+                k = kFace;
+
+                auto& s = paths[1];
+                s.startNewSubPath (65, 17);
+                s.cubicTo (40, 1, 9, 9, 14, 33);
+                s.cubicTo (17, 49, 67, 44, 66, 66);
+                s.cubicTo (65, 92, 30, 99, 10, 79);
+                juce::Path sFace;
+                juce::PathStrokeType (24, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (sFace, s);
+                s = sFace;
+
+                auto& h = paths[2];
+                h.addRoundedRectangle (3, 0, 25, 98, 7);
+                h.addRoundedRectangle (54, 0, 25, 98, 7);
+                h.addRoundedRectangle (20, 36, 42, 25, 5);
+                return paths;
+            }();
+            text (g, "OFSOUND", { 24, 19, 170, 20 }, 13, Palette::text, true, juce::Justification::centredLeft);
+            const std::array<juce::Colour, 3> colours { Palette::accent, Palette::text, Palette::info };
+            const std::array<float, 3> angles { -0.045f, 0.035f, -0.025f };
+            for (size_t i = 0; i < letters.size(); ++i)
+            {
+                const auto transform = juce::AffineTransform::rotation (angles[i], 40, 49).translated (24.0f + static_cast<float> (i) * 92.0f, 45);
+                for (int depth = 5; depth > 0; --depth)
+                {
+                    g.setColour (colours[i].darker (0.65f));
+                    g.fillPath (letters[i], transform.translated (static_cast<float> (depth), static_cast<float> (depth)));
+                }
+                g.setColour (colours[i]);
+                g.fillPath (letters[i], transform);
+            }
+        }
+    }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
     {
         addAndMakeVisible (mode);
@@ -53,9 +104,9 @@ namespace ksh::ui
         probability.onBegin = [this] { beginRelative ("Selected probability"); };
         roll.onBegin = [this] { controller.begin ("Selected roll"); };
         velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
-        probability.onChange = [this] (int v) { applyRelative (Layer::probability, v); };
-        roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) controller.editCell (p, withValue (controller.cell (p), Layer::roll, v)); controller.notify(); };
-        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::probability }, std::pair { &roll, Layer::roll } })
+        probability.onChange = [this] (int v) { applyRelative (Layer::chance, v); };
+        roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) { auto cell = controller.cell (p); cell.roll = juce::jlimit (1, 8, v); controller.editCell (p, cell); } controller.notify(); };
+        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance } })
         {
             const auto begin = control->onBegin;
             control->onBegin = [this, begin, layer]
@@ -127,11 +178,11 @@ namespace ksh::ui
         if (randomSection || inspectorBounds.isEmpty())
             return;
         const int x = inspectorBounds.getX();
-        velocity.setBounds (x + 130, 56, 108, 80);
-        probability.setBounds (x + 254, 56, 124, 80);
-        roll.setBounds (x + 394, 56, 88, 80);
-        remove.setBounds (inspectorBounds.getRight() - 96, 74, 76, 62);
-        cycle.setBounds (x + 498, 74, remove.getX() - x - 514, 62);
+        velocity.setBounds (x + 130, 38, 76, 80);
+        probability.setBounds (x + 222, 38, 92, 80);
+        roll.setBounds (x + 330, 38, 56, 80);
+        remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, 62);
+        cycle.setBounds (x + 402, 56, remove.getX() - x - 418, 62);
     }
     void PreviewPanel::sync()
     {
@@ -172,9 +223,9 @@ namespace ksh::ui
         if (!randomSection)
         {
             surface (g, inspectorBounds.toFloat());
-            text (g, juce::String (controller.selection (true).size()) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 74, 100, 62 }, 22, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Cycle", cycle.getBounds().withY (56).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (56).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
+            text (g, juce::String (controller.selection (true).size()) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 62 }, 22, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "Cycle", cycle.getBounds().withY (38).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "Delete", remove.getBounds().withY (38).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
         }
         else
         {
@@ -200,15 +251,7 @@ namespace ksh::ui
         }
         if (randomSection)
             return;
-        const float x = 12;
-        text (g, "OFSOUND", { x, 90, 195, 20 }, 11, Palette::text, true, juce::Justification::centredRight);
-        for (int depth = 6; depth >= 0; --depth)
-        {
-            const float d = static_cast<float> (depth);
-            text (g, "K", { x + d, 110 + d, 72, 84 }, 92, depth == 0 ? Palette::accent : Palette::accent.darker (0.65f), true);
-            text (g, "S", { x + 62 + d, 110 + d, 72, 84 }, 92, depth == 0 ? Palette::text : Palette::muted.darker (0.65f), true);
-            text (g, "H", { x + 124 + d, 110 + d, 72, 84 }, 92, depth == 0 ? Palette::info : Palette::info.darker (0.65f), true);
-        }
+        paintWordmark (g);
     }
     void PreviewPanel::updatePlayback()
     {

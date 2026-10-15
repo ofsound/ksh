@@ -18,7 +18,7 @@ namespace ksh::ui
         float width() const { return juce::jmax (1338.0f, 436.0f + gridWidth()); }
         float gridHeight() const { return 90.0f + static_cast<float> (channels) * rowHeight(); }
         float previewY() const { return gridY() + gridHeight(); }
-        float height() const { return previewY() + 240; }
+        float height() const { return previewY() + 204; }
         juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step) * cellWidth(), 58 + static_cast<float> (p.channel) * rowHeight(), cellWidth(), cellHeight() }; }
         Location at (juce::Point<float> point) const
         {

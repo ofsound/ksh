@@ -114,7 +114,7 @@ namespace ksh::ui
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
         if (modifiers.isAltDown())
-            return modifiers.isShiftDown() ? Layer::roll : Layer::probability;
+            return Layer::chance;
         return controller.layer;
     }
     void PatternGrid::modifierKeysChanged (const juce::ModifierKeys& m)
@@ -277,16 +277,29 @@ namespace ksh::ui
                         g.setColour (dark);
                         g.fillRect (r.withHeight (r.getHeight() * (1.0f - static_cast<float> (c.velocity) / 127.0f)));
                     }
-                    if (layer == Layer::roll)
-                        for (int part = 0; part < c.roll; part += 2)
+                    // Roll subdivisions stay visible beneath every layer's value treatment.
+                    if (c.roll > 1)
+                    {
+                        const float width = r.getWidth() / static_cast<float> (c.roll);
+                        for (int part = 0; part < c.roll; ++part)
                         {
-                            g.setColour (dark);
-                            g.fillRect (r.withX (r.getX() + static_cast<float> (part) * r.getWidth() / static_cast<float> (c.roll)).withWidth (r.getWidth() / static_cast<float> (c.roll)));
+                            const float x = r.getX() + static_cast<float> (part) * width;
+                            if (part % 2 == 1)
+                            {
+                                g.setColour (Palette::app.withAlpha (0.14f));
+                                g.fillRect (x, r.getY(), width, r.getHeight());
+                            }
+                            if (part > 0)
+                            {
+                                g.setColour (Palette::text.withAlpha (0.18f));
+                                g.fillRect (x, r.getY(), 0.75f, r.getHeight());
+                            }
                         }
+                    }
                     g.restoreState();
                     g.setColour (Palette::text.withAlpha (0.22f));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    if (layer == Layer::cycle)
+                    if (layer == Layer::chance)
                     {
                         text (g, juce::String (c.probability) + "%", r.removeFromTop (r.getHeight() * 0.6f), layout.steps > 16 ? 9.0f : 12.0f, valueColour);
                         const int bits = juce::jmin (c.cycle, 30);
@@ -298,7 +311,7 @@ namespace ksh::ui
                         }
                     }
                     else
-                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::probability ? "%" : ""), r, juce::jmin (18.0f, layout.cellWidth() * (layer == Layer::probability ? 0.33f : 0.42f)), valueColour);
+                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), r, juce::jmin (18.0f, layout.cellWidth() * (layer == Layer::chance ? 0.33f : 0.42f)), valueColour);
                 }
                 if (dimmed)
                     g.endTransparencyLayer();
@@ -518,7 +531,7 @@ namespace ksh::ui
         }
         else if (drag == Drag::value)
         {
-            const auto sensitivity = dragLayer == Layer::cycle || dragLayer == Layer::roll ? 8.0f : 2.0f;
+            const auto sensitivity = 2.0f;
             const int offset = dragOffset (origin.y - current.y, sensitivity);
             for (const auto& [p, c] : originals)
             {
@@ -559,7 +572,7 @@ namespace ksh::ui
             {
                 controller.selected.reset (static_cast<size_t> (anchor.key()));
             }
-            else if (dragLayer == Layer::cycle)
+            else if (dragLayer == Layer::chance)
             {
                 if (showCycle)
                     showCycle (anchor, layout.cell (anchor).toNearestInt());

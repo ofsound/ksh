@@ -152,8 +152,8 @@ TEST_CASE ("Native layout and gesture constants match reference", "[native-ui]")
     c.cycle = 64;
     c.cycleMask = 7;
     CHECK (withValue (c, Layer::velocity, 140).velocity == 127);
-    CHECK (withValue (c, Layer::probability, -10).probability == 0);
-    CHECK (withValue (c, Layer::cycle, 2).cycleMask == 3);
+    CHECK (withValue (c, Layer::chance, -10).probability == 0);
+    CHECK (withValue (c, Layer::chance, 2).cycleMask == c.cycleMask);
 }
 
 TEST_CASE ("Native editor constructs renders and tears down without a browser", "[native-ui][render]")
@@ -301,9 +301,10 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
     for (int ch = 0; ch < 8; ++ch)
         for (int step = 0; step < 32; ++step)
-            REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, ch + 1, step + 1, step % 3 != 1 ? 1 : 0, 50 + step * 2, 60 + step, 4, 5, 2 }));
+            REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, ch + 1, step + 1, step % 3 != 1 ? 1 : 0, 50 + step * 2, 60 + step, 4, 5, 1 << (step % 4) }));
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     for (int scale : { 50, 100, 120 })
+    for (auto layer : { Layer::velocity, Layer::chance })
     {
         processor.setProjectUiScalePercent (scale);
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
@@ -311,14 +312,14 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
         REQUIRE (view != nullptr);
         view->controller.selected.set (0);
         view->controller.selected.set (2);
-        view->controller.layer = Layer::cycle;
+        view->controller.layer = layer;
         view->sync();
         auto image = editor->createComponentSnapshot (editor->getLocalBounds());
         REQUIRE (image.isValid());
         CHECK (editor->getWidth() == juce::roundToInt (1338.0f * static_cast<float> (scale) / 100));
         if (directory.isNotEmpty())
         {
-            auto stream = juce::File (directory).getChildFile ("native-32-" + juce::String (scale) + ".png").createOutputStream();
+            auto stream = juce::File (directory).getChildFile ("native-32-" + juce::String (scale) + "-" + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
             REQUIRE (stream != nullptr);
             REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
         }
@@ -373,14 +374,129 @@ TEST_CASE ("Selected value controls temporarily switch the editing layer", "[nat
         auto* control = dynamic_cast<ValueControl*> (child);
         if (control == nullptr || (control->caption != "Velocity" && control->caption != "Probability" && control->caption != "Roll"))
             continue;
-        const auto expected = control->caption == "Velocity" ? Layer::velocity : control->caption == "Probability" ? Layer::probability : Layer::roll;
-        for (auto original : { Layer::velocity, Layer::probability, Layer::roll, Layer::cycle })
+
+        for (auto original : { Layer::velocity, Layer::chance })
         {
             controller.layer = original;
             control->onBegin();
+            const auto expected = control->caption == "Velocity" ? Layer::velocity : control->caption == "Probability" ? Layer::chance : original;
             CHECK (controller.layer == expected);
             control->onEnd();
             CHECK (controller.layer == original);
         }
     }
+}
+
+TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 80, 4, 5, 1 }));
+    NativeEditor editor (processor);
+    for (auto [key, layer] : { std::pair { '1', Layer::velocity }, std::pair { '2', Layer::chance } })
+    {
+        CHECK (editor.keyPressed (juce::KeyPress (key, {}, static_cast<juce::juce_wchar> (key))));
+        CHECK (editor.controller.layer == layer);
+    }
+    CHECK_FALSE (editor.keyPressed (juce::KeyPress ('3', {}, '3')));
+    CHECK_FALSE (editor.keyPressed (juce::KeyPress ('4', {}, '4')));
+    CHECK (editor.controller.layer == Layer::chance);
+    for (auto* child : editor.getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("heading"))
+        {
+            CHECK (button->getButtonText().contains ("Velocity / Chance"));
+            CHECK (button->getToggleState());
+            button->onClick();
+            CHECK (editor.controller.layer == Layer::velocity);
+            CHECK_FALSE (button->getToggleState());
+            CHECK (button->getButtonText().contains ("Velocity / Chance"));
+        }
+
+    auto& controller = editor.controller;
+    controller.selected.set (0);
+    const auto before = controller.cell ({ 0, 0 });
+    PreviewPanel inspector (controller);
+    ValueControl* roll = nullptr;
+    for (auto* child : inspector.getChildren())
+        if (auto* control = dynamic_cast<ValueControl*> (child); control && control->caption == "Roll")
+            roll = control;
+    REQUIRE (roll != nullptr);
+    for (auto layer : { Layer::velocity, Layer::chance })
+    {
+        controller.layer = layer;
+        roll->onBegin();
+        roll->onChange (4);
+        roll->onEnd();
+        CHECK (controller.layer == layer);
+        auto expected = before;
+        expected.roll = 4;
+        CHECK (controller.cell ({ 0, 0 }) == expected);
+        controller.undo();
+        CHECK (controller.cell ({ 0, 0 }) == before);
+    }
+}
+
+TEST_CASE ("Chance grid drags adjust probability and preserve cycle and roll", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 70, 80, 3, 2, 4 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    controller.layer = Layer::chance;
+    const auto before = controller.cell ({ 0, 0 });
+    const auto second = controller.cell ({ 0, 1 });
+    const bool selected = GENERATE (false, true);
+    if (selected)
+    {
+        controller.selected.set (0);
+        controller.selected.set (1);
+    }
+    const auto start = grid.layout.cell ({ 0, 0 }).getCentre();
+    const int modifiers = juce::ModifierKeys::leftButtonModifier | (selected ? juce::ModifierKeys::shiftModifier : 0);
+    const auto down = gridEvent (grid, start, start, modifiers);
+    grid.mouseDown (down);
+    grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, modifiers, true));
+    grid.mouseUp (down);
+    auto expected = before;
+    expected.probability += 8;
+    CHECK (controller.cell ({ 0, 0 }) == expected);
+    auto expectedSecond = second;
+    if (selected)
+        expectedSecond.probability += 8;
+    CHECK (controller.cell ({ 0, 1 }) == expectedSecond);
+    controller.undo();
+    CHECK (controller.cell ({ 0, 0 }) == before);
+    CHECK (controller.cell ({ 0, 1 }) == second);
+}
+
+TEST_CASE ("Inspector cycle edits temporarily show Chance", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    controller.selected.set (0);
+    PreviewPanel inspector (controller);
+    CycleEditor* cycle = nullptr;
+    for (auto* child : inspector.getChildren())
+        if (auto* editor = dynamic_cast<CycleEditor*> (child))
+            cycle = editor;
+    REQUIRE (cycle != nullptr);
+    cycle->sync();
+    bool sawChance = false;
+    controller.changed = [&] { sawChance = sawChance || controller.layer == Layer::chance; };
+    juce::Component* handle = nullptr;
+    for (auto* child : cycle->getChildren())
+        if (child->getTitle() == "Cycle length")
+            handle = child;
+    REQUIRE (handle != nullptr);
+    CHECK (handle->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (sawChance);
+    CHECK (controller.layer == Layer::velocity);
+    CHECK (controller.cell ({ 0, 0 }).cycle == 5);
+    CHECK (controller.cell ({ 0, 0 }).probability == 60);
+    controller.undo();
+    CHECK (controller.cell ({ 0, 0 }).cycle == 4);
+    controller.changed = {};
 }

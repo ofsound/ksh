@@ -5,9 +5,7 @@
 namespace ksh::ui
 {
     enum class Layer { velocity,
-        probability,
-        roll,
-        cycle };
+        chance };
     struct Location
     {
         int channel = -1, step = -1;
@@ -28,12 +26,8 @@ namespace ksh::ui
     {
         switch (layer)
         {
-            case Layer::probability:
+            case Layer::chance:
                 return c.probability;
-            case Layer::roll:
-                return c.roll;
-            case Layer::cycle:
-                return c.cycle;
             case Layer::velocity:
                 return c.velocity;
         }
@@ -43,15 +37,8 @@ namespace ksh::ui
     {
         switch (layer)
         {
-            case Layer::probability:
+            case Layer::chance:
                 c.probability = juce::jlimit (0, 100, value);
-                break;
-            case Layer::roll:
-                c.roll = juce::jlimit (1, 8, value);
-                break;
-            case Layer::cycle:
-                c.cycle = juce::jlimit (1, 64, value);
-                c.cycleMask = normalizeCycleMask (c.cycleMask, c.cycle);
                 break;
             case Layer::velocity:
                 c.velocity = juce::jlimit (1, 127, value);

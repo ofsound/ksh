@@ -26,9 +26,9 @@ namespace ksh::ui
                     const auto first = controller.cell (list.front());
                     const int nextLength = juce::jmax (first.cycle, i + 1);
                     const int mask = i >= first.cycle ? first.cycleMask : first.cycleMask ^ (1 << i);
-                    controller.begin ("Cycle pattern");
+                    beginEdit ("Cycle pattern");
                     controller.setCycle (nextLength, mask, list);
-                    controller.commit();
+                    endEdit();
                     sync();
                 };
             }
@@ -103,6 +103,28 @@ namespace ksh::ui
 
     private:
         EditorController& controller;
+        std::optional<Layer> previousLayer;
+        void beginEdit (const juce::String& label)
+        {
+            previousLayer = controller.layer;
+            controller.layer = Layer::chance;
+            controller.begin (label);
+            controller.notify();
+        }
+        void restoreLayer()
+        {
+            if (previousLayer.has_value())
+            {
+                controller.layer = *previousLayer;
+                previousLayer.reset();
+            }
+        }
+        void endEdit()
+        {
+            restoreLayer();
+            controller.commit();
+            controller.notify();
+        }
         int cycleLength = 1;
         class LengthHandle : public juce::Component, public juce::SettableTooltipClient
         {
@@ -130,7 +152,7 @@ namespace ksh::ui
                     return;
                 grabKeyboardFocus();
                 dragging = true;
-                owner.controller.begin ("Cycle length");
+                owner.beginEdit ("Cycle length");
             }
             void mouseDrag (const juce::MouseEvent& e) override
             {
@@ -145,7 +167,7 @@ namespace ksh::ui
                 if (dragging)
                 {
                     dragging = false;
-                    owner.controller.commit();
+                    owner.endEdit();
                 }
             }
             bool keyPressed (const juce::KeyPress& key) override
@@ -161,9 +183,9 @@ namespace ksh::ui
                 targets = owner.locations();
                 if (targets.empty())
                     return false;
-                owner.controller.begin ("Cycle length");
+                owner.beginEdit ("Cycle length");
                 apply (juce::jlimit (1, 8, owner.cycleLength + delta));
-                owner.controller.commit();
+                owner.endEdit();
                 return true;
             }
         private:
@@ -181,6 +203,7 @@ namespace ksh::ui
                 if (dragging)
                 {
                     dragging = false;
+                    owner.restoreLayer();
                     owner.controller.cancel();
                 }
             }

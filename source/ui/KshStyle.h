@@ -167,9 +167,22 @@ namespace ksh::ui
             if (b.getProperties().contains ("heading"))
             {
                 static auto headingFace = juce::Typeface::createSystemTypefaceFor (BinaryData::GantariExtrabold_ttf, BinaryData::GantariExtrabold_ttfSize);
-                g.setFont (juce::Font (juce::FontOptions (headingFace).withHeight (56.6f)));
+                g.setFont (juce::Font (juce::FontOptions (headingFace).withHeight (34.0f)));
                 g.setColour (Palette::accent);
-                g.drawFittedText (b.getButtonText(), b.getLocalBounds(), juce::Justification::centredLeft, 1, 0.6f);
+                g.drawFittedText (b.getProperties()["patternLabel"].toString(), { 0, 0, 68, b.getHeight() }, juce::Justification::centredLeft, 1, 0.8f);
+                for (int choice = 0; choice < 2; ++choice)
+                {
+                    const bool active = b.getToggleState() == (choice == 1);
+                    const juce::Rectangle<float> bounds { choice == 0 ? 74.0f : 178.0f, 7, choice == 0 ? 98.0f : 88.0f, 38 };
+                    if (active)
+                    {
+                        g.setColour (Palette::accent.withAlpha (0.14f));
+                        g.fillRoundedRectangle (bounds, 5);
+                        g.setColour (Palette::accent.withAlpha (0.6f));
+                        g.drawRoundedRectangle (bounds.reduced (0.5f), 5, 1);
+                    }
+                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 20, active ? Palette::accent : Palette::muted, true);
+                }
                 return;
             }
             text (g, b.getButtonText(), b.getLocalBounds().toFloat(), b.getButtonText() == "M" ? 30.0f : 12.0f, !b.isEnabled() ? Palette::faint : (b.getToggleState() || down ? Palette::app : Palette::text), true);
