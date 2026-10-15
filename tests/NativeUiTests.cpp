@@ -1,4 +1,5 @@
 #include <PluginEditor.h>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <ui/KshEditorController.h>
 #include <ui/KshLayout.h>
@@ -223,6 +224,59 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     grid.showCycle = [&] (Location location, juce::Rectangle<int>) { opened = location == Location { 0, 0 }; };
     grid.mouseDown (gridEvent (grid, start, start, juce::ModifierKeys::rightButtonModifier));
     CHECK (opened);
+}
+
+TEST_CASE ("Grid clicks outside a selection deselect without editing cells", "[native-ui]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const Location selected { 0, 0 }, other { 0, 4 };
+    const auto point = grid.layout.cell (other).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    auto click = [&] (juce::Point<float> position, int modifiers)
+    {
+        const auto event = gridEvent (grid, position, position, modifiers);
+        grid.mouseDown (event);
+        grid.mouseUp (event);
+    };
+
+    SECTION ("Enabled and empty cells only clear selection")
+    {
+        const bool enabled = GENERATE (false, true);
+        if (enabled)
+            click (point, left);
+        controller.selected.set (static_cast<size_t> (selected.key()));
+        click (point, left);
+        CHECK (controller.selected.none());
+        CHECK (controller.cell (other).enabled == enabled);
+    }
+    SECTION ("Deselecting does not begin a paint or value drag")
+    {
+        controller.selected.set (static_cast<size_t> (selected.key()));
+        grid.mouseDown (gridEvent (grid, point, point, left));
+        grid.mouseDrag (gridEvent (grid, grid.layout.cell ({ 0, 6 }).getCentre(), point, left, true));
+        grid.mouseUp (gridEvent (grid, point, point, left));
+        CHECK (controller.selected.none());
+        for (int step = 4; step <= 6; ++step)
+            CHECK_FALSE (controller.cell ({ 0, step }).enabled);
+        CHECK_FALSE (controller.canUndo());
+    }
+    SECTION ("Shift-click adds and removes selection without editing cells")
+    {
+        controller.selected.set (static_cast<size_t> (selected.key()));
+        click (point, left | juce::ModifierKeys::shiftModifier);
+        CHECK (controller.selected.count() == 2);
+        CHECK (controller.selected.test (static_cast<size_t> (other.key())));
+        CHECK_FALSE (controller.cell (other).enabled);
+        click (point, left | juce::ModifierKeys::shiftModifier);
+        CHECK (controller.selected.count() == 1);
+        CHECK (controller.selected.test (static_cast<size_t> (selected.key())));
+        CHECK_FALSE (controller.cell (other).enabled);
+        CHECK_FALSE (controller.canUndo());
+    }
 }
 
 TEST_CASE ("Host replacement invalidates undo before the next timer tick", "[native-ui]")

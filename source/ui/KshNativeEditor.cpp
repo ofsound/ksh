@@ -221,6 +221,7 @@ namespace ksh::ui
         randomPanel.setBounds (0, randomY, getWidth(), getHeight() - randomY);
         grid.setBounds (0, static_cast<int> (layout.gridY()), getWidth(), static_cast<int> (layout.gridHeight()));
         preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 200);
+        preview.setInspectorBounds (juce::Rectangle<float> (layout.gridLeft(), 30, layout.gridWidth() + 16.0f, 140).toNearestInt());
         dc.setBounds (getWidth() - 128, getHeight() - 36, 36, 32);
         scale.setBounds (getWidth() - 78, getHeight() - 36, 66, 32);
     }

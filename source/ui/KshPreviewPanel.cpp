@@ -110,17 +110,28 @@ namespace ksh::ui
             controller.editCell (p, withValue (c, layer, cellValue (c, layer) + offset));
         controller.notify();
     }
+    void PreviewPanel::setInspectorBounds (juce::Rectangle<int> bounds)
+    {
+        if (inspectorBounds == bounds)
+            return;
+        inspectorBounds = bounds;
+        resized();
+        repaint();
+    }
     void PreviewPanel::resized()
     {
         mode.setBounds (378, 44, 164, 28);
         refresh.setBounds (566, 23, 82, 49);
         for (int ch = 0; ch < 8; ++ch)
             locks[static_cast<size_t> (ch)].setBounds (378 + ch * ((getWidth() - 408) / 8), 106, (getWidth() - 408) / 8 - 8, 48);
-        velocity.setBounds (164, 56, 108, 80);
-        probability.setBounds (288, 56, 124, 80);
-        roll.setBounds (428, 56, 88, 80);
-        remove.setBounds (getWidth() - 324, 74, 76, 62);
-        cycle.setBounds (532, 74, remove.getX() - 548, 62);
+        if (randomSection || inspectorBounds.isEmpty())
+            return;
+        const int x = inspectorBounds.getX();
+        velocity.setBounds (x + 130, 56, 108, 80);
+        probability.setBounds (x + 254, 56, 124, 80);
+        roll.setBounds (x + 394, 56, 88, 80);
+        remove.setBounds (inspectorBounds.getRight() - 96, 74, 76, 62);
+        cycle.setBounds (x + 498, 74, remove.getX() - x - 514, 62);
     }
     void PreviewPanel::sync()
     {
@@ -160,8 +171,8 @@ namespace ksh::ui
         g.fillAll();
         if (!randomSection)
         {
-            surface (g, { 12, 30, static_cast<float> (getWidth() - 240), 140 });
-            text (g, juce::String (controller.selection (true).size()) + " Cells", { 32, 74, 116, 62 }, 22, Palette::text, true, juce::Justification::centredLeft);
+            surface (g, inspectorBounds.toFloat());
+            text (g, juce::String (controller.selection (true).size()) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 74, 100, 62 }, 22, Palette::text, true, juce::Justification::centredLeft);
             text (g, "Cycle", cycle.getBounds().withY (56).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
             text (g, "Delete", remove.getBounds().withY (56).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
         }
@@ -189,7 +200,7 @@ namespace ksh::ui
         }
         if (randomSection)
             return;
-        const float x = static_cast<float> (getWidth()) - 205;
+        const float x = 12;
         text (g, "OFSOUND", { x, 90, 195, 20 }, 11, Palette::text, true, juce::Justification::centredRight);
         for (int depth = 6; depth >= 0; --depth)
         {

@@ -161,7 +161,7 @@ namespace ksh::ui
             const auto index = static_cast<size_t> (ch);
             const bool muted = controller.source() >= 0 && p.sourceChannelMutes[static_cast<size_t> (controller.source())][index];
             if (displayedLoopStart[index] != range.loopStart || displayedLoopLength[index] != range.loopLength || displayedMutes[index] != muted)
-                repaint (350, juce::roundToInt (layout.cell ({ ch, 0 }).getY()) - 2, juce::roundToInt (layout.gridWidth()) + 34, juce::roundToInt (layout.rowHeight()) + 4);
+                repaint (juce::roundToInt (layout.gridLeft()) - 16, juce::roundToInt (layout.cell ({ ch, 0 }).getY()) - 2, juce::roundToInt (layout.gridWidth()) + 34, juce::roundToInt (layout.rowHeight()) + 4);
             displayedLoopStart[index] = range.loopStart;
             displayedLoopLength[index] = range.loopLength;
             displayedMutes[index] = muted;
@@ -195,17 +195,17 @@ namespace ksh::ui
             for (int step = 0; step < 32; ++step)
                 accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (layout.cell ({ ch, step }).toNearestInt());
         const float gridRight = layout.cell ({ 0, layout.steps - 1 }).getRight() + 16.0f;
-        const int arrowsX = juce::roundToInt ((gridRight + static_cast<float> (getWidth()) - 52.0f) * 0.5f);
+        const int arrowsX = juce::roundToInt ((gridRight + static_cast<float> (getWidth()) - 84.0f) * 0.5f);
         for (int ch = 0; ch < 8; ++ch)
         {
             auto& r = rows[static_cast<size_t> (ch)];
             const int y = juce::roundToInt (layout.cell ({ ch, 0 }).getCentreY()) - 16;
-            r.clear.setBounds (12, y + 4, 20, 24);
-            r.label.setBounds (56, y - 2, 76, 36);
-            r.note.setBounds (145, y, 44, 32);
-            r.reverse.setBounds (207, y, 34, 32);
-            r.ping.setBounds (259, y, 28, 32);
-            r.mute.setBounds (305, y, 24, 32);
+            r.clear.setBounds (arrowsX + 60, y + 4, 20, 24);
+            r.label.setBounds (12, y - 2, 76, 36);
+            r.note.setBounds (101, y, 44, 32);
+            r.reverse.setBounds (163, y, 34, 32);
+            r.ping.setBounds (215, y, 28, 32);
+            r.mute.setBounds (261, y, 24, 32);
             r.left.setBounds (arrowsX, y, 26, 32);
             r.right.setBounds (arrowsX + 26, y, 26, 32);
         }
@@ -396,10 +396,18 @@ namespace ksh::ui
                 showCycle (anchor, layout.cell (anchor).toNearestInt());
             return;
         }
-        const bool rightBoundary = row >= 0 && row < layout.channels && std::abs (e.position.x - (366 + layout.steps * layout.cellWidth())) < 4;
+        const bool rightBoundary = row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < 4;
         if (rightBoundary && dragLayer == Layer::velocity)
             anchor = { row, layout.steps - 1 };
         selectedAtStart = anchor.valid() && controller.selected.test (static_cast<size_t> (anchor.key()));
+        if (initialSelection.any() && !additive && !selectedAtStart)
+        {
+            drag = Drag::none;
+            controller.selected.reset();
+            controller.notify();
+            repaint();
+            return;
+        }
         if (!anchor.valid() || (additive && !selectedAtStart))
         {
             drag = Drag::marquee;
@@ -481,7 +489,7 @@ namespace ksh::ui
             controller.command ("channel_loop_length", { anchor.channel + 1, end - start + 1, start + 1 });
             return;
         }
-        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - 58) / layout.rowHeight()))), juce::jlimit (0, layout.steps - 1, static_cast<int> (std::floor ((current.x - 366) / layout.cellWidth()))) };
+        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - 58) / layout.rowHeight()))), juce::jlimit (0, layout.steps - 1, static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
         if (drag == Drag::pending)
         {
             if (origin.getDistanceFrom (current) < (selectedAtStart ? 5.0f : 4.0f))
@@ -523,7 +531,7 @@ namespace ksh::ui
         else if (drag == Drag::velocityLine)
         {
             const auto r = layout.cell (anchor);
-            const int endBoundary = juce::jlimit (0, layout.steps, jsRound ((current.x - 366) / layout.cellWidth()));
+            const int endBoundary = juce::jlimit (0, layout.steps, jsRound ((current.x - layout.gridLeft()) / layout.cellWidth()));
             const int velocity = juce::jlimit (1, 127, jsRound (1 + (1 - (current.y - r.getY()) / r.getHeight()) * 126));
             for (const auto& [p, c] : originals)
                 controller.editCell (p, c);

@@ -10,10 +10,12 @@ namespace ksh::ui
         void updatePlayback();
         void paint (juce::Graphics&) override;
         void resized() override;
+        void setInspectorBounds (juce::Rectangle<int>);
 
     private:
         EditorController& controller;
         const bool randomSection;
+        juce::Rectangle<int> inspectorBounds;
         juce::TextButton mode, remove { juce::String::fromUTF8 ("×") };
         ValueControl refresh, velocity, probability, roll;
         std::array<ValueControl, 8> locks;
