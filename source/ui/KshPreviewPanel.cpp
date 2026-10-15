@@ -53,8 +53,30 @@ namespace ksh::ui
         velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
         probability.onChange = [this] (int v) { applyRelative (Layer::probability, v); };
         roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) controller.editCell (p, withValue (controller.cell (p), Layer::roll, v)); controller.notify(); };
+        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::probability }, std::pair { &roll, Layer::roll } })
+        {
+            const auto begin = control->onBegin;
+            control->onBegin = [this, begin, layer]
+            {
+                begin();
+                previousLayer = controller.layer;
+                controller.layer = layer;
+                controller.notify();
+            };
+        }
         for (auto* control : { &velocity, &probability, &roll })
-            control->onEnd = [this] { controller.commit(); velocity.value = probability.value = 0; sync(); };
+            control->onEnd = [this]
+            {
+                if (previousLayer.has_value())
+                {
+                    controller.layer = *previousLayer;
+                    previousLayer.reset();
+                }
+                controller.commit();
+                velocity.value = probability.value = 0;
+                controller.notify();
+                sync();
+            };
         remove.setTooltip ("Delete selected cells");
         remove.onClick = [this] { controller.deleteSelection(); };
         cycle.locations = [this] { return controller.selection (true); };

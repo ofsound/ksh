@@ -269,3 +269,25 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
         }
     }
 }
+
+TEST_CASE ("Selected value controls temporarily switch the editing layer", "[native-ui]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    PreviewPanel panel (controller);
+    for (auto* child : panel.getChildren())
+    {
+        auto* control = dynamic_cast<ValueControl*> (child);
+        if (control == nullptr || (control->caption != "Velocity" && control->caption != "Probability" && control->caption != "Roll"))
+            continue;
+        const auto expected = control->caption == "Velocity" ? Layer::velocity : control->caption == "Probability" ? Layer::probability : Layer::roll;
+        for (auto original : { Layer::velocity, Layer::probability, Layer::roll, Layer::cycle })
+        {
+            controller.layer = original;
+            control->onBegin();
+            CHECK (controller.layer == expected);
+            control->onEnd();
+            CHECK (controller.layer == original);
+        }
+    }
+}

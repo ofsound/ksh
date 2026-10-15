@@ -18,6 +18,7 @@ namespace ksh::ui
         std::array<ValueControl, 8> locks;
         CycleEditor cycle;
         std::vector<std::pair<Location, Cell>> valueStarts;
+        std::optional<Layer> previousLayer;
         std::array<std::array<bool, 32>, 8> flashes {};
         void beginRelative (const juce::String&);
         void applyRelative (Layer, int);
