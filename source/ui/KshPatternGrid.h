@@ -8,7 +8,6 @@ namespace ksh::ui
     public:
         explicit PatternGrid (EditorController&);
         Layout layout;
-        std::function<void()> displayLayerChanged;
         void sync();
         void updatePlayback();
         void paint (juce::Graphics&) override;

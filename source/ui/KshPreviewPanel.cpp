@@ -7,48 +7,57 @@ namespace ksh::ui
         {
             const juce::Graphics::ScopedSaveState savedState (g);
             g.addTransform (juce::AffineTransform::scale (0.8f).translated (-3.2f, 16.4f));
-            // Broad, hand-shaped letters with rounded corners and a short solid extrusion.
-            static const auto letters = []
+            // Chiseled silhouettes keep the mark readable at small sizes without a font dependency.
+            static const auto artwork = []
             {
-                std::array<juce::Path, 3> paths;
-                auto& k = paths[0];
-                k.startNewSubPath (16, 12);
-                k.lineTo (16, 86);
-                k.startNewSubPath (64, 10);
-                k.lineTo (18, 52);
-                k.lineTo (68, 86);
-                juce::Path kFace;
-                juce::PathStrokeType (25, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (kFace, k);
-                k = kFace;
-
-                auto& s = paths[1];
-                s.startNewSubPath (65, 17);
-                s.cubicTo (40, 1, 9, 9, 14, 33);
-                s.cubicTo (17, 49, 67, 44, 66, 66);
-                s.cubicTo (65, 92, 30, 99, 10, 79);
-                juce::Path sFace;
-                juce::PathStrokeType (24, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (sFace, s);
-                s = sFace;
-
-                auto& h = paths[2];
-                h.addRoundedRectangle (3, 0, 25, 98, 7);
-                h.addRoundedRectangle (54, 0, 25, 98, 7);
-                h.addRoundedRectangle (20, 36, 42, 25, 5);
-                return paths;
+                struct Artwork
+                {
+                    std::array<juce::Path, 3> faces, highlights, cuts;
+                } result;
+                const auto polygon = [] (juce::Path& path, std::initializer_list<juce::Point<float>> points)
+                {
+                    auto point = points.begin();
+                    path.startNewSubPath (*point++);
+                    for (; point != points.end(); ++point)
+                        path.lineTo (*point);
+                    path.closeSubPath();
+                };
+                polygon (result.faces[0], { { 5, 4 }, { 30, 0 }, { 28, 34 }, { 56, 4 }, { 83, 8 }, { 50, 45 }, { 80, 81 }, { 55, 98 }, { 28, 62 }, { 24, 96 }, { 0, 91 }, { 6, 46 }, { 1, 38 } });
+                polygon (result.faces[1], { { 80, 3 }, { 72, 26 }, { 38, 22 }, { 25, 30 }, { 36, 39 }, { 62, 41 }, { 78, 57 }, { 72, 84 }, { 50, 99 }, { 7, 91 }, { 0, 69 }, { 39, 78 }, { 52, 70 }, { 44, 62 }, { 17, 57 }, { 2, 38 }, { 9, 14 }, { 36, 1 }, { 58, 7 }, { 63, 0 } });
+                polygon (result.faces[2], { { 7, 3 }, { 31, 0 }, { 27, 35 }, { 53, 30 }, { 58, 1 }, { 82, 7 }, { 69, 96 }, { 44, 100 }, { 49, 58 }, { 24, 64 }, { 19, 96 }, { 0, 88 } });
+                polygon (result.highlights[0], { { 9, 9 }, { 24, 6 }, { 20, 31 }, { 18, 13 } });
+                polygon (result.highlights[0], { { 58, 11 }, { 72, 12 }, { 43, 39 } });
+                polygon (result.highlights[1], { { 13, 18 }, { 36, 7 }, { 60, 13 }, { 36, 12 } });
+                polygon (result.highlights[1], { { 8, 77 }, { 38, 85 }, { 49, 81 }, { 39, 90 }, { 12, 86 } });
+                polygon (result.highlights[2], { { 11, 8 }, { 24, 6 }, { 17, 31 }, { 18, 12 } });
+                polygon (result.highlights[2], { { 62, 7 }, { 74, 11 }, { 65, 36 }, { 67, 14 } });
+                polygon (result.cuts[0], { { 0, 67 }, { 14, 73 }, { 0, 73 } });
+                polygon (result.cuts[0], { { 66, 68 }, { 53, 68 }, { 70, 75 } });
+                polygon (result.cuts[1], { { 72, 18 }, { 58, 17 }, { 74, 13 } });
+                polygon (result.cuts[1], { { 7, 43 }, { 21, 48 }, { 11, 51 } });
+                polygon (result.cuts[2], { { 1, 73 }, { 13, 77 }, { 0, 80 } });
+                polygon (result.cuts[2], { { 75, 61 }, { 62, 58 }, { 75, 54 } });
+                return result;
             }();
             text (g, "OFSOUND", { 24, 19, 170, 20 }, 13, Palette::text, true, juce::Justification::centredLeft);
             const std::array<juce::Colour, 3> colours { Palette::accent, Palette::text, Palette::info };
-            const std::array<float, 3> angles { -0.045f, 0.035f, -0.025f };
-            for (size_t i = 0; i < letters.size(); ++i)
+            const std::array<float, 3> angles { -0.11f, 0.07f, -0.04f };
+            for (size_t i = 0; i < artwork.faces.size(); ++i)
             {
                 const auto transform = juce::AffineTransform::rotation (angles[i], 40, 49).translated (24.0f + static_cast<float> (i) * 92.0f, 45);
                 for (int depth = 5; depth > 0; --depth)
                 {
                     g.setColour (colours[i].darker (0.65f));
-                    g.fillPath (letters[i], transform.translated (static_cast<float> (depth), static_cast<float> (depth)));
+                    g.fillPath (artwork.faces[i], transform.translated (static_cast<float> (depth), static_cast<float> (depth)));
                 }
+                g.setColour (Palette::app);
+                g.strokePath (artwork.faces[i], juce::PathStrokeType (3.5f, juce::PathStrokeType::mitered), transform);
                 g.setColour (colours[i]);
-                g.fillPath (letters[i], transform);
+                g.fillPath (artwork.faces[i], transform);
+                g.setColour (colours[i].interpolatedWith (Palette::text, 0.48f));
+                g.fillPath (artwork.highlights[i], transform);
+                g.setColour (Palette::app);
+                g.fillPath (artwork.cuts[i], transform);
             }
         }
     }
@@ -130,6 +139,7 @@ namespace ksh::ui
                 controller.notify();
                 sync();
             };
+        remove.getProperties().set ("icon", "clear");
         remove.setTooltip ("Delete selected cells");
         remove.onClick = [this] { controller.deleteSelection(); };
         cycle.locations = [this] { return controller.selection (true); };
@@ -138,6 +148,7 @@ namespace ksh::ui
         {
             control->valueFontSize = 22;
             control->captionFontSize = 12;
+            control->captionGap = 6;
         }
         mode.setVisible (randomSection);
         refresh.setVisible (randomSection);
@@ -178,9 +189,9 @@ namespace ksh::ui
         if (randomSection || inspectorBounds.isEmpty())
             return;
         const int x = inspectorBounds.getX();
-        velocity.setBounds (x + 130, 38, 76, 80);
-        probability.setBounds (x + 222, 38, 92, 80);
-        roll.setBounds (x + 330, 38, 56, 80);
+        velocity.setBounds (x + 130, 32, 76, 86);
+        probability.setBounds (x + 222, 32, 92, 86);
+        roll.setBounds (x + 330, 32, 56, 86);
         remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, 62);
         cycle.setBounds (x + 402, 56, remove.getX() - x - 418, 62);
     }
@@ -198,9 +209,15 @@ namespace ksh::ui
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
+        const float inspectorAlpha = active ? 1.0f : 0.25f;
         for (auto* control : { &velocity, &probability, &roll })
+        {
             control->setEnabled (active);
+            control->setAlpha (inspectorAlpha);
+        }
         remove.setEnabled (active);
+        remove.setAlpha (inspectorAlpha);
+        cycle.setAlpha (inspectorAlpha);
         if (active)
         {
             const int value = controller.cell (selected.front()).roll;
@@ -223,9 +240,12 @@ namespace ksh::ui
         if (!randomSection)
         {
             surface (g, inspectorBounds.toFloat());
-            text (g, juce::String (controller.selection (true).size()) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 62 }, 22, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Cycle", cycle.getBounds().withY (38).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (38).withHeight (18).toFloat(), 12, Palette::text, true, juce::Justification::centredLeft);
+            const auto selectedCount = controller.selection (true).size();
+            const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
+            if (selectedCount > 0)
+                text (g, juce::String (selectedCount) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 62 }, 22, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
         }
         else
         {

@@ -113,21 +113,16 @@ namespace ksh::ui
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        if (modifiers.isAltDown())
-            return Layer::chance;
         return controller.layer;
     }
     void PatternGrid::modifierKeysChanged (const juce::ModifierKeys& m)
     {
         if (modifiers != m)
         {
-            const auto previousLayer = displayLayer();
             modifiers = m;
             if (hoverCell.valid() && !velocityHintAt (hoverPosition).valid())
                 clearHoverMarker();
             repaint();
-            if (previousLayer != displayLayer() && displayLayerChanged)
-                displayLayerChanged();
         }
     }
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
@@ -287,7 +282,7 @@ namespace ksh::ui
                 if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                     colour = colour.interpolatedWith (Palette::surface, 0.58f);
                 if (dimmed)
-                    colour = colour.withSaturation (0.0f);
+                    colour = colour.withMultipliedSaturation (0.6f);
                 const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
                 const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
                 const auto dark = colour.interpolatedWith (Palette::app, 0.48f);

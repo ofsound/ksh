@@ -70,7 +70,7 @@ namespace ksh::ui
         }
         mutePattern.onClick = [this] { controller.selectSource (-1); };
         heading.onClick = [this] { controller.layer = static_cast<Layer> ((static_cast<int> (controller.layer) + 1) % 2); sync(); };
-        heading.setTooltip (juce::String::fromUTF8 ("Switch editing layer • 1 velocity, 2 chance • Hold Option / Alt for chance • Roll in inspector"));
+        heading.setTooltip (juce::String::fromUTF8 ("Switch Velocity / Chance editing layer • Probability and cycle edits temporarily show Chance in the inspector"));
         clear.setTooltip ("Double-click to clear pattern");
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
         record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
@@ -104,7 +104,6 @@ namespace ksh::ui
         scale.resetValue = 100;
         scale.suffix = "%";
         scale.onChange = [this] (int v) { controller.processor.setProjectUiScalePercent (v); if (preferredSizeChanged) preferredSizeChanged(); };
-        grid.displayLayerChanged = [this] { sync(); };
         controller.changed = [this] { sync(); };
         sync();
         startTimerHz (60);
@@ -232,7 +231,7 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - 40 })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option chance / copy"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
+        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option copy"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
         const auto date = controller.processor.getProjectModifiedAt().substring (0, 10);
         text (g, date, { 404, layout.transportHeight() + 63, 186, 16 }, 9, Palette::muted, false, juce::Justification::centredRight);
     }
@@ -282,12 +281,6 @@ namespace ksh::ui
             return true;
         }
         const auto character = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
-        if (character >= '1' && character <= '2')
-        {
-            controller.layer = static_cast<Layer> (character - '1');
-            sync();
-            return true;
-        }
         const juce::String pads ("asdfghjk");
         const int index = pads.indexOfChar (character);
         if (index >= 0 && index < layout.channels && !key.getModifiers().isCommandDown())

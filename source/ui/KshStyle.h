@@ -81,6 +81,17 @@ namespace ksh::ui
             {
                 g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
                 g.fillRoundedRectangle (r, 7);
+                const float centre = static_cast<float> (b.getWidth()) * 0.5f;
+                {
+                    juce::Graphics::ScopedSaveState save (g);
+                    juce::Path clip;
+                    clip.addRoundedRectangle (r, 7);
+                    g.reduceClipRegion (clip);
+                    g.setColour (Palette::accent.withAlpha (0.14f));
+                    g.fillRect (b.getToggleState() ? r.withLeft (centre) : r.withRight (centre));
+                }
+                g.setColour (Palette::border);
+                g.drawLine (centre, r.getY(), centre, r.getBottom(), 1.0f);
                 g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
                 g.drawRoundedRectangle (r, 7, 1);
                 return;
@@ -179,13 +190,6 @@ namespace ksh::ui
                     const bool active = b.getToggleState() == (choice == 1);
                     const float width = static_cast<float> (b.getWidth()) * 0.5f;
                     const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 3, 3, width - 6, static_cast<float> (b.getHeight() - 6) };
-                    if (active)
-                    {
-                        g.setColour (Palette::accent.withAlpha (0.14f));
-                        g.fillRoundedRectangle (bounds, 5);
-                        g.setColour (Palette::accent.withAlpha (0.6f));
-                        g.drawRoundedRectangle (bounds.reduced (0.5f), 5, 1);
-                    }
                     text (g, choice == 0 ? "Velocity" : "Chance", bounds, 13.3f, active ? Palette::accent : Palette::muted, true);
                 }
                 return;
@@ -251,6 +255,7 @@ namespace ksh::ui
         int value = 0, minimum = 0, maximum = 100, resetValue = 0;
         float sensitivity = 4;
         float valueFontSize = 14, captionFontSize = 10;
+        int captionGap = 0;
         juce::String suffix, caption;
         bool mixed = false;
         std::function<juce::String (int)> format;
@@ -270,6 +275,7 @@ namespace ksh::ui
             if (caption.isNotEmpty())
             {
                 text (g, caption, r.removeFromTop (18), captionFontSize, Palette::text, true, juce::Justification::centredLeft);
+                r.removeFromTop (static_cast<float> (captionGap));
             }
             surface (g, r.reduced (0.5f), dragging || hasKeyboardFocus (true), isMouseOver());
             text (g, mixed ? juce::String (juce::String::fromUTF8 ("—")) : format ? format (value)
@@ -281,7 +287,7 @@ namespace ksh::ui
         }
         void resized() override
         {
-            input.setBounds (getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 : 0));
+            input.setBounds (getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 + captionGap : 0));
             input.setFont (font (valueFontSize));
         }
         void mouseDown (const juce::MouseEvent& e) override

@@ -1,5 +1,6 @@
 #include <juce_audio_plugin_client/detail/juce_CheckSettingMacros.h>
 #include <juce_audio_plugin_client/detail/juce_IncludeSystemHeaders.h>
+#include "StandalonePreferences.h"
 #include <juce_audio_plugin_client/detail/juce_IncludeModuleHeaders.h>
 #include <juce_audio_plugin_client/detail/juce_PluginUtilities.h>
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -31,6 +32,10 @@ public:
                                   channels,
                                   shouldAutoOpenMidiDevices)
     {
+        if (settingsToUse != nullptr)
+            if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+                ksh::restoreStandaloneUiScale (*plugin, *settingsToUse);
+
         createVirtualMidiOutput();
         useVirtualMidiOutputIfAvailable();
         deviceManager.addChangeListener (this);
@@ -192,11 +197,18 @@ protected:
 private:
     void saveCurrentPluginState()
     {
+        const auto saveHolder = [] (StandalonePluginHolder& holder)
+        {
+            if (holder.settings != nullptr)
+                if (auto* plugin = dynamic_cast<PluginProcessor*> (holder.processor.get()))
+                    ksh::saveStandaloneUiScale (*plugin, *holder.settings);
+            holder.savePluginState();
+        };
         if (pluginHolder != nullptr)
-            pluginHolder->savePluginState();
+            saveHolder (*pluginHolder);
 
         if (mainWindow != nullptr && mainWindow->pluginHolder != nullptr)
-            mainWindow->pluginHolder->savePluginState();
+            saveHolder (*mainWindow->pluginHolder);
 
         appProperties.saveIfNeeded();
     }

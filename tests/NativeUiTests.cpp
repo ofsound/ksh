@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <ui/KshEditorController.h>
 #include <ui/KshLayout.h>
+#include "../standalone/StandalonePreferences.h"
 
 using namespace ksh;
 using namespace ksh::ui;
@@ -389,7 +390,7 @@ TEST_CASE ("Selected value controls temporarily switch the editing layer", "[nat
     }
 }
 
-TEST_CASE ("Layer toggle follows Option changes delivered directly to the grid", "[native-ui]")
+TEST_CASE ("Option leaves the grid layer and toggle unchanged", "[native-ui]")
 {
     PluginProcessor processor;
     NativeEditor editor (processor);
@@ -406,18 +407,24 @@ TEST_CASE ("Layer toggle follows Option changes delivered directly to the grid",
     REQUIRE (toggle != nullptr);
     CHECK_FALSE (toggle->getToggleState());
     grid->modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
-    CHECK (grid->displayLayer() == Layer::chance);
-    CHECK (toggle->getToggleState());
-    CHECK (toggle->getTitle().contains ("chance active"));
+    CHECK (grid->displayLayer() == Layer::velocity);
+    CHECK_FALSE (toggle->getToggleState());
+    CHECK (toggle->getTitle().contains ("velocity active"));
     grid->modifierKeysChanged ({});
     CHECK (grid->displayLayer() == Layer::velocity);
     CHECK_FALSE (toggle->getToggleState());
     const auto position = grid->layout.cell ({ 0, 0 }).getCentre();
     grid->mouseMove (gridEvent (*grid, position, position, juce::ModifierKeys::altModifier));
-    CHECK (toggle->getToggleState());
+    CHECK_FALSE (toggle->getToggleState());
     grid->mouseMove (gridEvent (*grid, position, position, 0));
     CHECK_FALSE (toggle->getToggleState());
     CHECK (editor.controller.layer == Layer::velocity);
+    toggle->onClick();
+    grid->modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+    CHECK (grid->displayLayer() == Layer::chance);
+    grid->modifierKeysChanged ({});
+    CHECK (grid->displayLayer() == Layer::chance);
+    CHECK (toggle->getToggleState());
 }
 
 TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")
@@ -425,18 +432,16 @@ TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity an
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 80, 4, 5, 1 }));
     NativeEditor editor (processor);
-    for (auto [key, layer] : { std::pair { '1', Layer::velocity }, std::pair { '2', Layer::chance } })
-    {
-        CHECK (editor.keyPressed (juce::KeyPress (key, {}, static_cast<juce::juce_wchar> (key))));
-        CHECK (editor.controller.layer == layer);
-    }
-    CHECK_FALSE (editor.keyPressed (juce::KeyPress ('3', {}, '3')));
-    CHECK_FALSE (editor.keyPressed (juce::KeyPress ('4', {}, '4')));
-    CHECK (editor.controller.layer == Layer::chance);
+    for (char key : { '1', '2', '3', '4' })
+        CHECK_FALSE (editor.keyPressed (juce::KeyPress (key, {}, static_cast<juce::juce_wchar> (key))));
+    CHECK (editor.controller.layer == Layer::velocity);
     for (auto* child : editor.getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("heading"))
         {
             CHECK (button->getButtonText().contains ("Velocity / Chance"));
+            CHECK_FALSE (button->getToggleState());
+            button->onClick();
+            CHECK (editor.controller.layer == Layer::chance);
             CHECK (button->getToggleState());
             button->onClick();
             CHECK (editor.controller.layer == Layer::velocity);
@@ -534,4 +539,42 @@ TEST_CASE ("Inspector cycle edits temporarily show Chance", "[native-ui]")
     controller.undo();
     CHECK (controller.cell ({ 0, 0 }).cycle == 4);
     controller.changed = {};
+}
+
+TEST_CASE ("Standalone restores the saved UI scale before creating its editor", "[native-ui]")
+{
+    juce::TemporaryFile temporary (".settings");
+    juce::PropertiesFile::Options options;
+    options.storageFormat = juce::PropertiesFile::storeAsXML;
+    const int percent = GENERATE (50, 75, 100, 120);
+    {
+        PluginProcessor previousSession;
+        previousSession.setProjectUiScalePercent (percent);
+        juce::PropertiesFile settings (temporary.getFile(), options);
+        ksh::saveStandaloneUiScale (previousSession, settings);
+        REQUIRE (settings.saveIfNeeded());
+    }
+    PluginProcessor nextSession;
+    juce::PropertiesFile settings (temporary.getFile(), options);
+    ksh::restoreStandaloneUiScale (nextSession, settings);
+    REQUIRE (nextSession.getProjectUiScalePercent() == percent);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (nextSession.createEditor());
+    const auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
+    REQUIRE (view != nullptr);
+    CHECK (editor->getWidth() == juce::roundToInt (view->layout.width() * static_cast<float> (percent) / 100.0f));
+    CHECK (nextSession.getProjectUiScalePercent() == percent);
+}
+
+TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]")
+{
+    PluginProcessor processor;
+    juce::PropertySet settings;
+    ksh::restoreStandaloneUiScale (processor, settings);
+    CHECK (processor.getProjectUiScalePercent() == 100);
+    settings.setValue ("uiScalePercent", -10);
+    ksh::restoreStandaloneUiScale (processor, settings);
+    CHECK (processor.getProjectUiScalePercent() == 50);
+    settings.setValue ("uiScalePercent", 500);
+    ksh::restoreStandaloneUiScale (processor, settings);
+    CHECK (processor.getProjectUiScalePercent() == 120);
 }
