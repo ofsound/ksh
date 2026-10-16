@@ -3,62 +3,17 @@ namespace ksh::ui
 {
     namespace
     {
+        const juce::Rectangle<float> wordmarkBounds { 24, 34.68f, 242.88f, 95.04f };
+        juce::AffineTransform wordmarkTransform() { return juce::AffineTransform::scale (0.8f).translated (-3.2f, 16.4f); }
         void paintWordmark (juce::Graphics& g)
         {
             const juce::Graphics::ScopedSaveState savedState (g);
-            g.addTransform (juce::AffineTransform::scale (0.8f).translated (-3.2f, 16.4f));
-            // Chiseled silhouettes keep the mark readable at small sizes without a font dependency.
-            static const auto artwork = []
-            {
-                struct Artwork
-                {
-                    std::array<juce::Path, 3> faces, highlights, cuts;
-                } result;
-                const auto polygon = [] (juce::Path& path, std::initializer_list<juce::Point<float>> points)
-                {
-                    auto point = points.begin();
-                    path.startNewSubPath (*point++);
-                    for (; point != points.end(); ++point)
-                        path.lineTo (*point);
-                    path.closeSubPath();
-                };
-                polygon (result.faces[0], { { 5, 4 }, { 30, 0 }, { 28, 34 }, { 56, 4 }, { 83, 8 }, { 50, 45 }, { 80, 81 }, { 55, 98 }, { 28, 62 }, { 24, 96 }, { 0, 91 }, { 6, 46 }, { 1, 38 } });
-                polygon (result.faces[1], { { 80, 3 }, { 72, 26 }, { 38, 22 }, { 25, 30 }, { 36, 39 }, { 62, 41 }, { 78, 57 }, { 72, 84 }, { 50, 99 }, { 7, 91 }, { 0, 69 }, { 39, 78 }, { 52, 70 }, { 44, 62 }, { 17, 57 }, { 2, 38 }, { 9, 14 }, { 36, 1 }, { 58, 7 }, { 63, 0 } });
-                polygon (result.faces[2], { { 7, 3 }, { 31, 0 }, { 27, 35 }, { 53, 30 }, { 58, 1 }, { 82, 7 }, { 69, 96 }, { 44, 100 }, { 49, 58 }, { 24, 64 }, { 19, 96 }, { 0, 88 } });
-                polygon (result.highlights[0], { { 9, 9 }, { 24, 6 }, { 20, 31 }, { 18, 13 } });
-                polygon (result.highlights[0], { { 58, 11 }, { 72, 12 }, { 43, 39 } });
-                polygon (result.highlights[1], { { 13, 18 }, { 36, 7 }, { 60, 13 }, { 36, 12 } });
-                polygon (result.highlights[1], { { 8, 77 }, { 38, 85 }, { 49, 81 }, { 39, 90 }, { 12, 86 } });
-                polygon (result.highlights[2], { { 11, 8 }, { 24, 6 }, { 17, 31 }, { 18, 12 } });
-                polygon (result.highlights[2], { { 62, 7 }, { 74, 11 }, { 65, 36 }, { 67, 14 } });
-                polygon (result.cuts[0], { { 0, 67 }, { 14, 73 }, { 0, 73 } });
-                polygon (result.cuts[0], { { 66, 68 }, { 53, 68 }, { 70, 75 } });
-                polygon (result.cuts[1], { { 72, 18 }, { 58, 17 }, { 74, 13 } });
-                polygon (result.cuts[1], { { 7, 43 }, { 21, 48 }, { 11, 51 } });
-                polygon (result.cuts[2], { { 1, 73 }, { 13, 77 }, { 0, 80 } });
-                polygon (result.cuts[2], { { 75, 61 }, { 62, 58 }, { 75, 54 } });
-                return result;
-            }();
+            g.addTransform (wordmarkTransform());
+            // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
+            static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
             text (g, "OFSOUND", { 24, 19, 170, 20 }, 13, Palette::text, true, juce::Justification::centredLeft);
-            const std::array<juce::Colour, 3> colours { Palette::accent, Palette::text, Palette::info };
-            const std::array<float, 3> angles { -0.11f, 0.07f, -0.04f };
-            for (size_t i = 0; i < artwork.faces.size(); ++i)
-            {
-                const auto transform = juce::AffineTransform::rotation (angles[i], 40, 49).translated (24.0f + static_cast<float> (i) * 92.0f, 45);
-                for (int depth = 5; depth > 0; --depth)
-                {
-                    g.setColour (colours[i].darker (0.65f));
-                    g.fillPath (artwork.faces[i], transform.translated (static_cast<float> (depth), static_cast<float> (depth)));
-                }
-                g.setColour (Palette::app);
-                g.strokePath (artwork.faces[i], juce::PathStrokeType (3.5f, juce::PathStrokeType::mitered), transform);
-                g.setColour (colours[i]);
-                g.fillPath (artwork.faces[i], transform);
-                g.setColour (colours[i].interpolatedWith (Palette::text, 0.48f));
-                g.fillPath (artwork.highlights[i], transform);
-                g.setColour (Palette::app);
-                g.fillPath (artwork.cuts[i], transform);
-            }
+            if (artwork != nullptr)
+                artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
@@ -158,6 +113,13 @@ namespace ksh::ui
             control->setVisible (!randomSection);
         remove.setVisible (!randomSection);
         cycle.setVisible (!randomSection);
+    }
+    void PreviewPanel::mouseDoubleClick (const juce::MouseEvent& event)
+    {
+        if (!randomSection && event.mods.isLeftButtonDown()
+            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform().inverted()))
+            && onLogoDoubleClick)
+            onLogoDoubleClick();
     }
     void PreviewPanel::beginRelative (const juce::String& label)
     {
@@ -270,7 +232,16 @@ namespace ksh::ui
             }
         }
         if (randomSection)
+        {
+            const float width = static_cast<float> (getWidth() - 64);
+            surface (g, { 24, 190, width + 16, static_cast<float> (getHeight() - 214) });
+            text (g, "KSH / ofsound", { 48, 212, width, 44 }, 32, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "Rhythm, with a little mischief.", { 48, 268, width, 28 }, 18, Palette::accent, false, juce::Justification::centredLeft);
+            text (g, "Made by ofsound. Built with JUCE.", { 48, 314, width, 24 }, 13, Palette::muted, false, juce::Justification::centredLeft);
+            text (g, "You found the random laboratory. Try a mode, set the length, lock a channel. Leave the rest to chance.", { 48, 354, width, 28 }, 13, Palette::text, false, juce::Justification::centredLeft);
+            text (g, "Double-click KSH again or press Escape to return.", { 48, static_cast<float> (getHeight() - 62), width, 24 }, 12, Palette::muted, false, juce::Justification::centredLeft);
             return;
+        }
         paintWordmark (g);
     }
     void PreviewPanel::updatePlayback()

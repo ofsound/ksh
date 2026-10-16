@@ -6,6 +6,8 @@ namespace ksh::ui
     {
     public:
         explicit PreviewPanel (EditorController&, bool randomSection = false);
+        std::function<void()> onLogoDoubleClick;
+        void mouseDoubleClick (const juce::MouseEvent&) override;
         void sync();
         void updatePlayback();
         void paint (juce::Graphics&) override;

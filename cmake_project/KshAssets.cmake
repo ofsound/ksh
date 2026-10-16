@@ -1,5 +1,6 @@
-# Only native font resources are embedded. Keep licenses beside the source fonts.
+# Native fonts and fixed vector branding. Keep licenses beside the source fonts.
 juce_add_binary_data(Assets SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/KshWordmark.svg"
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/GantariRegular.ttf"
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/GantariSemibold.ttf"
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/GantariExtrabold.ttf"

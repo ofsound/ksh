@@ -329,42 +329,81 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
     }
 }
 
-TEST_CASE ("Random controls overlay the grid without resizing the editor", "[native-ui][render]")
+TEST_CASE ("Logo double click reveals about and random controls without resizing the editor", "[native-ui][render]")
 {
     PluginProcessor processor;
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
     auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
     REQUIRE (view != nullptr);
-    juce::TextButton* toggle = nullptr;
     PatternGrid* grid = nullptr;
-    PreviewPanel* panel = nullptr;
+    juce::Viewport* panel = nullptr;
+    PreviewPanel* inspector = nullptr;
     for (auto* child : view->getChildren())
     {
-        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "Random")
-            toggle = button;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+            CHECK (button->getButtonText() != "Random");
         if (auto* candidate = dynamic_cast<PatternGrid*> (child))
             grid = candidate;
-        if (auto* candidate = dynamic_cast<PreviewPanel*> (child); candidate && !candidate->isVisible())
+        if (auto* candidate = dynamic_cast<juce::Viewport*> (child))
             panel = candidate;
+        if (auto* candidate = dynamic_cast<PreviewPanel*> (child))
+        {
+            inspector = candidate;
+        }
     }
-    REQUIRE (toggle != nullptr);
     REQUIRE (grid != nullptr);
     REQUIRE (panel != nullptr);
+    REQUIRE (inspector != nullptr);
+    REQUIRE (dynamic_cast<PreviewPanel*> (panel->getViewedComponent()) != nullptr);
     const auto editorBounds = editor->getBounds();
     const auto gridBounds = grid->getBounds();
-    toggle->onClick();
+    const auto event = [inspector] (juce::Point<float> position, int clicks, int modifiers = juce::ModifierKeys::leftButtonModifier)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, inspector, inspector, now, position, now, clicks, false);
+    };
+    inspector->mouseDown (event ({ 90, 80 }, 1));
+    CHECK_FALSE (panel->isVisible());
+    inspector->mouseDoubleClick (event ({ 280, 80 }, 2));
+    CHECK_FALSE (panel->isVisible());
+    inspector->mouseDoubleClick (event ({ 90, 80 }, 2, juce::ModifierKeys::rightButtonModifier));
+    CHECK_FALSE (panel->isVisible());
+    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
     CHECK (panel->isVisible());
+    CHECK (view->layout.randomVisible);
     CHECK (panel->getBounds().intersects (gridBounds));
     CHECK (panel->getX() == 0);
     CHECK (panel->getRight() == view->getWidth());
-    CHECK (panel->getBottom() == view->getHeight());
-    CHECK (toggle->getBottom() <= view->layout.toolbarY());
+    CHECK (panel->getBottom() == inspector->getY());
+    CHECK_FALSE (panel->getBounds().intersects (inspector->getBounds()));
     CHECK (view->getIndexOfChildComponent (panel) > view->getIndexOfChildComponent (grid));
     CHECK (grid->getBounds() == gridBounds);
     CHECK (editor->getBounds() == editorBounds);
-    toggle->onClick();
+    auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+    REQUIRE (image.isValid());
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        juce::File root (directory);
+        REQUIRE (root.createDirectory().wasOk());
+        auto stream = root.getChildFile ("native-about.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
+    }
+    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
     CHECK_FALSE (panel->isVisible());
     CHECK (grid->getBounds() == gridBounds);
+    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
+    REQUIRE (panel->isVisible());
+    CHECK (view->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (panel->isVisible());
+    CHECK_FALSE (view->layout.randomVisible);
+    // Small channel counts keep all about/random controls reachable by scrolling.
+    view->layout.channels = 1;
+    view->resized();
+    CHECK (panel->getViewedComponent()->getHeight() >= 540);
+    CHECK (panel->getViewedComponent()->getHeight() > panel->getHeight());
+    CHECK (panel->getBottom() == inspector->getY());
 }
 
 TEST_CASE ("Selected value controls temporarily switch the editing layer", "[native-ui]")

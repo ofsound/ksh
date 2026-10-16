@@ -8,21 +8,10 @@ namespace ksh::ui
         setWantsKeyboardFocus (true);
         addAndMakeVisible (grid);
         addAndMakeVisible (preview);
-        addChildComponent (randomPanel);
-        addAndMakeVisible (randomButton);
-        randomButton.setTooltip ("Show random mode, refresh length, and channel locks");
-        randomButton.onClick = [this]
-        {
-            controller.commit();
-            grid.cancelGesture();
-            layout.randomVisible = !layout.randomVisible;
-            randomButton.setToggleState (layout.randomVisible, juce::dontSendNotification);
-            randomPanel.setVisible (layout.randomVisible);
-            if (layout.randomVisible)
-                randomPanel.toFront (false);
-            resized();
-            repaint();
-        };
+        addChildComponent (aboutViewport);
+        aboutViewport.setViewedComponent (&randomPanel, false);
+        aboutViewport.setScrollBarsShown (true, false);
+        preview.onLogoDoubleClick = [this] { toggleAboutPanel(); };
         const std::array<juce::String, 5> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶") };
         for (int i = 0; i < 5; ++i)
         {
@@ -210,7 +199,6 @@ namespace ksh::ui
         left.setBounds (355, y + 13, 40, 41);
         right.setBounds (405, y + 13, 40, 41);
         clear.setBounds (455, y + 13, 40, 41);
-        randomButton.setBounds (852, top + 27, 66, 32);
         undoButton.setBounds (686, y + 13, 40, 41);
         redoButton.setBounds (736, y + 13, 40, 41);
         steps.setBounds (getWidth() - 374, y + 13, 120, 41);
@@ -218,7 +206,10 @@ namespace ksh::ui
         play.setBounds (getWidth() - 184, 8, 64, 28);
         tempo.setBounds (getWidth() - 110, play.getY(), 98, play.getHeight());
         const int randomY = juce::roundToInt (layout.toolbarY() + 68);
-        randomPanel.setBounds (0, randomY, getWidth(), getHeight() - randomY);
+        const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
+        aboutViewport.setBounds (0, randomY, getWidth(), aboutHeight);
+        const int scrollWidth = aboutHeight < 540 ? aboutViewport.getScrollBarThickness() : 0;
+        randomPanel.setSize (getWidth() - scrollWidth, juce::jmax (540, aboutHeight));
         grid.setBounds (0, static_cast<int> (layout.gridY()), getWidth(), static_cast<int> (layout.gridHeight()));
         preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 164);
         preview.setInspectorBounds (juce::Rectangle<float> (layout.gridLeft() - 16.0f, 12, layout.gridWidth() + 32.0f, 140).toNearestInt());
@@ -251,6 +242,18 @@ namespace ksh::ui
             safe->controller.commit();
         });
     }
+    void NativeEditor::toggleAboutPanel()
+    {
+        controller.commit();
+        grid.cancelGesture();
+        layout.randomVisible = !layout.randomVisible;
+        aboutViewport.setVisible (layout.randomVisible);
+        if (layout.randomVisible)
+            aboutViewport.toFront (false);
+        if (isShowing())
+            grabKeyboardFocus();
+        repaint();
+    }
     bool NativeEditor::textFocused() const { return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr; }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
@@ -267,6 +270,8 @@ namespace ksh::ui
         if (key == juce::KeyPress::escapeKey)
         {
             controller.copySource = -1;
+            if (layout.randomVisible)
+                toggleAboutPanel();
             grid.cancelGesture();
             return true;
         }

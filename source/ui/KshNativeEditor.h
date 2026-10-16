@@ -27,11 +27,11 @@ namespace ksh::ui
         PatternGrid grid;
         juce::Label patternHeading;
         PreviewPanel preview, randomPanel;
+        juce::Viewport aboutViewport;
         std::array<juce::TextButton, 16> patterns;
         std::array<juce::TextButton, 5> projectButtons;
         juce::TextEditor title, description;
         juce::TextButton mutePattern { "M" }, heading, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
-        juce::TextButton randomButton { "Random" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;
         int previousScale = 100;
@@ -39,6 +39,7 @@ namespace ksh::ui
         void timerCallback() override;
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
+        void toggleAboutPanel();
         bool textFocused() const;
     };
 }
