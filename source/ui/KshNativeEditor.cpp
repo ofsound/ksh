@@ -103,7 +103,8 @@ namespace ksh::ui
         }
         mutePattern.onClick = [this] { controller.selectSource (-1); };
         heading.onClick = [this] { controller.layer = static_cast<Layer> ((static_cast<int> (controller.layer) + 1) % 2); sync(); };
-        heading.setTooltip (juce::String::fromUTF8 ("Switch Velocity / Chance editing layer • Probability and cycle edits temporarily show Chance in the inspector"));
+        grid.layerChanged = [this] { updateLayerHeading(); };
+        heading.setTooltip (juce::String::fromUTF8 ("Switch Velocity / Chance editing layer • Hold Option for momentary Chance • Probability and cycle edits temporarily show Chance in the inspector"));
         clear.setTooltip ("Double-click to clear pattern");
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
         record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
@@ -192,13 +193,13 @@ namespace ksh::ui
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
-        static const std::array<juce::String, 2> layers { "velocity", "chance" };
         const auto patternLabel = controller.source() < 0 ? juce::String ("M") : "P" + juce::String (controller.source() + 1);
         patternHeading.setText (patternLabel, juce::dontSendNotification);
         heading.setButtonText ("Velocity / Chance");
-        heading.setToggleState (grid.displayLayer() == Layer::chance, juce::dontSendNotification);
-        modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
-        heading.setTitle (patternLabel + " editing layer: " + layers[static_cast<size_t> (grid.displayLayer())] + " active");
+        const bool selecting = controller.shiftDown (juce::ModifierKeys::getCurrentModifiersRealtime());
+        selectMode.setToggleState (selecting, juce::dontSendNotification);
+        heading.getProperties().set ("selectActive", selecting);
+        updateLayerHeading();
         for (auto* b : { &clear, &record, &left, &right, &rate })
             b->setEnabled (controller.source() >= 0);
         steps.setEnabled (controller.source() >= 0);
@@ -427,6 +428,13 @@ namespace ksh::ui
             grid.cancelGesture();
         }
     }
+    void NativeEditor::updateLayerHeading()
+    {
+        const auto patternLabel = controller.source() < 0 ? juce::String ("M") : "P" + juce::String (controller.source() + 1);
+        const bool chance = grid.displayLayer() == Layer::chance;
+        heading.setToggleState (chance, juce::dontSendNotification);
+        heading.setTitle (patternLabel + " editing layer: " + (chance ? "chance" : "velocity") + " active");
+    }
     void NativeEditor::modifierKeysChanged (const juce::ModifierKeys& mods)
     {
         const bool selecting = controller.shiftDown (mods);
@@ -437,6 +445,7 @@ namespace ksh::ui
             heading.repaint();
         }
         grid.modifierKeysChanged (mods);
+        updateLayerHeading();
     }
     void NativeEditor::timerCallback()
     {

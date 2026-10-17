@@ -746,7 +746,7 @@ TEST_CASE ("Selected value controls temporarily switch the editing layer", "[nat
     }
 }
 
-TEST_CASE ("Option leaves the grid layer and toggle unchanged", "[native-ui]")
+TEST_CASE ("Option temporarily shows Chance while the button preserves its latch", "[native-ui]")
 {
     PluginProcessor processor;
     NativeEditor editor (processor);
@@ -763,15 +763,19 @@ TEST_CASE ("Option leaves the grid layer and toggle unchanged", "[native-ui]")
     REQUIRE (toggle != nullptr);
     CHECK_FALSE (toggle->getToggleState());
     grid->modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
-    CHECK (grid->displayLayer() == Layer::velocity);
-    CHECK_FALSE (toggle->getToggleState());
-    CHECK (toggle->getTitle().contains ("velocity active"));
+    CHECK (grid->displayLayer() == Layer::chance);
+    CHECK (toggle->getToggleState());
+    CHECK (toggle->getTitle().contains ("chance active"));
+    CHECK (editor.controller.layer == Layer::velocity);
+    editor.sync();
+    CHECK (grid->displayLayer() == Layer::chance);
+    CHECK (toggle->getToggleState());
     grid->modifierKeysChanged ({});
     CHECK (grid->displayLayer() == Layer::velocity);
     CHECK_FALSE (toggle->getToggleState());
     const auto position = grid->layout.cell ({ 0, 0 }).getCentre();
     grid->mouseMove (gridEvent (*grid, position, position, juce::ModifierKeys::altModifier));
-    CHECK_FALSE (toggle->getToggleState());
+    CHECK (toggle->getToggleState());
     grid->mouseMove (gridEvent (*grid, position, position, 0));
     CHECK_FALSE (toggle->getToggleState());
     CHECK (editor.controller.layer == Layer::velocity);
@@ -781,6 +785,48 @@ TEST_CASE ("Option leaves the grid layer and toggle unchanged", "[native-ui]")
     grid->modifierKeysChanged ({});
     CHECK (grid->displayLayer() == Layer::chance);
     CHECK (toggle->getToggleState());
+}
+
+TEST_CASE ("Option edits selected Chance values and keeps the gesture layer until release", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 70, 80 }));
+    NativeEditor editor (processor);
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+    REQUIRE (grid != nullptr);
+    const bool selected = GENERATE (false, true);
+    if (selected)
+    {
+        editor.controller.selected.set (0);
+        editor.controller.selected.set (1);
+    }
+    const auto before = editor.controller.cell ({ 0, 0 });
+    const auto second = editor.controller.cell ({ 0, 1 });
+    const auto start = grid->layout.cell ({ 0, 0 }).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const int option = juce::ModifierKeys::altModifier;
+    editor.modifierKeysChanged (juce::ModifierKeys (option));
+    grid->mouseDown (gridEvent (*grid, start, start, left | option));
+    grid->mouseDrag (gridEvent (*grid, start.translated (0, -20), start, left | option, true));
+    auto expected = before;
+    expected.probability += 8;
+    CHECK (editor.controller.cell ({ 0, 0 }) == expected);
+    auto expectedSecond = second;
+    if (selected)
+        expectedSecond.probability += 8;
+    CHECK (editor.controller.cell ({ 0, 1 }) == expectedSecond);
+    editor.modifierKeysChanged (juce::ModifierKeys (left));
+    CHECK (grid->displayLayer() == Layer::chance);
+    grid->mouseUp (gridEvent (*grid, start.translated (0, -20), start, 0, true));
+    CHECK (grid->displayLayer() == Layer::velocity);
+    CHECK (editor.controller.layer == Layer::velocity);
+    editor.controller.undo();
+    CHECK (editor.controller.cell ({ 0, 0 }) == before);
+    CHECK (editor.controller.cell ({ 0, 1 }) == second);
 }
 
 TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")

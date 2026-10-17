@@ -57,6 +57,7 @@ namespace ksh::ui
         void syncChannel();
         void cancelCompactGestures();
         void timerCallback() override;
+        void updateLayerHeading();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
         void toggleAboutPanel();

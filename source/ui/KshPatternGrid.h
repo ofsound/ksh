@@ -9,6 +9,7 @@ namespace ksh::ui
         explicit PatternGrid (EditorController&);
         Layout layout;
         std::function<void (int)> channelSettings;
+        std::function<void()> layerChanged;
         bool copySelection = false;
         void sync();
         void updatePlayback();

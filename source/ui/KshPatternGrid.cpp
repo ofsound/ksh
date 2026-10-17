@@ -121,16 +121,19 @@ namespace ksh::ui
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        return controller.layer;
+        return modifiers.isAltDown() ? Layer::chance : controller.layer;
     }
     void PatternGrid::modifierKeysChanged (const juce::ModifierKeys& m)
     {
         if (modifiers != m)
         {
+            const auto previousLayer = displayLayer();
             modifiers = m;
             if (hoverCell.valid() && !velocityHintAt (hoverPosition).valid())
                 clearHoverMarker();
             repaint();
+            if (displayLayer() != previousLayer && layerChanged)
+                layerChanged();
         }
     }
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
@@ -627,14 +630,14 @@ namespace ksh::ui
             if (dragLayer == Layer::chance)
                 drag = Drag::value;
             else if (selectedAtStart)
-                drag = controller.useSelectionModifier (e.mods) ? Drag::value : ((e.mods.isAltDown() || copySelection) ? Drag::copy : Drag::move);
+                drag = controller.useSelectionModifier (e.mods) ? Drag::value : (copySelection ? Drag::copy : Drag::move);
             else
                 drag = std::abs (current.x - origin.x) > std::abs (current.y - origin.y) ? Drag::paint : Drag::value;
             controller.begin ("Edit cells");
         }
         if (drag == Drag::move || drag == Drag::copy)
         {
-            drag = (e.mods.isAltDown() || copySelection) ? Drag::copy : Drag::move;
+            drag = copySelection ? Drag::copy : Drag::move;
             repaint();
             return;
         }
