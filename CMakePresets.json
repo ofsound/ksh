@@ -10,6 +10,23 @@
         "CMAKE_SYSTEM_NAME": "iOS",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0"
       }
+    },
+    {
+      "name": "ios-iphone-release",
+      "displayName": "iPhone landscape release (Xcode)",
+      "inherits": "ios-xcode",
+      "binaryDir": "${sourceDir}/Builds-iPhone",
+      "cacheVariables": {
+        "KSH_IOS_IPHONE_ONLY": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ios-iphone-release",
+      "configurePreset": "ios-iphone-release",
+      "configuration": "Release",
+      "targets": ["KSH_Standalone"]
     }
   ]
 }

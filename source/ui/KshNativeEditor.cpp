@@ -139,6 +139,7 @@ namespace ksh::ui
         scale.suffix = "%";
         scale.onChange = [this] (int v) { controller.processor.setProjectUiScalePercent (v); if (preferredSizeChanged) preferredSizeChanged(); };
         controller.changed = [this] { sync(); };
+        setupCompactControls();
         sync();
         startTimerHz (60);
     }
@@ -167,6 +168,7 @@ namespace ksh::ui
         control.onBegin = [this, command] { controller.begin ("Change " + juce::String (command), command == "source_steps" ? juce::String() : juce::String (command)); };
         control.onChange = [this, command] (int v) { controller.command (command, command == "source_steps" ? nlohmann::json::array ({ controller.source() + 1, v }) : nlohmann::json::array ({ v })); };
         control.onEnd = [this] { controller.commit(); };
+        control.onCancel = [this] { controller.cancel(); };
     }
     void NativeEditor::sync()
     {
@@ -179,9 +181,14 @@ namespace ksh::ui
         previousScale = controller.processor.getProjectUiScalePercent();
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
+        if (layout.firstStep >= layout.steps)
+            layout.firstStep = 0;
         layout.standalone = controller.processor.hasStandaloneTransport();
         layout.patternScale = static_cast<float> (controller.processor.getPatternViewScale());
         grid.layout = layout;
+        compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
+        page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
+        duplicate.setToggleState (grid.copySelection, juce::dontSendNotification);
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
@@ -224,6 +231,8 @@ namespace ksh::ui
         grid.sync();
         preview.sync();
         randomPanel.sync();
+        if (layout.compact)
+            syncChannel();
         resized();
         repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
         repaint (0, getHeight() - 40, getWidth(), 40);
@@ -233,6 +242,11 @@ namespace ksh::ui
     }
     void NativeEditor::resized()
     {
+        if (layout.compact)
+        {
+            resizedCompact();
+            return;
+        }
         const int top = static_cast<int> (layout.transportHeight());
         projectButtons[0].setBounds (12, top + 27, 54, 32);
         projectButtons[1].setBounds (74, top + 27, 54, 32);
@@ -279,6 +293,35 @@ namespace ksh::ui
     void NativeEditor::paint (juce::Graphics& g)
     {
         g.fillAll (Palette::app);
+        if (layout.compact)
+        {
+            if (layout.steps <= 16)
+                text (g, "KSH", { 450, 3, 108, 40 }, 21, Palette::accent, true);
+            if (panel != Panel::none)
+            {
+                surface (g, { 4, 48, static_cast<float> (getWidth() - 8), layout.gridHeight() - 4 });
+                if (panel == Panel::patterns)
+                    text (g, controller.copySource >= 0 ? "Choose a destination to copy into. Tap P again to cancel." : "Choose a pattern. Select + pattern copies it to another slot.", { 18, 96, static_cast<float> (getWidth() - 36), 26 }, 13, Palette::muted, false, juce::Justification::centredLeft);
+                else if (panel == Panel::project)
+                    text (g, "PROJECT", { 18, 100, 110, 28 }, 12, Palette::accent, true, juce::Justification::centredLeft);
+                else if (panel == Panel::feel)
+                    text (g, "Drag a value vertically, or double-tap to enter it. Changes are shared with the host.", { 22, 218, static_cast<float> (getWidth() - 44), 36 }, 13, Palette::muted, false, juce::Justification::centredLeft);
+                else if (panel == Panel::channel)
+                    text (g, "CHANNEL " + juce::String (selectedChannel + 1) + "  /  tap its name in the grid to audition", { 20, 96, static_cast<float> (getWidth() - 40), 24 }, 12, Palette::accent, true, juce::Justification::centredLeft);
+                else if (panel == Panel::help)
+                {
+                    const std::array<juce::String, 5> lines {
+                        "Tap cells to toggle. Drag across a row to paint; drag up/down to change its value.",
+                        "Hold a cell, or tap Select, to select cells. Drag a rectangle to select several.",
+                        "Turn Select off to move selected cells. Enable Copy to duplicate while dragging.",
+                        "Deselect returns to drawing. Inspector values adjust all selected enabled cells.",
+                        "Tap a channel name to audition. The ... button opens note, loop, direction and solo." };
+                    for (int i = 0; i < static_cast<int> (lines.size()); ++i)
+                        text (g, lines[static_cast<size_t> (i)], { 20, 100.0f + static_cast<float> (i) * 38, static_cast<float> (getWidth() - 40), 34 }, 13, Palette::text, false, juce::Justification::centredLeft);
+                }
+            }
+            return;
+        }
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - 40 })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
@@ -329,6 +372,8 @@ namespace ksh::ui
         }
         if (key == juce::KeyPress::escapeKey)
         {
+            if (layout.compact)
+                showPanel (Panel::none);
             controller.cancelSelect();
             controller.copySource = -1;
             if (layout.randomVisible)
@@ -376,6 +421,8 @@ namespace ksh::ui
         heldPads.reset();
         if (!hasKeyboardFocus (true))
         {
+            if (layout.compact)
+                cancelCompactGestures();
             controller.cancelSelect();
             grid.cancelGesture();
         }
@@ -402,7 +449,7 @@ namespace ksh::ui
         modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
         grid.updatePlayback();
         preview.updatePlayback();
-        if (layout.randomVisible)
+        if (layout.randomVisible || (layout.compact && panel == Panel::generate))
             randomPanel.updatePlayback();
         keyStateChanged (false);
     }

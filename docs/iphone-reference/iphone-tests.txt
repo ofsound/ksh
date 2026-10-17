@@ -1,0 +1,6 @@
+JUCE v8.0.13
+Filters: [iphone]
+Randomness seeded to: 1364305201
+===============================================================================
+All tests passed (551 assertions in 4 test cases)
+

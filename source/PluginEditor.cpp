@@ -38,6 +38,16 @@ PluginEditor::~PluginEditor()
 }
 void PluginEditor::updateNativeSize()
 {
+   #if JUCE_IOS
+    if (!fitViewport && juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
+    {
+        setResizeLimits (640, 300, 2048, 1536);
+        if (getWidth() == 0 || getHeight() == 0)
+            setSize (814, 409);
+        resized();
+        return;
+    }
+   #endif
     if (fitViewport)
     {
         // The mobile wrapper owns the fullscreen bounds. Never grow its content
@@ -61,7 +71,6 @@ void PluginEditor::resized()
 {
     if (!nativeView)
         return;
-    const auto& layout = nativeView->layout;
     auto available = getLocalBounds().toFloat();
     if (fitViewport)
         if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
@@ -71,11 +80,19 @@ void PluginEditor::resized()
         }
     if (available.isEmpty())
         return;
+   #if JUCE_IOS
+    constexpr bool mobile = true;
+   #else
+    const bool mobile = fitViewport;
+   #endif
+    const bool compact = mobile && available.getWidth() >= available.getHeight() && available.getHeight() <= 500.0f && available.getWidth() <= 1100.0f;
+    nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())));
+    const auto& layout = nativeView->layout;
     const float scale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
     const int percent = juce::jlimit (50, 120, juce::roundToInt (scale * 100));
-    if (!fitViewport && percent != processorRef.getProjectUiScalePercent())
+    if (!fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    const auto offset = fitViewport ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    const auto offset = (fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }

@@ -8,6 +8,8 @@ namespace ksh::ui
     public:
         explicit PatternGrid (EditorController&);
         Layout layout;
+        std::function<void (int)> channelSettings;
+        bool copySelection = false;
         void sync();
         void updatePlayback();
         void paint (juce::Graphics&) override;
@@ -44,6 +46,7 @@ namespace ksh::ui
             GestureButton clear { juce::String::fromUTF8 ("×") }, reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") }, mute { juce::String::fromUTF8 ("⏻") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") };
             AuditionLabel label;
             ValueControl note;
+            juce::TextButton more { "..." };
         };
         std::array<Row, 8> rows;
         enum class Drag { none,
@@ -76,6 +79,7 @@ namespace ksh::ui
         std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
         std::array<bool, 8> displayedMutes {};
         int displayedSteps = -1;
+        int displayedFirstStep = -1;
         Layer displayedLayer = Layer::velocity;
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;

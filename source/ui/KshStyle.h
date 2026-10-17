@@ -317,6 +317,16 @@ namespace ksh::ui
         bool mixed = false, showAdjustmentHintAtZero = false;
         std::function<juce::String (int)> format;
         std::function<void()> onBegin, onEnd, onClick;
+        std::function<void()> onCancel;
+        void cancelGesture()
+        {
+            const bool wasActive = dragging || input.isVisible();
+            dragging = false;
+            input.setVisible (false);
+            if (wasActive && onCancel)
+                onCancel();
+            repaint();
+        }
         std::function<void (int)> onChange;
         void setValue (int v)
         {
@@ -380,7 +390,8 @@ namespace ksh::ui
                     onEnd();
                 return;
             }
-            grabKeyboardFocus();
+            if (isShowing())
+                grabKeyboardFocus();
             start = value;
             dragging = true;
             if (onBegin)

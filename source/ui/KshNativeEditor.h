@@ -16,6 +16,7 @@ namespace ksh::ui
         juce::String projectDescription() const { return description.getText(); }
         void sync();
         void useViewportFit();
+        void setCompactViewport (bool, int width, int height);
         void paint (juce::Graphics&) override;
         void resized() override;
         bool keyPressed (const juce::KeyPress&) override;
@@ -42,6 +43,19 @@ namespace ksh::ui
         std::bitset<8> heldPads;
         int previousScale = 100;
         bool syncing = false;
+        enum class Panel { none, patterns, project, pattern, feel, generate, channel, help };
+        Panel panel = Panel::none;
+        int selectedChannel = 0;
+        juce::TextButton compactPattern, controls { "Controls" }, closePanel { "Done" }, deselect { "Deselect" }, page { "1-16" }, duplicate { "Copy" };
+        std::array<juce::TextButton, 6> panelTabs;
+        juce::TextEditor channelName;
+        ValueControl channelNote, loopStart, loopLength;
+        juce::TextButton channelDirection, channelPing { "Ping-pong" }, channelSolo { "Solo" }, channelClear { "Clear row" }, channelReset { "Reset row" };
+        void resizedCompact();
+        void setupCompactControls();
+        void showPanel (Panel);
+        void syncChannel();
+        void cancelCompactGestures();
         void timerCallback() override;
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();

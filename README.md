@@ -21,6 +21,10 @@ The build copies plugin formats into the local macOS plugin folders when `KSH_CO
 
 The frontend uses JUCE components, custom grid painting, embedded Gantari fonts, and the fixed orange Alternative palette. Node, npm, a browser, and a UI server are not required.
 
+## iPhone
+
+A landscape iPhone editor keeps eight channels, 16 steps and the inspector visible, with secondary controls in touch-accessible pages. The separate `ios-iphone-release` CMake preset produces an iPhone-only app with its AUv3 extension. See [iPhone build, controls and validation](docs/iphone-release.md).
+
 ## Native editor
 
 - Click cells to toggle; drag horizontally to paint or vertically to edit values.

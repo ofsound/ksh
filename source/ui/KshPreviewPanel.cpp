@@ -25,6 +25,26 @@ namespace ksh::ui
         addAndMakeVisible (roll);
         addAndMakeVisible (remove);
         addAndMakeVisible (cycle);
+        addChildComponent (cycleLength);
+        cycleLength.caption = "Length";
+        cycleLength.setTitle ("Selected cycle length");
+        cycleLength.minimum = 1;
+        cycleLength.maximum = 8;
+        cycleLength.resetValue = 1;
+        cycleLength.sensitivity = 12;
+        cycleLength.onBegin = [this] { controller.begin ("Cycle length"); };
+        cycleLength.onChange = [this] (int v)
+        {
+            const auto cells = controller.selection (true);
+            for (auto p : cells)
+            {
+                const auto cell = controller.cell (p);
+                controller.setCycle (v, cell.cycleMask, { p });
+            }
+            controller.notify();
+        };
+        cycleLength.onEnd = [this] { controller.commit(); };
+        cycleLength.onCancel = [this] { controller.cancel(); };
         mode.onClick = [this] { const auto m = controller.state.playback.generationMode; controller.command ("mode", { m == GenerationMode::staticSource ? "stack" : m == GenerationMode::stack ? "per_channel" : "static" }, "Generation mode"); };
         refresh.setTitle ("Generation refresh length");
         refresh.caption = "Length";
@@ -82,6 +102,17 @@ namespace ksh::ui
             };
         }
         for (auto* control : { &velocity, &probability, &roll })
+        {
+            control->onCancel = [this]
+            {
+                if (previousLayer.has_value())
+                {
+                    controller.layer = *previousLayer;
+                    previousLayer.reset();
+                }
+                velocity.value = probability.value = 0;
+                controller.cancel();
+            };
             control->onEnd = [this]
             {
                 if (previousLayer.has_value())
@@ -94,6 +125,7 @@ namespace ksh::ui
                 controller.notify();
                 sync();
             };
+        }
         remove.getProperties().set ("icon", "clear");
         remove.setTooltip ("Delete selected cells");
         remove.onClick = [this] { controller.deleteSelection(); };
@@ -142,8 +174,48 @@ namespace ksh::ui
         resized();
         repaint();
     }
+    void PreviewPanel::setCompact (bool enabled)
+    {
+        compact = enabled;
+        cycle.compact = enabled;
+        cycleLength.setVisible (compact && !randomSection);
+        for (auto* control : { &velocity, &probability, &roll })
+        {
+            control->valueFontSize = compact ? 17.0f : 22.0f;
+            control->captionFontSize = compact ? 11.0f : 12.0f;
+            control->captionGap = compact ? 2 : 6;
+        }
+        resized();
+    }
+    void PreviewPanel::cancelGesture()
+    {
+        for (auto* control : { &velocity, &probability, &roll, &cycleLength, &refresh })
+            control->cancelGesture();
+        for (auto& lock : locks)
+            lock.cancelGesture();
+        cycle.cancelGesture();
+    }
     void PreviewPanel::resized()
     {
+        if (compact)
+        {
+            if (randomSection)
+            {
+                mode.setBounds (18, 30, 180, 44);
+                refresh.setBounds (216, 10, 110, 64);
+                const int stride = (getWidth() - 36) / 8;
+                for (int ch = 0; ch < 8; ++ch)
+                    locks[static_cast<size_t> (ch)].setBounds (18 + ch * stride, 98, stride - 6, 66);
+                return;
+            }
+            velocity.setBounds (76, 8, 82, 64);
+            probability.setBounds (166, 8, 88, 64);
+            roll.setBounds (262, 8, 56, 64);
+            cycleLength.setBounds (326, 8, 56, 64);
+            remove.setBounds (getWidth() - 48, 28, 42, 44);
+            cycle.setBounds (390, 26, juce::jmax (0, remove.getX() - 398), 48);
+            return;
+        }
         mode.setBounds (378, 44, 164, 28);
         refresh.setBounds (566, 23, 82, 49);
         for (int ch = 0; ch < 8; ++ch)
@@ -173,7 +245,11 @@ namespace ksh::ui
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
+        cycleLength.setEnabled (active);
+        cycleLength.setValue (active ? controller.cell (selected.front()).cycle : 1);
+        cycleLength.mixed = active && std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).cycle != controller.cell (selected.front()).cycle; });
         const float inspectorAlpha = active ? 1.0f : 0.25f;
+        cycleLength.setAlpha (inspectorAlpha);
         for (auto* control : { &velocity, &probability, &roll })
         {
             control->setEnabled (active);
@@ -196,6 +272,39 @@ namespace ksh::ui
     void PreviewPanel::paint (juce::Graphics& g)
     {
         g.fillAll (Palette::app);
+        if (compact)
+        {
+            surface (g, getLocalBounds().toFloat().reduced (1));
+            if (randomSection)
+            {
+                text (g, "Generation mode", { 18, 8, 180, 18 }, 12, Palette::text, true, juce::Justification::centredLeft);
+                text (g, "Channel pattern locks", { 18, 78, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                text (g, "OFF lets the generator choose a pattern. Drag a lock to pin a channel to P1-P16.", { 18, 180, static_cast<float> (getWidth() - 36), 32 }, 12, Palette::muted, false, juce::Justification::centredLeft);
+                const auto& state = controller.state.playback;
+                const auto now = juce::Time::getMillisecondCounterHiRes();
+                const float cw = static_cast<float> (getWidth() - 100) / static_cast<float> (state.stepCount);
+                for (int ch = 0; ch < state.channelCount; ++ch)
+                {
+                    const float y = 224.0f + static_cast<float> (ch) * 26.0f;
+                    text (g, state.channels[static_cast<size_t> (ch)].label, { 12, y, 78, 22 }, 11, Palette::muted, false, juce::Justification::centredLeft);
+                    for (int step = 0; step < state.stepCount; ++step)
+                    {
+                        const auto index = static_cast<size_t> (step);
+                        g.setColour (controller.generatedFlashes[static_cast<size_t> (ch)][index] > now ? Palette::text : state.generated[static_cast<size_t> (ch)][index].enabled ? Palette::info : Palette::surface);
+                        g.fillRoundedRectangle (92.0f + static_cast<float> (step) * cw, y, cw - 3.0f, 22, 3);
+                    }
+                }
+            }
+            else
+            {
+                const auto count = controller.selection (true).size();
+                text (g, count == 0 ? "INSPECT" : juce::String (count) + " CELLS", { 8, 10, 64, 20 }, 11, Palette::accent, true);
+                text (g, count == 0 ? "Hold cell" : "Drag values", { 6, 34, 66, 18 }, 10, Palette::muted);
+                text (g, count == 0 ? "or Select" : "to adjust", { 6, 52, 66, 18 }, 10, Palette::muted);
+                text (g, "Cycle beats", { 400, 8, 160, 18 }, 11, Palette::text, true, juce::Justification::centredLeft);
+            }
+            return;
+        }
         g.setColour (Palette::raised);
         g.drawHorizontalLine (0, 0, static_cast<float> (getWidth()));
         // The same warm/cool branding field as the original, rendered with cached font/vector primitives.
@@ -263,6 +372,11 @@ namespace ksh::ui
                 }
             }
         if (dirty)
-            repaint (0, 0, 350, 170);
+        {
+            if (compact)
+                repaint();
+            else
+                repaint (0, 0, 350, 170);
+        }
     }
 }

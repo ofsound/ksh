@@ -36,6 +36,8 @@ namespace ksh::ui
         ~CycleEditor() override { handle.cancel(); }
         std::function<std::vector<Location>()> locations = [] { return std::vector<Location>(); };
         bool inlineLayout = false;
+        bool compact = false;
+        void cancelGesture() { handle.cancel(); }
         void sync()
         {
             const auto list = locations();
@@ -86,6 +88,7 @@ namespace ksh::ui
             const int edge = 10 + juce::jlimit (1, 8, cycleLength) * cellStride - 4;
             handle.setBounds (edge - 4, top, 9, side);
             handle.toFront (false);
+            handle.setVisible (!compact);
         }
         void paint (juce::Graphics& g) override
         {

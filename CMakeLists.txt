@@ -35,7 +35,12 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(FORMATS Standalone AUv3)
     set(KSH_COPY_PLUGIN_AFTER_BUILD FALSE)
     set(KSH_BACKGROUND_AUDIO_ENABLED TRUE)
-    set(KSH_TARGETED_DEVICE_FAMILY "2")
+    option(KSH_IOS_IPHONE_ONLY "Build the landscape iPhone release without iPad support" OFF)
+    if (KSH_IOS_IPHONE_ONLY)
+        set(KSH_TARGETED_DEVICE_FAMILY "1")
+    else()
+        set(KSH_TARGETED_DEVICE_FAMILY "1,2")
+    endif()
 else()
     set(FORMATS Standalone AU VST3 AUv3)
     option(KSH_COPY_PLUGIN_AFTER_BUILD "Install desktop plugins after building" ON)
@@ -84,8 +89,6 @@ juce_add_plugin("${PROJECT_NAME}"
     BACKGROUND_AUDIO_ENABLED ${KSH_BACKGROUND_AUDIO_ENABLED}
     TARGETED_DEVICE_FAMILY ${KSH_TARGETED_DEVICE_FAMILY}
     IPHONE_SCREEN_ORIENTATIONS
-        UIInterfaceOrientationPortrait
-        UIInterfaceOrientationPortraitUpsideDown
         UIInterfaceOrientationLandscapeLeft
         UIInterfaceOrientationLandscapeRight
     IPAD_SCREEN_ORIENTATIONS
@@ -185,7 +188,10 @@ target_compile_definitions(SharedCode
 CPMAddPackage("gh:nlohmann/json@3.11.3")
 
 # Lock-free SPSC queue for realtime-safe audio -> message thread handoff
-CPMAddPackage("gh:cameron314/readerwriterqueue@1.0.6")
+CPMAddPackage(NAME readerwriterqueue
+    GITHUB_REPOSITORY cameron314/readerwriterqueue
+    VERSION 1.0.6
+    OPTIONS "CMAKE_POLICY_VERSION_MINIMUM 3.10")
 
 target_link_libraries(SharedCode
     INTERFACE

@@ -42,6 +42,9 @@ namespace ksh::ui
             }
             addAndMakeVisible (r.label);
             addAndMakeVisible (r.note);
+            addChildComponent (r.more);
+            r.more.setTitle ("Settings channel " + juce::String (ch + 1));
+            r.more.onClick = [this, ch] { if (channelSettings) channelSettings (ch); };
             r.label.setEditable (false, true);
             r.label.setFont (font (22, true));
             r.label.setColour (juce::Label::textColourId, Palette::accent);
@@ -166,9 +169,10 @@ namespace ksh::ui
         layout.steps = p.stepCount;
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
             clearHoverMarker();
-        const bool fullPaint = displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
+        const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
                                || displayedSelection.any() != controller.selected.any();
         displayedSteps = layout.steps;
+        displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
         displayedColors = controller.drumColors;
         for (int ch = 0; ch < 8; ++ch)
@@ -177,11 +181,13 @@ namespace ksh::ui
             const auto& channel = p.channels[static_cast<size_t> (ch)];
             for (auto* b : { &r.clear, &r.reverse, &r.ping, &r.mute, &r.left, &r.right })
             {
-                b->setVisible (ch < p.channelCount);
+                b->setVisible (ch < p.channelCount && (!layout.compact || b == &r.mute));
                 b->setEnabled (controller.source() >= 0);
             }
             r.label.setVisible (ch < p.channelCount);
-            r.note.setVisible (ch < p.channelCount);
+            r.note.setVisible (ch < p.channelCount && !layout.compact);
+            r.more.setVisible (ch < p.channelCount && layout.compact);
+            r.label.setFont (font (layout.compact ? 13.0f : 22.0f, true));
             if (!r.label.isBeingEdited())
                 r.label.setText (channel.label, juce::dontSendNotification);
             r.note.setValue (channel.note);
@@ -212,7 +218,7 @@ namespace ksh::ui
                 if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index])
                     repaint (layout.cell (location).expanded (2).getSmallestIntegerContainer());
                 displayedCells[index] = value;
-                accessible.setVisible (ch < layout.channels && step < layout.steps);
+                accessible.setVisible (ch < layout.channels && layout.stepVisible (step));
                 accessible.setEnabled (controller.source() >= 0);
                 accessible.setTitle ("Channel " + juce::String (ch + 1) + ", step " + juce::String (step + 1));
                 accessible.setDescription (juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", roll " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle));
@@ -235,6 +241,15 @@ namespace ksh::ui
         {
             auto& r = rows[static_cast<size_t> (ch)];
             const int y = juce::roundToInt (layout.cell ({ ch, 0 }).getCentreY()) - 16;
+            if (layout.compact)
+            {
+                const int rowY = juce::roundToInt (layout.cell ({ ch, 0 }).getY());
+                const int height = juce::roundToInt (layout.cellHeight());
+                r.label.setBounds (2, rowY, 62, height);
+                r.mute.setBounds (65, rowY, 31, height);
+                r.more.setBounds (98, rowY, 30, height);
+                continue;
+            }
             r.clear.setBounds (arrowsX + 60, y + 4, 20, 24);
             r.label.setBounds (12, y - 2, 76, 36);
             r.note.setBounds (101, y, 44, 32);
@@ -251,21 +266,23 @@ namespace ksh::ui
         const auto layer = displayLayer();
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
-        for (int step = 0; step < layout.steps; ++step)
+        for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
         {
             auto r = layout.cell ({ 0, step });
-            r.setY (layout.cellsY() - 32);
-            r.setHeight (22);
+            r.setY (layout.cellsY() - (layout.compact ? 18.0f : 32.0f));
+            r.setHeight (layout.compact ? 16.0f : 22.0f);
             text (g, juce::String (step + 1), r, 10, step + 1 == controller.playingStep ? Palette::accent : Palette::muted);
         }
         for (int ch = 0; ch < layout.channels; ++ch)
         {
             const auto range = controller.loop (ch);
             auto first = layout.cell ({ ch, range.loopStart });
-            auto brace = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth()).expanded (16, 1);
+            auto brace = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth()).expanded (layout.compact ? 0.0f : 16.0f, 1);
+            if (layout.compact)
+                brace = brace.getIntersection ({ layout.gridLeft(), brace.getY(), layout.gridWidth(), brace.getHeight() });
             g.setColour (Palette::accent.withAlpha (0.08f));
             g.fillRoundedRectangle (brace, 6);
-            for (int step = 0; step < layout.steps; ++step)
+            for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 const Location pos { ch, step };
                 if (!g.clipRegionIntersects (layout.cell (pos).expanded (2).getSmallestIntegerContainer()))
@@ -367,12 +384,15 @@ namespace ksh::ui
             // Keep the loop boundary and handles above cells outside the loop.
             g.setColour (Palette::accent.withAlpha (0.42f));
             g.drawRoundedRectangle (brace, 6, 1);
-            for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
-                for (int dot = -2; dot <= 2; ++dot)
-                {
-                    g.setColour (Palette::muted);
-                    g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
-                }
+            if (!layout.compact)
+            {
+                for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
+                    for (int dot = -2; dot <= 2; ++dot)
+                    {
+                        g.setColour (Palette::muted);
+                        g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
+                    }
+            }
         }
         const auto paintMarker = [&g] (juce::Point<float> point)
         {
@@ -428,7 +448,7 @@ namespace ksh::ui
         if (previousStep != controller.playingStep)
         {
             previousStep = controller.playingStep;
-            repaint (0, 20, getWidth(), 30);
+            repaint (0, 0, getWidth(), juce::roundToInt (layout.cellsY()));
         }
     }
     void PatternGrid::mouseDown (const juce::MouseEvent& e)
@@ -446,7 +466,7 @@ namespace ksh::ui
         initialSelection = controller.selected;
         additive = controller.useSelectionModifier (e.mods);
         const int row = static_cast<int> (std::floor ((e.position.y - layout.cellsY()) / layout.rowHeight()));
-        if (row >= 0 && row < layout.channels)
+        if (!layout.compact && row >= 0 && row < layout.channels)
         {
             const auto loop = controller.loop (row);
             const auto first = layout.cell ({ row, loop.loopStart });
@@ -460,7 +480,7 @@ namespace ksh::ui
                 return;
             }
         }
-        const bool rightBoundary = row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < 4;
+        const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < 4;
         if (rightBoundary && dragLayer == Layer::velocity)
             anchor = { row, layout.steps - 1 };
         selectedAtStart = anchor.valid() && controller.selected.test (static_cast<size_t> (anchor.key()));
@@ -489,7 +509,7 @@ namespace ksh::ui
         else
             originals.emplace_back (anchor, original);
         const auto r = layout.cell (anchor);
-        if (dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || std::abs (e.position.x - r.getX()) < 4))
+        if (!layout.compact && dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || std::abs (e.position.x - r.getX()) < 4))
         {
             drag = Drag::velocityLine;
             boundary = rightBoundary ? layout.steps : anchor.step;
@@ -560,7 +580,7 @@ namespace ksh::ui
             controller.command ("channel_loop_length", { anchor.channel + 1, end - start + 1, start + 1 });
             return;
         }
-        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - layout.cellsY()) / layout.rowHeight()))), juce::jlimit (0, layout.steps - 1, static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
+        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - layout.cellsY()) / layout.rowHeight()))), juce::jlimit (layout.firstStep, layout.firstStep + layout.visibleSteps() - 1, layout.firstStep + static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
         if (drag == Drag::pending)
         {
             if (origin.getDistanceFrom (current) < (selectedAtStart ? 5.0f : 4.0f))
@@ -568,14 +588,14 @@ namespace ksh::ui
             if (dragLayer == Layer::chance)
                 drag = Drag::value;
             else if (selectedAtStart)
-                drag = controller.useSelectionModifier (e.mods) ? Drag::value : (e.mods.isAltDown() ? Drag::copy : Drag::move);
+                drag = controller.useSelectionModifier (e.mods) ? Drag::value : ((e.mods.isAltDown() || copySelection) ? Drag::copy : Drag::move);
             else
                 drag = std::abs (current.x - origin.x) > std::abs (current.y - origin.y) ? Drag::paint : Drag::value;
             controller.begin ("Edit cells");
         }
         if (drag == Drag::move || drag == Drag::copy)
         {
-            drag = e.mods.isAltDown() ? Drag::copy : Drag::move;
+            drag = (e.mods.isAltDown() || copySelection) ? Drag::copy : Drag::move;
             repaint();
             return;
         }

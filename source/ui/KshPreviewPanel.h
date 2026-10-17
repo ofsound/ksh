@@ -13,15 +13,19 @@ namespace ksh::ui
         void paint (juce::Graphics&) override;
         void resized() override;
         void setInspectorBounds (juce::Rectangle<int>);
+        void setCompact (bool);
+        void cancelGesture();
 
     private:
         EditorController& controller;
         const bool randomSection;
+        bool compact = false;
         juce::Rectangle<int> inspectorBounds;
         juce::TextButton mode, remove { juce::String::fromUTF8 ("×") };
         ValueControl refresh, velocity, probability, roll;
         std::array<ValueControl, 8> locks;
         CycleEditor cycle;
+        ValueControl cycleLength;
         std::vector<std::pair<Location, Cell>> valueStarts;
         std::optional<Layer> previousLayer;
         std::array<std::array<bool, 32>, 8> flashes {};

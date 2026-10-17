@@ -149,6 +149,10 @@ public:
 
     void initialise (const String&) override
     {
+       #if JUCE_IOS
+        if (SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
+            Desktop::getInstance().setOrientationsEnabled (Desktop::rotatedClockwise | Desktop::rotatedAntiClockwise);
+       #endif
         mainWindow = rawToUniquePtr (createWindow());
 
         if (mainWindow != nullptr)
