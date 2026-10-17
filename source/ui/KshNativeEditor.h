@@ -15,15 +15,19 @@ namespace ksh::ui
         juce::String projectTitle() const { return title.getText(); }
         juce::String projectDescription() const { return description.getText(); }
         void sync();
+        void useViewportFit();
         void paint (juce::Graphics&) override;
         void resized() override;
         bool keyPressed (const juce::KeyPress&) override;
         bool keyStateChanged (bool) override;
         void focusLost (FocusChangeType) override;
+        void modifierKeysChanged (const juce::ModifierKeys&) override;
 
     private:
         LookAndFeel look;
-        juce::TooltipWindow tooltips { this, 600 };
+        std::unique_ptr<juce::PropertiesFile> uiPreferences;
+        std::unique_ptr<juce::TooltipWindow> tooltips;
+        juce::TextButton tooltipToggle { "Tips" };
         PatternGrid grid;
         juce::Label patternHeading;
         PreviewPanel preview, randomPanel;
@@ -31,6 +35,8 @@ namespace ksh::ui
         std::array<juce::TextButton, 16> patterns;
         std::array<juce::TextButton, 5> projectButtons;
         juce::TextEditor title, description;
+        GestureButton selectMode { "Select" };
+        juce::TextButton stop { "Stop" };
         juce::TextButton mutePattern { "M" }, heading, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;

@@ -18,4 +18,10 @@ History groups a gesture into one action and conditionally merges only its chang
 
 `KshLayout` supplies cell bounds and hit tests. The grid and generated preview remain together in one native editor. Overall scale is stored in project/host metadata at 50–120%. Imported theme metadata remains readable; all rendering uses the fixed Alternative palette and newly saved projects use `alt`.
 
+iOS standalone uses automatic viewport fitting instead of the saved zoom. The fullscreen wrapper owns editor bounds, with no fixed aspect ratio or minimum zoom constraint. The native interface is scaled uniformly and centred inside the available safe area on every resize or preferred-layout change. The scale control displays a read-only `Fit`; fitting does not overwrite project zoom metadata. Desktop standalone and hosted plugins retain their adjustable scale.
+
+The footer `Tips` toggle beside `DC` enables or destroys the editor's hover-tooltip window. It defaults on and is saved as a local UI preference (`ofsound/KSH.ui.settings` in Application Support on Apple platforms), independently of project and host state.
+
+Select beside Velocity/Chance is an editor-local Shift modifier. Tap to latch or unlatch; holding for at least 300 ms, or using it for a modified action with another touch, is momentary. Physical Shift also lights Select, and releasing it preserves any latch. The modifier covers grid selection and selected-value drags, channel solo, pattern copy-source selection, and Cmd-Shift-Z redo. It preserves the Velocity/Chance layer and is cleared by Escape or editor focus loss. This state is never persisted or published to audio processing.
+
 The string command adapter is retained solely for the existing command-contract tests and compatibility with internal callers. It has no web transport, resources or browser objects.

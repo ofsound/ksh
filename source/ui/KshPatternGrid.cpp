@@ -76,7 +76,7 @@ namespace ksh::ui
             r.reverse.onClick = [direction] { direction (true); };
             r.ping.onClick = [direction] { direction (false); };
             r.mute.setTooltip (juce::String::fromUTF8 ("Mute channel • Shift-click solo • right-click reset row"));
-            r.mute.onClick = [this, ch] { auto mods = juce::ModifierKeys::getCurrentModifiersRealtime(); if (mods.isPopupMenu()) controller.clearRow (ch, true); else controller.toggleMute (ch, mods.isShiftDown()); };
+            r.mute.onClick = [this, ch] { auto mods = juce::ModifierKeys::getCurrentModifiersRealtime(); if (mods.isPopupMenu()) controller.clearRow (ch, true); else controller.toggleMute (ch, controller.useSelectionModifier (mods)); };
             r.mute.pressed = [this, ch] (const juce::MouseEvent& e) {
                 if (controller.source() < 0)
                     return;
@@ -85,7 +85,7 @@ namespace ksh::ui
                     controller.clearRow (ch, true);
                     return;
                 }
-                if (e.mods.isShiftDown())
+                if (controller.useSelectionModifier (e.mods))
                 {
                     controller.toggleMute (ch, true);
                     return;
@@ -128,7 +128,7 @@ namespace ksh::ui
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
     {
         if (controller.source() < 0 || displayLayer() != Layer::velocity || controller.selected.any()
-            || modifiers.isShiftDown() || modifiers.isAnyMouseButtonDown())
+            || controller.shiftDown (modifiers) || modifiers.isAnyMouseButtonDown())
             return {};
         const auto location = layout.at (point);
         if (!location.valid() || std::abs (point.x - layout.cell (location).getX()) >= 4)
@@ -341,7 +341,7 @@ namespace ksh::ui
                         auto strip = r.reduced (3, 4);
                         for (int i = 0; i < bits; ++i)
                         {
-                            g.setColour ((c.cycleMask & (1 << i)) != 0 ? Palette::app : light);
+                            g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
                             g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 1), strip.getHeight());
                         }
                     }
@@ -444,7 +444,7 @@ namespace ksh::ui
         anchor = target = layout.at (e.position);
         dragLayer = displayLayer();
         initialSelection = controller.selected;
-        additive = e.mods.isShiftDown();
+        additive = controller.useSelectionModifier (e.mods);
         const int row = static_cast<int> (std::floor ((e.position.y - layout.cellsY()) / layout.rowHeight()));
         if (row >= 0 && row < layout.channels)
         {
@@ -568,7 +568,7 @@ namespace ksh::ui
             if (dragLayer == Layer::chance)
                 drag = Drag::value;
             else if (selectedAtStart)
-                drag = e.mods.isShiftDown() ? Drag::value : (e.mods.isAltDown() ? Drag::copy : Drag::move);
+                drag = controller.useSelectionModifier (e.mods) ? Drag::value : (e.mods.isAltDown() ? Drag::copy : Drag::move);
             else
                 drag = std::abs (current.x - origin.x) > std::abs (current.y - origin.y) ? Drag::paint : Drag::value;
             controller.begin ("Edit cells");

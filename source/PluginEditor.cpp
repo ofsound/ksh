@@ -1,9 +1,11 @@
 #include "PluginEditor.h"
 #include "engine/KshPersistence.h"
 
-PluginEditor::PluginEditor (PluginProcessor& p) : AudioProcessorEditor (&p), processorRef (p)
+PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
 {
     nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
+    if (fitViewport)
+        nativeView->useViewportFit();
     addAndMakeVisible (*nativeView);
     nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
     nativeView->projectAction = [this] (int action) {
@@ -26,7 +28,7 @@ PluginEditor::PluginEditor (PluginProcessor& p) : AudioProcessorEditor (&p), pro
         else
             cycleProject (action == 3 ? -1 : 1, completed);
     };
-    setResizable (true, true);
+    setResizable (!fitViewport, !fitViewport);
     updateNativeSize();
 }
 PluginEditor::~PluginEditor()
@@ -36,6 +38,16 @@ PluginEditor::~PluginEditor()
 }
 void PluginEditor::updateNativeSize()
 {
+    if (fitViewport)
+    {
+        // The mobile wrapper owns the fullscreen bounds. Never grow its content
+        // in response to a saved project scale or a change in pattern height.
+        if (getWidth() == 0 || getHeight() == 0)
+            if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+                setSize (juce::roundToInt (display->userBounds.getWidth()), juce::roundToInt (display->userBounds.getHeight()));
+        resized();
+        return;
+    }
     const auto& layout = nativeView->layout;
     const float scale = static_cast<float> (processorRef.getProjectUiScalePercent()) / 100.0f;
     setResizeLimits (juce::roundToInt (layout.width() * 0.5f), juce::roundToInt (layout.height() * 0.5f), juce::roundToInt (layout.width() * 1.2f), juce::roundToInt (layout.height() * 1.2f));
@@ -50,11 +62,21 @@ void PluginEditor::resized()
     if (!nativeView)
         return;
     const auto& layout = nativeView->layout;
-    const float scale = juce::jmin (static_cast<float> (getWidth()) / layout.width(), static_cast<float> (getHeight()) / layout.height());
+    auto available = getLocalBounds().toFloat();
+    if (fitViewport)
+        if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
+        {
+            const auto safeScreen = display->safeAreaInsets.subtractedFrom (display->userBounds.toNearestInt());
+            available = available.getIntersection (getLocalArea (nullptr, safeScreen).toFloat());
+        }
+    if (available.isEmpty())
+        return;
+    const float scale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
     const int percent = juce::jlimit (50, 120, juce::roundToInt (scale * 100));
-    if (percent != processorRef.getProjectUiScalePercent())
+    if (!fitViewport && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    nativeView->setTransform (juce::AffineTransform::scale (scale));
+    const auto offset = fitViewport ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }
 

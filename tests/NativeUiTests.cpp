@@ -8,6 +8,204 @@
 using namespace ksh;
 using namespace ksh::ui;
 
+TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom and pattern size", "[native-ui][render]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    processor.setProjectUiScalePercent (120);
+    PluginEditor editor (processor, true);
+    auto* view = dynamic_cast<NativeEditor*> (editor.getChildComponent (0));
+    REQUIRE (view != nullptr);
+    CHECK_FALSE (editor.isResizable());
+    for (const auto viewport : { juce::Rectangle<int> (1024, 768), juce::Rectangle<int> (768, 1024), juce::Rectangle<int> (320, 700) })
+    {
+        editor.setBounds (viewport);
+        for (const double patternScale : { 1.0, 1.5 })
+        for (const int savedScale : { 50, 100, 120 })
+        {
+            processor.setPatternViewScale (patternScale);
+            processor.setProjectUiScalePercent (savedScale);
+            view->sync();
+            CHECK (editor.getBounds() == viewport);
+            CHECK (processor.getProjectUiScalePercent() == savedScale);
+            const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform());
+            CHECK (content.getX() >= -0.01f);
+            CHECK (content.getY() >= -0.01f);
+            CHECK (content.getRight() <= static_cast<float> (editor.getWidth()) + 0.01f);
+            CHECK (content.getBottom() <= static_cast<float> (editor.getHeight()) + 0.01f);
+        }
+        const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+        if (directory.isNotEmpty())
+        {
+            auto stream = juce::File (directory).getChildFile ("native-ipad-fit-" + juce::String (viewport.getWidth()) + ".png").createOutputStream();
+            REQUIRE (stream != nullptr);
+            const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
+            REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
+        }
+    }
+}
+
+TEST_CASE ("Standalone icon transport has separate play stop and a Space toggle", "[native-ui][render]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
+    REQUIRE (view != nullptr);
+    juce::TextButton* play = nullptr;
+    juce::TextButton* stop = nullptr;
+    for (auto* child : view->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("transport"))
+        {
+            if (button->getTitle() == "Play")
+                play = button;
+            else if (button->getTitle() == "Stop")
+                stop = button;
+        }
+    REQUIRE (play != nullptr);
+    REQUIRE (stop != nullptr);
+    play->onClick();
+    play->onClick();
+    CHECK (processor.isStandaloneTransportPlaying());
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile ("native-transport.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
+    }
+    stop->onClick();
+    stop->onClick();
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    view->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+    CHECK (processor.isStandaloneTransportPlaying());
+    view->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+}
+
+TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift feedback", "[native-ui]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    GestureButton* select = nullptr;
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* button = dynamic_cast<GestureButton*> (child); button && button->getProperties().contains ("selectMode"))
+            select = button;
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+    }
+    REQUIRE (select != nullptr);
+    REQUIRE (grid != nullptr);
+    auto event = [] (juce::Component& component, juce::Point<float> point, int duration = 0)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), point, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+                                &component, &component, now, point, now - juce::RelativeTime::milliseconds (duration), 1, false);
+    };
+    auto press = [&] { select->mouseDown (event (*select, { 10, 10 })); };
+    auto release = [&] (int duration = 0) { select->mouseUp (event (*select, { 10, 10 }, duration)); };
+
+    SECTION ("Tap latches and toggles off without changing the editing layer")
+    {
+        editor.controller.layer = Layer::chance;
+        press();
+        CHECK (select->getToggleState());
+        release();
+        CHECK (editor.controller.selectLatched);
+        CHECK (editor.controller.layer == Layer::chance);
+        press();
+        release();
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Holding without another action is momentary")
+    {
+        press();
+        CHECK (editor.controller.shiftDown ({}));
+        release (400);
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+        CHECK_FALSE (select->getToggleState());
+    }
+    SECTION ("Using a second touch makes even a short press momentary")
+    {
+        press();
+        const auto point = grid->layout.cell ({ 0, 0 }).getCentre();
+        grid->mouseDown (event (*grid, point));
+        grid->mouseUp (event (*grid, point));
+        CHECK (editor.controller.selected.test (0));
+        CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+        release (100);
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Physical Shift lights Select and release preserves a latch")
+    {
+        editor.modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        CHECK (select->getToggleState());
+        editor.modifierKeysChanged ({});
+        CHECK_FALSE (select->getToggleState());
+        press();
+        release();
+        editor.modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        editor.modifierKeysChanged ({});
+        CHECK (select->getToggleState());
+        editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Releasing outside cancels a tap")
+    {
+        press();
+        select->mouseUp (event (*select, { -10, -10 }));
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Latched Select toggles cells and drags a marquee without painting")
+    {
+        press();
+        release();
+        const auto first = grid->layout.cell ({ 0, 0 }).getCentre();
+        const auto last = grid->layout.cell ({ 0, 2 }).getCentre().translated (0, 10);
+        grid->mouseDown (event (*grid, first));
+        grid->mouseDrag (event (*grid, last));
+        grid->mouseUp (event (*grid, last));
+        CHECK (editor.controller.selected.count() == 3);
+        grid->mouseDown (event (*grid, first));
+        grid->mouseUp (event (*grid, first));
+        CHECK_FALSE (editor.controller.selected.test (0));
+        CHECK (editor.controller.selected.count() == 2);
+        CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+        CHECK_FALSE (editor.controller.cell ({ 0, 2 }).enabled);
+    }
+    SECTION ("Momentary Select chooses a pattern copy source")
+    {
+        press();
+        for (auto* child : editor.getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "2")
+                button->onClick();
+        CHECK (editor.controller.copySource == 1);
+        release (100);
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Momentary Select solos a channel")
+    {
+        press();
+        GestureButton* mute = nullptr;
+        for (auto* child : grid->getChildren())
+            if (auto* button = dynamic_cast<GestureButton*> (child); button && button->getTitle() == "power channel 1")
+                mute = button;
+        REQUIRE (mute != nullptr);
+        mute->mouseDown (event (*mute, { 10, 10 }));
+        mute->mouseUp (event (*mute, { 10, 10 }));
+        const auto& mutes = editor.controller.state.playback.sourceChannelMutes[0];
+        CHECK_FALSE (mutes[0]);
+        CHECK (mutes[1]);
+        release (100);
+        CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+}
+
 TEST_CASE ("Native batch edits are atomic and reject stale cells", "[native-ui]")
 {
     PluginProcessor processor;

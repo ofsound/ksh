@@ -3,6 +3,28 @@ namespace ksh::ui
 {
     NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true)
     {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "KSH";
+        options.filenameSuffix = ".ui.settings";
+        options.folderName = "ofsound";
+        options.osxLibrarySubFolder = "Application Support";
+        options.millisecondsBeforeSaving = -1;
+        uiPreferences = std::make_unique<juce::PropertiesFile> (options);
+        if (uiPreferences->getBoolValue ("hoverTooltips", true))
+            tooltips = std::make_unique<HoverTooltipWindow> (*this);
+        addAndMakeVisible (tooltipToggle);
+        tooltipToggle.setTitle ("Hover tooltips");
+        tooltipToggle.setTooltip ("Turn hover tooltips on or off");
+        tooltipToggle.onClick = [this]
+        {
+            if (tooltips)
+                tooltips.reset();
+            else
+                tooltips = std::make_unique<HoverTooltipWindow> (*this);
+            uiPreferences->setValue ("hoverTooltips", tooltips != nullptr);
+            uiPreferences->saveIfNeeded();
+            sync();
+        };
         setLookAndFeel (&look);
         setOpaque (true);
         setWantsKeyboardFocus (true);
@@ -35,13 +57,35 @@ namespace ksh::ui
         description.setTitle ("Project description");
         for (auto* b : { &mutePattern, &heading, &clear, &record, &left, &right, &undoButton, &redoButton, &rate, &play, &dc })
             addAndMakeVisible (*b);
+        addAndMakeVisible (selectMode);
+        addAndMakeVisible (stop);
+        for (auto* button : { &play, &stop })
+        {
+            button->getProperties().set ("transport", true);
+            button->getProperties().set ("icon", button == &play ? "play" : "stop");
+            button->setTitle (button == &play ? "Play" : "Stop");
+            button->setTooltip (button == &play ? "Play transport (Space toggles play/stop)" : "Stop transport (Space toggles play/stop)");
+        }
+        selectMode.getProperties().set ("selectMode", true);
+        selectMode.setTitle ("Select modifier");
+        selectMode.setTooltip ("Tap to latch Select; hold for momentary Shift. Select cells, adjust selected values, solo channels, or choose a pattern copy source.");
+        selectMode.pressed = [this] (const juce::MouseEvent& e)
+        {
+            if (e.mods.isLeftButtonDown())
+                controller.beginSelect();
+        };
+        selectMode.released = [this] (const juce::MouseEvent& e)
+        {
+            controller.endSelect (e.getLengthOfMousePress() >= 300, selectMode.getLocalBounds().contains (e.getPosition()));
+        };
+        selectMode.onClick = [this] { controller.selectLatched = !controller.selectLatched; controller.notify(); };
         for (int i = 0; i < 16; ++i)
         {
             auto& b = patterns[static_cast<size_t> (i)];
             addAndMakeVisible (b);
             b.setButtonText (juce::String (i + 1));
             b.setTooltip (juce::String::fromUTF8 ("Select pattern • Shift-click chooses copy source, then click destination"));
-            b.onClick = [this, i] { controller.selectSource (i, juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown()); };
+            b.onClick = [this, i] { controller.selectSource (i, controller.useSelectionModifier (juce::ModifierKeys::getCurrentModifiersRealtime())); };
         }
         heading.getProperties().set ("heading", true);
         addAndMakeVisible (patternHeading);
@@ -71,7 +115,8 @@ namespace ksh::ui
         undoButton.setTooltip (juce::String::fromUTF8 ("Undo • Cmd-Z"));
         redoButton.setTooltip (juce::String::fromUTF8 ("Redo • Cmd-Shift-Z"));
         rate.onClick = [this] { rateMenu(); };
-        play.onClick = [this] { controller.command ("standalone_transport_playing", { !controller.processor.isStandaloneTransportPlaying() }); };
+        play.onClick = [this] { controller.command ("standalone_transport_playing", { true }); };
+        stop.onClick = [this] { controller.command ("standalone_transport_playing", { false }); };
         dc.onClick = [this] { controller.drumColors = ! controller.drumColors; sync(); };
         configureValue (swing, "Swing", 0, 100, "swing");
         configureValue (subdivision, "Sub", 0, 2, "swing_subdivision");
@@ -102,6 +147,14 @@ namespace ksh::ui
         stopTimer();
         controller.changed = {};
         setLookAndFeel (nullptr);
+    }
+    void NativeEditor::useViewportFit()
+    {
+        scale.setEnabled (false);
+        scale.format = [] (int) { return juce::String ("Fit"); };
+        scale.setTitle ("UI scale: fit to screen");
+        scale.setTooltip ("Automatically fits the full interface to the available screen space");
+        scale.onChange = {};
     }
     void NativeEditor::configureValue (ValueControl& control, const juce::String& caption, int minimum, int maximum, const std::string& command)
     {
@@ -137,6 +190,7 @@ namespace ksh::ui
         patternHeading.setText (patternLabel, juce::dontSendNotification);
         heading.setButtonText ("Velocity / Chance");
         heading.setToggleState (grid.displayLayer() == Layer::chance, juce::dontSendNotification);
+        modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
         heading.setTitle (patternLabel + " editing layer: " + layers[static_cast<size_t> (grid.displayLayer())] + " active");
         for (auto* b : { &clear, &record, &left, &right, &rate })
             b->setEnabled (controller.source() >= 0);
@@ -156,10 +210,13 @@ namespace ksh::ui
         auto found = std::find (rates.begin(), rates.end(), value);
         rate.setButtonText (found == rates.end() ? "16th" : names[static_cast<size_t> (found - rates.begin())] + juce::String::fromUTF8 ("   ▾"));
         play.setVisible (layout.standalone);
+        stop.setVisible (layout.standalone);
         tempo.setVisible (layout.standalone);
-        play.setButtonText (controller.processor.isStandaloneTransportPlaying() ? "Stop" : "Play");
+        play.setToggleState (controller.processor.isStandaloneTransportPlaying(), juce::dontSendNotification);
+        stop.setToggleState (!controller.processor.isStandaloneTransportPlaying(), juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
+        tooltipToggle.setToggleState (tooltips != nullptr, juce::dontSendNotification);
         if (!title.hasKeyboardFocus (true))
             title.setText (controller.processor.getProjectName(), false);
         if (!description.hasKeyboardFocus (true))
@@ -192,18 +249,20 @@ namespace ksh::ui
             patterns[static_cast<size_t> (i)].setBounds (926 + (i % 8) * 42, top + 10 + (i / 8) * 36, 36, 30);
         mutePattern.setBounds (1268, top + 10, 58, 66);
         const int y = static_cast<int> (layout.toolbarY());
-        const int patternLabelWidth = juce::GlyphArrangement::getStringWidthInt (patternHeading.getFont(), patternHeading.getText()) + 4;
+        constexpr int patternLabelWidth = 112;
         patternHeading.setBounds (12, y + 8, patternLabelWidth, 52);
         heading.setBounds (patternHeading.getRight() + 8, y + 23, 129, 29);
-        record.setBounds (305, y + 13, 40, 41);
-        left.setBounds (355, y + 13, 40, 41);
-        right.setBounds (405, y + 13, 40, 41);
-        clear.setBounds (455, y + 13, 40, 41);
+        selectMode.setBounds (heading.getRight() - 1, heading.getY(), 64, heading.getHeight());
+        record.setBounds (375, y + 13, 40, 41);
+        left.setBounds (425, y + 13, 40, 41);
+        right.setBounds (475, y + 13, 40, 41);
+        clear.setBounds (525, y + 13, 40, 41);
         undoButton.setBounds (686, y + 13, 40, 41);
         redoButton.setBounds (736, y + 13, 40, 41);
         steps.setBounds (getWidth() - 374, y + 13, 120, 41);
         rate.setBounds (getWidth() - 246, y + 13, 220, 41);
-        play.setBounds (getWidth() - 184, 8, 64, 28);
+        play.setBounds (getWidth() - 190, 6, 32, 32);
+        stop.setBounds (getWidth() - 150, play.getY(), play.getWidth(), play.getHeight());
         tempo.setBounds (getWidth() - 110, play.getY(), 98, play.getHeight());
         const int randomY = juce::roundToInt (layout.toolbarY() + 68);
         const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
@@ -214,6 +273,7 @@ namespace ksh::ui
         preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 164);
         preview.setInspectorBounds (juce::Rectangle<float> (layout.gridLeft() - 16.0f, 12, layout.gridWidth() + 32.0f, 140).toNearestInt());
         dc.setBounds (getWidth() - 128, getHeight() - 36, 36, 32);
+        tooltipToggle.setBounds (getWidth() - 190, getHeight() - 36, 50, 32);
         scale.setBounds (getWidth() - 78, getHeight() - 36, 66, 32);
     }
     void NativeEditor::paint (juce::Graphics& g)
@@ -222,7 +282,7 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - 40 })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option copy"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 156), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
+        text (g, controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) + juce::String::fromUTF8 (" → choose destination • Escape to cancel") : "Source " + juce::String (controller.source() + 1) + juce::String::fromUTF8 (" · ") + juce::String (layout.channels) + juce::String::fromUTF8 (" channels · Shift select · Option copy"), { 12, static_cast<float> (getHeight() - 40), static_cast<float> (getWidth() - 218), 40 }, 11, Palette::muted, false, juce::Justification::centredLeft);
         const auto date = controller.processor.getProjectModifiedAt().substring (0, 10);
         text (g, date, { 404, layout.transportHeight() + 63, 186, 16 }, 9, Palette::muted, false, juce::Justification::centredRight);
     }
@@ -261,7 +321,7 @@ namespace ksh::ui
             return false;
         if (key.getModifiers().isCommandDown() && juce::CharacterFunctions::toLowerCase (key.getTextCharacter()) == 'z')
         {
-            if (key.getModifiers().isShiftDown())
+            if (controller.useSelectionModifier (key.getModifiers()))
                 controller.redo();
             else
                 controller.undo();
@@ -269,6 +329,7 @@ namespace ksh::ui
         }
         if (key == juce::KeyPress::escapeKey)
         {
+            controller.cancelSelect();
             controller.copySource = -1;
             if (layout.randomVisible)
                 toggleAboutPanel();
@@ -282,7 +343,7 @@ namespace ksh::ui
         }
         if (key == juce::KeyPress::spaceKey && layout.standalone)
         {
-            play.triggerClick();
+            controller.command ("standalone_transport_playing", { !controller.processor.isStandaloneTransportPlaying() });
             return true;
         }
         const auto character = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
@@ -314,7 +375,21 @@ namespace ksh::ui
     {
         heldPads.reset();
         if (!hasKeyboardFocus (true))
+        {
+            controller.cancelSelect();
             grid.cancelGesture();
+        }
+    }
+    void NativeEditor::modifierKeysChanged (const juce::ModifierKeys& mods)
+    {
+        const bool selecting = controller.shiftDown (mods);
+        selectMode.setToggleState (selecting, juce::dontSendNotification);
+        if (static_cast<bool> (heading.getProperties()["selectActive"]) != selecting)
+        {
+            heading.getProperties().set ("selectActive", selecting);
+            heading.repaint();
+        }
+        grid.modifierKeysChanged (mods);
     }
     void NativeEditor::timerCallback()
     {
@@ -324,7 +399,7 @@ namespace ksh::ui
         // or an additional frame of delay between the processor and editor timers.
         controller.processor.emitPendingNoteHitsForUi();
         controller.poll();
-        grid.modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
+        modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
         grid.updatePlayback();
         preview.updatePlayback();
         if (layout.randomVisible)

@@ -60,7 +60,7 @@ namespace ksh::ui
         probability.minimum = -100;
         probability.maximum = 100;
         for (auto* control : { &velocity, &probability })
-            control->format = [] (int v) { return v == 0 ? juce::String::fromUTF8 ("↕") : juce::String (v); };
+            control->showAdjustmentHintAtZero = true;
         roll.minimum = 1;
         roll.maximum = 8;
         roll.resetValue = 1;
@@ -151,11 +151,13 @@ namespace ksh::ui
         if (randomSection || inspectorBounds.isEmpty())
             return;
         const int x = inspectorBounds.getX();
-        velocity.setBounds (x + 130, 32, 76, 86);
-        probability.setBounds (x + 222, 32, 92, 86);
-        roll.setBounds (x + 330, 32, 56, 86);
-        remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, 62);
-        cycle.setBounds (x + 402, 56, remove.getX() - x - 418, 62);
+        constexpr int inputHeight = 42;
+        constexpr int captionHeight = 24;
+        velocity.setBounds (x + 130, 32, 76, captionHeight + inputHeight);
+        probability.setBounds (x + 222, 32, 92, captionHeight + inputHeight);
+        roll.setBounds (x + 330, 32, 56, captionHeight + inputHeight);
+        remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, inputHeight);
+        cycle.setBounds (x + 402, 52, remove.getX() - x - 418, inputHeight + 8);
     }
     void PreviewPanel::sync()
     {
@@ -205,7 +207,7 @@ namespace ksh::ui
             const auto selectedCount = controller.selection (true).size();
             const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
             if (selectedCount > 0)
-                text (g, juce::String (selectedCount) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 62 }, 22, labelColour, true, juce::Justification::centredLeft);
+                text (g, juce::String (selectedCount) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 42 }, 22, labelColour, true, juce::Justification::centredLeft);
             text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
             text (g, "Delete", remove.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
         }

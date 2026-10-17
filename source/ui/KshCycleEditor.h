@@ -74,16 +74,17 @@ namespace ksh::ui
         }
         void resized() override
         {
-            const int w = (getWidth() - 20) / 8;
             const int top = inlineLayout ? 4 : 10;
-            const int height = juce::jmax (24, getHeight() - (inlineLayout ? 8 : 56));
+            const int availableHeight = juce::jmax (0, getHeight() - (inlineLayout ? 8 : 56));
+            const int side = juce::jmax (0, juce::jmin ((getWidth() - 20) / 8 - 4, availableHeight));
+            cellStride = side + 4;
             for (int i = 0; i < 8; ++i)
             {
                 bits[static_cast<size_t> (i)].fontHeight = inlineLayout ? 20.0f : 14.0f;
-                bits[static_cast<size_t> (i)].setBounds (10 + i * w, top, w - 4, height);
+                bits[static_cast<size_t> (i)].setBounds (10 + i * cellStride, top, side, side);
             }
-            const int edge = 10 + juce::jlimit (1, 8, cycleLength) * w - 4;
-            handle.setBounds (edge - 4, top, 9, height);
+            const int edge = 10 + juce::jlimit (1, 8, cycleLength) * cellStride - 4;
+            handle.setBounds (edge - 4, top, 9, side);
             handle.toFront (false);
         }
         void paint (juce::Graphics& g) override
@@ -126,6 +127,7 @@ namespace ksh::ui
             controller.notify();
         }
         int cycleLength = 1;
+        int cellStride = 4;
         class LengthHandle : public juce::Component, public juce::SettableTooltipClient
         {
         public:
@@ -159,7 +161,7 @@ namespace ksh::ui
                 if (!dragging)
                     return;
                 const float x = e.getEventRelativeTo (&owner).position.x;
-                const float width = static_cast<float> ((owner.getWidth() - 20) / 8);
+                const float width = static_cast<float> (owner.cellStride);
                 apply (juce::jlimit (1, 8, static_cast<int> (std::ceil ((x - 8) / width))));
             }
             void mouseUp (const juce::MouseEvent&) override

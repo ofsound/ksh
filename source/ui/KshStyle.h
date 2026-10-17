@@ -7,6 +7,7 @@ namespace ksh::ui
     struct Palette
     {
         static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfffbc04e }, strong { 0xffe8ad38 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
+        static inline const juce::Colour play { 0xff76d99b };
         static juce::Colour channel (int ch, bool colors = true)
         {
             static constexpr std::array<juce::uint32, 8> values { 0xffdb4047, 0xffed8c5c, 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
@@ -51,6 +52,7 @@ namespace ksh::ui
             setColour (juce::PopupMenu::highlightedTextColourId, Palette::accent);
             setColour (juce::TooltipWindow::backgroundColourId, Palette::raised);
             setColour (juce::TooltipWindow::textColourId, Palette::text);
+            setColour (juce::TooltipWindow::outlineColourId, Palette::border);
         }
         void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
         {
@@ -77,23 +79,48 @@ namespace ksh::ui
         void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down) override
         {
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+            if (b.getProperties().contains ("transport"))
+            {
+                const bool playing = b.getProperties()["icon"].toString() == "play";
+                const auto colour = playing ? Palette::play : Palette::muted;
+                g.setColour (Palette::surface.interpolatedWith (colour, down ? 0.35f : b.getToggleState() ? 0.22f : hover ? 0.16f : 0.07f));
+                g.fillRoundedRectangle (r, 7);
+                g.setColour (b.hasKeyboardFocus (true) || b.getToggleState() ? colour : Palette::border);
+                g.drawRoundedRectangle (r, 7, 1);
+                return;
+            }
+            if (b.getProperties().contains ("selectMode"))
+            {
+                juce::Path outline;
+                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, false, true, false, true);
+                g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
+                g.fillPath (outline);
+                if (b.getToggleState())
+                {
+                    g.setColour (Palette::accent.withAlpha (0.24f));
+                    g.fillPath (outline);
+                }
+                g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
+                g.strokePath (outline, juce::PathStrokeType (1));
+                return;
+            }
             if (b.getProperties().contains ("heading"))
             {
+                juce::Path outline;
+                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, true, false, true, false);
                 g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
-                g.fillRoundedRectangle (r, 7);
+                g.fillPath (outline);
                 const float centre = static_cast<float> (b.getWidth()) * 0.5f;
                 {
                     juce::Graphics::ScopedSaveState save (g);
-                    juce::Path clip;
-                    clip.addRoundedRectangle (r, 7);
-                    g.reduceClipRegion (clip);
-                    g.setColour (Palette::accent.withAlpha (0.14f));
+                    g.reduceClipRegion (outline);
+                    g.setColour (Palette::accent.withAlpha (static_cast<bool> (b.getProperties()["selectActive"]) ? 0.0f : 0.14f));
                     g.fillRect (b.getToggleState() ? r.withLeft (centre) : r.withRight (centre));
                 }
                 g.setColour (Palette::border);
                 g.drawLine (centre, r.getY(), centre, r.getBottom(), 1.0f);
                 g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
-                g.drawRoundedRectangle (r, 7, 1);
+                g.strokePath (outline, juce::PathStrokeType (1));
                 return;
             }
             if (b.getProperties().contains ("icon"))
@@ -132,6 +159,19 @@ namespace ksh::ui
                 const float size = juce::jmin (30.0f, r.getWidth() * 0.84f);
                 g.addTransform (juce::AffineTransform::scale (size / 24).translated (r.getCentreX() - size / 2, r.getCentreY() - size / 2));
                 juce::Path path;
+                if (icon == "play")
+                {
+                    g.setColour (Palette::play);
+                    path.addTriangle (7, 4.5f, 7, 19.5f, 20, 12);
+                    g.fillPath (path);
+                    return;
+                }
+                if (icon == "stop")
+                {
+                    g.setColour (b.getToggleState() ? Palette::text : Palette::muted);
+                    g.fillRoundedRectangle (6, 6, 12, 12, 1.5f);
+                    return;
+                }
                 if (icon == "clear")
                 {
                     path.startNewSubPath (6, 6);
@@ -183,11 +223,16 @@ namespace ksh::ui
                 g.strokePath (path, juce::PathStrokeType (2, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
             }
+            if (b.getProperties().contains ("selectMode"))
+            {
+                text (g, "Select", b.getLocalBounds().toFloat(), 13.3f, b.getToggleState() ? Palette::accent : Palette::muted, true);
+                return;
+            }
             if (b.getProperties().contains ("heading"))
             {
                 for (int choice = 0; choice < 2; ++choice)
                 {
-                    const bool active = b.getToggleState() == (choice == 1);
+                    const bool active = !static_cast<bool> (b.getProperties()["selectActive"]) && b.getToggleState() == (choice == 1);
                     const float width = static_cast<float> (b.getWidth()) * 0.5f;
                     const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 3, 3, width - 6, static_cast<float> (b.getHeight() - 6) };
                     text (g, choice == 0 ? "Velocity" : "Chance", bounds, 13.3f, active ? Palette::accent : Palette::muted, true);
@@ -195,6 +240,18 @@ namespace ksh::ui
                 return;
             }
             text (g, b.getButtonText(), b.getLocalBounds().toFloat(), b.getButtonText() == "M" ? 30.0f : 12.0f, !b.isEnabled() ? Palette::faint : (b.getToggleState() || down ? Palette::app : Palette::text), true);
+        }
+    };
+
+    class HoverTooltipWindow : public juce::TooltipWindow
+    {
+    public:
+        explicit HoverTooltipWindow (juce::Component& parent) : juce::TooltipWindow (&parent, 600)
+        {
+            // The rounded LookAndFeel leaves transparent corners. An opaque
+            // component makes those corners appear as a second, square box.
+            setOpaque (false);
+            setInterceptsMouseClicks (false, false);
         }
     };
 
@@ -257,7 +314,7 @@ namespace ksh::ui
         float valueFontSize = 14, captionFontSize = 10;
         int captionGap = 0;
         juce::String suffix, caption;
-        bool mixed = false;
+        bool mixed = false, showAdjustmentHintAtZero = false;
         std::function<juce::String (int)> format;
         std::function<void()> onBegin, onEnd, onClick;
         std::function<void (int)> onChange;
@@ -278,6 +335,26 @@ namespace ksh::ui
                 r.removeFromTop (static_cast<float> (captionGap));
             }
             surface (g, r.reduced (0.5f), dragging || hasKeyboardFocus (true), isMouseOver());
+            if (showAdjustmentHintAtZero && value == 0 && !mixed)
+            {
+                const auto centre = r.getCentre();
+                const float halfHeight = juce::jmin (9.0f, r.getHeight() * 0.25f);
+                const float wing = halfHeight * 0.45f;
+                juce::Path arrows;
+                arrows.startNewSubPath (centre.x, centre.y - halfHeight);
+                arrows.lineTo (centre.x, centre.y + halfHeight);
+                for (const float direction : { -1.0f, 1.0f })
+                {
+                    const float tip = centre.y + direction * halfHeight;
+                    const float base = tip - direction * wing;
+                    arrows.startNewSubPath (centre.x - wing, base);
+                    arrows.lineTo (centre.x, tip);
+                    arrows.lineTo (centre.x + wing, base);
+                }
+                g.setColour (isEnabled() ? Palette::text : Palette::faint);
+                g.strokePath (arrows, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                return;
+            }
             text (g, mixed ? juce::String (juce::String::fromUTF8 ("—")) : format ? format (value)
                                                                                   : juce::String (value) + suffix,
                 r,

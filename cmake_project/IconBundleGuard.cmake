@@ -13,6 +13,9 @@ if (NOT EXISTS "${_ksh_icon_source}")
     return()
 endif()
 
+# JUCE generates its platform icon during configuration, not the build step.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ksh_icon_source}")
+
 set(_ksh_icon_stamp "${CMAKE_CURRENT_BINARY_DIR}/ksh_icon_rebuild.stamp")
 
 add_custom_command(

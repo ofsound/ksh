@@ -57,6 +57,34 @@ namespace ksh::ui
         Selection selected;
         Layer layer = Layer::velocity;
         bool drumColors = true, noteNames = true;
+        bool selectLatched = false, selectHeld = false, selectUsed = false;
+        bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || mods.isShiftDown(); }
+        bool useSelectionModifier (const juce::ModifierKeys& mods)
+        {
+            if (selectHeld)
+                selectUsed = true;
+            return shiftDown (mods);
+        }
+        void beginSelect()
+        {
+            selectHeld = true;
+            selectUsed = false;
+            notify();
+        }
+        void endSelect (bool held, bool inside)
+        {
+            if (!selectHeld)
+                return;
+            if (!held && !selectUsed && inside)
+                selectLatched = !selectLatched;
+            selectHeld = false;
+            notify();
+        }
+        void cancelSelect()
+        {
+            selectHeld = selectLatched = selectUsed = false;
+            notify();
+        }
         int copySource = -1;
         std::function<void()> changed;
         std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {};

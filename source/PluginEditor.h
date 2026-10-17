@@ -8,7 +8,13 @@
 class PluginEditor : public juce::AudioProcessorEditor
 {
 public:
-    explicit PluginEditor (PluginProcessor&);
+    explicit PluginEditor (PluginProcessor&, bool fitStandaloneToViewport =
+                         #if JUCE_IOS
+                             true
+                         #else
+                             false
+                         #endif
+    );
     ~PluginEditor() override;
 
     void paint (juce::Graphics&) override;
@@ -26,6 +32,7 @@ public:
 
 private:
     PluginProcessor& processorRef;
+    const bool fitViewport;
 
     juce::File getDefaultProjectsDirectory() const;
     juce::Array<juce::File> getSiblingProjectFiles() const;
