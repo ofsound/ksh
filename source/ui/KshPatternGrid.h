@@ -84,8 +84,11 @@ namespace ksh::ui
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;
         int boundary = 0, lineVelocity = 100;
+        int valueStep = 0, valueVelocity = 100;
         void updateSelection();
+        int velocityAtY (float) const;
         Location velocityHintAt (juce::Point<float>) const;
+        Location velocityEdgeAt (juce::Point<float>) const;
         void clearHoverMarker();
         void timerCallback() override;
     };

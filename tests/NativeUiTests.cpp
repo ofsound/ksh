@@ -416,7 +416,7 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     CHECK_FALSE (controller.canUndo());
     grid.mouseDown (down);
     grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, juce::ModifierKeys::leftButtonModifier, true));
-    CHECK (controller.cell ({ 0, 0 }).velocity == 108);
+    CHECK (controller.cell ({ 0, 0 }).velocity == 111);
     grid.cancelGesture();
     CHECK_FALSE (controller.cell ({ 0, 0 }).enabled);
     const auto beforeRightClick = controller.cell ({ 0, 0 });
@@ -425,6 +425,125 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     grid.mouseUp (rightClick);
     CHECK (controller.cell ({ 0, 0 }) == beforeRightClick);
     CHECK_FALSE (controller.canUndo());
+}
+
+TEST_CASE ("Velocity edge hints require an active neighbor and stay stable across the edge", "[native-ui]")
+{
+    PluginProcessor processor;
+    const bool leftActive = GENERATE (false, true);
+    const bool rightActive = GENERATE (false, true);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, leftActive ? 1 : 0, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, rightActive ? 1 : 0, 90 }));
+    EditorController controller (processor);
+    REQUIRE (controller.cell ({ 0, 0 }).enabled == leftActive);
+    REQUIRE (controller.cell ({ 0, 1 }).enabled == rightActive);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const auto bounds = grid.layout.cell ({ 0, 1 });
+    const auto edge = juce::Point<float> (bounds.getX(), bounds.getCentreY());
+    const auto hidden = grid.createComponentSnapshot (grid.getLocalBounds());
+    grid.mouseMove (gridEvent (grid, edge.translated (-5, 0), edge, 0));
+    // Drain callbacks while waiting so JUCE's timer thread can keep advancing.
+    for (int i = 0; i < 20; ++i)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    const auto visible = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto region = juce::Rectangle<float> (edge.x - 7, edge.y - 7, 14, 14).getSmallestIntegerContainer();
+    bool changed = false;
+    for (int y = region.getY(); y < region.getBottom(); ++y)
+        for (int x = region.getX(); x < region.getRight(); ++x)
+            changed = changed || hidden.getPixelAt (x, y) != visible.getPixelAt (x, y);
+    REQUIRE (changed == (leftActive || rightActive));
+    for (const float dx : { 5.0f, -5.0f, 2.0f })
+    {
+        grid.mouseMove (gridEvent (grid, edge.translated (dx, 0), edge, 0));
+        grid.sync();
+        const auto moved = grid.createComponentSnapshot (grid.getLocalBounds());
+        for (int y = region.getY(); y < region.getBottom(); ++y)
+            for (int x = region.getX(); x < region.getRight(); ++x)
+                REQUIRE (moved.getPixelAt (x, y) == visible.getPixelAt (x, y));
+    }
+    grid.mouseExit (gridEvent (grid, edge, edge, 0));
+    const auto exited = grid.createComponentSnapshot (grid.getLocalBounds());
+    for (int y = region.getY(); y < region.getBottom(); ++y)
+        for (int x = region.getX(); x < region.getRight(); ++x)
+            REQUIRE (exited.getPixelAt (x, y) == hidden.getPixelAt (x, y));
+}
+
+TEST_CASE ("Single velocity drags draw across the row in one gesture", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 70, 80, 3, 2, 4 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    std::array<Cell, 5> before;
+    for (int s = 0; s < 5; ++s)
+        before[static_cast<size_t> (s)] = controller.cell ({ 0, s });
+    const auto start = grid.layout.cell ({ 0, 0 }).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const auto down = gridEvent (grid, start, start, left);
+    auto dragTo = [&] (int step, float dy)
+    {
+        grid.mouseDrag (gridEvent (grid, { grid.layout.cell ({ 0, step }).getCentreX(), start.y + dy }, start, left, true));
+    };
+    grid.mouseDown (down);
+    dragTo (0, -20);
+    REQUIRE (controller.cell ({ 0, 0 }).velocity == 111);
+    dragTo (4, -40);
+    for (int s = 0; s <= 4; ++s)
+    {
+        auto expected = before[static_cast<size_t> (s)];
+        expected.enabled = true;
+        expected.velocity = 111 + s * 4;
+        CHECK (controller.cell ({ 0, s }) == expected);
+    }
+    dragTo (1, -40);
+    for (int s = 1; s <= 4; ++s)
+        CHECK (controller.cell ({ 0, s }).velocity == 127);
+    CHECK (controller.cell ({ 0, 0 }).velocity == 111);
+    CHECK_FALSE (controller.cell ({ 1, 1 }).enabled);
+
+    SECTION ("Release and undo restores every touched cell")
+    {
+        grid.mouseUp (down);
+        controller.undo();
+    }
+    SECTION ("Cancellation restores every touched cell")
+    {
+        grid.cancelGesture();
+    }
+    for (int s = 0; s < 5; ++s)
+        CHECK (controller.cell ({ 0, s }) == before[static_cast<size_t> (s)]);
+    CHECK_FALSE (controller.canUndo());
+}
+
+TEST_CASE ("Velocity sweeps stay inside the starting row loop", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 3, 2 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const auto start = grid.layout.cell ({ 0, 2 }).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const auto down = gridEvent (grid, start, start, left);
+    grid.mouseDown (down);
+    grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, left, true));
+    grid.mouseDrag (gridEvent (grid, { grid.layout.cell ({ 0, 8 }).getCentreX(), start.y - 20 }, start, left, true));
+    grid.mouseDrag (gridEvent (grid, { grid.layout.cell ({ 0, 0 }).getCentreX(), start.y - 20 }, start, left, true));
+    grid.mouseUp (down);
+    for (int s = 0; s < grid.layout.steps; ++s)
+    {
+        CHECK (controller.cell ({ 0, s }).enabled == (s >= 1 && s <= 3));
+        if (s >= 1 && s <= 3)
+            CHECK (controller.cell ({ 0, s }).velocity == 111);
+    }
 }
 
 TEST_CASE ("Grid clicks outside a selection deselect without editing cells", "[native-ui]")

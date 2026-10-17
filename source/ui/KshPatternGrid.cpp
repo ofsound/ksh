@@ -1,6 +1,11 @@
 #include "KshPatternGrid.h"
 namespace ksh::ui
 {
+    namespace
+    {
+        constexpr float velocityEdgeHitRadius = 6.0f;
+    }
+
     PatternGrid::PatternGrid (EditorController& c) : controller (c)
     {
         setWantsKeyboardFocus (true);
@@ -133,8 +138,19 @@ namespace ksh::ui
         if (controller.source() < 0 || displayLayer() != Layer::velocity || controller.selected.any()
             || controller.shiftDown (modifiers) || modifiers.isAnyMouseButtonDown())
             return {};
-        const auto location = layout.at (point);
-        if (!location.valid() || std::abs (point.x - layout.cell (location).getX()) >= 4)
+        const auto edge = velocityEdgeAt (point);
+        if (!edge.valid())
+            return {};
+        const bool rightActive = controller.cell (edge).enabled;
+        const bool leftActive = edge.step > 0 && controller.cell ({ edge.channel, edge.step - 1 }).enabled;
+        return leftActive || rightActive ? edge : Location {};
+    }
+    Location PatternGrid::velocityEdgeAt (juce::Point<float> point) const
+    {
+        const int boundaryStep = layout.firstStep + jsRound ((point.x - layout.gridLeft()) / layout.cellWidth());
+        const float edgeX = layout.gridLeft() + static_cast<float> (boundaryStep - layout.firstStep) * layout.cellWidth();
+        const auto location = layout.at ({ edgeX + 0.01f, point.y });
+        if (!location.valid() || std::abs (point.x - edgeX) >= velocityEdgeHitRadius)
             return {};
         const auto loop = controller.loop (location.channel);
         return location.step >= loop.loopStart && location.step < loop.loopStart + loop.loopLength ? location : Location {};
@@ -153,13 +169,23 @@ namespace ksh::ui
     void PatternGrid::mouseMove (const juce::MouseEvent& e)
     {
         modifierKeysChanged (e.mods);
-        clearHoverMarker();
         if (drag != Drag::none)
+        {
+            clearHoverMarker();
             return;
+        }
+        const auto nextHoverCell = velocityHintAt (e.position);
         hoverPosition = e.position;
-        hoverCell = velocityHintAt (hoverPosition);
+        if (nextHoverCell.valid() && nextHoverCell == hoverCell)
+        {
+            if (hoverMarkerVisible)
+                repaint();
+            return;
+        }
+        clearHoverMarker();
+        hoverCell = nextHoverCell;
         if (hoverCell.valid())
-            startTimer (450);
+            startTimer (75);
     }
     void PatternGrid::mouseExit (const juce::MouseEvent&) { clearHoverMarker(); }
     void PatternGrid::sync()
@@ -480,7 +506,13 @@ namespace ksh::ui
                 return;
             }
         }
-        const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < 4;
+        const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < velocityEdgeHitRadius;
+        if (!layout.compact && dragLayer == Layer::velocity)
+        {
+            const auto edge = velocityEdgeAt (e.position);
+            if (edge.valid())
+                anchor = edge;
+        }
         if (rightBoundary && dragLayer == Layer::velocity)
             anchor = { row, layout.steps - 1 };
         selectedAtStart = anchor.valid() && controller.selected.test (static_cast<size_t> (anchor.key()));
@@ -502,6 +534,8 @@ namespace ksh::ui
         if (anchor.step < loop.loopStart || anchor.step >= loop.loopStart + loop.loopLength)
             return;
         original = controller.cell (anchor);
+        valueStep = anchor.step;
+        valueVelocity = velocityAtY (e.position.y);
         originals.clear();
         if (selectedAtStart)
             for (auto p : controller.selection())
@@ -509,11 +543,11 @@ namespace ksh::ui
         else
             originals.emplace_back (anchor, original);
         const auto r = layout.cell (anchor);
-        if (!layout.compact && dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || std::abs (e.position.x - r.getX()) < 4))
+        if (!layout.compact && dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || std::abs (e.position.x - r.getX()) < velocityEdgeHitRadius))
         {
             drag = Drag::velocityLine;
             boundary = rightBoundary ? layout.steps : anchor.step;
-            lineVelocity = juce::jlimit (1, 127, jsRound (1 + (1 - (e.position.y - r.getY()) / r.getHeight()) * 126));
+            lineVelocity = velocityAtY (e.position.y);
             originals.clear();
             for (int s = 0; s < layout.steps; ++s)
                 originals.emplace_back (Location { anchor.channel, s }, controller.cell ({ anchor.channel, s }));
@@ -555,6 +589,11 @@ namespace ksh::ui
                         controller.selected.set (static_cast<size_t> (ch * 32 + s));
         controller.notify();
         repaint();
+    }
+    int PatternGrid::velocityAtY (float y) const
+    {
+        const auto r = layout.cell (anchor);
+        return juce::jlimit (1, 127, jsRound (1 + (1 - (y - r.getY()) / r.getHeight()) * 126));
     }
     void PatternGrid::mouseDrag (const juce::MouseEvent& e)
     {
@@ -613,19 +652,36 @@ namespace ksh::ui
         {
             const auto sensitivity = 2.0f;
             const int offset = dragOffset (origin.y - current.y, sensitivity);
-            for (const auto& [p, c] : originals)
+            if (dragLayer == Layer::velocity && !selectedAtStart)
             {
-                auto next = withValue (c, dragLayer, cellValue (c, dragLayer) + offset);
-                if (!selectedAtStart)
+                const auto loop = controller.loop (anchor.channel);
+                const int step = juce::jlimit (loop.loopStart, loop.loopStart + loop.loopLength - 1, target.step);
+                const int velocity = velocityAtY (current.y);
+                // Join successive mouse positions so quick sweeps do not skip cells.
+                for (int s = juce::jmin (valueStep, step); s <= juce::jmax (valueStep, step); ++s)
+                {
+                    const float fraction = step == valueStep ? 1.0f : static_cast<float> (std::abs (s - valueStep)) / static_cast<float> (std::abs (step - valueStep));
+                    auto next = controller.cell ({ anchor.channel, s });
+                    next.velocity = jsRound (static_cast<float> (valueVelocity) + fraction * static_cast<float> (velocity - valueVelocity));
                     next.enabled = true;
-                controller.editCell (p, next);
+                    controller.editCell ({ anchor.channel, s }, next);
+                }
+                valueStep = step;
+                valueVelocity = velocity;
             }
+            else
+                for (const auto& [p, c] : originals)
+                {
+                    auto next = withValue (c, dragLayer, cellValue (c, dragLayer) + offset);
+                    if (!selectedAtStart)
+                        next.enabled = true;
+                    controller.editCell (p, next);
+                }
         }
         else if (drag == Drag::velocityLine)
         {
-            const auto r = layout.cell (anchor);
             const int endBoundary = juce::jlimit (0, layout.steps, jsRound ((current.x - layout.gridLeft()) / layout.cellWidth()));
-            const int velocity = juce::jlimit (1, 127, jsRound (1 + (1 - (current.y - r.getY()) / r.getHeight()) * 126));
+            const int velocity = velocityAtY (current.y);
             for (const auto& [p, c] : originals)
                 controller.editCell (p, c);
             if (endBoundary != boundary)
