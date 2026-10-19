@@ -19,6 +19,8 @@ Resize, page changes, auxiliary panel switches and focus loss cancel active edit
 
 ## Build
 
+The iOS app and AUv3 use the opaque, full-bleed `packaging/icon-ios.png`; the padded desktop icon remains separate. Its vector source is `packaging/icon-ios.svg`; regenerate the PNG with `rsvg-convert packaging/icon-ios.svg -o packaging/icon-ios.png`.
+
 The normal `ios-xcode` preset builds a universal iPhone/iPad app; iPhone orientations are landscape only and iPad orientations remain unchanged. The separate release preset limits the product to the iPhone device family:
 
 ```sh

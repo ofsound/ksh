@@ -46,12 +46,15 @@ TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom and pa
     }
 }
 
-TEST_CASE ("Standalone icon transport has separate play stop and a Space toggle", "[native-ui][render]")
+TEST_CASE ("Standalone transport swaps Play and Stop in one position with clicks and Space", "[native-ui][render]")
 {
+    const bool compact = GENERATE (false, true);
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
-    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    auto editor = std::make_unique<PluginEditor> (processor, compact);
+    if (compact)
+        editor->setSize (814, 409);
     auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
     REQUIRE (view != nullptr);
     juce::TextButton* play = nullptr;
@@ -66,24 +69,32 @@ TEST_CASE ("Standalone icon transport has separate play stop and a Space toggle"
         }
     REQUIRE (play != nullptr);
     REQUIRE (stop != nullptr);
+    const auto checkTransport = [&] (bool playing)
+    {
+        CHECK (processor.isStandaloneTransportPlaying() == playing);
+        CHECK (play->isVisible() == !playing);
+        CHECK (stop->isVisible() == playing);
+        CHECK (play->getBounds() == stop->getBounds());
+    };
+    checkTransport (false);
     play->onClick();
     play->onClick();
-    CHECK (processor.isStandaloneTransportPlaying());
+    checkTransport (true);
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     if (directory.isNotEmpty())
     {
-        auto stream = juce::File (directory).getChildFile ("native-transport.png").createOutputStream();
+        auto stream = juce::File (directory).getChildFile (compact ? "native-transport-compact.png" : "native-transport.png").createOutputStream();
         REQUIRE (stream != nullptr);
         auto image = editor->createComponentSnapshot (editor->getLocalBounds());
         REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
     }
     stop->onClick();
     stop->onClick();
-    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    checkTransport (false);
     view->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
-    CHECK (processor.isStandaloneTransportPlaying());
+    checkTransport (true);
     view->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
-    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    checkTransport (false);
 }
 
 TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift feedback", "[native-ui]")
@@ -254,6 +265,42 @@ TEST_CASE ("Native gestures undo once and preserve unrelated recorded cells", "[
     CHECK (editor.cell ({ 3, 1 }).enabled);
 }
 
+TEST_CASE ("Undo redo shortcuts use keyboard Shift independently of Select mode", "[native-ui]")
+{
+    const bool standalone = GENERATE (false, true);
+    const bool selectLatched = GENERATE (false, true);
+    const bool selectHeld = GENERATE (false, true);
+    // macOS sends Command shortcuts with a key code but no text character.
+    const bool textCharacterPresent = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (standalone ? juce::AudioProcessor::wrapperType_Standalone : juce::AudioProcessor::wrapperType_Undefined);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    auto& controller = editor.controller;
+    auto cell = controller.cell ({ 0, 0 });
+    const bool original = cell.enabled;
+    cell.enabled = !original;
+    controller.begin ("Toggle cell");
+    controller.editCell ({ 0, 0 }, cell);
+    controller.commit();
+    REQUIRE (controller.canUndo());
+    controller.selectLatched = selectLatched;
+    controller.selectHeld = selectHeld;
+
+    CHECK (editor.keyPressed (juce::KeyPress ('Z', juce::ModifierKeys::commandModifier, textCharacterPresent ? 'z' : 0)));
+    CHECK (controller.cell ({ 0, 0 }).enabled == original);
+    CHECK (controller.canRedo());
+    CHECK_FALSE (controller.canUndo());
+
+    CHECK (editor.keyPressed (juce::KeyPress ('Z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, textCharacterPresent ? 'Z' : 0)));
+    CHECK (controller.cell ({ 0, 0 }).enabled == !original);
+    CHECK (controller.canUndo());
+    CHECK_FALSE (controller.canRedo());
+    CHECK (controller.selectLatched == selectLatched);
+    CHECK (controller.selectHeld == selectHeld);
+    CHECK_FALSE (controller.selectUsed);
+}
+
 TEST_CASE ("Native cancelled gesture restores only its own fields", "[native-ui]")
 {
     PluginProcessor processor;
@@ -355,6 +402,42 @@ TEST_CASE ("Native layout and gesture constants match reference", "[native-ui]")
     CHECK (withValue (c, Layer::chance, 2).cycleMask == c.cycleMask);
 }
 
+TEST_CASE ("Select mode hides cell data in both layers", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    controller.layer = GENERATE (Layer::velocity, Layer::chance);
+    const int mode = GENERATE (0, 1, 2);
+    controller.selectLatched = mode == 0;
+    controller.selectHeld = mode == 1;
+    PatternGrid grid (controller);
+    grid.setSize (1338, 560);
+    grid.modifierKeysChanged (juce::ModifierKeys (mode == 2 ? juce::ModifierKeys::shiftModifier : 0));
+    const auto render = [&] (bool alternate)
+    {
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1,
+            alternate ? 127 : 30, alternate ? 100 : 25, alternate ? 8 : 2, alternate ? 85 : 1, alternate ? 4 : 1 }));
+        controller.refresh();
+        grid.sync();
+        return grid.createComponentSnapshot (grid.layout.cell ({ 0, 0 }).getSmallestIntegerContainer());
+    };
+    const auto equalPixels = [] (const juce::Image& a, const juce::Image& b)
+    {
+        for (int y = 0; y < a.getHeight(); ++y)
+            for (int x = 0; x < a.getWidth(); ++x)
+                if (a.getPixelAt (x, y) != b.getPixelAt (x, y))
+                    return false;
+        return true;
+    };
+    const auto first = render (false);
+    CHECK (equalPixels (first, render (true)));
+    controller.selectLatched = controller.selectHeld = false;
+    grid.modifierKeysChanged ({});
+    const auto detailed = render (false);
+    CHECK_FALSE (equalPixels (first, detailed));
+    CHECK_FALSE (equalPixels (detailed, render (true)));
+}
+
 TEST_CASE ("Native editor constructs renders and tears down without a browser", "[native-ui][render]")
 {
     PluginProcessor processor;
@@ -427,13 +510,16 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     CHECK_FALSE (controller.canUndo());
 }
 
-TEST_CASE ("Velocity edge hints require an active neighbor and stay stable across the edge", "[native-ui]")
+TEST_CASE ("Velocity edge hints require an active neighbor inside the loop and stay stable across the edge", "[native-ui]")
 {
     PluginProcessor processor;
     const bool leftActive = GENERATE (false, true);
     const bool rightActive = GENERATE (false, true);
+    const bool loopStartsHere = GENERATE (false, true);
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, leftActive ? 1 : 0, 90 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, rightActive ? 1 : 0, 90 }));
+    if (loopStartsHere)
+        REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 15, 2 }));
     EditorController controller (processor);
     REQUIRE (controller.cell ({ 0, 0 }).enabled == leftActive);
     REQUIRE (controller.cell ({ 0, 1 }).enabled == rightActive);
@@ -456,7 +542,7 @@ TEST_CASE ("Velocity edge hints require an active neighbor and stay stable acros
     for (int y = region.getY(); y < region.getBottom(); ++y)
         for (int x = region.getX(); x < region.getRight(); ++x)
             changed = changed || hidden.getPixelAt (x, y) != visible.getPixelAt (x, y);
-    REQUIRE (changed == (leftActive || rightActive));
+    REQUIRE (changed == ((leftActive && !loopStartsHere) || rightActive));
     for (const float dx : { 5.0f, -5.0f, 2.0f })
     {
         grid.mouseMove (gridEvent (grid, edge.translated (dx, 0), edge, 0));
@@ -471,6 +557,73 @@ TEST_CASE ("Velocity edge hints require an active neighbor and stay stable acros
     for (int y = region.getY(); y < region.getBottom(); ++y)
         for (int x = region.getX(); x < region.getRight(); ++x)
             REQUIRE (exited.getPixelAt (x, y) == hidden.getPixelAt (x, y));
+}
+
+TEST_CASE ("Empty row edges keep normal cell clicking and painting", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 2, 1, 1, 90 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const int step = GENERATE (0, 3, 15);
+    const bool rightEdge = GENERATE (false, true);
+    const auto bounds = grid.layout.cell ({ 0, step });
+    const juce::Point<float> start { rightEdge ? bounds.getRight() - 1 : bounds.getX() + 1, bounds.getCentreY() };
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const auto down = gridEvent (grid, start, start, left);
+    int endStep = step;
+    grid.mouseMove (gridEvent (grid, start, start, 0));
+    grid.mouseDown (down);
+
+    SECTION ("Click toggles the cell under the pointer")
+    {
+        grid.mouseUp (down);
+    }
+    SECTION ("Drag paints the empty cells")
+    {
+        endStep = step == 15 ? 12 : step + 3;
+        const auto end = grid.layout.cell ({ 0, endStep }).getCentre();
+        grid.mouseDrag (gridEvent (grid, end, start, left, true));
+        grid.mouseUp (gridEvent (grid, end, start, left, true));
+    }
+    for (int s = 0; s < grid.layout.steps; ++s)
+        CHECK (controller.cell ({ 0, s }).enabled == (s >= juce::jmin (step, endStep) && s <= juce::jmax (step, endStep)));
+    CHECK (controller.cell ({ 1, 0 }).enabled);
+    REQUIRE (controller.canUndo());
+    controller.undo();
+    for (int s = 0; s < grid.layout.steps; ++s)
+        CHECK_FALSE (controller.cell ({ 0, s }).enabled);
+    CHECK_FALSE (controller.canUndo());
+}
+
+TEST_CASE ("Velocity edge lines still interpolate beside active cells", "[native-ui]")
+{
+    PluginProcessor processor;
+    for (const int step : { 1, 3, 5 })
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, step, 1, 90 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    std::array<Cell, 16> before;
+    for (int s = 0; s < grid.layout.steps; ++s)
+        before[static_cast<size_t> (s)] = controller.cell ({ 0, s });
+    const auto row = grid.layout.cell ({ 0, 1 });
+    const juce::Point<float> start { row.getX(), row.getBottom() - 99.0f / 126.0f * row.getHeight() };
+    const juce::Point<float> end { grid.layout.cell ({ 0, 5 }).getX(), row.getBottom() - 19.0f / 126.0f * row.getHeight() };
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    grid.mouseDown (gridEvent (grid, start, start, left));
+    grid.mouseDrag (gridEvent (grid, end, start, left, true));
+    grid.mouseUp (gridEvent (grid, end, start, left, true));
+    CHECK (controller.cell ({ 0, 2 }).velocity == 73);
+    CHECK (controller.cell ({ 0, 4 }).velocity == 20);
+    for (int s = 0; s < grid.layout.steps; ++s)
+        CHECK (controller.cell ({ 0, s }).enabled == before[static_cast<size_t> (s)].enabled);
+    controller.undo();
+    for (int s = 0; s < grid.layout.steps; ++s)
+        CHECK (controller.cell ({ 0, s }) == before[static_cast<size_t> (s)]);
 }
 
 TEST_CASE ("Single velocity drags draw across the row in one gesture", "[native-ui]")
@@ -787,7 +940,7 @@ TEST_CASE ("Option temporarily shows Chance while the button preserves its latch
     CHECK (toggle->getToggleState());
 }
 
-TEST_CASE ("Option edits selected Chance values and keeps the gesture layer until release", "[native-ui]")
+TEST_CASE ("Option edits unselected Chance values and keeps the gesture layer until release", "[native-ui]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60 }));
@@ -798,12 +951,6 @@ TEST_CASE ("Option edits selected Chance values and keeps the gesture layer unti
         if (auto* candidate = dynamic_cast<PatternGrid*> (child))
             grid = candidate;
     REQUIRE (grid != nullptr);
-    const bool selected = GENERATE (false, true);
-    if (selected)
-    {
-        editor.controller.selected.set (0);
-        editor.controller.selected.set (1);
-    }
     const auto before = editor.controller.cell ({ 0, 0 });
     const auto second = editor.controller.cell ({ 0, 1 });
     const auto start = grid->layout.cell ({ 0, 0 }).getCentre();
@@ -816,8 +963,6 @@ TEST_CASE ("Option edits selected Chance values and keeps the gesture layer unti
     expected.probability += 8;
     CHECK (editor.controller.cell ({ 0, 0 }) == expected);
     auto expectedSecond = second;
-    if (selected)
-        expectedSecond.probability += 8;
     CHECK (editor.controller.cell ({ 0, 1 }) == expectedSecond);
     editor.modifierKeysChanged (juce::ModifierKeys (left));
     CHECK (grid->displayLayer() == Layer::chance);
@@ -827,6 +972,131 @@ TEST_CASE ("Option edits selected Chance values and keeps the gesture layer unti
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }) == before);
     CHECK (editor.controller.cell ({ 0, 1 }) == second);
+}
+
+TEST_CASE ("Option arms selection duplication without switching layers or editing values", "[native-ui]")
+{
+    const auto layer = GENERATE (Layer::velocity, Layer::chance);
+    const bool compact = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 70, 80, 3, 2, 2 }));
+    NativeEditor editor (processor);
+    if (compact)
+        editor.setCompactViewport (true, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    PatternGrid* grid = nullptr;
+    juce::TextButton* heading = nullptr;
+    juce::TextButton* copy = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getProperties().contains ("heading"))
+                heading = button;
+            if (button->getTitle() == "Copy selected cells when dragging")
+                copy = button;
+        }
+    }
+    REQUIRE (grid != nullptr);
+    REQUIRE (heading != nullptr);
+    REQUIRE (copy != nullptr);
+    auto& controller = editor.controller;
+    controller.layer = layer;
+    controller.selected.set (0);
+    controller.selected.set (1);
+    const auto first = controller.cell ({ 0, 0 });
+    const auto second = controller.cell ({ 0, 1 });
+    editor.sync();
+    const int option = juce::ModifierKeys::altModifier;
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    editor.modifierKeysChanged (juce::ModifierKeys (option));
+    CHECK (grid->displayLayer() == layer);
+    CHECK (heading->getToggleState() == (layer == Layer::chance));
+    CHECK (grid->isCopyMode());
+    CHECK (copy->getToggleState());
+    CHECK_FALSE (grid->copySelection);
+    CHECK (grid->getMouseCursor() == juce::MouseCursor (juce::MouseCursor::CopyingCursor));
+    const auto start = grid->layout.cell ({ 0, 0 }).getCentre();
+    const auto end = grid->layout.cell ({ 1, 4 }).getCentre();
+    grid->mouseDown (gridEvent (*grid, start, start, left | option));
+
+    SECTION ("Dragging copies the entire selection and supports undo redo")
+    {
+        grid->mouseDrag (gridEvent (*grid, end, start, left | option, true));
+        CHECK (grid->displayLayer() == layer);
+        grid->mouseUp (gridEvent (*grid, end, start, option, true));
+        CHECK (controller.cell ({ 0, 0 }) == first);
+        CHECK (controller.cell ({ 0, 1 }) == second);
+        CHECK (controller.cell ({ 1, 4 }) == first);
+        CHECK (controller.cell ({ 1, 5 }) == second);
+        CHECK (controller.selected.count() == 2);
+        CHECK (controller.selected.test (36));
+        CHECK (controller.selected.test (37));
+        controller.undo();
+        CHECK (controller.cell ({ 0, 0 }) == first);
+        CHECK (controller.cell ({ 0, 1 }) == second);
+        CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
+        CHECK_FALSE (controller.cell ({ 1, 5 }).enabled);
+        controller.redo();
+        CHECK (controller.cell ({ 1, 4 }) == first);
+        CHECK (controller.cell ({ 1, 5 }) == second);
+    }
+    SECTION ("Clicking without dragging leaves selected notes intact")
+    {
+        grid->mouseUp (gridEvent (*grid, start, start, option));
+        CHECK (controller.cell ({ 0, 0 }) == first);
+        CHECK (controller.cell ({ 0, 1 }) == second);
+        CHECK_FALSE (controller.canUndo());
+    }
+    SECTION ("Cancelling a duplicate drag leaves the pattern intact")
+    {
+        grid->mouseDrag (gridEvent (*grid, end, start, left | option, true));
+        grid->cancelGesture();
+        CHECK (controller.cell ({ 0, 0 }) == first);
+        CHECK (controller.cell ({ 0, 1 }) == second);
+        CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
+        CHECK_FALSE (controller.cell ({ 1, 5 }).enabled);
+        CHECK_FALSE (controller.canUndo());
+    }
+    editor.modifierKeysChanged ({});
+    CHECK (controller.layer == layer);
+    CHECK (grid->displayLayer() == layer);
+    CHECK_FALSE (grid->isCopyMode());
+    CHECK_FALSE (copy->getToggleState());
+    CHECK_FALSE (grid->copySelection);
+}
+
+TEST_CASE ("Option can switch a selection drag between moving and copying", "[native-ui]")
+{
+    const bool optionInitially = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    controller.selected.set (0);
+    grid.sync();
+    const auto original = controller.cell ({ 0, 0 });
+    const auto start = grid.layout.cell ({ 0, 0 }).getCentre();
+    const auto end = grid.layout.cell ({ 1, 4 }).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const int option = juce::ModifierKeys::altModifier;
+    const int initial = optionInitially ? option : 0;
+    const int final = optionInitially ? 0 : option;
+    grid.mouseDown (gridEvent (grid, start, start, left | initial));
+    grid.mouseDrag (gridEvent (grid, end, start, left | initial, true));
+    grid.modifierKeysChanged (juce::ModifierKeys (left | final));
+    CHECK (grid.isCopyMode() == !optionInitially);
+    CHECK (grid.displayLayer() == Layer::velocity);
+    grid.mouseUp (gridEvent (grid, end, start, final, true));
+    CHECK (controller.cell ({ 1, 4 }) == original);
+    CHECK (controller.cell ({ 0, 0 }).enabled == !optionInitially);
+    controller.undo();
+    CHECK (controller.cell ({ 0, 0 }) == original);
+    CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
 }
 
 TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")
@@ -941,6 +1211,72 @@ TEST_CASE ("Inspector cycle edits temporarily show Chance", "[native-ui]")
     controller.undo();
     CHECK (controller.cell ({ 0, 0 }).cycle == 4);
     controller.changed = {};
+}
+
+TEST_CASE ("Disabled cycle handles reject input and cancel active drags", "[native-ui]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    CycleEditor cycle (controller);
+    cycle.locations = [&] { return controller.selection (true); };
+    cycle.setSize (400, 120);
+    cycle.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    cycle.setVisible (true);
+    juce::Component* handle = nullptr;
+    for (auto* child : cycle.getChildren())
+        if (child->getTitle() == "Cycle length")
+            handle = child;
+    REQUIRE (handle != nullptr);
+    const auto event = [&] (float x, bool dragged = false)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, 10.0f },
+            juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+            handle, handle, now, { 4.0f, 10.0f }, now, 1, dragged);
+    };
+
+    SECTION ("No selection")
+    {
+        cycle.sync();
+    }
+    SECTION ("Disabled with a selection")
+    {
+        controller.selected.set (0);
+        cycle.sync();
+        cycle.setEnabled (false);
+    }
+    SECTION ("Selection cleared during a drag")
+    {
+        controller.selected.set (0);
+        cycle.sync();
+        handle->mouseDown (event (4));
+        REQUIRE (controller.editing());
+        handle->mouseDrag (event (55, true));
+        REQUIRE (controller.cell ({ 0, 0 }).cycle > 4);
+        controller.selected.reset();
+        cycle.sync();
+    }
+
+    CHECK_FALSE (handle->isEnabled());
+    CHECK_FALSE (handle->getWantsKeyboardFocus());
+    CHECK (handle->getMouseCursor() == juce::MouseCursor::NormalCursor);
+    handle->mouseDown (event (4));
+    handle->mouseDrag (event (100, true));
+    handle->mouseUp (event (100, true));
+    CHECK_FALSE (handle->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK_FALSE (controller.editing());
+    CHECK_FALSE (controller.canUndo());
+    CHECK (controller.layer == Layer::velocity);
+    CHECK (controller.cell ({ 0, 0 }).cycle == 4);
+
+    controller.selected.set (0);
+    cycle.sync();
+    CHECK (handle->isEnabled());
+    CHECK (handle->getWantsKeyboardFocus());
+    CHECK (handle->getMouseCursor() == juce::MouseCursor::LeftRightResizeCursor);
+    CHECK (handle->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (controller.cell ({ 0, 0 }).cycle == 5);
 }
 
 TEST_CASE ("Standalone restores the saved UI scale before creating its editor", "[native-ui]")

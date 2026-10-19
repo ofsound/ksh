@@ -121,7 +121,11 @@ namespace ksh::ui
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        return modifiers.isAltDown() ? Layer::chance : controller.layer;
+        return modifiers.isAltDown() && controller.selected.none() ? Layer::chance : controller.layer;
+    }
+    bool PatternGrid::isCopyMode() const
+    {
+        return controller.selected.any() && (copySelection || modifiers.isAltDown());
     }
     void PatternGrid::modifierKeysChanged (const juce::ModifierKeys& m)
     {
@@ -129,24 +133,22 @@ namespace ksh::ui
         {
             const auto previousLayer = displayLayer();
             modifiers = m;
+            if (drag == Drag::move || drag == Drag::copy)
+                drag = isCopyMode() ? Drag::copy : Drag::move;
             if (hoverCell.valid() && !velocityHintAt (hoverPosition).valid())
                 clearHoverMarker();
             repaint();
             if (displayLayer() != previousLayer && layerChanged)
                 layerChanged();
         }
+        setMouseCursor (isCopyMode() ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::NormalCursor);
     }
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
     {
         if (controller.source() < 0 || displayLayer() != Layer::velocity || controller.selected.any()
             || controller.shiftDown (modifiers) || modifiers.isAnyMouseButtonDown())
             return {};
-        const auto edge = velocityEdgeAt (point);
-        if (!edge.valid())
-            return {};
-        const bool rightActive = controller.cell (edge).enabled;
-        const bool leftActive = edge.step > 0 && controller.cell ({ edge.channel, edge.step - 1 }).enabled;
-        return leftActive || rightActive ? edge : Location {};
+        return velocityEdgeAt (point);
     }
     Location PatternGrid::velocityEdgeAt (juce::Point<float> point) const
     {
@@ -156,7 +158,11 @@ namespace ksh::ui
         if (!location.valid() || std::abs (point.x - edgeX) >= velocityEdgeHitRadius)
             return {};
         const auto loop = controller.loop (location.channel);
-        return location.step >= loop.loopStart && location.step < loop.loopStart + loop.loopLength ? location : Location {};
+        if (location.step < loop.loopStart || location.step >= loop.loopStart + loop.loopLength)
+            return {};
+        const bool rightActive = controller.cell (location).enabled;
+        const bool leftActive = location.step > loop.loopStart && controller.cell ({ location.channel, location.step - 1 }).enabled;
+        return leftActive || rightActive ? location : Location {};
     }
     void PatternGrid::clearHoverMarker()
     {
@@ -193,13 +199,15 @@ namespace ksh::ui
     void PatternGrid::mouseExit (const juce::MouseEvent&) { clearHoverMarker(); }
     void PatternGrid::sync()
     {
+        setMouseCursor (isCopyMode() ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::NormalCursor);
         const auto& p = controller.state.playback;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
             clearHoverMarker();
         const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
-                               || displayedSelection.any() != controller.selected.any();
+                               || displayedSelection.any() != controller.selected.any() || displayedSelecting != controller.shiftDown (modifiers);
+        displayedSelecting = controller.shiftDown (modifiers);
         displayedSteps = layout.steps;
         displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
@@ -245,7 +253,7 @@ namespace ksh::ui
                 const auto& value = controller.cell (location);
                 const auto index = static_cast<size_t> (location.key());
                 if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index])
-                    repaint (layout.cell (location).expanded (2).getSmallestIntegerContainer());
+                    repaint (layout.cell (location).expanded (3).getSmallestIntegerContainer());
                 displayedCells[index] = value;
                 accessible.setVisible (ch < layout.channels && layout.stepVisible (step));
                 accessible.setEnabled (controller.source() >= 0);
@@ -293,6 +301,7 @@ namespace ksh::ui
     {
         g.fillAll (Palette::shell.interpolatedWith (Palette::app, 0.28f));
         const auto layer = displayLayer();
+        const bool selecting = controller.shiftDown (modifiers);
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
         for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
@@ -314,7 +323,7 @@ namespace ksh::ui
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 const Location pos { ch, step };
-                if (!g.clipRegionIntersects (layout.cell (pos).expanded (2).getSmallestIntegerContainer()))
+                if (!g.clipRegionIntersects (layout.cell (pos).expanded (3).getSmallestIntegerContainer()))
                     continue;
                 const auto& c = controller.cell (pos);
                 auto r = layout.cell (pos).reduced (0.8f);
@@ -353,13 +362,13 @@ namespace ksh::ui
                     g.reduceClipRegion (clip);
                     g.setGradientFill (juce::ColourGradient (light, r.getTopLeft(), fillBottom, r.getBottomLeft(), false));
                     g.fillRect (r);
-                    if (layer == Layer::velocity)
+                    if (!selecting && layer == Layer::velocity)
                     {
                         g.setColour (dark);
                         g.fillRect (r.withHeight (r.getHeight() * (1.0f - static_cast<float> (c.velocity) / 127.0f)));
                     }
                     // Roll subdivisions stay visible beneath every layer's value treatment.
-                    if (c.roll > 1)
+                    if (!selecting && c.roll > 1)
                     {
                         const float width = r.getWidth() / static_cast<float> (c.roll);
                         for (int part = 0; part < c.roll; ++part)
@@ -380,35 +389,44 @@ namespace ksh::ui
                     g.restoreState();
                     g.setColour (Palette::text.withAlpha (0.22f));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    if (layer == Layer::chance)
+                    if (!selecting)
                     {
-                        text (g, juce::String (c.probability) + "%", r.removeFromTop (r.getHeight() * 0.6f), layout.steps > 16 ? 9.0f : 12.0f, valueColour);
-                        const int bits = juce::jmin (c.cycle, 30);
-                        auto strip = r.reduced (3, 4);
-                        for (int i = 0; i < bits; ++i)
+                        // Keep values anchored between layers, with space below for cycle marks.
+                        const auto valueBounds = r.withHeight (r.getHeight() * 0.76f).translated (0, r.getHeight() * 0.05f);
+                        const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
+                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), valueBounds, valueSize, valueColour);
+                        if (layer == Layer::chance)
                         {
-                            g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
-                            g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 1), strip.getHeight());
+                            const int bits = juce::jmin (c.cycle, 30);
+                            const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f).withHeight (r.getHeight() * 0.14f).reduced (3, 0);
+                            for (int i = 0; i < bits; ++i)
+                            {
+                                g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
+                                g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 1), strip.getHeight());
+                            }
                         }
                     }
-                    else
-                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), r, juce::jmin (18.0f, layout.cellWidth() * (layer == Layer::chance ? 0.33f : 0.42f)), valueColour);
                 }
                 if (dimmed)
                     g.endTransparencyLayer();
                 if (!inLoop)
                     g.endTransparencyLayer();
-                // Keep selection clear even for disabled cells or steps outside the loop.
-                if (selected)
-                {
-                    const auto frame = layout.cell (pos).reduced (2);
-                    g.setColour (Palette::accent.withAlpha (0.3f));
-                    g.drawRoundedRectangle (frame, 5, 6);
-                    g.setColour (Palette::app);
-                    g.drawRoundedRectangle (frame.reduced (1), 4, 4);
-                    g.setColour (Palette::text);
-                    g.drawRoundedRectangle (frame.reduced (1), 4, 2);
-                }
+            }
+            // Paint selection over the completed row so neighboring cells cannot
+            // cover its outer halo. Keep the cell interior free of inset borders.
+            for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
+            {
+                const Location pos { ch, step };
+                if (!controller.selected.test (static_cast<size_t> (pos.key()))
+                    || !g.clipRegionIntersects (layout.cell (pos).expanded (3).getSmallestIntegerContainer()))
+                    continue;
+                const auto frame = layout.cell (pos).reduced (0.15f);
+                g.setColour (Palette::accent.withAlpha (0.16f));
+                g.drawRoundedRectangle (frame, 5.65f, 4.0f);
+                g.setColour (Palette::text.withAlpha (0.14f));
+                g.drawRoundedRectangle (frame, 5.65f, 2.5f);
+                g.setColour (Palette::text.withAlpha (0.95f));
+                g.drawRoundedRectangle (frame, 5.65f, 1.3f);
             }
             // Keep the loop boundary and handles above cells outside the loop.
             g.setColour (Palette::accent.withAlpha (0.42f));
@@ -471,7 +489,7 @@ namespace ksh::ui
                 if (last != flash)
                 {
                     last = flash;
-                    repaint (layout.cell ({ ch, s }).expanded (2).getSmallestIntegerContainer());
+                    repaint (layout.cell ({ ch, s }).expanded (3).getSmallestIntegerContainer());
                 }
             }
         if (previousStep != controller.playingStep)
@@ -509,13 +527,12 @@ namespace ksh::ui
                 return;
             }
         }
-        const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < velocityEdgeHitRadius;
-        if (!layout.compact && dragLayer == Layer::velocity)
-        {
-            const auto edge = velocityEdgeAt (e.position);
-            if (edge.valid())
-                anchor = edge;
-        }
+        const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels
+                                   && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < velocityEdgeHitRadius
+                                   && controller.cell ({ row, layout.steps - 1 }).enabled;
+        const auto edge = !layout.compact && dragLayer == Layer::velocity ? velocityEdgeAt (e.position) : Location {};
+        if (edge.valid())
+            anchor = edge;
         if (rightBoundary && dragLayer == Layer::velocity)
             anchor = { row, layout.steps - 1 };
         selectedAtStart = anchor.valid() && controller.selected.test (static_cast<size_t> (anchor.key()));
@@ -545,8 +562,7 @@ namespace ksh::ui
                 originals.emplace_back (p, controller.cell (p));
         else
             originals.emplace_back (anchor, original);
-        const auto r = layout.cell (anchor);
-        if (!layout.compact && dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || std::abs (e.position.x - r.getX()) < velocityEdgeHitRadius))
+        if (!layout.compact && dragLayer == Layer::velocity && !additive && !selectedAtStart && (rightBoundary || edge.valid()))
         {
             drag = Drag::velocityLine;
             boundary = rightBoundary ? layout.steps : anchor.step;
@@ -559,7 +575,7 @@ namespace ksh::ui
             return;
         }
         drag = Drag::pending;
-        if (e.mods.isLeftButtonDown() && !additive)
+        if (e.mods.isLeftButtonDown() && !additive && !isCopyMode())
             startTimer (500);
     }
     void PatternGrid::timerCallback()
@@ -627,17 +643,19 @@ namespace ksh::ui
         {
             if (origin.getDistanceFrom (current) < (selectedAtStart ? 5.0f : 4.0f))
                 return;
-            if (dragLayer == Layer::chance)
+            if (selectedAtStart && isCopyMode())
+                drag = Drag::copy;
+            else if (dragLayer == Layer::chance)
                 drag = Drag::value;
             else if (selectedAtStart)
-                drag = controller.useSelectionModifier (e.mods) ? Drag::value : (copySelection ? Drag::copy : Drag::move);
+                drag = controller.useSelectionModifier (e.mods) ? Drag::value : Drag::move;
             else
                 drag = std::abs (current.x - origin.x) > std::abs (current.y - origin.y) ? Drag::paint : Drag::value;
             controller.begin ("Edit cells");
         }
         if (drag == Drag::move || drag == Drag::copy)
         {
-            drag = copySelection ? Drag::copy : Drag::move;
+            drag = isCopyMode() ? Drag::copy : Drag::move;
             repaint();
             return;
         }
@@ -704,10 +722,13 @@ namespace ksh::ui
         }
         controller.notify();
     }
-    void PatternGrid::mouseUp (const juce::MouseEvent&)
+    void PatternGrid::mouseUp (const juce::MouseEvent& e)
     {
         stopTimer();
-        if (drag == Drag::pending && anchor.valid())
+        modifiers = e.mods;
+        if (drag == Drag::move || drag == Drag::copy)
+            drag = isCopyMode() ? Drag::copy : Drag::move;
+        if (drag == Drag::pending && anchor.valid() && !(selectedAtStart && isCopyMode()))
         {
             if (selectedAtStart && additive)
             {

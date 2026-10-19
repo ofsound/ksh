@@ -234,8 +234,9 @@ namespace ksh::ui
             place (page, 446, 3, 84, 40);
         if (layout.standalone)
         {
-            place (play, w - 240, 3, 36, 40);
-            place (stop, w - 200, 3, 36, 40);
+            play.setBounds (w - 200, 3, 36, 40);
+            stop.setBounds (play.getBounds());
+            visible.push_back (controller.processor.isStandaloneTransportPlaying() ? &stop : &play);
             place (tempo, w - 160, 3, 78, 40);
         }
         place (controls, w - 78, 3, 74, 40);
@@ -273,7 +274,7 @@ namespace ksh::ui
                 break;
             case Panel::pattern:
                 place (steps, 20, 114, 130, 60);
-                place (rate, 162, 114, 180, 60);
+                place (rate, 162, 114, rateControlWidth(), 60);
                 place (record, 354, 114, 60, 60);
                 place (left, 430, 114, 60, 60);
                 place (right, 502, 114, 60, 60);

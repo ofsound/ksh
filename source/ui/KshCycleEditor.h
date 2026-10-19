@@ -138,19 +138,29 @@ namespace ksh::ui
             {
                 setTooltip ("Drag horizontally to set cycle length (1-8); arrow keys adjust");
             }
+            void enablementChanged() override
+            {
+                const bool active = isEnabled();
+                setMouseCursor (active ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+                setWantsKeyboardFocus (active);
+                setInterceptsMouseClicks (active, false);
+                if (!active)
+                    cancel();
+                repaint();
+            }
             void paint (juce::Graphics& g) override
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 g.setColour (Palette::surface);
                 g.fillRoundedRectangle (r, 2);
-                g.setColour (Palette::accent);
+                g.setColour (Palette::accent.withMultipliedAlpha (isEnabled() ? 1.0f : 0.35f));
                 g.drawRoundedRectangle (r, 2, 1);
                 for (const float x : { 3.0f, 6.0f })
                     g.drawVerticalLine (static_cast<int> (x), r.getCentreY() - 5, r.getCentreY() + 5);
             }
             void mouseDown (const juce::MouseEvent& e) override
             {
-                if (!e.mods.isLeftButtonDown())
+                if (!isEnabled() || !e.mods.isLeftButtonDown())
                     return;
                 targets = owner.locations();
                 if (targets.empty())
@@ -163,12 +173,22 @@ namespace ksh::ui
             {
                 if (!dragging)
                     return;
+                if (!isEnabled() || owner.locations().empty())
+                {
+                    cancel();
+                    return;
+                }
                 const float x = e.getEventRelativeTo (&owner).position.x;
                 const float width = static_cast<float> (owner.cellStride);
                 apply (juce::jlimit (1, 8, static_cast<int> (std::ceil ((x - 8) / width))));
             }
             void mouseUp (const juce::MouseEvent&) override
             {
+                if (!isEnabled() || owner.locations().empty())
+                {
+                    cancel();
+                    return;
+                }
                 if (dragging)
                 {
                     dragging = false;
@@ -177,6 +197,8 @@ namespace ksh::ui
             }
             bool keyPressed (const juce::KeyPress& key) override
             {
+                if (!isEnabled())
+                    return false;
                 if (key == juce::KeyPress::escapeKey && dragging)
                 {
                     cancel();

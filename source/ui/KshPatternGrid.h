@@ -23,6 +23,7 @@ namespace ksh::ui
         void modifierKeysChanged (const juce::ModifierKeys&) override;
         void cancelGesture();
         Layer displayLayer() const;
+        bool isCopyMode() const;
 
     private:
         EditorController& controller;
@@ -82,6 +83,7 @@ namespace ksh::ui
         int displayedSteps = -1;
         int displayedFirstStep = -1;
         Layer displayedLayer = Layer::velocity;
+        bool displayedSelecting = false;
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;
         int boundary = 0, lineVelocity = 100;

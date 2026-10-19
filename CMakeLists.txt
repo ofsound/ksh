@@ -74,9 +74,16 @@ endif()
 # juce_add_module(modules/my_module)
 
 # See `docs/CMake API.md` in the JUCE repo for all config options
+set(KSH_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png")
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # iOS applies its own mask. The desktop icon has transparent outer padding
+    # that JUCE would flatten onto white when generating the iOS asset catalog.
+    set(KSH_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon-ios.png")
+endif()
+
 juce_add_plugin("${PROJECT_NAME}"
     # Icons for the standalone app
-    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png"
+    ICON_BIG "${KSH_APP_ICON}"
 
     COMPANY_NAME "${COMPANY_NAME}"
     BUNDLE_ID "${BUNDLE_ID}"

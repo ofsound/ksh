@@ -21,6 +21,11 @@ namespace ksh::ui
         auto f = juce::Font (juce::FontOptions (bold ? heavy : regular).withHeight (height * 1.18f));
         return f;
     }
+    inline int dropdownWidth (const juce::String& label)
+    {
+        return juce::jmax (juce::GlyphArrangement::getStringWidthInt (font (13), label),
+                          juce::GlyphArrangement::getStringWidthInt (font (13, true), label)) + 40;
+    }
     inline void text (juce::Graphics& g, const juce::String& value, juce::Rectangle<float> bounds, float size = 12.0f, juce::Colour colour = Palette::text, bool bold = false, juce::Justification align = juce::Justification::centred)
     {
         g.setColour (colour);
@@ -75,10 +80,62 @@ namespace ksh::ui
             g.drawRoundedRectangle (editor.getLocalBounds().toFloat().reduced (1.0f), 4.0f, 1.0f);
         }
         juce::Font getPopupMenuFont() override { return font (13); }
+        void preparePopupMenuWindow (juce::Component& window) override
+        {
+            // Rounded corners must expose the content underneath, rather than
+            // the white backing JUCE paints for an opaque menu window.
+            window.setOpaque (false);
+        }
+        int getPopupMenuBorderSizeWithOptions (const juce::PopupMenu::Options&) override { return 6; }
+        void getIdealPopupMenuItemSizeWithOptions (const juce::String& label, bool separator, int standardHeight, int& width, int& height, const juce::PopupMenu::Options& options) override
+        {
+            width = dropdownWidth (label) - 2 * getPopupMenuBorderSizeWithOptions (options);
+            height = separator ? 8 : standardHeight > 0 ? standardHeight : 30;
+        }
+        void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
+        {
+            const auto bounds = juce::Rectangle<float> (0, 0, static_cast<float> (width), static_cast<float> (height)).reduced (0.5f);
+            g.setColour (Palette::shell);
+            g.fillRoundedRectangle (bounds, 7.0f);
+            g.setColour (Palette::border.withAlpha (0.8f));
+            g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
+        }
+        void drawPopupMenuItemWithOptions (juce::Graphics& g, const juce::Rectangle<int>& area, bool highlighted, const juce::PopupMenu::Item& item, const juce::PopupMenu::Options&) override
+        {
+            const auto bounds = area.toFloat().reduced (6.0f, 1.0f);
+            if (highlighted && item.isEnabled)
+            {
+                g.setColour (Palette::raised);
+                g.fillRoundedRectangle (bounds, 4.0f);
+            }
+            else if (item.isTicked)
+            {
+                g.setColour (Palette::accent.withAlpha (0.08f));
+                g.fillRoundedRectangle (bounds, 4.0f);
+            }
+            text (g, item.text, bounds.withTrimmedLeft (8).withTrimmedRight (20), 13,
+                  !item.isEnabled ? Palette::faint : item.isTicked ? Palette::accent : Palette::text,
+                  item.isTicked, juce::Justification::centredLeft);
+            if (item.isTicked)
+            {
+                const float x = bounds.getRight() - 14, y = bounds.getCentreY();
+                juce::Path tick;
+                tick.startNewSubPath (x, y);
+                tick.lineTo (x + 3, y + 3);
+                tick.lineTo (x + 9, y - 4);
+                g.setColour (Palette::accent);
+                g.strokePath (tick, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+        }
         juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font (juce::jmin (14.0f, static_cast<float> (height) * 0.45f), true); }
         void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down) override
         {
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+            if (b.getProperties().contains ("dropdown"))
+            {
+                surface (g, r, b.hasKeyboardFocus (true), hover || down || b.getToggleState());
+                return;
+            }
             if (b.getProperties().contains ("transport"))
             {
                 const bool playing = b.getProperties()["icon"].toString() == "play";
@@ -150,6 +207,21 @@ namespace ksh::ui
         }
         void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool down) override
         {
+            if (b.getProperties().contains ("dropdown"))
+            {
+                const auto bounds = b.getLocalBounds().toFloat();
+                text (g, b.getButtonText(), bounds.withTrimmedLeft (14).withTrimmedRight (26), 13,
+                      b.isEnabled() ? Palette::text : Palette::faint, true, juce::Justification::centredLeft);
+                const float x = bounds.getRight() - 14, y = bounds.getCentreY();
+                const float direction = b.getToggleState() ? -1.0f : 1.0f;
+                juce::Path chevron;
+                chevron.startNewSubPath (x - 4, y - direction * 2);
+                chevron.lineTo (x, y + direction * 2);
+                chevron.lineTo (x + 4, y - direction * 2);
+                g.setColour (b.isEnabled() ? Palette::muted : Palette::faint);
+                g.strokePath (chevron, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                return;
+            }
             const auto icon = b.getProperties()["icon"].toString();
             if (icon.isNotEmpty())
             {

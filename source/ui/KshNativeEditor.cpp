@@ -1,6 +1,20 @@
 #include "KshNativeEditor.h"
 namespace ksh::ui
 {
+    const std::array<juce::String, 8> NativeEditor::rateNames { "Quarter", "Quarter triplet", "Eighth", "Eighth triplet", "16th", "16th triplet", "32nd", "32nd triplet" };
+
+    int NativeEditor::rateControlWidth()
+    {
+        static const int width = []
+        {
+            int widest = 0;
+            for (const auto& name : rateNames)
+                widest = juce::jmax (widest, dropdownWidth (name));
+            return widest;
+        }();
+        return width;
+    }
+
     NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true)
     {
         juce::PropertiesFile::Options options;
@@ -104,7 +118,7 @@ namespace ksh::ui
         mutePattern.onClick = [this] { controller.selectSource (-1); };
         heading.onClick = [this] { controller.layer = static_cast<Layer> ((static_cast<int> (controller.layer) + 1) % 2); sync(); };
         grid.layerChanged = [this] { updateLayerHeading(); };
-        heading.setTooltip (juce::String::fromUTF8 ("Switch Velocity / Chance editing layer • Hold Option for momentary Chance • Probability and cycle edits temporarily show Chance in the inspector"));
+        heading.setTooltip (juce::String::fromUTF8 ("Switch Velocity / Chance • Option temporarily shows Chance with no selection • Option-drag duplicates selected cells • Probability and cycle edits temporarily show Chance"));
         clear.setTooltip ("Double-click to clear pattern");
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
         record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
@@ -115,6 +129,10 @@ namespace ksh::ui
         redoButton.onClick = [this] { controller.redo(); };
         undoButton.setTooltip (juce::String::fromUTF8 ("Undo • Cmd-Z"));
         redoButton.setTooltip (juce::String::fromUTF8 ("Redo • Cmd-Shift-Z"));
+        rate.getProperties().set ("dropdown", true);
+        rate.setTitle ("Pattern rate");
+        rate.setTooltip ("Choose the step duration for this pattern");
+        rate.setTriggeredOnMouseDown (true);
         rate.onClick = [this] { rateMenu(); };
         play.onClick = [this] { controller.command ("standalone_transport_playing", { true }); };
         stop.onClick = [this] { controller.command ("standalone_transport_playing", { false }); };
@@ -147,6 +165,7 @@ namespace ksh::ui
     NativeEditor::~NativeEditor()
     {
         stopTimer();
+        juce::PopupMenu::dismissAllActiveMenus();
         controller.changed = {};
         setLookAndFeel (nullptr);
     }
@@ -189,7 +208,7 @@ namespace ksh::ui
         grid.layout = layout;
         compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
-        duplicate.setToggleState (grid.copySelection, juce::dontSendNotification);
+        duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
@@ -213,15 +232,15 @@ namespace ksh::ui
         tempo.setValue (juce::roundToInt (controller.processor.getStandaloneTempoBpm()));
         scale.setValue (controller.processor.getProjectUiScalePercent());
         static const std::array<std::string, 8> rates { "4n", "4nt", "8n", "8nt", "16n", "16nt", "32n", "32nt" };
-        static const std::array<juce::String, 8> names { "Quarter", "Quarter Triplet", "Eighth", "Eighth Triplet", "16th", "16th Triplet", "32nd", "32nd Triplet" };
         auto value = p.sourceSettings[static_cast<size_t> (juce::jmax (0, controller.source()))].rate;
         auto found = std::find (rates.begin(), rates.end(), value);
-        rate.setButtonText (found == rates.end() ? "16th" : names[static_cast<size_t> (found - rates.begin())] + juce::String::fromUTF8 ("   ▾"));
-        play.setVisible (layout.standalone);
-        stop.setVisible (layout.standalone);
+        rate.setButtonText (found == rates.end() ? "16th" : rateNames[static_cast<size_t> (found - rates.begin())]);
+        const bool playing = controller.processor.isStandaloneTransportPlaying();
+        play.setVisible (layout.standalone && !playing);
+        stop.setVisible (layout.standalone && playing);
         tempo.setVisible (layout.standalone);
-        play.setToggleState (controller.processor.isStandaloneTransportPlaying(), juce::dontSendNotification);
-        stop.setToggleState (!controller.processor.isStandaloneTransportPlaying(), juce::dontSendNotification);
+        play.setToggleState (playing, juce::dontSendNotification);
+        stop.setToggleState (!playing, juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
         tooltipToggle.setToggleState (tooltips != nullptr, juce::dontSendNotification);
@@ -274,10 +293,10 @@ namespace ksh::ui
         clear.setBounds (525, y + 13, 40, 41);
         undoButton.setBounds (686, y + 13, 40, 41);
         redoButton.setBounds (736, y + 13, 40, 41);
-        steps.setBounds (getWidth() - 374, y + 13, 120, 41);
-        rate.setBounds (getWidth() - 246, y + 13, 220, 41);
-        play.setBounds (getWidth() - 190, 6, 32, 32);
-        stop.setBounds (getWidth() - 150, play.getY(), play.getWidth(), play.getHeight());
+        rate.setBounds (getWidth() - 26 - rateControlWidth(), y + 13, rateControlWidth(), 41);
+        steps.setBounds (rate.getX() - 128, y + 13, 120, 41);
+        play.setBounds (getWidth() - 150, 6, 32, 32);
+        stop.setBounds (play.getBounds());
         tempo.setBounds (getWidth() - 110, play.getY(), 98, play.getHeight());
         const int randomY = juce::roundToInt (layout.toolbarY() + 68);
         const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
@@ -333,12 +352,31 @@ namespace ksh::ui
     void NativeEditor::rateMenu()
     {
         juce::PopupMenu menu;
-        const std::array<juce::String, 8> names { "Quarter", "Quarter triplet", "Eighth", "Eighth triplet", "16th", "16th triplet", "32nd", "32nd triplet" };
+        menu.setLookAndFeel (&look);
+        int selected = 5;
         for (int i = 0; i < 8; ++i)
-            menu.addItem (i + 1, names[static_cast<size_t> (i)]);
+        {
+            const bool current = rate.getButtonText() == rateNames[static_cast<size_t> (i)];
+            menu.addItem (i + 1, rateNames[static_cast<size_t> (i)], true, current);
+            if (current)
+                selected = i + 1;
+        }
+        rate.setToggleState (true, juce::dontSendNotification);
         const juce::Component::SafePointer<NativeEditor> safe (this);
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rate), [safe] (int result) {
-            if (safe == nullptr || result < 1)
+        auto target = rate.getScreenBounds();
+        const int gap = juce::roundToInt (4.0f * juce::Component::getApproximateScaleFactorForComponent (&rate));
+        target.setBottom (target.getBottom() + gap);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rate)
+                                .withTargetScreenArea (target)
+                                .withMinimumWidth (rate.getWidth())
+                                .withStandardItemHeight (30)
+                                .withMaximumNumColumns (1)
+                                .withInitiallySelectedItem (selected),
+                           [safe] (int result) {
+            if (safe == nullptr)
+                return;
+            safe->rate.setToggleState (false, juce::dontSendNotification);
+            if (result < 1)
                 return;
             static const std::array<std::string, 8> values { "4n", "4nt", "8n", "8nt", "16n", "16nt", "32n", "32nt" };
             safe->controller.begin ("Change rate", "rate");
@@ -363,9 +401,9 @@ namespace ksh::ui
     {
         if (textFocused())
             return false;
-        if (key.getModifiers().isCommandDown() && juce::CharacterFunctions::toLowerCase (key.getTextCharacter()) == 'z')
+        if (key.getModifiers().isCommandDown() && key.isKeyCode ('Z'))
         {
-            if (controller.useSelectionModifier (key.getModifiers()))
+            if (key.getModifiers().isShiftDown())
                 controller.redo();
             else
                 controller.undo();
@@ -445,6 +483,7 @@ namespace ksh::ui
             heading.repaint();
         }
         grid.modifierKeysChanged (mods);
+        duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         updateLayerHeading();
     }
     void NativeEditor::timerCallback()

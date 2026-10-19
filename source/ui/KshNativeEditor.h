@@ -60,6 +60,8 @@ namespace ksh::ui
         void updateLayerHeading();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
+        static const std::array<juce::String, 8> rateNames;
+        static int rateControlWidth();
         void toggleAboutPanel();
         bool textFocused() const;
     };

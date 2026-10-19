@@ -1,4 +1,4 @@
-# When packaging/icon.png changes, JUCE regenerates AppIcon.icns at configure time and Ninja
+# When the platform icon changes, JUCE regenerates icon assets at configure time and Ninja
 # may copy the new resource into plugin bundles without relinking. That leaves a stale ad-hoc
 # signature and macOS hosts will refuse to load the VST3/AU/CLAP. Force bundle targets to
 # rebuild (and run JUCE's POST_BUILD re-sign step) whenever the icon source changes.
@@ -7,7 +7,7 @@ if (NOT APPLE)
     return()
 endif()
 
-set(_ksh_icon_source "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png")
+get_target_property(_ksh_icon_source "${PROJECT_NAME}" JUCE_ICON_BIG)
 
 if (NOT EXISTS "${_ksh_icon_source}")
     return()
