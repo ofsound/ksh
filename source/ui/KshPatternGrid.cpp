@@ -150,7 +150,22 @@ namespace ksh::ui
             if (displayLayer() != previousLayer && layerChanged)
                 layerChanged();
         }
+        updateSoloHints();
         setMouseCursor (isCopyMode() ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::NormalCursor);
+    }
+    void PatternGrid::updateSoloHints()
+    {
+        const bool solo = controller.source() >= 0 && controller.shiftDown (modifiers);
+        for (auto& row : rows)
+        {
+            auto& button = row.mute;
+            if (static_cast<bool> (button.getProperties()["soloHint"]) == solo)
+                continue;
+            button.getProperties().set ("soloHint", solo);
+            button.setTooltip (solo ? "Click to solo this channel; click again to restore the other channels"
+                                    : juce::String::fromUTF8 ("Mute channel • Shift-click solo • right-click reset row"));
+            button.repaint();
+        }
     }
     Location PatternGrid::velocityHintAt (juce::Point<float> point) const
     {
@@ -271,6 +286,7 @@ namespace ksh::ui
             }
         displayedSelection = controller.selected;
         displayedNames = controller.noteNames;
+        updateSoloHints();
         if (laidOut != std::pair { layout, getLocalBounds() })
             resized();
         if (fullPaint)
@@ -306,6 +322,33 @@ namespace ksh::ui
             r.right.setBounds (arrowsX + 26, y, 26, 32);
         }
     }
+    void PatternGrid::prepareProbabilityLabels (float size)
+    {
+        if (std::abs (probabilityFontSize - size) < 0.001f)
+            return;
+        probabilityFontSize = size;
+        const auto labelFont = font (size);
+        const float digitWidth = juce::GlyphArrangement::getStringWidth (labelFont, "0");
+        const float percentWidth = juce::GlyphArrangement::getStringWidth (labelFont, "%");
+        probabilityBaseline = (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
+        // Gantari has proportional numerals and no tabular-number feature.
+        // Cache equal-width digit slots so matching digit counts keep % aligned.
+        for (int value = 0; value <= 100; ++value)
+        {
+            auto& label = probabilityLabels[static_cast<size_t> (value)];
+            const auto number = juce::String (value);
+            label.width = static_cast<float> (number.length()) * digitWidth + percentWidth;
+            label.glyphs.clear();
+            label.glyphs.addLineOfText (labelFont, number + "%", 0.0f, 0.0f);
+            for (int i = 0; i < label.glyphs.getNumGlyphs(); ++i)
+            {
+                auto& glyph = label.glyphs.getGlyph (i);
+                const float slot = static_cast<float> (i) * digitWidth;
+                const float inset = i < number.length() ? (digitWidth - glyph.getBounds().getWidth()) * 0.5f : 0.0f;
+                glyph.moveBy (slot + inset - glyph.getLeft(), 0.0f);
+            }
+        }
+    }
     void PatternGrid::paint (juce::Graphics& g)
     {
         const auto gridBackdrop = Palette::shell.interpolatedWith (Palette::app, 0.28f);
@@ -313,6 +356,10 @@ namespace ksh::ui
         const auto loopBackdrop = gridBackdrop.overlaidWith (loopTint);
         g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
+        const auto cellBounds = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
+        const float valueSize = juce::jmin (18.0f, cellBounds.getWidth() * 0.38f, cellBounds.getHeight() * 0.5f);
+        if (layer == Layer::chance)
+            prepareProbabilityLabels (juce::jmax (1.0f, valueSize - 3.0f));
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
         for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
@@ -350,7 +397,7 @@ namespace ksh::ui
                 if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                     colour = colour.interpolatedWith (Palette::surface, 0.58f);
                 if (dimmed)
-                    colour = colour.withMultipliedSaturation (0.6f);
+                    colour = colour.withMultipliedSaturation (0.85f);
                 const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
                 const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
                 const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
@@ -358,7 +405,7 @@ namespace ksh::ui
                 const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
                 // Out-of-loop and dimmed cells are faded toward the backdrop. Blending every colour
                 // against an opaque backdrop matches a transparency layer without the offscreen pass.
-                const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.16f : 1.0f);
+                const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.65f : 1.0f);
                 const auto paintCell = [&] (juce::Colour backdrop)
                 {
                     const auto tone = [opacity, backdrop] (juce::Colour value)
@@ -415,13 +462,13 @@ namespace ksh::ui
                     }
                     g.setColour (tone (Palette::text.withAlpha (0.22f)));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    // Lift the smaller probability label so its glyph top matches velocity.
-                    const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
-                    const float labelSize = layer == Layer::chance ? juce::jmax (1.0f, valueSize - 3.0f) : valueSize;
-                    const auto labelBounds = layer == Layer::chance ? r.translated (0.0f, -1.0f) : r;
-                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), labelBounds, labelSize, tone (valueColour));
                     if (layer == Layer::chance)
                     {
+                        // Lift the smaller probability label so its glyph top matches velocity.
+                        const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
+                        g.setColour (tone (valueColour));
+                        label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
+                                                 r.getCentreY() - 1.0f + probabilityBaseline));
                         const int bits = juce::jmin (c.cycle, 30);
                         const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
                         for (int i = 0; i < bits; ++i)
@@ -430,6 +477,8 @@ namespace ksh::ui
                             g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
                         }
                     }
+                    else
+                        text (g, juce::String (c.velocity), r, valueSize, tone (valueColour));
                 };
                 if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
                 {
@@ -448,8 +497,7 @@ namespace ksh::ui
                     paintCell (loopBackdrop);
                 }
             }
-            // Paint selection over the completed row so neighboring cells cannot
-            // cover its outer halo. Keep the cell interior free of inset borders.
+            // Paint a single thin selection outline above the completed row.
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 const Location pos { ch, step };
@@ -457,12 +505,8 @@ namespace ksh::ui
                     || !g.clipRegionIntersects (layout.cell (pos).expanded (3).getSmallestIntegerContainer()))
                     continue;
                 const auto frame = layout.cell (pos).reduced (0.15f);
-                g.setColour (Palette::accent.withAlpha (0.16f));
-                g.drawRoundedRectangle (frame, 5.65f, 4.0f);
-                g.setColour (Palette::text.withAlpha (0.14f));
-                g.drawRoundedRectangle (frame, 5.65f, 2.5f);
-                g.setColour (Palette::text.withAlpha (0.95f));
-                g.drawRoundedRectangle (frame, 5.65f, 1.3f);
+                g.setColour (Palette::text.withAlpha (0.9f));
+                g.drawRoundedRectangle (frame, 5.65f, 1.0f);
             }
             // Keep the loop boundary and handles above cells outside the loop.
             g.setColour (Palette::accent.withAlpha (0.42f));

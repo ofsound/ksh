@@ -660,15 +660,17 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
         dropPendingNoteOnsAtOrAfter (patternSelections.events[0].samplePosition);
     }
 
-    flushPendingNoteOns (numSamples, midiOut, result);
-    flushPendingNoteOffs (numSamples, midiOut);
-
     if (! isPlaying || ! snapshot.deviceActive || bpm <= 0.0)
     {
         if (wasPlaying)
         {
             releaseHeldNotes (midiOut);
             resetCycleCounters();
+        }
+        else
+        {
+            // Auditions may still have gates to finish while transport is stopped.
+            flushPendingNoteOffs (numSamples, midiOut);
         }
 
         flushAuditionNotes (numSamples, midiOut);
@@ -677,8 +679,6 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
         return result;
     }
-
-    flushAuditionNotes (numSamples, midiOut);
 
     const double beatsPerSample = (bpm / 60.0) / sampleRate;
     const double beatsPerStep = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
@@ -732,6 +732,12 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
             lastEmittedGlobalStep = firstGlobalStepAtOrAfter (landingPpq - edgeTolerance, beatsPerStep) - 1;
         }
     }
+
+    // Stop/device-off and seek cancellation must run before a deferred hit can
+    // emit. Otherwise its new note-off can be cleared after the note-on is sent.
+    flushPendingNoteOns (numSamples, midiOut, result);
+    flushPendingNoteOffs (numSamples, midiOut);
+    flushAuditionNotes (numSamples, midiOut);
 
     expectedNextPpq = ppqPosition + static_cast<double> (numSamples) * beatsPerSample;
     const int firstStep = lastEmittedGlobalStep.has_value() ? *lastEmittedGlobalStep + 1 : globalStepStart;

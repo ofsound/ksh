@@ -8,6 +8,8 @@ The visible editor polls at 60 Hz. Only changed state or flash/playhead regions 
 
 The audio callback only enqueues hit notifications and sets work flags. The processor drains them on its 120 Hz message-thread timer, including with the editor closed. The visible editor also asks the processor to drain hits immediately before its playback repaint pass. Audio processing never calls `triggerAsyncUpdate()` to wake the UI.
 
+Pattern recording uses separate bounded queues for incoming MIDI (audio-thread producer) and pad/QWERTY input (message-thread producer). The message thread drains both queues under the engine mutex; no SPSC queue has multiple producers.
+
 `RealtimeMailbox` coalesces unconsumed updates through one lock-free atomic pointer. A new publication replaces and recycles the previous pending snapshot, while the consumer's current snapshot remains immutable. Retired slots are recycled on the producer side; all producer operations are serialized by the engine mutex. Bursts while audio processing is suspended still deliver the latest state on the next callback.
 
 Deferred MIDI note-ons and note-offs use absolute deadlines on a monotonic callback sample timeline. Block sizes can change without shifting an event's deadline. Playback reset clears the pending events and sample timeline together.

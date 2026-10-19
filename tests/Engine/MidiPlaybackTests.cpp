@@ -575,6 +575,51 @@ TEST_CASE ("midi playback releases held notes on stop, seek, and device off", "[
     }
 }
 
+TEST_CASE ("transport cancellation drops deferred rolls before emitting them", "[engine][transport][realtime]")
+{
+    const int blockSize = GENERATE (64, 128, 512, 1024);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (16);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1, 0, false, 2);
+    auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+
+    // The second roll hit is due at sample 3000, inside the next callback.
+    const int cancelSample = 3000 - blockSize / 2;
+    const auto first = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, cancelSample);
+    REQUIRE (countNoteOns (first.midi) == 1);
+    double ppq = static_cast<double> (cancelSample) / 24000.0;
+    double bpm = 120.0;
+    bool playing = true;
+
+    SECTION ("stop") { playing = false; }
+    SECTION ("device off") { snapshot.deviceActive = false; }
+    SECTION ("invalid tempo") { bpm = 0.0; }
+    SECTION ("seek to the middle of an empty step") { ppq = 2.6; }
+    SECTION ("bypass")
+    {
+        juce::MidiBuffer released;
+        runner.suspend (released);
+        REQUIRE (countNoteOns (released) == 0);
+        playing = false;
+    }
+
+    for (int block = 0; block < 8; ++block)
+    {
+        CAPTURE (blockSize, block);
+        const auto result = runPlaybackBlock (runner, snapshot, ppq, bpm, playing, blockSize);
+        REQUIRE (countNoteOns (result.midi) == 0);
+        REQUIRE (result.noteHitCount == 0);
+        ppq += static_cast<double> (blockSize) / 48000.0 * bpm / 60.0;
+    }
+}
+
 TEST_CASE ("midi playback generates refresh windows on the audio thread deterministically", "[engine][transport][generation]")
 {
     EngineFixture fixture;

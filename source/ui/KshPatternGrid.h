@@ -86,6 +86,13 @@ namespace ksh::ui
         Layer displayedLayer = Layer::velocity;
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;
+        struct ProbabilityLabel
+        {
+            juce::GlyphArrangement glyphs;
+            float width = 0.0f;
+        };
+        std::array<ProbabilityLabel, 101> probabilityLabels;
+        float probabilityFontSize = 0.0f, probabilityBaseline = 0.0f;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         int boundary = 0, lineVelocity = 100;
         int valueStep = 0, valueVelocity = 100;
@@ -94,6 +101,8 @@ namespace ksh::ui
         Location velocityHintAt (juce::Point<float>) const;
         Location velocityEdgeAt (juce::Point<float>) const;
         void clearHoverMarker();
+        void updateSoloHints();
+        void prepareProbabilityLabels (float size);
         void timerCallback() override;
     };
 }

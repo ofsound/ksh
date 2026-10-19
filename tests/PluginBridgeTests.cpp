@@ -4,12 +4,18 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <thread>
+
 class PluginProcessorTestPeer
 {
 public:
     static bool messageThreadWorkPending (const PluginProcessor& processor) { return processor.messageThreadWorkPending.load(); }
     static void tick (PluginProcessor& processor) { processor.timerCallback(); }
     static bool hostTempoPending (const PluginProcessor& processor) { return processor.hostBpmChangePending.load(); }
+    static std::array<size_t, 2> pendingRecordCounts (const PluginProcessor& processor)
+    {
+        return { processor.pendingMidiPatternRecordEvents.size_approx(), processor.pendingUiPatternRecordEvents.size_approx() };
+    }
 };
 
 namespace
@@ -403,6 +409,87 @@ TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][br
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.sources[1][2][0].enabled);
     REQUIRE (engine.sources[1][2][0].velocity == 91);
+}
+
+TEST_CASE ("MIDI and UI recording have independent producer queues", "[plugin][bridge][record][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setBpm (20.0);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 64);
+    plugin.setPatternRecordingEnabled (true, 0);
+    juce::AudioBuffer<float> buffer (2, 64);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (81)), 0);
+    plugin.processBlock (buffer, midi);
+    REQUIRE (plugin.triggerRowFromUi (1, 93));
+
+    REQUIRE (PluginProcessorTestPeer::pendingRecordCounts (plugin) == std::array<size_t, 2> { 1, 1 });
+    PluginProcessorTestPeer::tick (plugin);
+    REQUIRE (PluginProcessorTestPeer::pendingRecordCounts (plugin) == std::array<size_t, 2> { 0, 0 });
+    const auto state = plugin.engineStateSnapshot();
+    REQUIRE (state.sources[0][0][0].enabled);
+    REQUIRE (state.sources[0][0][0].velocity == 81);
+    REQUIRE (state.sources[0][1][0].enabled);
+    REQUIRE (state.sources[0][1][0].velocity == 93);
+}
+
+TEST_CASE ("MIDI and UI recording preserve both streams under concurrent input", "[plugin][bridge][record][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    // Within the UI extrapolation window, triggers always quantize to step one.
+    playHead.setBpm (20.0);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 64);
+    plugin.setPatternRecordingEnabled (true, 0);
+    constexpr int rounds = 256;
+    juce::AudioBuffer<float> initialBuffer (2, 64);
+    juce::MidiBuffer initialMidi;
+    plugin.processBlock (initialBuffer, initialMidi);
+    PluginProcessorTestPeer::tick (plugin);
+    std::atomic<int> requested { 0 }, completed { 0 };
+    std::atomic<bool> cancelled { false };
+    std::thread audio ([&]
+    {
+        juce::AudioBuffer<float> buffer (2, 64);
+        juce::MidiBuffer midi;
+        midi.ensureSize (32768);
+        for (int round = 1; round <= rounds; ++round)
+        {
+            while (requested.load (std::memory_order_acquire) < round)
+            {
+                if (cancelled.load (std::memory_order_acquire))
+                    return;
+                std::this_thread::yield();
+            }
+            midi.clear();
+            midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (round % 127 + 1)), 0);
+            plugin.processBlock (buffer, midi);
+            completed.store (round, std::memory_order_release);
+        }
+    });
+    const juce::ScopeGuard joinAudio { [&]
+    {
+        cancelled.store (true, std::memory_order_release);
+        audio.join();
+    } };
+
+    for (int round = 1; round <= rounds; ++round)
+    {
+        CAPTURE (round);
+        requested.store (round, std::memory_order_release);
+        const int uiVelocity = (round + 31) % 127 + 1;
+        REQUIRE (plugin.triggerRowFromUi (1, uiVelocity));
+        while (completed.load (std::memory_order_acquire) < round)
+            std::this_thread::yield();
+        PluginProcessorTestPeer::tick (plugin);
+        const auto state = plugin.engineStateSnapshot();
+        REQUIRE (state.sources[0][0][0].velocity == round % 127 + 1);
+        REQUIRE (state.sources[0][1][0].velocity == uiVelocity);
+        REQUIRE (PluginProcessorTestPeer::pendingRecordCounts (plugin) == std::array<size_t, 2> { 0, 0 });
+    }
 }
 
 TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][bridge][midi-input]")

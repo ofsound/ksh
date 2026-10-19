@@ -125,6 +125,13 @@ public:
 
 private:
     friend class PluginProcessorTestPeer;
+    struct PatternRecordEvent
+    {
+        int source = 0;
+        int channel = 0;
+        int step = 0;
+        int velocity = 100;
+    };
     static BusesProperties createBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void initializeDefaultPattern();
@@ -158,7 +165,8 @@ private:
     void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying);
     void drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
-    [[nodiscard]] bool enqueuePatternRecordEvent (int source, int channel, int step, int velocity);
+    [[nodiscard]] static bool enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
+                                                         int source, int channel, int step, int velocity);
     [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
     [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity);
     [[nodiscard]] int quantizedStepForUiTrigger() const;
@@ -181,14 +189,9 @@ private:
     // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
     moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
-    struct PatternRecordEvent
-    {
-        int source = 0;
-        int channel = 0;
-        int step = 0;
-        int velocity = 100;
-    };
-    moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingPatternRecordEvents { 256 };
+    // Each queue has exactly one producer; only the message thread drains them.
+    moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingMidiPatternRecordEvents { 256 }; // audio -> message
+    moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingUiPatternRecordEvents { 256 }; // message -> message
     // Generated-source choices made by the audio thread, mirrored into the engine for the UI.
     moodycamel::ReaderWriterQueue<ksh::GeneratedSourcesFrame> generatedSourcesForEngine { 16 };
     std::atomic<int> currentStepForUi { 0 };

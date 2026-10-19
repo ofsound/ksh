@@ -808,7 +808,7 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
             {
                 const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
                 const int step = quantizedStepForPpq (snapshot, eventPpq);
-                recordQueued = enqueuePatternRecordEvent (recordSource, row, step, metadata.data[2])
+                recordQueued = enqueuePatternRecordEvent (pendingMidiPatternRecordEvents, recordSource, row, step, metadata.data[2])
                             || recordQueued;
             }
         }
@@ -856,26 +856,32 @@ void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
         syncMacroParametersFromEngineLocked (true);
 }
 
-bool PluginProcessor::enqueuePatternRecordEvent (int source, int channel, int step, int velocity)
+bool PluginProcessor::enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
+                                                 int source, int channel, int step, int velocity)
 {
     PatternRecordEvent event;
     event.source = ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1);
     event.channel = ksh::clampInt (channel, 0, ksh::Constants::maxChannels - 1);
     event.step = ksh::clampInt (step, 0, ksh::Constants::maxSteps - 1);
     event.velocity = ksh::clampInt (velocity, 1, 127);
-    return pendingPatternRecordEvents.try_enqueue (event);
+    return queue.try_enqueue (event);
 }
 
 void PluginProcessor::drainPendingPatternRecordEventsLocked()
 {
-    PatternRecordEvent event;
     bool changed = false;
 
-    while (pendingPatternRecordEvents.try_dequeue (event))
+    const auto drain = [this, &changed] (auto& queue)
     {
-        engine.setCell (event.source, event.channel, event.step, true, event.velocity, 100, 1, 0, false, 1);
-        changed = true;
-    }
+        PatternRecordEvent event;
+        while (queue.try_dequeue (event))
+        {
+            engine.setCell (event.source, event.channel, event.step, true, event.velocity, 100, 1, 0, false, 1);
+            changed = true;
+        }
+    };
+    drain (pendingMidiPatternRecordEvents);
+    drain (pendingUiPatternRecordEvents);
 
     if (changed)
     {
@@ -1321,7 +1327,7 @@ bool PluginProcessor::triggerRowFromUi (int channelZeroBased, int velocity)
                                      0,
                                      ksh::Constants::sourceCount - 1);
     const int step = quantizedStepForUiTrigger();
-    const bool queued = enqueuePatternRecordEvent (source, channelZeroBased, step, vel);
+    const bool queued = enqueuePatternRecordEvent (pendingUiPatternRecordEvents, source, channelZeroBased, step, vel);
 
     if (queued)
         messageThreadWorkPending.store (true, std::memory_order_release);

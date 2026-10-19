@@ -168,6 +168,14 @@ namespace ksh::ui
             }
             if (b.getProperties().contains ("icon"))
             {
+                if (b.isEnabled() && (hover || down) && static_cast<bool> (b.getProperties()["soloHint"]))
+                {
+                    g.setColour (Palette::accent.withAlpha (0.18f));
+                    g.fillRoundedRectangle (r, 4);
+                    g.setColour (Palette::accent);
+                    g.drawRoundedRectangle (r, 4, 1);
+                    return;
+                }
                 if (hover || down || b.hasKeyboardFocus (true))
                 {
                     g.setColour (Palette::raised);
@@ -191,7 +199,7 @@ namespace ksh::ui
                 g.drawRoundedRectangle (r, 4, 1);
             }
         }
-        void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool down) override
+        void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool hover, bool down) override
         {
             if (b.getProperties().contains ("dropdown"))
             {
@@ -211,6 +219,11 @@ namespace ksh::ui
             const auto icon = b.getProperties()["icon"].toString();
             if (icon.isNotEmpty())
             {
+                if (b.isEnabled() && (hover || down) && static_cast<bool> (b.getProperties()["soloHint"]))
+                {
+                    text (g, "S", b.getLocalBounds().toFloat(), juce::jmin (20.0f, b.getHeight() * 0.6f), Palette::accent, true);
+                    return;
+                }
                 g.setColour (!b.isEnabled() ? Palette::faint.withAlpha (0.4f) : b.getToggleState() || down ? Palette::accent
                                                                                                            : Palette::muted);
                 const auto r = b.getLocalBounds().toFloat();

@@ -34,6 +34,7 @@ A landscape iPhone editor keeps eight channels, 16 steps and the inspector visib
 - Shift-click a pattern chooses a copy source; click a destination to copy it.
 - Click channel labels to audition; double-click to rename. ASDFGHJK plays channels.
 - Click/drag channel power controls to mute; Shift-click solos; right-click resets a row.
+- Hold Shift (or latch Select) and hover a channel power control to reveal its gold S solo cue.
 - Numeric controls support dragging, scrolling, arrow keys, double-click entry, and right-click reset. A burst of scroll-wheel ticks is one undo step.
 - Cmd-Z / Cmd-Shift-Z undo/redo; Escape cancels a grid gesture; Delete clears selected cells.
 - Standalone provides Play/Stop, tempo, and Space transport. The DC control switches channel colors; UI scale is 50–120%.
