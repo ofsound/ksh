@@ -40,7 +40,6 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 }
 PluginEditor::~PluginEditor()
 {
-    processorRef.setEditorResizeCallback ({});
     nativeView.reset();
 }
 void PluginEditor::updateNativeSize()
@@ -179,7 +178,6 @@ juce::var PluginEditor::projectOperationResult (const bool success,
         object->setProperty ("hasPreviousProject", hasPreviousProject() ? 1 : 0);
         object->setProperty ("hasNextProject", hasNextProject() ? 1 : 0);
         object->setProperty ("projectUiScalePercent", processorRef.getProjectUiScalePercent());
-        object->setProperty ("projectThemeMode", processorRef.getProjectThemeMode());
     }
 
     return juce::var (object.release());

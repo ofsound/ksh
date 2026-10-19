@@ -9,7 +9,7 @@ KSH playback is snapshot based. The message/host side publishes immutable `Playb
 | `KickSnareHatEngine` | Owns pattern/generation state and builds `PlaybackSnapshot` |
 | `PluginProcessor` | Publishes snapshots, reports host tempo/transport to the message thread, and calls `MidiPlaybackRunner` from `processBlock` |
 | `MidiPlaybackRunner` | Realtime-safe MIDI evaluation and note scheduling |
-| `KshUiBridge` / Svelte | Drains message-thread events and flashes UI cells |
+| `KshUiBridge` / native editor | Receives note hits drained on the message thread and flashes grid cells |
 
 ## Realtime Rules
 
@@ -28,7 +28,7 @@ The audio thread must not:
 - Lock `engineStateMutex`
 - Mutate `KickSnareHatEngine`
 - Build JSON or strings
-- Call WebView/JUCE UI APIs
+- Call JUCE UI or `AsyncUpdater` APIs
 - Allocate containers or grow buffers
 
 ## Step Evaluation
@@ -45,16 +45,12 @@ For each emitted global step, playback resolves:
 - note-on and note-off scheduling
 - note-hit metadata for UI flashes
 
-The runner uses a small realtime-safe RNG for probability and humanize decisions.
-
-## Legacy Native Rows
-
-The engine still has `buildNativePlaybackRows()` tests because those rows are useful for preserving M4L behavior expectations. The audio thread does not consume a precomputed native playback table; it evaluates from `PlaybackSnapshot` live.
+The runner uses a small realtime-safe RNG for probability and humanize decisions. There is no precomputed playback table; every step is evaluated live from the snapshot.
 
 ## Tests
 
 ```sh
-./Builds/Tests "[engine][native]"
 ./Builds/Tests "[engine][transport]"
+./Builds/Tests "[plugin][realtime]"
 ./Builds/Tests
 ```

@@ -73,12 +73,6 @@ juce::String juceStringFromView (std::string_view text)
     return juce::String::fromUTF8 (text.data(), static_cast<int> (text.size()));
 }
 
-juce::String normalizeProjectThemeMode (const juce::String& themeMode)
-{
-    const auto normalized = themeMode.trim().toLowerCase();
-    return normalized == "light" || normalized == "alt" ? normalized : juce::String ("dark");
-}
-
 int rateIndexForValue (std::string_view rate)
 {
     const auto normalized = ksh::Constants::normalizeRate (rate);
@@ -247,7 +241,6 @@ void PluginProcessor::initializeDefaultPattern()
 PluginProcessor::PluginProcessor()
      : AudioProcessor (createBusesProperties()),
        parameters (*this, nullptr, "KSH_PARAMETERS", createParameterLayout()),
-       uiBridge (*this),
        engine (makeEngineCallbacks())
 {
     initializeDefaultPattern();
@@ -378,13 +371,7 @@ int PluginProcessor::emitPendingNoteHitsForUi()
     return emitted;
 }
 
-void PluginProcessor::scheduleUiPreviewFlush()
-{
-    messageThreadWorkPending.store (true, std::memory_order_release);
-    triggerAsyncUpdate();
-}
-
-void PluginProcessor::handleAsyncUpdate()
+void PluginProcessor::runMessageThreadWork()
 {
     // Hits first so flashes are never delayed behind engine work. Generation runs on the
     // audio thread, so nothing here sits between a refresh boundary and its first note.
@@ -409,9 +396,6 @@ void PluginProcessor::handleAsyncUpdate()
 
     emitPendingNoteHitsForUi();
     notifyHostOfStateChangeIfDue();
-
-    if (fullUiSyncPending.exchange (false, std::memory_order_acquire))
-        uiBridge.syncAll();
 }
 
 void PluginProcessor::applyPendingHostTempoLocked()
@@ -440,14 +424,13 @@ void PluginProcessor::applyPendingHostTempoLocked()
 PluginProcessor::~PluginProcessor()
 {
     stopTimer();
-    cancelPendingUpdate();
     removeMacroParameterListeners();
 }
 
 void PluginProcessor::timerCallback()
 {
     if (messageThreadWorkPending.exchange (false, std::memory_order_acquire))
-        handleAsyncUpdate();
+        runMessageThreadWork();
 }
 
 //==============================================================================
@@ -565,8 +548,7 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
         currentStepForUi.store (0, std::memory_order_relaxed);
     }
 
-    messageThreadWorkPending.store (true, std::memory_order_release);
-    triggerAsyncUpdate();
+    requestMessageThreadWork();
 }
 
 bool PluginProcessor::isStandaloneTransportPlaying() const
@@ -586,7 +568,7 @@ void PluginProcessor::setStandaloneTempoBpm (double bpm)
 
         if (std::abs (engine.getTempo() - bpm) > 0.01)
         {
-            engine.setTempo (bpm); // emits tempo status; avoid full engine_state resync
+            engine.setTempo (bpm);
             publishPlaybackSnapshotIfChangedLocked();
             markDocumentModified();
         }
@@ -756,11 +738,9 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (size_t i = 0; i < playback.noteHitCount; ++i)
         pushedHit = noteHitsForUi.try_enqueue (playback.noteHits[i]) || pushedHit;
 
+    // Drained by the message-thread timer; posting an OS message from here could block.
     if (pushedHit || notify)
-        messageThreadWorkPending.store (true, std::memory_order_release);
-
-    // The message-thread timer drains these flags/FIFOs. Posting an OS message
-    // here (triggerAsyncUpdate) can block the audio thread.
+        requestMessageThreadWork();
 }
 
 void PluginProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -899,7 +879,7 @@ void PluginProcessor::drainPendingPatternRecordEventsLocked()
 
     if (changed)
     {
-        fullUiSyncPending.store (true, std::memory_order_release);
+        uiBridge.invalidate();
         markDocumentModified();
     }
 }
@@ -978,8 +958,6 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
     }
 
     applyProjectMetadataFromState (*payload);
-    if (const auto scale = payload->find ("patternViewScale"); scale != payload->end() && scale->is_number())
-        setPatternViewScale (scale->get<double>());
 
     if (const auto playing = payload->find ("standaloneTransportPlaying");
         playing != payload->end() && (playing->is_boolean() || playing->is_number()))
@@ -998,8 +976,8 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
     markDocumentClean();
-    fullUiSyncPending.store (true, std::memory_order_release);
-    triggerAsyncUpdate();
+    uiBridge.invalidate();
+    requestMessageThreadWork();
     return true;
 }
 
@@ -1016,11 +994,8 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         state["projectDescription"] = projectDescription.toStdString();
         state["projectCreatedAt"] = projectCreatedAt.toStdString();
         state["projectModifiedAt"] = projectModifiedAt.toStdString();
-        state["projectThemeMode"] = "alt";
     }
-    state["patternViewScale"] = patternViewScale;
     state["standaloneTransportPlaying"] = isStandaloneTransportPlaying() ? 1 : 0;
-    state["standaloneTempo"] = clampStandaloneTempoBpm (engine.getTempo());
     return state;
 }
 
@@ -1105,7 +1080,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
                                       : false;
         const int source = args.is_array() && args.size() > 1 ? args[1].get<int>() - 1 : 0;
         setPatternRecordingEnabled (shouldRecord, source);
-        uiBridge.emitEngineState();
+        uiBridge.invalidate();
         return true;
     }
 
@@ -1115,7 +1090,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
         const int velocity = args.is_array() && args.size() > 1 ? args[1].get<int>() : 100;
         const bool ok = recordPatternRowAtCurrentStep (row, velocity);
         if (ok)
-            uiBridge.emitEngineState();
+            uiBridge.invalidate();
         return ok;
     }
 
@@ -1131,10 +1106,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
                                     ? (args[0].is_boolean() ? args[0].get<bool>() : args[0].get<int>() != 0)
                                     : false;
         setStandaloneTransportPlaying (shouldPlay);
-        // Transport-only: never push a full engine_state. A destructive persistence
-        // apply can wipe optimistic UI cells if the engine snapshot is empty/stale.
-        uiBridge.emitStatus (std::string { "standalone_transport_playing " }
-                             + (isStandaloneTransportPlaying() ? "1" : "0"));
+        uiBridge.invalidate();
         return hasStandaloneTransport();
     }
 
@@ -1258,16 +1230,6 @@ void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
     suppressParameterCallbacks.store (previousSuppression, std::memory_order_release);
 }
 
-void PluginProcessor::setEditorResizeCallback (EditorResizeCallback callback)
-{
-    editorResizeCallback = std::move (callback);
-}
-
-void PluginProcessor::setPatternViewScale (double scale)
-{
-    patternViewScale = scale == 1.5 ? 1.5 : 1.0;
-}
-
 void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 {
     const auto next = juce::jlimit (50, 120, uiScalePercent);
@@ -1276,18 +1238,6 @@ void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
         projectUiScalePercent = next;
         uiBridge.invalidate();
     }
-}
-
-juce::String PluginProcessor::getProjectThemeMode() const
-{
-    std::scoped_lock lock { projectMetadataMutex };
-    return projectThemeMode;
-}
-
-void PluginProcessor::setProjectThemeMode (const juce::String& themeMode)
-{
-    std::scoped_lock lock { projectMetadataMutex };
-    projectThemeMode = normalizeProjectThemeMode (themeMode);
 }
 
 void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
@@ -1463,13 +1413,10 @@ void PluginProcessor::applyProjectMetadataFromState (const nlohmann::json& state
         projectDescription = juceStringFromView (state.value ("projectDescription", std::string {})).trim();
         projectCreatedAt = juceStringFromView (state.value ("projectCreatedAt", std::string {}));
         projectModifiedAt = juceStringFromView (state.value ("projectModifiedAt", std::string {}));
-        projectThemeMode = normalizeProjectThemeMode (
-            juceStringFromView (state.value ("projectThemeMode", std::string { "dark" })));
     }
     catch (...)
     {
         setProjectMetadata ("Untitled Project", {}, {}, {});
-        setProjectThemeMode ("alt");
     }
 }
 
@@ -1495,27 +1442,14 @@ void PluginProcessor::resetProject()
     }
 
     setProjectMetadata ("Untitled Project", {}, {}, {});
-    setPatternViewScale (1.0);
-    setProjectThemeMode ("alt");
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
     markDocumentClean();
-    fullUiSyncPending.store (true, std::memory_order_release);
-    triggerAsyncUpdate();
-}
-
-void PluginProcessor::requestEditorSize (int width, int height)
-{
-    if (editorResizeCallback == nullptr)
-        return;
-
-    juce::MessageManager::callAsync ([callback = editorResizeCallback, width, height]
-                                     {
-                                         callback (width, height);
-                                     });
+    uiBridge.invalidate();
+    requestMessageThreadWork();
 }
 
 //==============================================================================

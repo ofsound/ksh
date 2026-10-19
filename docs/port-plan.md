@@ -10,9 +10,7 @@ KSH started as a Max for Live prototype and is now a JUCE-driven MIDI effect plu
 | Generation modes, channels, source cells, persistence | Complete |
 | MIDI playback in JUCE `processBlock` | Complete |
 | Plugin state save/load | Complete |
-| WebView bridge | Complete |
-| Compact UI | Complete |
-| Full editor UI | Complete |
+| Native JUCE editor (full, compact, iPhone) | Complete |
 | LiveAPI clip export | Not ported |
 
 M4L clip export is intentionally skipped. There is no standard JUCE/Logic equivalent to LiveAPI clip writing.
@@ -25,26 +23,24 @@ M4L clip export is intentionally skipped. There is no standard JUCE/Logic equiva
 | UI/host command dispatch | `source/engine/KshEngineCommands.*` |
 | Audio-thread playback | `source/engine/KshMidiPlayback.*` |
 | Snapshot handoff | `RealtimeMailbox<PlaybackSnapshot>` in `PluginProcessor` |
-| UI bridge | `KshUiBridge` + JUCE WebView native functions |
-| Frontend | Svelte/Vite in `ui/` |
+| UI change notifications | `KshUiBridge` revision/document counters and note-hit callback |
+| Frontend | Native JUCE components in `source/ui/` driven by `KshEditorController` |
 | Persistence | Strict `v:1` JSON via `serializeForPersistence()` / `deserializeForPersistence()` |
 
 The engine is mutable only on non-audio threads. The message/host side mutates engine state, then publishes an immutable `PlaybackSnapshot` to the audio thread. The audio thread reads only that snapshot and never locks or calls UI code.
 
 ## Threading Contract
 
-- `processBlock` must not allocate, block, lock, build strings, emit WebView events, or mutate `KickSnareHatEngine`.
+- `processBlock` must not allocate, block, lock, build strings, call UI code, or mutate `KickSnareHatEngine`.
 - Playback uses the latest immutable snapshot published by the message/host side.
 - Host tempo and transport position are reported from audio to message thread with atomics.
 - Note-hit UI events are queued through a lock-free FIFO and drained on the message thread.
-- Message-thread work is timer-polled. Do not call `triggerAsyncUpdate()` from audio or realtime-adjacent callbacks.
+- Message-thread work is timer-polled: callers set a pending flag with `requestMessageThreadWork()` and the processor's timer runs it. Do not use `AsyncUpdater` or `triggerAsyncUpdate()` from audio or realtime-adjacent callbacks.
 - The remaining `engineStateMutex` protects message-thread and host-thread engine access only. It is not an audio-thread lock.
 
 ## Playback Model
 
-`MidiPlaybackRunner` evaluates enabled generated cells live from `PlaybackSnapshot` at host step edges. Probability, cycle gates, velocity/timing humanize, rolls, swing, playback direction, note-on/off scheduling, and UI note-hit metadata are resolved in the runner with fixed-size state.
-
-The older precomputed native playback table code remains only as engine-side compatibility/test coverage for native-row behavior. It is not the audio-thread playback source of truth.
+`MidiPlaybackRunner` evaluates enabled generated cells live from `PlaybackSnapshot` at host step edges. Probability, cycle gates, velocity/timing humanize, rolls, swing, playback direction, note-on/off scheduling, and UI note-hit metadata are resolved in the runner with fixed-size state. There is no precomputed playback table.
 
 ## Persistence
 
@@ -62,6 +58,8 @@ The only supported plugin state format is direct JSON:
 ```
 
 Legacy M4L `ksh_pattern_data` wrappers and chunked `ksh_json_chunks_v1` atoms are rejected. Keep the format small and explicit: globals, channel rows, mutes, and sparse enabled/edited cells.
+
+Older saves may contain `projectThemeMode`, `patternViewScale`, or `standaloneTempo`. These keys are ignored on load and no longer written.
 
 ## Naming
 
@@ -97,8 +95,8 @@ Useful focused test filters:
 
 ```sh
 ./Builds/Tests "[engine][generation]"
-./Builds/Tests "[engine][native]"
 ./Builds/Tests "[engine][transport]"
 ./Builds/Tests "[plugin][persistence]"
 ./Builds/Tests "[plugin][bridge]"
+./Builds/Tests "[native-ui]"
 ```

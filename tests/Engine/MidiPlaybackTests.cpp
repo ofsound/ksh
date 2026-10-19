@@ -281,7 +281,7 @@ TEST_CASE ("midi playback resets cycle phases when the playback definition chang
     REQUIRE (hitSteps == std::vector<int> { 7, 8 });
 }
 
-TEST_CASE ("midi playback preserves cycle phases across transport window refreshes", "[engine][transport]")
+TEST_CASE ("midi playback preserves cycle phases across fresh snapshots", "[engine][transport]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -300,7 +300,6 @@ TEST_CASE ("midi playback preserves cycle phases across transport window refresh
 
     for (int step = 0; step < 6; ++step)
     {
-        fixture.engine.transportPosition (static_cast<double> (step) * beatsPerStep, true);
         const auto result = runPlaybackBlock (runner,
                                               fixture.engine.makePlaybackSnapshot(),
                                               static_cast<double> (step) * beatsPerStep,
@@ -878,7 +877,7 @@ TEST_CASE ("midi playback uses the selected swing subdivision phase", "[engine][
     REQUIRE (fineStep1.noteHits[0].delayMs == 0.0);
 }
 
-TEST_CASE ("transport position does not fire while stopped", "[engine][transport]")
+TEST_CASE ("midi playback does not fire while transport is stopped", "[engine][transport]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -889,9 +888,6 @@ TEST_CASE ("transport position does not fire while stopped", "[engine][transport
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
-
-    fixture.engine.transportPosition (0.0, false);
-    fixture.engine.transportPosition (0.25, false);
 
     const auto result = runPlaybackBlock (runner, fixture.engine.makePlaybackSnapshot(), 0.25, 120.0, false, 512);
 
@@ -1032,7 +1028,7 @@ TEST_CASE ("midi playback stays active with velocity humanize", "[engine][transp
     fixture.engine.generateWindow (0, 32, true);
     fixture.engine.setVelocityHumanize (10);
 
-    REQUIRE (fixture.engine.nativePlaybackActive());
+    REQUIRE (fixture.engine.isDeviceActive());
 
     ksh::MidiPlaybackRunner runner;
     runner.prepare (44100.0);
@@ -1128,4 +1124,49 @@ TEST_CASE ("midi playback repeats offset loop hits on loop length cadence", "[en
     }
 
     REQUIRE (hitSteps == std::vector<int> { 0, 6, 8, 10, 16, 18 });
+}
+
+TEST_CASE ("midi playback follows each channel playback mode inside its loop range", "[engine][transport]")
+{
+    struct ModeCase
+    {
+        PlaybackMode mode;
+        int stepCount, loopLength, loopStart;
+        std::vector<int> expectedVelocities;
+    };
+    const auto modeCase = GENERATE (values<ModeCase> ({
+        { PlaybackMode::reverse, 4, 4, 0, { 40, 30, 20, 10, 40 } },
+        { PlaybackMode::reverse, 8, 3, 2, { 50, 40, 30, 50 } },
+        { PlaybackMode::ping_pong, 4, 3, 0, { 10, 20, 30, 30, 20, 10, 10 } },
+        { PlaybackMode::reverse_ping_pong, 4, 3, 0, { 30, 20, 10, 10, 20, 30, 30 } },
+        { PlaybackMode::normal, 16, 10, 2, { 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 30, 40 } },
+    }));
+
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (modeCase.stepCount);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    for (int step = 0; step < modeCase.stepCount; ++step)
+        fixture.engine.setCell (0, 0, step, true, std::min (127, 10 * (step + 1)), 100, 1);
+    fixture.engine.setChannelLoopLength (0, modeCase.loopLength, modeCase.loopStart);
+    fixture.engine.setChannelPlaybackMode (0, modeCase.mode);
+    fixture.engine.generateWindow (0, modeCase.stepCount, true);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    std::vector<int> velocities;
+
+    for (size_t step = 0; step < modeCase.expectedVelocities.size(); ++step)
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (step) * snapshot.beatsPerStep, 120.0, true, 512);
+        for (const auto metadata : result.midi)
+            if (metadata.getMessage().isNoteOn())
+                velocities.push_back (metadata.getMessage().getVelocity());
+    }
+
+    CHECK (velocities == modeCase.expectedVelocities);
 }

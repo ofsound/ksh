@@ -55,6 +55,8 @@ Bundle the Gantari font locally with its redistribution license. Verify the exac
 
 Remove the theme button. Accept old `projectThemeMode` metadata without affecting appearance, and write `alt` on new saves for compatibility with older KSH builds. This requires no project schema change.
 
+> **Superseded:** the processor no longer stores a theme mode. `projectThemeMode`, `patternViewScale`, and `standaloneTempo` are ignored on load and not written. A WebView-era build opening a new save falls back to its default theme.
+
 ## Native architecture
 
 ```text

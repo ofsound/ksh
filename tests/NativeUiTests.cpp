@@ -8,7 +8,7 @@
 using namespace ksh;
 using namespace ksh::ui;
 
-TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom and pattern size", "[native-ui][render]")
+TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom", "[native-ui][render]")
 {
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
@@ -21,10 +21,8 @@ TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom and pa
     for (const auto viewport : { juce::Rectangle<int> (1024, 768), juce::Rectangle<int> (768, 1024), juce::Rectangle<int> (320, 700) })
     {
         editor.setBounds (viewport);
-        for (const double patternScale : { 1.0, 1.5 })
         for (const int savedScale : { 50, 100, 120 })
         {
-            processor.setPatternViewScale (patternScale);
             processor.setProjectUiScalePercent (savedScale);
             view->sync();
             CHECK (editor.getBounds() == viewport);
@@ -531,19 +529,17 @@ TEST_CASE ("Native layout and gesture constants match reference", "[native-ui]")
     CHECK (jsRound (-0.5) == 0);
     CHECK (jsRound (0.5) == 1);
     for (int steps : { 1, 16, 32 })
-        for (float scale : { 1.0f, 1.5f })
-        {
-            Layout layout;
-            layout.steps = steps;
-            layout.patternScale = scale;
-            for (int ch = 0; ch < 8; ++ch)
-                for (int s = 0; s < steps; ++s)
-                {
-                    const Location p { ch, s };
-                    CHECK (layout.at (layout.cell (p).getCentre()) == p);
-                    CHECK (layout.cell (p).getRight() < layout.width());
-                }
-        }
+    {
+        Layout layout;
+        layout.steps = steps;
+        for (int ch = 0; ch < 8; ++ch)
+            for (int s = 0; s < steps; ++s)
+            {
+                const Location p { ch, s };
+                CHECK (layout.at (layout.cell (p).getCentre()) == p);
+                CHECK (layout.cell (p).getRight() < layout.width());
+            }
+    }
     Cell c;
     c.velocity = 120;
     c.cycle = 64;

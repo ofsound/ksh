@@ -257,7 +257,6 @@ namespace ksh::ui
         (void) processor.dispatchUiEngineCommand (selector, args);
         if (transaction)
             lastOwn = processor.editorDocument();
-        processor.scheduleUiPreviewFlush();
         refresh();
         if (single)
             commit();

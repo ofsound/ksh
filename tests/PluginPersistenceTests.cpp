@@ -200,8 +200,6 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
                                  "External file test",
                                  "2026-07-08T10:00:00Z",
                                  "2026-07-08T11:00:00Z");
-    original.setPatternViewScale (1.5);
-    original.setProjectThemeMode ("alt");
 
     const auto saved = getPluginState (original);
     const auto parsed = nlohmann::json::parse (
@@ -209,8 +207,9 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
 
     REQUIRE (parsed["projectName"] == "Pseudoflute");
     REQUIRE (parsed["projectDescription"] == "External file test");
-    REQUIRE (parsed["projectThemeMode"] == "alt");
-    REQUIRE (parsed["patternViewScale"] == 1.5);
+    CHECK_FALSE (parsed.contains ("projectThemeMode"));
+    CHECK_FALSE (parsed.contains ("patternViewScale"));
+    CHECK_FALSE (parsed.contains ("standaloneTempo"));
 
     PluginProcessor restored;
     setPluginState (restored, saved);
@@ -219,28 +218,24 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
     REQUIRE (restored.getProjectDescription() == "External file test");
     REQUIRE (restored.getProjectCreatedAt() == "2026-07-08T10:00:00Z");
     REQUIRE (restored.getProjectModifiedAt() == "2026-07-08T11:00:00Z");
-    REQUIRE (restored.getProjectThemeMode() == "alt");
-    REQUIRE (restored.getPatternViewScale() == 1.5);
     REQUIRE (restored.engineStateSnapshot().sources[0][1][4].enabled);
 }
 
-TEST_CASE ("project theme mode rejects invalid and missing persisted values", "[plugin][persistence]")
+TEST_CASE ("projects saved with retired editor keys still load", "[plugin][persistence]")
 {
     PluginProcessor source;
+    configureSnarePattern (source);
     const auto saved = getPluginState (source);
     auto payload = nlohmann::json::parse (
         std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
-
-    PluginProcessor invalidTheme;
     payload["projectThemeMode"] = "sepia";
-    setPluginStateText (invalidTheme, payload.dump());
-    REQUIRE (invalidTheme.getProjectThemeMode() == "dark");
+    payload["patternViewScale"] = 1.5;
+    payload["standaloneTempo"] = 140.0;
 
-    PluginProcessor missingTheme;
-    missingTheme.setProjectThemeMode ("alt");
-    payload.erase ("projectThemeMode");
-    setPluginStateText (missingTheme, payload.dump());
-    REQUIRE (missingTheme.getProjectThemeMode() == "dark");
+    PluginProcessor restored;
+    setPluginStateText (restored, payload.dump());
+    CHECK (restored.engineStateSnapshot().sources[0][1][4].enabled);
+    CHECK (std::abs (restored.engineStateSnapshot().tempo - source.engineStateSnapshot().tempo) < 0.001);
 }
 
 TEST_CASE ("resetProject restores default project-owned state", "[plugin][persistence]")
@@ -248,16 +243,12 @@ TEST_CASE ("resetProject restores default project-owned state", "[plugin][persis
     PluginProcessor plugin;
     configureSnarePattern (plugin);
     plugin.setProjectMetadata ("Old Project", "Old description", "created", "modified");
-    plugin.setPatternViewScale (1.5);
-    plugin.setProjectThemeMode ("alt");
 
     plugin.resetProject();
 
     const auto state = plugin.engineStateSnapshot();
     REQUIRE (plugin.getProjectName() == "Untitled Project");
     REQUIRE (plugin.getProjectDescription().isEmpty());
-    REQUIRE (plugin.getPatternViewScale() == 1.0);
-    REQUIRE (plugin.getProjectThemeMode() == "alt");
     REQUIRE (state.channelCount == ksh::Constants::defaultChannelCount);
     REQUIRE_FALSE (state.sources[0][0][0].enabled);
     REQUIRE_FALSE (state.sources[0][1][4].enabled);

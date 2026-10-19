@@ -1,22 +1,14 @@
 #pragma once
-#include "engine/KickSnareHatEngine.h"
+#include "engine/KshNativePlayback.h"
 #include <atomic>
-#include <juce_gui_basics/juce_gui_basics.h>
-
-class PluginProcessor;
+#include <cstdint>
+#include <functional>
 
 /** Native message-thread notification boundary. Engine callbacks only invalidate state;
     they never call editor code while the engine mutex is held. */
 class KshUiBridge
 {
 public:
-    explicit KshUiBridge (PluginProcessor& p) : processor (p) {}
-    [[nodiscard]] bool handleCommand (const juce::String& commandJson);
-    void syncAll() { invalidate(); }
-    void requestState() { invalidate(); }
-    void emitEngineState() { invalidate(); }
-    void emitPreview (const nlohmann::json&) { invalidate(); }
-    void emitStatus (const std::string&) { invalidate(); }
     void emitNoteHit (const ksh::NativeHit& hit)
     {
         if (onNoteHit)
@@ -33,6 +25,5 @@ public:
     std::function<void (const ksh::NativeHit&)> onNoteHit;
 
 private:
-    PluginProcessor& processor;
     std::atomic<uint64_t> revision { 1 }, documentEpoch { 1 };
 };

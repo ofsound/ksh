@@ -4,7 +4,7 @@ This file provides guidance for AI coding agents working in this repository. See
 
 ## About This Project
 
-**KSH** by **ofsound** — a MIDI effect plugin. Built on the [Pamplejuce](https://github.com/sudara/pamplejuce) template with JUCE 8, CMake, C++23, Catch2 tests, and CLAP/AU/VST3/AUv3/Standalone formats.
+**KSH** by **ofsound** — a MIDI effect plugin. Built on the [Pamplejuce](https://github.com/sudara/pamplejuce) template with JUCE 8, CMake, C++23, and Catch2 tests. The default Ninja build produces Standalone, AU, VST3, and CLAP; AUv3 is configured but only built by the Xcode generator (desktop or the iOS presets in `docs/iphone-release.md`).
 
 Plugin-specific logic lives in `source/`. CI is macOS-only for now; code signing is disabled until release.
 
@@ -45,7 +45,7 @@ cmake --build Builds
 
 On macOS for universal binary: add `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` to configure.
 
-Built plugins are copied to `~/Library/Audio/Plug-Ins/` when `COPY_PLUGIN_AFTER_BUILD` is on (Debug builds too).
+`KSH.component`, `KSH.vst3`, and `KSH.clap` are copied to `~/Library/Audio/Plug-Ins/` when `KSH_COPY_PLUGIN_AFTER_BUILD` is on (the macOS default, Debug builds too). Run the build outside the agent sandbox so the install step can write there. The Debug standalone app is `Builds/KSH_artefacts/Debug/Standalone/KSH.app`.
 
 Builds default to **Debug** for development (faster builds, better debugging). Use **Release** if you hit audio dropouts or high CPU in a DAW.
 
@@ -56,25 +56,27 @@ The complete editor lives in `source/ui/`. It uses a fixed Alternative palette w
 - `KshStyle.h`: palette, embedded Gantari typography, vector icons, native controls.
 - `KshLayout.h`: shared rendering/hit-test geometry; one root UI-scale transform.
 - `KshEditorController`: typed snapshots, batched edits, conditional undo/redo, selection and gestures.
-- `KshPatternGrid`, `KshCycleEditor`, `KshPreviewPanel`, `KshNativeEditor`: native interface.
-- `KshUiBridge`: message-thread revision and note-hit notifications; no browser dependency.
+- `KshPatternGrid`, `KshCycleEditor`, `KshPreviewPanel`, `KshNativeEditor`, `KshCompactEditor`: native interface.
+- `KshUiBridge`: message-thread revision counter, document epoch, and note-hit callback only. There is no JSON command bus; editor and tests send edits through `KshEditorController` or `PluginProcessor::dispatchUiEngineCommand`.
+
+The processor has no theme mode, pattern-view scale, or editor-resize callback. Older saves containing `projectThemeMode`, `patternViewScale`, or `standaloneTempo` load with those keys ignored; do not write them again.
 
 Preserve strict `v:1` projects, host parameter IDs, audio-thread isolation, gesture cancellation, and external-recording conflict checks. See `docs/ui-sync.md` and `docs/native-ui-migration-plan.md`.
 
 ## Agent workflow (rebuild every time)
 
-After any change to `source/`, `CMakeLists.txt`, or plugin-related CMake modules:
+After any change to `source/`, `tests/`, `assets/`, `CMakeLists.txt`, or CMake modules (see `.cursor/rules/rebuild-after-changes.mdc`):
 
-1. Reconfigure only if CMake changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
-2. Build: `cmake --build Builds` (installs VST3, AU, Standalone, CLAP to system plugin folders)
-3. Fix compile/check warnings before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
+1. Reconfigure only if CMake or the asset list changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
+2. Build: `cmake --build Builds` (Standalone, AU, VST3, CLAP, and Tests; installs the AU, VST3, and CLAP bundles)
+3. Fix compile warnings before finishing the task; do not leave rebuilds to the user unless their toolchain is missing (cmake/ninja/Xcode).
 
-Run `./Builds/Tests` when test or processor behavior changes.
+Run `./Builds/Tests` when test or processor behavior changes. After a rebuild, quit and reopen the standalone app and reload the plugin in the DAW.
 
 ## Project Structure
 
 - `source/` - Plugin source code (PluginProcessor, PluginEditor, engine, native UI)
-- `cmake_project/` - Project-specific CMake (native assets, icons)
+- `cmake_project/` - Project-specific CMake (`KshAssets.cmake` for the native font list, `IconBundleGuard.cmake`)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
@@ -89,10 +91,10 @@ Run `./Builds/Tests` when test or processor behavior changes.
 
 **CMake Modules**:
 - `PamplejuceVersion.cmake` - Reads VERSION file, optional auto-bump patch level
-- `Assets.cmake` - Auto-includes all files in assets/ as binary data
+- `cmake_project/KshAssets.cmake` - Embeds the explicit native asset list as binary data (the template's `Assets.cmake` glob is not used)
 - `Tests.cmake` - Configures Catch2 test target
 - `Benchmarks.cmake` - Configures Catch2 benchmark target
-- `PamplejuceIPP.cmake` - Intel IPP integration (optional, disabled for KSH)
+- `PamplejuceIPP.cmake` - Intel IPP integration (present but not included by KSH)
 
 **Test Discovery**: Uses `catch_discover_tests()` with `PRE_TEST` discovery mode for Xcode compatibility.
 
@@ -103,7 +105,7 @@ Edit `CMakeLists.txt` to customize:
 - `PRODUCT_NAME` - Display name in DAWs (can have spaces)
 - `COMPANY_NAME` - Used for bundle name
 - `BUNDLE_ID` - macOS bundle identifier
-- `FORMATS` - Plugin formats to build (Standalone AU VST3 AUv3)
+- `FORMATS` - Plugin formats (desktop: Standalone AU VST3 AUv3; iOS: Standalone AUv3). CLAP is added separately through clap-juce-extensions on desktop.
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` - 4-character plugin IDs
 
 Version is read from the `VERSION` file in project root.
@@ -129,7 +131,8 @@ To communicate between them:
 - **Simple values**: Use `std::atomic` or JUCE's `AudioParameterFloat`/`AudioParameterBool` (which are atomic under the hood)
 - **Larger data**: Use a lock-free queue (e.g. `moodycamel::ReaderWriterQueue`) to pass data from message → audio thread
 - **Playback state**: Message/host threads mutate `KickSnareHatEngine`, then publish an immutable `PlaybackSnapshot` through `RealtimeMailbox`. `processBlock` reads only that snapshot.
-- **Audio → UI updates**: Use fixed-size atomics/FIFOs drained by a message-thread `juce::Timer`; never call UI code, `triggerAsyncUpdate()`, JSON/string builders, or engine mutation from the audio thread.
+- **Audio → UI updates**: Use fixed-size atomics/FIFOs drained by the processor's message-thread `juce::Timer`; never call UI code, `triggerAsyncUpdate()`, JSON/string builders, or engine mutation from the audio thread. The processor is not an `AsyncUpdater`: message-thread work is requested with `requestMessageThreadWork()` (an atomic flag) and run by `runMessageThreadWork()` on the timer.
+- **Playback evaluation**: `MidiPlaybackRunner` evaluates each step live from the snapshot. There is no precomputed playback table.
 - **Engine locking**: `engineStateMutex` is only for message/host-thread access. The audio thread must never take it.
 
 Host-automatable macro controls live in APVTS (`rate`, `swing`, `velocity_humanize`, `timing_humanize`, `device_active`). Pattern/grid state stays in strict `v:1` JSON using `channelCount` and `channels`; do not reintroduce legacy M4L wrapper/chunk persistence or UI `lane` naming.

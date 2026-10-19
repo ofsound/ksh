@@ -12,7 +12,6 @@ TEST_CASE ("Constants match M4L device limits", "[engine][foundation]")
     REQUIRE (Constants::sourceCount == 16);
     REQUIRE (Constants::defaultChannelCount == 8);
     REQUIRE (Constants::maxRoll == 8);
-    REQUIRE (Constants::nativeHitFieldCount == 9);
     REQUIRE (std::string { Constants::defaultRate } == "16n");
     REQUIRE (std::string { Constants::defaultGenerationMode } == "static");
 }

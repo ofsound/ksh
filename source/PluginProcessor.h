@@ -18,7 +18,6 @@
 #endif
 
 class PluginProcessor : public juce::AudioProcessor,
-                        private juce::AsyncUpdater,
                         private juce::Timer,
                         private juce::AudioProcessorValueTreeState::Listener
 {
@@ -95,32 +94,22 @@ public:
     void beginUiParameterGesture (const juce::String& parameterID);
     void endUiParameterGesture (const juce::String& parameterID);
 
-    /** Low-latency QWERTY / pad trigger: queues MIDI audition without the JSON command bus.
-        When pattern recording is armed, also enqueues a quantized cell write (deferred UI sync). */
+    /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
+        When pattern recording is armed, also enqueues a quantized cell write. */
     [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100);
-
-    using EditorResizeCallback = std::function<void (int, int)>;
-    void setEditorResizeCallback (EditorResizeCallback callback);
-    void requestEditorSize (int width, int height);
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
     /** Drain queued note-hit flashes to the native editor (safe on the message thread). */
     int emitPendingNoteHitsForUi();
-    /** Wake the message thread to flush a dirty preview without blocking a UI command. */
-    void scheduleUiPreviewFlush();
     bool hasStandaloneTransport() const;
     void setStandaloneTransportPlaying (bool shouldPlay);
     bool isStandaloneTransportPlaying() const;
     void setStandaloneTempoBpm (double bpm);
     double getStandaloneTempoBpm();
 
-    void setPatternViewScale (double scale);
-    [[nodiscard]] double getPatternViewScale() const { return patternViewScale; }
     int getProjectUiScalePercent() const noexcept { return projectUiScalePercent; }
     void setProjectUiScalePercent (int uiScalePercent);
-    [[nodiscard]] juce::String getProjectThemeMode() const;
-    void setProjectThemeMode (const juce::String& themeMode);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
 
@@ -140,7 +129,9 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void initializeDefaultPattern();
     ksh::EngineCallbacks makeEngineCallbacks();
-    void handleAsyncUpdate() override;
+    /** Message-thread half of every audio/host handoff; runs from the timer when work is pending. */
+    void runMessageThreadWork();
+    void requestMessageThreadWork() { messageThreadWorkPending.store (true, std::memory_order_release); }
     void timerCallback() override;
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void publishPlaybackSnapshot();
@@ -187,7 +178,7 @@ private:
     RealtimeMailbox<ksh::PlaybackSnapshot> playbackMailbox;
     unsigned long lastPublishedSnapshotVersion = 0; // message-thread only
 
-    // Audio -> message-thread handoff (drained in handleAsyncUpdate / polled by the editor).
+    // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
     moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
     struct PatternRecordEvent
@@ -208,7 +199,6 @@ private:
 
     std::atomic<bool> messageThreadWorkPending { false };
     std::atomic<bool> playbackResetRequested { false };
-    std::atomic<bool> fullUiSyncPending { false };
     // One bit per kMacroParameterIDs entry, set by host/UI parameter changes.
     std::atomic<uint32_t> dirtyMacroParameters { 0 };
     std::atomic<bool> suppressParameterCallbacks { false };
@@ -239,9 +229,6 @@ private:
     std::array<juce::MidiBuffer, 2> midiOutputBuffers;
     std::array<const juce::uint8*, 2> reservedMidiStorage {};
 
-    EditorResizeCallback editorResizeCallback;
-
-    double patternViewScale = 1.0;
     int projectUiScalePercent = 100;
 
     mutable std::mutex projectMetadataMutex;
@@ -249,7 +236,6 @@ private:
     juce::String projectDescription;
     juce::String projectCreatedAt;
     juce::String projectModifiedAt;
-    juce::String projectThemeMode { "alt" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

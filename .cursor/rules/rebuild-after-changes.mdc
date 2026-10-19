@@ -1,54 +1,39 @@
 ---
-description: Rebuild plugins and standalone after code changes
+description: Rebuild every desktop format and run tests after source or CMake changes
 alwaysApply: true
 ---
 
 # Rebuild after changes
 
-After any change that affects what the user sees in the app (`ui/`, `source/`, `CMakeLists.txt`, or plugin-related CMake), **rebuild every shipping format** and report success or errors. Do not ask the user to rebuild manually unless the toolchain is broken.
+After any change to `source/`, `tests/`, `benchmarks/`, `assets/`, `CMakeLists.txt`, `cmake/`, or `cmake_project/`, rebuild and report success or errors. Do not ask the user to rebuild unless the toolchain (Xcode, CMake, Ninja) is missing.
 
-## Required build
+The editor is native JUCE (`source/ui/`). There is no web frontend, npm build, dev server, or embedded UI bundle.
 
-Prefer the full default build:
+## Required steps
 
-```bash
-cmake --build Builds
-```
+1. Reconfigure only if CMake files or the asset list changed:
 
-That rebuilds Standalone, AU, VST3, AUv3, and CLAP, refreshes `assets/webview/ui.zip` in BinaryData when `ui/` changed, and copies built plugins to `~/Library/Audio/Plug-Ins/` when `COPY_PLUGIN_AFTER_BUILD` is on.
+   ```bash
+   cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
+   ```
 
-Do not build only the standalone app unless the user explicitly asks for that narrow target; DAW plugin bundles can otherwise remain stale.
+2. Build everything (Standalone, AU, VST3, CLAP, and Tests):
 
-## WebView UI (`ui/`)
+   ```bash
+   cmake --build Builds
+   ```
 
-Editors load the UI from **`assets/webview/ui.zip` embedded in BinaryData**, not from `ui/dist` directly.
+   Do not build a single target unless the user asks; DAW bundles would otherwise stay stale. The build installs `KSH.component`, `KSH.vst3`, and `KSH.clap` into `~/Library/Audio/Plug-Ins/`, so run it outside the sandbox. Desktop AUv3 is only produced by the Xcode generator.
 
-Svelte 5 sources in `ui/` must pass:
+3. Run the tests when behaviour, tests, or the processor changed:
 
-```bash
-cd ui && npm run check
-```
+   ```bash
+   ./Builds/Tests
+   ```
 
-Then run the full CMake build so every binary embeds the new zip:
+Treat compiler warnings as errors and fix them before finishing.
 
-```bash
-cmake --build Builds
-```
+## Checking the result
 
-`npm run dev` alone does not update standalone or plugin binaries. Debug builds load `http://localhost:5173` only while that Vite server is running.
-
-Built standalone app (Debug):
-
-`Builds/KSH_artefacts/Debug/Standalone/KSH.app`
-
-After rebuilding the standalone, fully quit and reopen it. Relaunching an already-running instance can keep the old embedded UI.
-
-## Plugin C++ (`source/`), CMake, tests
-
-1. If `CMakeLists.txt` changed: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
-2. Always: `cmake --build Builds`
-3. Run `./Builds/Tests` when test or processor behavior changes.
-
-## DAW reload
-
-After plugin binaries change, remove the plugin instance and reopen it, or restart the DAW. Rescan plug-in folders only when the host does not pick up replaced bundles automatically.
+- Debug Standalone: `Builds/KSH_artefacts/Debug/Standalone/KSH.app`. Quit it fully and reopen it after a rebuild.
+- DAWs: remove and re-add the plugin instance, or restart the host. Rescan plug-in folders only if the host does not pick up the replaced bundle.

@@ -5,12 +5,11 @@
 
 #include <array>
 #include <cstdint>
-#include <vector>
 
 namespace ksh
 {
 
-/** Flat native playback hit matching M4L coll row fields (9 values per hit). */
+/** One emitted note and the grid cell it came from, reported from the audio thread for UI flashes. */
 struct NativeHit
 {
     int pitch = 0;
@@ -27,54 +26,6 @@ struct NativeHit
     [[nodiscard]] bool operator== (const NativeHit&) const = default;
 };
 
-using NativePlaybackRow = std::vector<NativeHit>;
-using NativePlaybackTable = std::vector<NativePlaybackRow>;
-
-/** Flat row encoding used by M4L tests (9 fields per hit). */
-[[nodiscard]] inline std::vector<double> nativeHitRow (int pitch,
-                                                       int velocity,
-                                                       int durationMs,
-                                                       int midiChannel,
-                                                       double delayMs,
-                                                       int uiChannel,
-                                                       int uiGeneratedStep,
-                                                       int uiSource,
-                                                       int uiSourceStep)
-{
-    return {
-        static_cast<double> (pitch),
-        static_cast<double> (velocity),
-        static_cast<double> (durationMs),
-        static_cast<double> (midiChannel),
-        delayMs,
-        static_cast<double> (uiChannel),
-        static_cast<double> (uiGeneratedStep),
-        static_cast<double> (uiSource),
-        static_cast<double> (uiSourceStep)
-    };
-}
-
-[[nodiscard]] inline std::vector<double> flattenNativeRow (const NativePlaybackRow& row)
-{
-    std::vector<double> flat;
-    flat.reserve (row.size() * Constants::nativeHitFieldCount);
-
-    for (const auto& hit : row)
-    {
-        flat.push_back (static_cast<double> (hit.pitch));
-        flat.push_back (static_cast<double> (hit.velocity));
-        flat.push_back (static_cast<double> (hit.durationMs));
-        flat.push_back (static_cast<double> (hit.midiChannel));
-        flat.push_back (hit.delayMs);
-        flat.push_back (static_cast<double> (hit.uiChannel));
-        flat.push_back (static_cast<double> (hit.uiGeneratedStep));
-        flat.push_back (static_cast<double> (hit.uiSource));
-        flat.push_back (static_cast<double> (hit.uiSourceStep));
-    }
-
-    return flat;
-}
-
 /** Source chosen for each generated cell (-1 = none), as picked by the audio thread. */
 using GeneratedSources = std::array<std::array<int8_t, Constants::maxSteps>, Constants::maxChannels>;
 
@@ -82,19 +33,6 @@ struct GeneratedSourcesFrame
 {
     GeneratedSources sources {};
     unsigned long basisVersion = 0; ///< Engine generation the audio thread had adopted.
-};
-
-struct TransportProtection
-{
-    int globalStep = 0;
-    bool includeCurrent = false;
-};
-
-/** Result of {@link KickSnareHatEngine::buildNativePlaybackRows}; commit via syncNativePlaybackTable. */
-struct NativePlaybackBuild
-{
-    NativePlaybackTable rows;
-    int stepCount = 0;
 };
 
 /** Immutable, realtime-safe view of everything the audio thread needs to evaluate steps live.

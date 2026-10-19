@@ -32,8 +32,6 @@ struct Constants
     static constexpr int defaultMidiChannel = 1;
     static constexpr int defaultNoteDurationMs = 100;
 
-    static constexpr int nativeHitFieldCount = 9;
-
     static constexpr int phaseEarlyMsMin = -80;
     static constexpr int phaseEarlyMsMax = 80;
 

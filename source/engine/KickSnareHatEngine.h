@@ -92,10 +92,6 @@ struct EngineStateSnapshot
     bool deviceActive = true;
     int currentStep = 0;
     int playingStepOneBased = 0;
-    int nativePlaybackStepCount = 16;
-    int transportPlaying = 0;
-    std::optional<int> lastReportedGlobalStep;
-    NativePlaybackTable nativePlaybackRows;
     std::array<Channel, Constants::maxChannels> channels {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
     std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
@@ -127,11 +123,9 @@ public:
     [[nodiscard]] bool isDeviceActive() const { return deviceActive; }
     [[nodiscard]] int getCurrentStep() const { return currentStep; }
     [[nodiscard]] int getPlayingStepOneBased() const { return playingStepOneBased; }
-    [[nodiscard]] int getNativePlaybackStepCount() const { return nativePlaybackStepCount; }
     [[nodiscard]] const Channel& channelAt (int channel) const;
     [[nodiscard]] const Cell& sourceCellAt (int source, int channel, int step) const;
     [[nodiscard]] const Cell& generatedCellAt (int channel, int step) const;
-    [[nodiscard]] const NativePlaybackRow& nativePlaybackRowAt (int step) const;
     [[nodiscard]] bool sourceChannelMutedAt (int source, int channel) const;
 
 private:
@@ -163,10 +157,6 @@ private:
     bool deviceActive = true;
     int currentStep = 0;
     int playingStepOneBased = 0;
-    int nativePlaybackStepCount = 16;
-    int transportPlaying = 0;
-    std::optional<int> lastReportedGlobalStep;
-    NativePlaybackTable nativePlaybackRows;
 
     std::array<Channel, Constants::maxChannels> channels {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
@@ -260,10 +250,6 @@ public:
 
     [[nodiscard]] std::optional<MidiNoteEvent> auditionChannel (int channel);
 
-    [[nodiscard]] int nativePlaybackPeriod() const;
-    [[nodiscard]] bool nativePlaybackSupported() const;
-    [[nodiscard]] bool nativePlaybackActive() const { return deviceActive; }
-
     /** Immutable view for the audio thread. Built on the message thread. */
     [[nodiscard]] PlaybackSnapshot makePlaybackSnapshot() const;
     /** Same as makePlaybackSnapshot, written into existing storage so no ~140 KB temporary is copied. */
@@ -271,14 +257,7 @@ public:
 
     /** Bumped whenever playback-affecting state changes; lets owners publish only on change. */
     [[nodiscard]] unsigned long playbackSnapshotVersion() const { return playbackSnapshotVersion_; }
-    [[nodiscard]] int playbackStepForChannel (int channel, int playbackIndex) const;
-    [[nodiscard]] NativePlaybackBuild buildNativePlaybackRows (
-        const std::optional<TransportProtection>& transportProtection = std::nullopt);
-    void commitNativePlaybackBuild (NativePlaybackBuild build);
-    [[nodiscard]] int globalStepForBeats (double songBeats) const;
     [[nodiscard]] double beatsPerStep() const;
-    void transportPosition (double songBeats, bool isPlaying);
-    void syncNativePlaybackTable();
     void flushPreview();
     [[nodiscard]] bool isPreviewDirty() const { return previewDirty; }
 
@@ -289,7 +268,6 @@ private:
     mutable std::vector<double> testRandomValues;
     mutable size_t testRandomIndex = 0;
     bool previewDirty = false;
-    bool nativeTransportRefreshInProgress = false;
     unsigned long playbackSnapshotVersion_ = 0;
     unsigned long generationVersion_ = 0;
 
@@ -316,22 +294,6 @@ private:
     void refreshGeneratedCellsForSourceEdit (int source, int channel, int sourceStep);
     [[nodiscard]] bool isSourceChannelMuted (int source, int channel) const;
     void updateStepIntervalMs();
-
-    [[nodiscard]] std::string cycleKey (int source, int channel, int step) const;
-    [[nodiscard]] double playbackTimingHumanizeRangeMs() const;
-    [[nodiscard]] double playbackHumanizeTimingOffsetMs();
-    [[nodiscard]] int humanizeVelocity (int velocity);
-    [[nodiscard]] int rollNoteDurationMs (int roll) const;
-    void appendNativeHit (NativePlaybackRow& row,
-                          int channel,
-                          int rowStep,
-                          const Cell& cell,
-                          int velocity,
-                          double delayMs,
-                          int durationMs) const;
-    void prepareStepForPlayback (int step);
-    void reportTransportStep (int globalStep);
-    [[nodiscard]] int currentNativePlaybackStep() const;
 };
 
 } // namespace ksh

@@ -143,10 +143,6 @@ EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
     snapshot.deviceActive = deviceActive;
     snapshot.currentStep = currentStep;
     snapshot.playingStepOneBased = playingStepOneBased;
-    snapshot.nativePlaybackStepCount = nativePlaybackStepCount;
-    snapshot.transportPlaying = transportPlaying;
-    snapshot.lastReportedGlobalStep = lastReportedGlobalStep;
-    snapshot.nativePlaybackRows = nativePlaybackRows;
     snapshot.channels = channels;
     snapshot.sources = sources;
     snapshot.sourceSettings = sourceSettings;
@@ -171,11 +167,6 @@ const Cell& KickSnareHatEngine::sourceCellAt (int source, int channel, int step)
 const Cell& KickSnareHatEngine::generatedCellAt (int channel, int step) const
 {
     return generated[static_cast<size_t> (clampChannel (channel))][static_cast<size_t> (clampStep (step))];
-}
-
-const NativePlaybackRow& KickSnareHatEngine::nativePlaybackRowAt (int step) const
-{
-    return nativePlaybackRows[static_cast<size_t> (clampInt (step, 0, nativePlaybackStepCount - 1))];
 }
 
 bool KickSnareHatEngine::sourceChannelMutedAt (int source, int channel) const

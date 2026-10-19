@@ -1,5 +1,13 @@
-Thanks for installing!
+Thanks for installing KSH by ofsound.
 
-This plugin was made with the Pamplejuce template.
+KSH is a MIDI effect: it generates kick, snare and hat patterns as MIDI notes for the instrument that follows it.
 
-TODO: Update this text with what you want to show up in your macOS installer.
+You can choose which components to install:
+  - Standalone app
+  - VST3 (Ableton Live and other VST3 hosts)
+  - AU (Logic and other Audio Unit hosts)
+  - CLAP
+
+Logic: load KSH in a MIDI FX slot above the instrument.
+
+Ableton Live: use the VST3. Load KSH in the instrument slot of one MIDI track, put your synth on a second track, and set that track's MIDI From to the first track and KSH, with Monitor set to In.

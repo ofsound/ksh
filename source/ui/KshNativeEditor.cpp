@@ -211,7 +211,6 @@ namespace ksh::ui
         if (layout.firstStep >= layout.steps)
             layout.firstStep = 0;
         layout.standalone = controller.processor.hasStandaloneTransport();
-        layout.patternScale = static_cast<float> (controller.processor.getPatternViewScale());
         grid.layout = layout;
         compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));

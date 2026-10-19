@@ -1,6 +1,6 @@
 # KSH performance review — 2026-10-13
 
-**Follow-up:** The three P1 findings below have been fixed. See [fixes and validation](fixes.md) for the implementation, regression coverage, and new measurements. The original review and baseline results below are retained for comparison.
+**Follow-up:** The three P1 findings below have been fixed. See [fixes and validation](fixes.md) for the implementation, regression coverage, and new measurements. The three P2 findings were fixed later: MIDI input is parsed from raw bytes and output buffers are reserved in `prepareToPlay`, preview invalidation no longer builds JSON, and the editor syncs once per revision and skips unchanged panels. The original review and baseline results below are retained for comparison.
 
 Reviewed the current working tree, including the uncommitted native UI migration. No production code was changed. The strongest opportunities are timing correctness, realtime safety, and reducing message-thread work; raw note scheduling is already inexpensive.
 

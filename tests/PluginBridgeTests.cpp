@@ -7,7 +7,7 @@
 class PluginProcessorTestPeer
 {
 public:
-    static bool asyncUpdatePending (const PluginProcessor& processor) { return processor.isUpdatePending(); }
+    static bool messageThreadWorkPending (const PluginProcessor& processor) { return processor.messageThreadWorkPending.load(); }
     static void tick (PluginProcessor& processor) { processor.timerCallback(); }
     static bool hostTempoPending (const PluginProcessor& processor) { return processor.hostBpmChangePending.load(); }
 };
@@ -96,21 +96,21 @@ bool containsNoteOff (const juce::MidiBuffer& midi, int pitch)
 }
 } // namespace
 
-TEST_CASE ("audio note hits reach the UI timer without posting an async update", "[plugin][bridge][realtime]")
+TEST_CASE ("audio note hits reach the UI through the message-thread timer", "[plugin][bridge][realtime]")
 {
     PluginProcessor plugin;
     FixedPlayHead playHead;
     plugin.setPlayHead (&playHead);
     plugin.prepareToPlay (48000.0, 512);
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    PluginProcessorTestPeer::tick (plugin);
     int hits = 0;
     plugin.getUiBridge().onNoteHit = [&] (const ksh::NativeHit&) { ++hits; };
-    REQUIRE_FALSE (PluginProcessorTestPeer::asyncUpdatePending (plugin));
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
     plugin.processBlock (buffer, midi);
     REQUIRE (containsNoteOn (midi, 36));
-    REQUIRE_FALSE (PluginProcessorTestPeer::asyncUpdatePending (plugin));
+    REQUIRE (PluginProcessorTestPeer::messageThreadWorkPending (plugin));
     REQUIRE (hits == 0);
     PluginProcessorTestPeer::tick (plugin);
     REQUIRE (hits == 1);
@@ -225,32 +225,25 @@ TEST_CASE ("in-app edits mark the project modified until it is saved or loaded",
     REQUIRE (plugin.engineStateSnapshot().sources[0][0][0].enabled);
 }
 
-TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge]")
+TEST_CASE ("ui revision bumps without an editor and leaves the default project intact", "[plugin][bridge]")
 {
     PluginProcessor plugin;
+    const auto before = plugin.getUiBridge().getRevision();
 
-    plugin.getUiBridge().syncAll();
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing", { 12 }));
+    REQUIRE_FALSE (plugin.dispatchUiEngineCommand ("not_a_command", {}));
 
+    CHECK (plugin.getUiBridge().getRevision() > before);
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.stepCount == 16);
     REQUIRE_FALSE (engine.sources[0][0][0].enabled);
 }
 
-TEST_CASE ("ui bridge handleCommand parses sync_all json", "[plugin][bridge]")
+TEST_CASE ("ui command applies cell edit", "[plugin][bridge]")
 {
     PluginProcessor plugin;
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"sync_all","args":[]})"));
-    REQUIRE_FALSE (plugin.getUiBridge().handleCommand ("not json"));
-    REQUIRE_FALSE (plugin.getUiBridge().handleCommand (R"({"args":[]})"));
-}
-
-TEST_CASE ("ui bridge handleCommand applies cell edit", "[plugin][bridge]")
-{
-    PluginProcessor plugin;
-
-    REQUIRE (plugin.getUiBridge().handleCommand (
-        R"({"selector":"cell","args":[1,1,5,1,90,100,1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1,1,5,1,90,100,1 }));
 
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.sources[0][0][4].enabled);
@@ -267,25 +260,25 @@ TEST_CASE ("processor command setVelocityHumanize does not crash", "[plugin][bri
     REQUIRE (plugin.engineStateSnapshot().deviceActive);
 }
 
-TEST_CASE ("ui bridge humanize commands rebuild native playback safely", "[plugin][bridge]")
+TEST_CASE ("ui humanize commands republish playback safely", "[plugin][bridge]")
 {
     PluginProcessor plugin;
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("velocity_humanize", { 1 }));
     REQUIRE (plugin.engineStateSnapshot().deviceActive);
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"timing_humanize","args":[1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("timing_humanize", { 1 }));
     REQUIRE (plugin.engineStateSnapshot().deviceActive);
 }
 
-TEST_CASE ("ui bridge humanize commands survive processBlock", "[plugin][bridge]")
+TEST_CASE ("ui humanize commands survive processBlock", "[plugin][bridge]")
 {
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"velocity_humanize","args":[1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("velocity_humanize", { 1 }));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
@@ -308,36 +301,35 @@ TEST_CASE ("ui playback edits do not retrigger the current step", "[plugin][brid
     plugin.processBlock (buffer, midi);
     REQUIRE (countNoteOns (midi) == 1);
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"swing","args":[37]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing", { 37 }));
 
     midi.clear();
     plugin.processBlock (buffer, midi);
     REQUIRE (countNoteOns (midi) == 0);
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"cell","args":[1,1,2,1,100,100,1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1,1,2,1,100,100,1 }));
 
     midi.clear();
     plugin.processBlock (buffer, midi);
     REQUIRE (countNoteOns (midi) == 0);
 }
 
-TEST_CASE ("ui bridge macro commands update host parameters", "[plugin][bridge]")
+TEST_CASE ("ui macro commands update host parameters", "[plugin][bridge]")
 {
     PluginProcessor plugin;
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"swing","args":[37]})"));
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"rate","args":["8n"]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing", { 37 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("rate", { "8n" }));
 
     REQUIRE (plugin.getValueTreeState().getRawParameterValue ("swing")->load() == 37.0f);
     REQUIRE (plugin.getValueTreeState().getRawParameterValue ("rate")->load() == 2.0f);
 }
 
-TEST_CASE ("ui bridge swing subdivision command updates engine state", "[plugin][bridge]")
+TEST_CASE ("ui swing subdivision command updates engine state", "[plugin][bridge]")
 {
     PluginProcessor plugin;
 
-    REQUIRE (plugin.getUiBridge().handleCommand (
-        R"({"selector":"swing_subdivision","args":[2]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing_subdivision", { 2 }));
     REQUIRE (plugin.engineStateSnapshot().swingSubdivisionIndex == 2);
 }
 
@@ -354,13 +346,13 @@ TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
     REQUIRE (plugin.engineStateSnapshot().swing == 41);
 }
 
-TEST_CASE ("ui bridge channel audition emits midi note", "[plugin][bridge]")
+TEST_CASE ("ui channel audition emits midi note", "[plugin][bridge]")
 {
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
     REQUIRE (plugin.dispatchUiEngineCommand ("channel_note", { 2, 42 }));
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"channel_audition","args":[2]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("channel_audition", { 2 }));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
@@ -601,7 +593,7 @@ TEST_CASE ("incoming row MIDI notes monitor when pattern recording is off", "[pl
     PluginProcessor plugin;
     plugin.prepareToPlay (44100.0, 512);
 
-    REQUIRE (plugin.getUiBridge().handleCommand (R"({"selector":"cell","args":[1,1,1,1,100,100,1]})"));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1,1,1,1,100,100,1 }));
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;

@@ -48,14 +48,6 @@ struct EngineTestPeer
         return engine.randomCallCount;
     }
 
-    static void setTransportState (KickSnareHatEngine& engine,
-                                   int transportPlayingIn,
-                                   std::optional<int> lastReportedGlobalStepIn)
-    {
-        engine.transportPlaying = transportPlayingIn;
-        engine.lastReportedGlobalStep = lastReportedGlobalStepIn;
-    }
-
     static void setPlaybackState (KickSnareHatEngine& engine, int currentStepIn, int playingStepOneBasedIn)
     {
         engine.currentStep = clampInt (currentStepIn, 0, engine.stepCount - 1);
