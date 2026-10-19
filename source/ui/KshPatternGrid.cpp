@@ -388,10 +388,11 @@ namespace ksh::ui
                     g.restoreState();
                     g.setColour (Palette::text.withAlpha (0.22f));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    // Both value labels share the cell's vertical center.
+                    // Lift the smaller probability label so its glyph top matches velocity.
                     const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
-                    const float labelSize = layer == Layer::chance ? juce::jmax (1.0f, valueSize - 2.0f) : valueSize;
-                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), r, labelSize, valueColour);
+                    const float labelSize = layer == Layer::chance ? juce::jmax (1.0f, valueSize - 3.0f) : valueSize;
+                    const auto labelBounds = layer == Layer::chance ? r.translated (0.0f, -1.0f) : r;
+                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), labelBounds, labelSize, valueColour);
                     if (layer == Layer::chance)
                     {
                         const int bits = juce::jmin (c.cycle, 30);
