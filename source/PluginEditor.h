@@ -34,6 +34,7 @@ private:
     PluginProcessor& processorRef;
     const bool fitViewport;
 
+    void confirmDiscardingChanges (std::function<void()> proceed);
     juce::File getDefaultProjectsDirectory() const;
     juce::Array<juce::File> getSiblingProjectFiles() const;
     bool loadProjectFile (const juce::File& file, juce::String& errorMessage);

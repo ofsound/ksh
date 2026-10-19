@@ -6,6 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cmath>
+#include <set>
+
 using namespace ksh;
 using ksh::test::EngineFixture;
 
@@ -404,10 +407,296 @@ TEST_CASE ("midi playback does not emit on transport jump", "[engine][transport]
 
     const auto snapshot = fixture.engine.makePlaybackSnapshot();
     [[maybe_unused]] const auto first = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 512);
-    const auto jumped = runPlaybackBlock (runner, snapshot, 0.75, 120.0, true, 512);
+    const auto jumped = runPlaybackBlock (runner, snapshot, 0.8, 120.0, true, 512);
 
     REQUIRE (countNoteOns (jumped.midi) == 0);
     REQUIRE (jumped.currentStepOneBased == 4);
+
+    const auto nextBoundary = runPlaybackBlock (runner, snapshot, 1.0, 120.0, true, 512);
+    REQUIRE (countNoteOns (nextBoundary.midi) == 1);
+    REQUIRE (nextBoundary.currentStepOneBased == 1);
+}
+
+TEST_CASE ("midi playback emits the landing step when a jump lands on its boundary", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+    fixture.engine.setCell (0, 0, 3, true, 100, 100, 1);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto first = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 512);
+    const auto jumped = runPlaybackBlock (runner, snapshot, 0.75, 120.0, true, 512);
+
+    REQUIRE (countNoteOns (jumped.midi) == 1);
+    REQUIRE (jumped.noteHitCount == 1);
+    REQUIRE (jumped.noteHits[0].uiGeneratedStep == 4);
+}
+
+namespace
+{
+struct LoopRunEvents
+{
+    int kicks = 0;
+    int snares = 0;
+};
+
+// Plays a continuous transport that the "host" wraps from loopEnd to loopStart
+// without splitting the block at the wrap point.
+LoopRunEvents runHostLoop (const PlaybackSnapshot& snapshot, const HostLoopRange& reportedLoop, double loopEnd, int passes)
+{
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    constexpr int blockSize = 700;
+    const double beatsPerBlock = static_cast<double> (blockSize) / 24000.0;
+    const double loopLength = loopEnd;
+    LoopRunEvents events;
+    double position = 0.0;
+
+    while (position < loopLength * passes)
+    {
+        juce::MidiBuffer midi;
+        runner.processBlock (snapshot, std::fmod (position, loopLength), 120.0, true, blockSize, midi, {}, reportedLoop);
+
+        for (const auto metadata : midi)
+        {
+            const auto message = metadata.getMessage();
+
+            if (message.isNoteOn() && message.getNoteNumber() == 36)
+                ++events.kicks;
+            else if (message.isNoteOn() && message.getNoteNumber() == 38)
+                ++events.snares;
+        }
+
+        position += beatsPerBlock;
+    }
+
+    return events;
+}
+} // namespace
+
+TEST_CASE ("host loop wraps play the loop-start step every pass and never the loop-end step", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setChannelNote (0, 36);
+    fixture.engine.setChannelNote (1, 38);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+    fixture.engine.setCell (0, 1, 4, true, 100, 100, 1);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+
+    const auto events = runHostLoop (snapshot, { true, 0.0, 1.0 }, 1.0, 6);
+
+    REQUIRE (events.kicks == 6);
+    REQUIRE (events.snares == 0);
+}
+
+TEST_CASE ("host loop wraps keep cycle phases running", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setChannelNote (0, 36);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 2, 0b10);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+
+    const auto events = runHostLoop (snapshot, { true, 0.0, 1.0 }, 1.0, 6);
+
+    REQUIRE (events.kicks == 3);
+}
+
+TEST_CASE ("midi playback releases held notes on stop, seek, and device off", "[engine][transport][realtime]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+
+    const auto expectReleasedAfter = [&snapshot] (auto&& secondBlock)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        const auto first = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 256);
+        REQUIRE (containsNoteOn (first.midi, 36));
+
+        juce::MidiBuffer midi;
+        secondBlock (runner, midi);
+        bool released = false;
+
+        for (const auto metadata : midi)
+            released = released || (metadata.getMessage().isNoteOff() && metadata.getMessage().getNoteNumber() == 36);
+
+        REQUIRE (released);
+    };
+
+    SECTION ("transport stop")
+    {
+        expectReleasedAfter ([&snapshot] (MidiPlaybackRunner& runner, juce::MidiBuffer& midi)
+                             { runner.processBlock (snapshot, 0.0107, 120.0, false, 256, midi); });
+    }
+
+    SECTION ("seek")
+    {
+        expectReleasedAfter ([&snapshot] (MidiPlaybackRunner& runner, juce::MidiBuffer& midi)
+                             { runner.processBlock (snapshot, 2.6, 120.0, true, 256, midi); });
+    }
+
+    SECTION ("device off")
+    {
+        auto inactive = snapshot;
+        inactive.deviceActive = false;
+        expectReleasedAfter ([&inactive] (MidiPlaybackRunner& runner, juce::MidiBuffer& midi)
+                             { runner.processBlock (inactive, 0.0107, 120.0, true, 256, midi); });
+    }
+
+    SECTION ("suspend")
+    {
+        expectReleasedAfter ([] (MidiPlaybackRunner& runner, juce::MidiBuffer& midi) { runner.suspend (midi); });
+    }
+}
+
+TEST_CASE ("midi playback generates refresh windows on the audio thread deterministically", "[engine][transport][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (8);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRefreshSteps (4);
+    fixture.engine.setGenerationMode (GenerationMode::stack);
+
+    for (int step = 0; step < 8; ++step)
+    {
+        fixture.engine.setCell (0, 0, step, true, 40, 100, 1);
+        fixture.engine.setCell (1, 0, step, true, 90, 100, 1);
+    }
+
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+
+    const auto render = [&snapshot]
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<std::pair<int, int>> sourcesByStep;
+        int boundaryFrames = 0;
+
+        for (int step = 0; step < 64; ++step)
+        {
+            const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (step) * 0.25, 120.0, true, 512);
+
+            if (result.generatedSourcesChanged)
+            {
+                ++boundaryFrames;
+                const auto frame = runner.generatedSourcesFrame();
+                REQUIRE (result.noteHitCount == 1);
+                REQUIRE (frame.sources[0][static_cast<size_t> (step % 8)] + 1 == result.noteHits[0].uiSource);
+            }
+
+            for (size_t hit = 0; hit < result.noteHitCount; ++hit)
+                sourcesByStep.emplace_back (step, result.noteHits[hit].uiSource);
+        }
+
+        REQUIRE (boundaryFrames == 16);
+        return sourcesByStep;
+    };
+
+    const auto first = render();
+    REQUIRE (first.size() == 64);
+    REQUIRE (first == render());
+
+    std::set<int> sourcesUsed;
+    for (const auto& [step, source] : first)
+        sourcesUsed.insert (source);
+
+    REQUIRE (sourcesUsed == std::set<int> { 1, 2 });
+}
+
+TEST_CASE ("engine mirrors audio-thread generated sources only for its current generation", "[engine][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRefreshSteps (4);
+    fixture.engine.setGenerationMode (GenerationMode::stack);
+    fixture.engine.setCell (0, 0, 0, true, 40, 100, 1);
+    fixture.engine.setCell (3, 0, 0, true, 90, 100, 1);
+    fixture.setRandomValues ({ 0.0 });
+    fixture.engine.generateWindow (0, 4, false);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 0);
+
+    GeneratedSourcesFrame frame;
+    frame.basisVersion = fixture.engine.generationVersion();
+    for (auto& step : frame.sources[0])
+        step = 3;
+
+    REQUIRE (fixture.engine.adoptGeneratedSources (frame));
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).source == 3);
+    REQUIRE (fixture.engine.generatedCellAt (0, 0).velocity == 90);
+    REQUIRE (fixture.engine.makePlaybackSnapshot().generationVersion == frame.basisVersion);
+
+    fixture.engine.generateWindow (0, 4, false);
+    for (auto& step : frame.sources[0])
+        step = 0;
+
+    REQUIRE_FALSE (fixture.engine.adoptGeneratedSources (frame));
+}
+
+TEST_CASE ("editing one cell keeps the cycle phase of every other cell", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (2);
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setChannelNote (0, 36);
+    fixture.engine.setChannelNote (1, 38);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 0b001);
+
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+    auto snapshot = fixture.engine.makePlaybackSnapshot();
+    std::vector<int> hitSteps;
+
+    for (int step = 0; step <= 8; ++step)
+    {
+        if (step == 3)
+        {
+            fixture.engine.setCell (0, 1, 1, true, 80, 100, 1);
+            snapshot = fixture.engine.makePlaybackSnapshot();
+        }
+
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (step) * 0.25, 120.0, true, 512);
+
+        if (containsNoteOn (result.midi, 36))
+            hitSteps.push_back (step);
+    }
+
+    REQUIRE (hitSteps == std::vector<int> { 0, 6 });
 }
 
 TEST_CASE ("midi playback advances one step per sixteenth at 120 bpm", "[engine][transport]")

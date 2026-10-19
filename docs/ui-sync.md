@@ -10,7 +10,11 @@ The audio callback only enqueues hit notifications and sets work flags. The proc
 
 `RealtimeMailbox` coalesces unconsumed updates through one lock-free atomic pointer. A new publication replaces and recycles the previous pending snapshot, while the consumer's current snapshot remains immutable. Retired slots are recycled on the producer side; all producer operations are serialized by the engine mutex. Bursts while audio processing is suspended still deliver the latest state on the next callback.
 
-Deferred MIDI note-ons and note-offs use absolute deadlines on a monotonic callback sample timeline. Block sizes can change without shifting an event's deadline. Host seeks retain the existing cancellation rules, and playback reset clears the pending events and sample timeline together.
+Deferred MIDI note-ons and note-offs use absolute deadlines on a monotonic callback sample timeline. Block sizes can change without shifting an event's deadline. Playback reset clears the pending events and sample timeline together.
+
+Transport discontinuities never leave notes hanging. Stop, device off, seeks, bypass and state restores send note-offs for every sounding note at sample 0 and drop queued note-ons. After a jump, a step whose start falls at the landing position plays; a mid-step landing waits for the next boundary. When the host reports a loop, steps at or after the loop end are left for the next pass. A wrap to the loop start keeps pending notes and cycle phases, and plays the loop-start step even if the host did not split the block there. Cycle phases restart per cell, only when that cell's cycle length or mask changes.
+
+Generative modes pick sources on the audio thread at each refresh boundary with a fixed-seed RNG, so the step that opens a window plays the new choice and offline renders repeat. The runner reports its choices through a FIFO; the engine mirrors them for the preview only when they extend its current `generationVersion`. Deliberate recompositions (mode, lock or channel changes, reset) bump that version, and the runner adopts the engine's choices. Undo and redo keep the current generated sources rather than re-rolling them.
 
 Discrete commands go directly to `dispatchUiEngineCommand`, without JavaScript or serialized command messages. Convert native zero-based indices to the engine's one-based command indices once at this boundary. Numeric APVTS gestures pair begin/end callbacks. Row audition calls `triggerRowFromUi` directly through the existing realtime queue.
 

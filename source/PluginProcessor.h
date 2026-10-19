@@ -32,6 +32,8 @@ public:
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using juce::AudioProcessor::processBlockBypassed;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
@@ -51,6 +53,12 @@ public:
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+    /** Same as setStateInformation, but reports whether the project was actually restored. */
+    [[nodiscard]] bool loadStateFromData (const void* data, int sizeInBytes);
+
+    /** True after an in-app edit since the last load, save, or new project. */
+    [[nodiscard]] bool isDocumentModified() const { return documentModified.load (std::memory_order_acquire); }
+    void markDocumentClean() { documentModified.store (false, std::memory_order_release); }
 
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
     const juce::AudioProcessorValueTreeState& getValueTreeState() const { return parameters; }
@@ -133,8 +141,11 @@ private:
     void publishPlaybackSnapshotIfChangedLocked();
     void addMacroParameterListeners();
     void removeMacroParameterListeners();
-    void applyMacroParametersToEngineLocked();
+    void applyMacroParametersToEngineLocked (uint32_t parameterMask);
     void syncMacroParametersFromEngineLocked (bool notifyHost);
+    void adoptGeneratedSourcesLocked();
+    void markDocumentModified();
+    void notifyHostOfStateChangeIfDue();
     ksh::MidiPatternSelectionBlock consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
     ksh::MidiPatternSelectionBlock consumeMidiInput (juce::MidiBuffer& midiMessages,
                                                      const ksh::PlaybackSnapshot& snapshot,
@@ -176,28 +187,21 @@ private:
         int velocity = 100;
     };
     moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingPatternRecordEvents { 256 };
+    // Generated-source choices made by the audio thread, mirrored into the engine for the UI.
+    moodycamel::ReaderWriterQueue<ksh::GeneratedSourcesFrame> generatedSourcesForEngine { 16 };
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
 
-    // Audio thread reports its transport position so the message thread can advance generation.
-    std::atomic<double> reportedPpq { 0.0 };
-    std::atomic<bool> reportedPlaying { false };
-    std::atomic<bool> transportReportPending { false };
     std::atomic<bool> messageThreadWorkPending { false };
     std::atomic<bool> playbackResetRequested { false };
     std::atomic<bool> fullUiSyncPending { false };
-    std::atomic<bool> previewFlushPending { false };
-    // Set whenever note_hit is emitted; cleared when heavy UI work is deferred so
-    // generateWindow cannot run in the same turn (pollTransportUi used to drain
-    // hits, then handleAsyncUpdate regenerated and blocked the flash by a step).
-    std::atomic<bool> noteHitDeferHeavyUi { false };
-    // Loop-start regen deferred so note_hit JS can flush on a free run-loop turn.
-    std::atomic<bool> deferredTransportPending { false };
-    std::atomic<double> deferredTransportPpq { 0.0 };
-    std::atomic<bool> deferredTransportPlaying { false };
-    std::atomic<bool> macroParametersDirty { false };
+    // One bit per kMacroParameterIDs entry, set by host/UI parameter changes.
+    std::atomic<uint32_t> dirtyMacroParameters { 0 };
     std::atomic<bool> suppressParameterCallbacks { false };
+    std::atomic<bool> documentModified { false };
+    std::atomic<bool> hostStateChangePending { false };
+    double lastHostStateChangeNotifyMs = 0.0; // message-thread only
     std::atomic<int> standaloneTransportPlaying { 0 };
     std::atomic<double> standaloneTransportPpqPosition { 0.0 };
     std::atomic<int> standaloneTransportResetRequested { 0 };
@@ -216,9 +220,6 @@ private:
     std::atomic<int> auditionStepCount { 16 };
     std::atomic<double> auditionBeatsPerStep { 0.25 };
 
-    // Audio-thread-only state for deciding when to wake the message thread.
-    int lastReportedStepForRegen = 0;
-    bool wasPlayingForRegen = false;
     juce::MidiBuffer midiInputScratch;
 
     EditorResizeCallback editorResizeCallback;

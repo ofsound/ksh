@@ -21,6 +21,15 @@ constexpr std::array<std::string_view, 5> kMacroParameterIDs {{
     "device_active"
 }};
 
+enum MacroParameterBit : uint32_t
+{
+    rateBit = 1u << 0,
+    swingBit = 1u << 1,
+    velocityHumanizeBit = 1u << 2,
+    timingHumanizeBit = 1u << 3,
+    deviceActiveBit = 1u << 4
+};
+
 bool isMacroParameterID (std::string_view id)
 {
     for (const auto macroID : kMacroParameterIDs)
@@ -31,6 +40,20 @@ bool isMacroParameterID (std::string_view id)
 
     return false;
 }
+
+// Called from the audio thread for host automation: compares without allocating.
+uint32_t macroParameterBit (const juce::String& id)
+{
+    for (size_t i = 0; i < kMacroParameterIDs.size(); ++i)
+    {
+        if (id == kMacroParameterIDs[i].data())
+            return 1u << i;
+    }
+
+    return 0;
+}
+
+constexpr double kHostStateChangeIntervalMs = 250.0;
 
 juce::String juceStringFromView (std::string_view text)
 {
@@ -248,8 +271,46 @@ void PluginProcessor::publishPlaybackSnapshotLocked()
 
 void PluginProcessor::applyPendingMacroParametersLocked()
 {
-    if (macroParametersDirty.exchange (false, std::memory_order_acquire))
-        applyMacroParametersToEngineLocked();
+    if (const auto parameterMask = dirtyMacroParameters.exchange (0, std::memory_order_acquire); parameterMask != 0)
+        applyMacroParametersToEngineLocked (parameterMask);
+}
+
+void PluginProcessor::adoptGeneratedSourcesLocked()
+{
+    ksh::GeneratedSourcesFrame frame;
+    bool received = false;
+
+    while (generatedSourcesForEngine.try_dequeue (frame))
+        received = true;
+
+    if (received && engine.adoptGeneratedSources (frame))
+        uiBridge.invalidate();
+}
+
+void PluginProcessor::markDocumentModified()
+{
+    documentModified.store (true, std::memory_order_release);
+    hostStateChangePending.store (true, std::memory_order_release);
+    messageThreadWorkPending.store (true, std::memory_order_release);
+}
+
+void PluginProcessor::notifyHostOfStateChangeIfDue()
+{
+    if (! hostStateChangePending.load (std::memory_order_acquire))
+        return;
+
+    // Hosts may do real work per notification; coalesce drags into a few per second.
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs - lastHostStateChangeNotifyMs < kHostStateChangeIntervalMs)
+    {
+        messageThreadWorkPending.store (true, std::memory_order_release);
+        return;
+    }
+
+    hostStateChangePending.store (false, std::memory_order_release);
+    lastHostStateChangeNotifyMs = nowMs;
+    updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
 }
 
 void PluginProcessor::publishPlaybackSnapshotIfChangedLocked()
@@ -300,28 +361,20 @@ int PluginProcessor::emitPendingNoteHitsForUi()
         ++emitted;
     }
 
-    if (emitted > 0)
-        noteHitDeferHeavyUi.store (true, std::memory_order_release);
-
     return emitted;
 }
 
 void PluginProcessor::scheduleUiPreviewFlush()
 {
-    previewFlushPending.store (true, std::memory_order_release);
     messageThreadWorkPending.store (true, std::memory_order_release);
     triggerAsyncUpdate();
 }
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    // Step 0 is the refresh boundary (step % refreshSteps == 0). Emitting note_hit
-    // and then calling generateWindow on the same turn blocks editor painting.
-    // Only defer that heavy work on refresh boundaries / dirty preview — deferring
-    // every note doubled message-thread work and made grid editing feel laggy.
+    // Hits first so flashes are never delayed behind engine work. Generation runs on the
+    // audio thread, so nothing here sits between a refresh boundary and its first note.
     emitPendingNoteHitsForUi();
-    const bool hadHits = noteHitDeferHeavyUi.exchange (false, std::memory_order_acq_rel);
-    bool scheduleDeferredTurn = false;
 
     {
         std::scoped_lock lock { engineStateMutex };
@@ -329,6 +382,7 @@ void PluginProcessor::handleAsyncUpdate()
         applyPendingMacroParametersLocked();
         drainPendingMidiPatternSelectionsLocked();
         drainPendingPatternRecordEventsLocked();
+        adoptGeneratedSourcesLocked();
 
         if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
         {
@@ -338,77 +392,19 @@ void PluginProcessor::handleAsyncUpdate()
                 engine.setTempo (bpm);
         }
 
-        const int stepOneBased = getCurrentStepForUi();
-        const int refreshSteps = std::max (1, engine.getRefreshSteps());
-        const bool atRefreshBoundary = stepOneBased > 0
-                                       && ((stepOneBased - 1) % refreshSteps) == 0;
-        // Only defer regen at the refresh boundary. Tying deferral to preview-dirty
-        // starved flushes while painting during playback (hits + dirty every turn).
-        const bool deferHeavyUi = hadHits && atRefreshBoundary;
+        publishPlaybackSnapshotIfChangedLocked();
 
-        if (deferHeavyUi)
-        {
-            if (transportReportPending.exchange (false, std::memory_order_acquire))
-            {
-                if (! deferredTransportPending.load (std::memory_order_relaxed))
-                {
-                    deferredTransportPpq.store (reportedPpq.load (std::memory_order_relaxed),
-                                               std::memory_order_relaxed);
-                    deferredTransportPlaying.store (reportedPlaying.load (std::memory_order_relaxed),
-                                                    std::memory_order_relaxed);
-                    deferredTransportPending.store (true, std::memory_order_release);
-                }
-            }
-
-            if (engine.isPreviewDirty())
-                previewFlushPending.store (true, std::memory_order_release);
-
-            scheduleDeferredTurn = deferredTransportPending.load (std::memory_order_relaxed)
-                                   || previewFlushPending.load (std::memory_order_relaxed)
-                                   || fullUiSyncPending.load (std::memory_order_relaxed);
-        }
-        else
-        {
-            if (deferredTransportPending.exchange (false, std::memory_order_acq_rel))
-            {
-                engine.transportPosition (deferredTransportPpq.load (std::memory_order_relaxed),
-                                         deferredTransportPlaying.load (std::memory_order_relaxed));
-            }
-
-            if (transportReportPending.exchange (false, std::memory_order_acquire))
-            {
-                engine.transportPosition (reportedPpq.load (std::memory_order_relaxed),
-                                         reportedPlaying.load (std::memory_order_relaxed));
-            }
-
-            if (previewFlushPending.exchange (false, std::memory_order_acq_rel))
-                engine.flushPreview();
-
-            publishPlaybackSnapshotIfChangedLocked();
-
-            if (engine.isPreviewDirty())
-                engine.flushPreview();
-        }
+        if (engine.isPreviewDirty())
+            engine.flushPreview();
 
         // Keep all mailbox producer operations serialized with host state restore.
         playbackMailbox.drainRetired();
     }
 
-    if (emitPendingNoteHitsForUi() > 0)
-    {
-        // Let the next turn decide whether regen must wait — do not force a
-        // deferred heavy pass for ordinary mid-pattern hits.
-        noteHitDeferHeavyUi.store (true, std::memory_order_release);
-        messageThreadWorkPending.store (true, std::memory_order_release);
-        triggerAsyncUpdate();
-    }
-    else if (scheduleDeferredTurn)
-    {
-        messageThreadWorkPending.store (true, std::memory_order_release);
-        triggerAsyncUpdate();
-    }
+    emitPendingNoteHitsForUi();
+    notifyHostOfStateChangeIfDue();
 
-    if (! scheduleDeferredTurn && fullUiSyncPending.exchange (false, std::memory_order_acquire))
+    if (fullUiSyncPending.exchange (false, std::memory_order_acquire))
         uiBridge.syncAll();
 }
 
@@ -518,19 +514,9 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
         if (standaloneTransportPlaying.load (std::memory_order_relaxed) != 0)
             return;
 
-        // Prepare step-0 before the audio thread is allowed to run. Setting the
-        // playing flag first let the first MIDI event fire while generateWindow
-        // still held the message thread — note_hit then painted a step late.
         standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
         standaloneTransportResetRequested.store (1, std::memory_order_release);
         currentStepForUi.store (0, std::memory_order_relaxed);
-
-        {
-            std::scoped_lock lock { engineStateMutex };
-            engine.transportPosition (0.0, true);
-            publishPlaybackSnapshotIfChangedLocked();
-        }
-
         standaloneTransportPlaying.store (1, std::memory_order_release);
     }
     else
@@ -541,8 +527,6 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
             standaloneStopAllNotesRequested.store (1, std::memory_order_release);
 
         currentStepForUi.store (0, std::memory_order_relaxed);
-        reportedPlaying.store (false, std::memory_order_relaxed);
-        transportReportPending.store (true, std::memory_order_release);
     }
 
     messageThreadWorkPending.store (true, std::memory_order_release);
@@ -568,6 +552,7 @@ void PluginProcessor::setStandaloneTempoBpm (double bpm)
         {
             engine.setTempo (bpm); // emits tempo status; avoid full engine_state resync
             publishPlaybackSnapshotIfChangedLocked();
+            markDocumentModified();
         }
     }
 }
@@ -619,21 +604,14 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (snapshot == nullptr)
         return;
 
-    if (playbackResetRequested.exchange (false, std::memory_order_acquire))
-        midiPlayback.reset (false);
-
-    if (standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0)
-        midiPlayback.reset (false);
-
-    if (standaloneStopAllNotesRequested.exchange (0, std::memory_order_acquire) != 0)
-    {
-        for (int channel = 1; channel <= 16; ++channel)
-            midiMessages.addEvent (juce::MidiMessage::allNotesOff (channel), 0);
-    }
+    const bool playbackReset = playbackResetRequested.exchange (false, std::memory_order_acquire);
+    const bool standaloneReset = standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0;
+    const bool stopAllNotes = standaloneStopAllNotesRequested.exchange (0, std::memory_order_acquire) != 0;
 
     double ppqPosition = 0.0;
     double bpm = snapshot->tempo;
     bool isPlaying = false;
+    ksh::HostLoopRange hostLoop;
 
     if (hasStandaloneTransport())
     {
@@ -652,15 +630,40 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                 bpm = *hostBpm;
 
             isPlaying = position->getIsPlaying();
+
+            if (position->getIsLooping())
+            {
+                if (const auto loopPoints = position->getLoopPoints())
+                    hostLoop = { true, loopPoints->ppqStart, loopPoints->ppqEnd };
+            }
         }
     }
 
     publishPatternRecordTransportPosition (ppqPosition, bpm, isPlaying);
 
+    // Consume input before adding generated MIDI so our note-offs are never mistaken for pattern selections.
     const auto midiPatternSelections = consumeMidiInput (midiMessages, *snapshot, ppqPosition, bpm, isPlaying, numSamples);
 
-    const auto playback =
-        midiPlayback.processBlock (*snapshot, ppqPosition, bpm, isPlaying, numSamples, midiMessages, midiPatternSelections);
+    if (playbackReset || standaloneReset)
+    {
+        midiPlayback.releaseHeldNotes (midiMessages);
+        midiPlayback.reset (false);
+    }
+
+    if (stopAllNotes)
+    {
+        for (int channel = 1; channel <= 16; ++channel)
+            midiMessages.addEvent (juce::MidiMessage::allNotesOff (channel), 0);
+    }
+
+    const auto playback = midiPlayback.processBlock (*snapshot,
+                                                     ppqPosition,
+                                                     bpm,
+                                                     isPlaying,
+                                                     numSamples,
+                                                     midiMessages,
+                                                     midiPatternSelections,
+                                                     hostLoop);
 
     if (hasStandaloneTransport() && isPlaying && bpm > 0.0)
     {
@@ -674,19 +677,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     bool notify = midiPatternSelections.count > 0;
 
-    // Wake the message thread to advance generation on step changes and play/stop transitions.
-    const bool stepChanged = playback.currentStepOneBased != lastReportedStepForRegen;
-    lastReportedStepForRegen = playback.currentStepOneBased;
-
-    if (playback.playing != wasPlayingForRegen || (playback.playing && stepChanged))
-    {
-        reportedPpq.store (ppqPosition, std::memory_order_relaxed);
-        reportedPlaying.store (playback.playing, std::memory_order_relaxed);
-        transportReportPending.store (true, std::memory_order_release);
-        notify = true;
-    }
-
-    wasPlayingForRegen = playback.playing;
+    if (playback.generatedSourcesChanged)
+        notify = generatedSourcesForEngine.try_enqueue (midiPlayback.generatedSourcesFrame()) || notify;
 
     // Defer host tempo changes to the message thread (engine mutation + UI emit are not RT-safe).
     if (isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - bpm) > 0.01)
@@ -706,6 +698,13 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     // The message-thread timer drains these flags/FIFOs. Posting an OS message
     // here (triggerAsyncUpdate) can block the audio thread.
+}
+
+void PluginProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    buffer.clear();
+    midiPlayback.suspend (midiMessages);
+    currentStepForUi.store (0, std::memory_order_relaxed);
 }
 
 ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
@@ -813,9 +812,17 @@ void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition,
 void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
 {
     int source = 0;
+    bool switched = false;
 
     while (pendingMidiPatternSelections.try_dequeue (source))
+    {
         engine.setStaticSource (source);
+        switched = true;
+    }
+
+    // The newly selected pattern brings its own rate; show it on the host parameter.
+    if (switched)
+        syncMacroParametersFromEngineLocked (true);
 }
 
 bool PluginProcessor::enqueuePatternRecordEvent (int source, int channel, int step, int velocity)
@@ -840,7 +847,10 @@ void PluginProcessor::drainPendingPatternRecordEventsLocked()
     }
 
     if (changed)
+    {
         fullUiSyncPending.store (true, std::memory_order_release);
+        markDocumentModified();
+    }
 }
 
 //==============================================================================
@@ -863,14 +873,19 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    [[maybe_unused]] const bool restored = loadStateFromData (data, sizeInBytes);
+}
+
+bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
+{
     if (data == nullptr || sizeInBytes <= 0)
-        return;
+        return false;
 
     const auto payload = ksh::parsePersistencePayload (
         std::string_view (static_cast<const char*> (data), static_cast<size_t> (sizeInBytes)));
 
     if (! payload.has_value())
-        return;
+        return false;
 
     {
         std::scoped_lock lock { engineStateMutex };
@@ -904,7 +919,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
         suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
 
         if (! restored)
-            return;
+            return false;
 
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
@@ -912,13 +927,13 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     }
 
     applyProjectMetadataFromState (*payload);
-    if (payload->contains ("patternViewScale"))
-        setPatternViewScale (payload->value ("patternViewScale", patternViewScale));
+    if (const auto scale = payload->find ("patternViewScale"); scale != payload->end() && scale->is_number())
+        setPatternViewScale (scale->get<double>());
 
-    if (payload->contains ("standaloneTransportPlaying"))
+    if (const auto playing = payload->find ("standaloneTransportPlaying");
+        playing != payload->end() && (playing->is_boolean() || playing->is_number()))
     {
-        const auto& playing = (*payload)["standaloneTransportPlaying"];
-        const bool shouldPlay = playing.is_boolean() ? playing.get<bool>() : playing.get<int>() != 0;
+        const bool shouldPlay = playing->is_boolean() ? playing->get<bool>() : playing->get<int>() != 0;
         if (hasStandaloneTransport())
             setStandaloneTransportPlaying (shouldPlay);
     }
@@ -931,8 +946,10 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
+    markDocumentClean();
     fullUiSyncPending.store (true, std::memory_order_release);
     triggerAsyncUpdate();
+    return true;
 }
 
 nlohmann::json PluginProcessor::enginePersistenceState()
@@ -996,7 +1013,7 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
 
     try
     {
-        ok = engine.deserializeForPersistence (state);
+        ok = engine.deserializeForPersistence (state, true);
     }
     catch (...)
     {
@@ -1007,7 +1024,7 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
     {
         try
         {
-            const auto rollbackSucceeded = engine.deserializeForPersistence (previousEngineState);
+            const auto rollbackSucceeded = engine.deserializeForPersistence (previousEngineState, true);
             if (! rollbackSucceeded)
                 jassertfalse;
         }
@@ -1024,6 +1041,7 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
 
     syncMacroParametersFromEngineLocked (true);
     publishPlaybackSnapshotLocked();
+    markDocumentModified();
     return true;
 }
 
@@ -1084,6 +1102,9 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
     if (! ok)
         return false;
 
+    if (selector != "reset")
+        markDocumentModified();
+
     if (isMacroParameterID (selector) || selector == "source_rate" || selector == "static_source")
         syncMacroParametersFromEngineLocked (true);
 
@@ -1100,10 +1121,12 @@ void PluginProcessor::parameterChanged (const juce::String& parameterID, float n
     if (suppressParameterCallbacks.load (std::memory_order_relaxed))
         return;
 
-    if (! isMacroParameterID (parameterID.toStdString()))
+    const auto parameterBit = macroParameterBit (parameterID);
+
+    if (parameterBit == 0)
         return;
 
-    macroParametersDirty.store (true, std::memory_order_release);
+    dirtyMacroParameters.fetch_or (parameterBit, std::memory_order_acq_rel);
     messageThreadWorkPending.store (true, std::memory_order_release);
 }
 
@@ -1119,37 +1142,54 @@ void PluginProcessor::removeMacroParameterListeners()
         parameters.removeParameterListener (juceStringFromView (id), this);
 }
 
-void PluginProcessor::applyMacroParametersToEngineLocked()
+void PluginProcessor::applyMacroParametersToEngineLocked (uint32_t parameterMask)
 {
-    const int rateIndex = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "rate"))),
-                                        0,
-                                        static_cast<int> (ksh::Constants::rates.size()) - 1);
-    const auto rate = ksh::Constants::rates[static_cast<size_t> (rateIndex)];
+    // Only the parameters that moved: re-applying the rest would write stale values,
+    // e.g. the previous pattern's rate into a pattern just selected over MIDI.
+    if ((parameterMask & rateBit) != 0)
+    {
+        const int rateIndex = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "rate"))),
+                                            0,
+                                            static_cast<int> (ksh::Constants::rates.size()) - 1);
+        const auto rate = ksh::Constants::rates[static_cast<size_t> (rateIndex)];
 
-    if (engine.getRate() != rate)
-        engine.setRate (rate);
+        if (engine.getRate() != rate)
+            engine.setRate (rate);
+    }
 
-    const auto swing = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "swing"))), 0, 100);
+    if ((parameterMask & swingBit) != 0)
+    {
+        const auto swing = ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "swing"))), 0, 100);
 
-    if (engine.getSwing() != swing)
-        engine.setSwing (swing);
+        if (engine.getSwing() != swing)
+            engine.setSwing (swing);
+    }
 
-    const auto velocityHumanize =
-        ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "velocity_humanize"))), 0, 100);
+    if ((parameterMask & velocityHumanizeBit) != 0)
+    {
+        const auto velocityHumanize =
+            ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "velocity_humanize"))), 0, 100);
 
-    if (engine.getVelocityHumanize() != velocityHumanize)
-        engine.setVelocityHumanize (velocityHumanize);
+        if (engine.getVelocityHumanize() != velocityHumanize)
+            engine.setVelocityHumanize (velocityHumanize);
+    }
 
-    const auto timingHumanize =
-        ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "timing_humanize"))), 0, 100);
+    if ((parameterMask & timingHumanizeBit) != 0)
+    {
+        const auto timingHumanize =
+            ksh::clampInt (static_cast<int> (std::lround (parameterValue (parameters, "timing_humanize"))), 0, 100);
 
-    if (engine.getTimingHumanize() != timingHumanize)
-        engine.setTimingHumanize (timingHumanize);
+        if (engine.getTimingHumanize() != timingHumanize)
+            engine.setTimingHumanize (timingHumanize);
+    }
 
-    const bool deviceActive = parameterValue (parameters, "device_active") >= 0.5f;
+    if ((parameterMask & deviceActiveBit) != 0)
+    {
+        const bool deviceActive = parameterValue (parameters, "device_active") >= 0.5f;
 
-    if (engine.isDeviceActive() != deviceActive)
-        engine.setDeviceActive (deviceActive);
+        if (engine.isDeviceActive() != deviceActive)
+            engine.setDeviceActive (deviceActive);
+    }
 }
 
 void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
@@ -1308,6 +1348,7 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
     [[maybe_unused]] const bool auditioned = queueRowAudition (row, vel);
     publishPlaybackSnapshotIfChangedLocked();
     engine.flushPreview();
+    markDocumentModified();
     return true;
 }
 
@@ -1316,11 +1357,21 @@ void PluginProcessor::setProjectMetadata (const juce::String& name,
                                           const juce::String& createdAt,
                                           const juce::String& modifiedAt)
 {
-    std::scoped_lock lock { projectMetadataMutex };
-    projectName = name.trim().isNotEmpty() ? name.trim() : juce::String ("Untitled Project");
-    projectDescription = description.trim();
-    projectCreatedAt = createdAt;
-    projectModifiedAt = modifiedAt;
+    bool changed = false;
+
+    {
+        std::scoped_lock lock { projectMetadataMutex };
+        const auto nextName = name.trim().isNotEmpty() ? name.trim() : juce::String ("Untitled Project");
+        const auto nextDescription = description.trim();
+        changed = nextName != projectName || nextDescription != projectDescription;
+        projectName = nextName;
+        projectDescription = nextDescription;
+        projectCreatedAt = createdAt;
+        projectModifiedAt = modifiedAt;
+    }
+
+    if (changed)
+        markDocumentModified();
 }
 
 juce::String PluginProcessor::getProjectName() const
@@ -1398,6 +1449,7 @@ void PluginProcessor::resetProject()
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
+    markDocumentClean();
     fullUiSyncPending.store (true, std::memory_order_release);
     triggerAsyncUpdate();
 }
@@ -1448,7 +1500,6 @@ bool PluginProcessor::applyNativeCellEdits (const std::vector<CellEdit>& edits, 
     }
     publishPlaybackSnapshotIfChangedLocked();
     uiBridge.invalidate();
-    previewFlushPending.store (true, std::memory_order_release);
-    messageThreadWorkPending.store (true, std::memory_order_release);
+    markDocumentModified();
     return true;
 }

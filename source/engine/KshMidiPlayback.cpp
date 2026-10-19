@@ -29,6 +29,11 @@ int globalStepForBeats (double songBeats, const PlaybackSnapshot& snapshot)
     return static_cast<int> (std::floor ((songBeats + 0.000000001) / beatsPerStep));
 }
 
+int firstGlobalStepAtOrAfter (double songBeats, double beatsPerStep)
+{
+    return static_cast<int> (std::ceil ((songBeats - 0.000000001) / beatsPerStep));
+}
+
 int stepOneBased (int globalStep, int stepCount)
 {
     if (stepCount <= 0)
@@ -115,6 +120,33 @@ Cell staticSourceCellForStep (const PlaybackSnapshot& snapshot, int source, int 
     cell.sourceStep = sourceStep;
     return cell;
 }
+
+bool sourceIsEmpty (const PlaybackSnapshot& snapshot, int source)
+{
+    const auto sourceIndex = static_cast<size_t> (source);
+    const int sourceStepCount = clampInt (snapshot.sourceSettings[sourceIndex].stepCount, 1, Constants::maxSteps);
+    const int channelCount = clampInt (snapshot.channelCount, 0, Constants::maxChannels);
+
+    for (int channel = 0; channel < channelCount; ++channel)
+    {
+        const auto channelIndex = static_cast<size_t> (channel);
+
+        if (snapshot.sourceChannelMutes[sourceIndex][channelIndex])
+            continue;
+
+        auto range = snapshot.sourceSettings[sourceIndex].loopRanges[channelIndex];
+        range.loopStart = clampInt (range.loopStart, 0, sourceStepCount - 1);
+        range.loopLength = clampInt (range.loopLength, 1, sourceStepCount - range.loopStart);
+
+        for (int step = range.loopStart; step < range.loopStart + range.loopLength; ++step)
+        {
+            if (snapshot.sources[sourceIndex][channelIndex][static_cast<size_t> (step)].enabled)
+                return false;
+        }
+    }
+
+    return true;
+}
 } // namespace
 
 void MidiPlaybackRunner::prepare (double sampleRateIn)
@@ -128,8 +160,9 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
     blockStartSample = 0;
     nextBlockStartSample = 0;
     wasPlaying = false;
+    expectedNextPpq = 0.0;
     lastEmittedGlobalStep = std::nullopt;
-    lastCycleDefinitionVersion = std::nullopt;
+    adoptedGenerationVersion = std::nullopt;
     pendingNoteOffCount = 0;
     pendingNoteOnCount = 0;
     pendingStaticSourceOverride = noStaticSourceOverride;
@@ -160,6 +193,110 @@ void MidiPlaybackRunner::clearPending()
 {
     pendingNoteOffCount = 0;
     pendingNoteOnCount = 0;
+}
+
+void MidiPlaybackRunner::releaseHeldNotes (juce::MidiBuffer& midiOut)
+{
+    for (size_t i = 0; i < pendingNoteOffCount; ++i)
+        midiOut.addEvent (juce::MidiMessage::noteOff (pendingNoteOffs[i].midiChannel, pendingNoteOffs[i].pitch), 0);
+
+    clearPending();
+}
+
+void MidiPlaybackRunner::suspend (juce::MidiBuffer& midiOut)
+{
+    releaseHeldNotes (midiOut);
+    resetCycleCounters();
+    wasPlaying = false;
+    lastEmittedGlobalStep = std::nullopt;
+}
+
+GeneratedSourcesFrame MidiPlaybackRunner::generatedSourcesFrame() const
+{
+    return { generatedSources, adoptedGenerationVersion.value_or (0) };
+}
+
+void MidiPlaybackRunner::adoptGeneratedSources (const PlaybackSnapshot& snapshot)
+{
+    for (size_t channel = 0; channel < generatedSources.size(); ++channel)
+    {
+        for (size_t step = 0; step < generatedSources[channel].size(); ++step)
+        {
+            const int source = clampInt (snapshot.generated[channel][step].source,
+                                         Constants::mutedStaticSource,
+                                         Constants::sourceCount - 1);
+            generatedSources[channel][step] = static_cast<int8_t> (source);
+        }
+    }
+
+    adoptedGenerationVersion = snapshot.generationVersion;
+}
+
+bool MidiPlaybackRunner::regenerateWindowIfDue (const PlaybackSnapshot& snapshot, int globalStep)
+{
+    if (snapshot.generationMode == GenerationMode::staticSource)
+        return false;
+
+    const int stepCount = clampInt (snapshot.stepCount, 1, Constants::maxSteps);
+    const int refreshSteps = clampInt (snapshot.refreshSteps, 1, stepCount);
+    const int windowStart = mod (globalStep, stepCount);
+
+    if (windowStart % refreshSteps != 0)
+        return false;
+
+    std::array<int, Constants::sourceCount> activeSources {};
+    int activeCount = 0;
+
+    for (int source = 0; source < Constants::sourceCount; ++source)
+    {
+        if (! sourceIsEmpty (snapshot, source))
+            activeSources[static_cast<size_t> (activeCount++)] = source;
+    }
+
+    auto pickSource = [this, &activeSources, activeCount]
+    {
+        if (activeCount == 0)
+            return 0;
+
+        const int pick = clampInt (static_cast<int> (std::floor (nextRandomUnit() * static_cast<double> (activeCount))),
+                                   0,
+                                   activeCount - 1);
+        return activeSources[static_cast<size_t> (pick)];
+    };
+
+    const int stackSource = snapshot.generationMode == GenerationMode::stack ? pickSource() : 0;
+    const int channelCount = clampInt (snapshot.channelCount, 0, Constants::maxChannels);
+
+    for (int offset = 0; offset < refreshSteps; ++offset)
+    {
+        const auto step = static_cast<size_t> (mod (windowStart + offset, stepCount));
+
+        for (int channel = 0; channel < channelCount; ++channel)
+        {
+            const int lock = snapshot.channels[static_cast<size_t> (channel)].lock;
+            int source = stackSource;
+
+            if (lock >= 0)
+                source = lock;
+            else if (snapshot.generationMode == GenerationMode::perChannel)
+                source = pickSource();
+
+            generatedSources[static_cast<size_t> (channel)][step] =
+                static_cast<int8_t> (clampInt (source, Constants::mutedStaticSource, Constants::sourceCount - 1));
+        }
+    }
+
+    return true;
+}
+
+Cell MidiPlaybackRunner::generatedCellForStep (const PlaybackSnapshot& snapshot, int channel, int playbackStep) const
+{
+    const int source = generatedSources[static_cast<size_t> (channel)][static_cast<size_t> (playbackStep)];
+
+    if (source < 0 || source >= Constants::sourceCount)
+        return defaultCell();
+
+    return staticSourceCellForStep (snapshot, source, channel, playbackStep);
 }
 
 void MidiPlaybackRunner::dropPendingNoteOnsAtOrAfter (int sampleOffset)
@@ -306,27 +443,35 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
         if (playbackStep < 0)
             continue;
 
-        const Cell staticSourceCell =
-            staticSourceOverride >= 0
-                ? staticSourceCellForStep (snapshot, staticSourceOverride, channel, playbackStep)
-                : Cell {};
-        const auto& cell = staticSourceOverride >= 0
-                               ? staticSourceCell
-                               : snapshot.generated[static_cast<size_t> (channel)][static_cast<size_t> (playbackStep)];
+        const Cell cell = staticSourceOverride >= 0
+                              ? staticSourceCellForStep (snapshot, staticSourceOverride, channel, playbackStep)
+                              : generatedCellForStep (snapshot, channel, playbackStep);
 
         if (! cell.enabled)
             continue;
 
         const int cycle = clampInt (cell.cycle, 1, 64);
+        const auto cycleIndex = cycleCounterIndex (cell.source, channel, cell.sourceStep);
+
+        // A cell's cycle phase restarts only when its own cycle definition changes.
+        if (cycleIndex < cycleDefinitions.size())
+        {
+            const CycleDefinition definition { cycle, cell.cycleMask };
+
+            if (cycleDefinitions[cycleIndex] != definition)
+            {
+                cycleDefinitions[cycleIndex] = definition;
+                cycleCounters[cycleIndex] = 0;
+            }
+        }
+
         int cycleStep = 1;
         if (cycle > 1 || cell.cycleMask != 1)
         {
-            const auto index = cycleCounterIndex (cell.source, channel, cell.sourceStep);
-
-            if (index >= cycleCounters.size())
+            if (cycleIndex >= cycleCounters.size())
                 continue;
 
-            const int count = static_cast<int> (cycleCounters[index]++);
+            const int count = static_cast<int> (cycleCounters[cycleIndex]++);
             cycleStep = count % cycle + 1;
             if (! cycleGateMatches (count, cycle, cell.cycleMask))
                 continue;
@@ -489,22 +634,22 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                                                      bool isPlaying,
                                                      int numSamples,
                                                      juce::MidiBuffer& midiOut,
-                                                     const MidiPatternSelectionBlock& patternSelections)
+                                                     const MidiPatternSelectionBlock& patternSelections,
+                                                     const HostLoopRange& hostLoop)
 {
     MidiPlaybackResult result;
 
     if (numSamples <= 0)
         return result;
 
+    if (std::isnan (ppqPosition))
+        ppqPosition = 0.0;
+
     blockStartSample = nextBlockStartSample;
     nextBlockStartSample += numSamples;
 
-    if (! lastCycleDefinitionVersion.has_value()
-        || *lastCycleDefinitionVersion != snapshot.cycleDefinitionVersion)
-    {
-        resetCycleCounters();
-        lastCycleDefinitionVersion = snapshot.cycleDefinitionVersion;
-    }
+    if (! adoptedGenerationVersion.has_value() || *adoptedGenerationVersion != snapshot.generationVersion)
+        adoptGeneratedSources (snapshot);
 
     if (snapshot.generationMode == GenerationMode::staticSource && patternSelections.count > 0)
     {
@@ -517,27 +662,36 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
     flushPendingNoteOns (numSamples, midiOut, result);
     flushPendingNoteOffs (numSamples, midiOut);
-    flushAuditionNotes (numSamples, midiOut);
 
     if (! isPlaying || ! snapshot.deviceActive || bpm <= 0.0)
     {
         if (wasPlaying)
         {
-            clearPending();
+            releaseHeldNotes (midiOut);
             resetCycleCounters();
         }
 
+        flushAuditionNotes (numSamples, midiOut);
         wasPlaying = false;
         lastEmittedGlobalStep = std::nullopt;
 
         return result;
     }
 
+    flushAuditionNotes (numSamples, midiOut);
+
     const double beatsPerSample = (bpm / 60.0) / sampleRate;
+    const double beatsPerStep = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
+    const double edgeTolerance = 2.0 * beatsPerSample;
     const double blockLastSamplePpq = ppqPosition + static_cast<double> (numSamples - 1) * beatsPerSample;
+    const bool hostLoopValid = hostLoop.active && hostLoop.endPpq > hostLoop.startPpq;
 
     const int globalStepStart = globalStepForBeats (ppqPosition, snapshot);
-    const int globalStepEnd = globalStepForBeats (blockLastSamplePpq, snapshot);
+    int globalStepEnd = globalStepForBeats (blockLastSamplePpq, snapshot);
+
+    // Steps at or after the host loop end belong to the next pass; the host wraps first.
+    if (hostLoopValid && ppqPosition < hostLoop.endPpq)
+        globalStepEnd = std::min (globalStepEnd, firstGlobalStepAtOrAfter (hostLoop.endPpq - edgeTolerance, beatsPerStep) - 1);
 
     result.playing = true;
     result.latestGlobalStep = globalStepStart;
@@ -548,28 +702,47 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
         lastEmittedGlobalStep = globalStepStart - 1;
         wasPlaying = true;
     }
-
-    if (lastEmittedGlobalStep.has_value())
+    else if (lastEmittedGlobalStep.has_value())
     {
         const int previous = *lastEmittedGlobalStep;
-        const bool discontinuity = globalStepStart != previous + 1 && globalStepStart != previous;
+        const bool stepsContinue = globalStepStart == previous || globalStepStart == previous + 1;
+        const double jitterTolerance = std::min (0.25 * beatsPerStep, 64.0 * beatsPerSample);
+        const bool ppqContinues = std::abs (ppqPosition - expectedNextPpq) <= jitterTolerance;
 
-        if (discontinuity)
+        if (! stepsContinue && ! ppqContinues)
         {
-            clearPending();
-            resetCycleCounters();
-            // Seek/jump: do not emit the landing step (avoids a rogue note on locate).
-            // Continuous pattern loops never hit this path — global steps advance by 1.
-            lastEmittedGlobalStep = globalStepStart;
-            return result;
+            const bool loopWrapped = hostLoopValid
+                                     && expectedNextPpq >= hostLoop.endPpq - jitterTolerance
+                                     && ppqPosition >= hostLoop.startPpq - edgeTolerance
+                                     && ppqPosition < hostLoop.endPpq;
+            double landingPpq = ppqPosition;
+
+            if (loopWrapped)
+            {
+                // Hosts that do not split the block at the wrap still owe the steps from loop start.
+                landingPpq = std::min (ppqPosition, hostLoop.startPpq);
+            }
+            else
+            {
+                releaseHeldNotes (midiOut);
+                resetCycleCounters();
+            }
+
+            // Steps that start at the landing position play; a mid-step landing waits for the next boundary.
+            lastEmittedGlobalStep = firstGlobalStepAtOrAfter (landingPpq - edgeTolerance, beatsPerStep) - 1;
         }
     }
 
+    expectedNextPpq = ppqPosition + static_cast<double> (numSamples) * beatsPerSample;
     const int firstStep = lastEmittedGlobalStep.has_value() ? *lastEmittedGlobalStep + 1 : globalStepStart;
 
     for (int globalStep = firstStep; globalStep <= globalStepEnd; ++globalStep)
     {
         const int stepSample = sampleOffsetForGlobalStep (snapshot, ppqPosition, bpm, globalStep, numSamples);
+
+        if (regenerateWindowIfDue (snapshot, globalStep))
+            result.generatedSourcesChanged = true;
+
         const int staticSourceOverride = staticSourceForStep (snapshot, patternSelections, stepSample);
         evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result, staticSourceOverride);
         lastEmittedGlobalStep = globalStep;

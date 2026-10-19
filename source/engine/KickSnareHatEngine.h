@@ -204,7 +204,15 @@ public:
 
     [[nodiscard]] nlohmann::json snapshot() const;
     [[nodiscard]] nlohmann::json serializeForPersistence() const;
-    [[nodiscard]] bool deserializeForPersistence (const nlohmann::json& state);
+    /** Replaces the whole document. Returns false without mutating anything when required
+        `v:1` keys are missing or mistyped. With keepGeneratedSources the current generated
+        choices survive (undo/redo) instead of being re-rolled. */
+    [[nodiscard]] bool deserializeForPersistence (const nlohmann::json& state, bool keepGeneratedSources = false);
+    [[nodiscard]] static bool isValidPersistenceState (const nlohmann::json& state);
+
+    /** Mirrors the audio thread's generated-source choices; returns true when any cell changed. */
+    bool adoptGeneratedSources (const GeneratedSourcesFrame& frame);
+    [[nodiscard]] unsigned long generationVersion() const { return generationVersion_; }
 
     [[nodiscard]] std::optional<MidiNoteEvent> auditionChannel (int channel);
 
@@ -237,7 +245,7 @@ private:
     bool previewDirty = false;
     bool nativeTransportRefreshInProgress = false;
     unsigned long playbackSnapshotVersion_ = 0;
-    unsigned long cycleDefinitionVersion_ = 0;
+    unsigned long generationVersion_ = 0;
 
     void initChannels();
     void initSources();

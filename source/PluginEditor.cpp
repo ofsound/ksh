@@ -19,14 +19,21 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             safe->nativeView->controller.refresh();
             safe->updateNativeSize();
         };
-        if (action == 0)
-            createNewProject (completed);
-        else if (action == 1)
-            showLoadProjectDialog (completed);
-        else if (action == 2)
+        if (action == 2)
+        {
             showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription() }, completed);
-        else
-            cycleProject (action == 3 ? -1 : 1, completed);
+            return;
+        }
+        confirmDiscardingChanges ([safe, action, completed] {
+            if (safe == nullptr)
+                return;
+            if (action == 0)
+                safe->createNewProject (completed);
+            else if (action == 1)
+                safe->showLoadProjectDialog (completed);
+            else
+                safe->cycleProject (action == 3 ? -1 : 1, completed);
+        });
     };
     setResizable (!fitViewport, !fitViewport);
     updateNativeSize();
@@ -95,6 +102,26 @@ void PluginEditor::resized()
     const auto offset = (fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
+}
+
+void PluginEditor::confirmDiscardingChanges (std::function<void()> proceed)
+{
+    if (!processorRef.isDocumentModified())
+    {
+        proceed();
+        return;
+    }
+
+    juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon,
+        "Unsaved changes",
+        "\"" + processorRef.getProjectName() + "\" has changes that have not been saved. Discard them?",
+        "Discard Changes",
+        "Cancel",
+        this,
+        juce::ModalCallbackFunction::create ([discardAndProceed = std::move (proceed)] (int result) {
+            if (result == 1)
+                discardAndProceed();
+        }));
 }
 
 juce::File PluginEditor::getDefaultProjectsDirectory() const
@@ -189,7 +216,12 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
         return false;
     }
 
-    processorRef.setStateInformation (data.getData(), static_cast<int> (data.getSize()));
+    if (!processorRef.loadStateFromData (data.getData(), static_cast<int> (data.getSize())))
+    {
+        errorMessage = "The project file is damaged or was saved by an incompatible version of KSH.";
+        return false;
+    }
+
     currentProjectFile = file;
 
     if (!parsed->contains ("projectName"))
@@ -209,6 +241,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
             processorRef.getProjectModifiedAt());
     }
 
+    processorRef.markDocumentClean();
     return true;
 }
 
@@ -232,6 +265,7 @@ bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorM
     }
 
     currentProjectFile = file;
+    processorRef.markDocumentClean();
     return true;
 }
 

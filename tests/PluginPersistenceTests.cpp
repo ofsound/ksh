@@ -7,8 +7,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <exception>
 #include <thread>
+#include <vector>
 
 using namespace ksh;
 
@@ -310,4 +312,123 @@ TEST_CASE ("UI scale is independent of saved and legacy projects", "[plugin][per
 
     plugin.resetProject();
     CHECK (plugin.getProjectUiScalePercent() == 110);
+}
+
+TEST_CASE ("persistence keeps hidden channels and steps beyond the current lengths", "[plugin][persistence]")
+{
+    KickSnareHatEngine original;
+    original.setStepCount (32);
+    original.setChannelCount (4);
+    original.setChannelLabel (3, "Hidden Perc");
+    original.setChannelNote (3, 50);
+    original.setCell (0, 3, 20, true, 77, 100, 1);
+    original.setCell (0, 0, 24, true, 66, 100, 1);
+    original.setSourceChannelMute (2, 3, true);
+    original.setChannelCount (2);
+    original.setStepCount (16);
+
+    KickSnareHatEngine restored;
+    REQUIRE (restored.deserializeForPersistence (original.serializeForPersistence()));
+
+    REQUIRE (restored.getChannelCount() == 2);
+    REQUIRE (restored.getStepCount() == 16);
+    REQUIRE (restored.channelAt (3).label == "Hidden Perc");
+    REQUIRE (restored.channelAt (3).note == 50);
+    REQUIRE (restored.sourceCellAt (0, 3, 20).enabled);
+    REQUIRE (restored.sourceCellAt (0, 3, 20).velocity == 77);
+    REQUIRE (restored.sourceCellAt (0, 0, 24).velocity == 66);
+    REQUIRE (restored.sourceChannelMutedAt (2, 3));
+}
+
+TEST_CASE ("persistence rejects v1 projects with missing or mistyped keys without changing anything", "[plugin][persistence]")
+{
+    KickSnareHatEngine engine;
+    engine.setCell (0, 0, 0, true, 90, 100, 1);
+    const auto before = engine.serializeForPersistence();
+
+    for (const auto* key : { "stepCount", "channelCount", "refreshSteps", "staticSource", "rate", "swing",
+                             "velocityHumanize", "timingHumanize", "deviceActive" })
+    {
+        CAPTURE (key);
+        auto broken = before;
+        broken.erase (key);
+        REQUIRE_FALSE (engine.deserializeForPersistence (broken));
+        REQUIRE (engine.serializeForPersistence() == before);
+    }
+
+    auto mistypedChannel = before;
+    mistypedChannel["channels"][0][1] = "loud";
+    REQUIRE_FALSE (engine.deserializeForPersistence (mistypedChannel));
+
+    auto mistypedCell = before;
+    mistypedCell["cells"][0][4] = "ninety";
+    REQUIRE_FALSE (engine.deserializeForPersistence (mistypedCell));
+
+    auto mistypedSettings = before;
+    mistypedSettings["sourceSettings"][0][1] = 16;
+    REQUIRE_FALSE (engine.deserializeForPersistence (mistypedSettings));
+
+    REQUIRE (engine.serializeForPersistence() == before);
+}
+
+TEST_CASE ("loading a project resets channel data the file does not mention", "[plugin][persistence]")
+{
+    KickSnareHatEngine engine;
+    engine.setChannelCount (8);
+    engine.setChannelLabel (6, "Old Tom");
+    engine.setChannelNote (6, 70);
+    engine.setChannelLock (6, 3);
+
+    // Older files only stored the visible channel rows.
+    auto legacy = KickSnareHatEngine {}.serializeForPersistence();
+    legacy["channelCount"] = 2;
+    legacy["channels"] = nlohmann::json::array ({ legacy["channels"][0], legacy["channels"][1] });
+    REQUIRE (engine.deserializeForPersistence (legacy));
+
+    const KickSnareHatEngine defaults;
+    REQUIRE (engine.channelAt (6).label == defaults.channelAt (6).label);
+    REQUIRE (engine.channelAt (6).note == defaults.channelAt (6).note);
+    REQUIRE (engine.channelAt (6).lock == defaults.channelAt (6).lock);
+}
+
+TEST_CASE ("undo-style restores keep the generated pattern instead of re-rolling it", "[plugin][persistence][generation]")
+{
+    double randomValue = 0.0;
+    EngineCallbacks callbacks;
+    callbacks.rng = [&randomValue]
+    {
+        randomValue = std::fmod (randomValue + 0.37, 1.0);
+        return randomValue;
+    };
+
+    KickSnareHatEngine engine { callbacks };
+    engine.setStepCount (8);
+    engine.setChannelCount (2);
+    engine.setGenerationMode (GenerationMode::perChannel);
+
+    for (int source = 0; source < 4; ++source)
+        for (int channel = 0; channel < 2; ++channel)
+            engine.setCell (source, channel, 0, true, 50 + source, 100, 1);
+
+    engine.generateWindow (0, 8, false);
+
+    const auto generatedSources = [&engine]
+    {
+        std::vector<int> sources;
+        for (int channel = 0; channel < 2; ++channel)
+            for (int step = 0; step < 8; ++step)
+                sources.push_back (engine.generatedCellAt (channel, step).source);
+        return sources;
+    };
+
+    const auto before = generatedSources();
+    const auto version = engine.generationVersion();
+    const auto state = engine.serializeForPersistence();
+
+    REQUIRE (engine.deserializeForPersistence (state, true));
+    REQUIRE (generatedSources() == before);
+    REQUIRE (engine.generationVersion() == version);
+
+    REQUIRE (engine.deserializeForPersistence (state));
+    REQUIRE (engine.generationVersion() != version);
 }

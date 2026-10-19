@@ -328,6 +328,7 @@ void KickSnareHatEngine::setSourceStepCount (int source, int count)
     settings.stepCount = clampInt (count, 1, Constants::maxSteps);
     for (auto& range : settings.loopRanges)
         clampLoopRange (range, settings.stepCount);
+    ++playbackSnapshotVersion_;
     status ("source_steps " + std::to_string (source + 1) + " "
             + std::to_string (settings.stepCount));
 }
@@ -342,6 +343,7 @@ void KickSnareHatEngine::setChannelCount (int count)
 void KickSnareHatEngine::setRefreshSteps (int count)
 {
     refreshSteps = clampInt (count, 1, stepCount);
+    ++playbackSnapshotVersion_;
     status ("refresh_steps " + std::to_string (refreshSteps));
 }
 
@@ -358,6 +360,8 @@ void KickSnareHatEngine::setStaticSource (int source)
 
     if (staticSource >= 0)
         applyActiveSourceSettings();
+
+    ++playbackSnapshotVersion_;
 
     if (generationMode == GenerationMode::staticSource)
         recomposeWindow (0, stepCount, true);
@@ -835,6 +839,7 @@ void KickSnareHatEngine::generateWindow (int startStep, int length, bool forceEm
         }
     }
 
+    ++generationVersion_;
     markPreviewDirty (forceEmit);
 }
 
@@ -845,6 +850,7 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
 
     ActiveSourceList activeSources;
     int initialStackSource = -1;
+    bool sourcesChanged = false;
 
     if (generationMode != GenerationMode::staticSource)
         activeSources = activeSourceIndices();
@@ -886,21 +892,47 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
                 }
             }
 
-            generated[static_cast<size_t> (channel)][static_cast<size_t> (step)] =
-                generatedCellFromSource (source, channel, step);
+            auto& cell = generated[static_cast<size_t> (channel)][static_cast<size_t> (step)];
+            sourcesChanged = sourcesChanged || cell.source != source;
+            cell = generatedCellFromSource (source, channel, step);
         }
     }
 
+    if (sourcesChanged)
+        ++generationVersion_;
+
     markPreviewDirty (forceEmit);
+}
+
+bool KickSnareHatEngine::adoptGeneratedSources (const GeneratedSourcesFrame& frame)
+{
+    if (frame.basisVersion != generationVersion_ || generationMode == GenerationMode::staticSource)
+        return false;
+
+    bool changed = false;
+
+    for (int channel = 0; channel < channelCount; ++channel)
+    {
+        for (int step = 0; step < stepCount; ++step)
+        {
+            const int source = frame.sources[static_cast<size_t> (channel)][static_cast<size_t> (step)];
+            auto& cell = generated[static_cast<size_t> (channel)][static_cast<size_t> (step)];
+
+            if (cell.source == source)
+                continue;
+
+            cell = generatedCellFromSource (source, channel, step);
+            changed = true;
+        }
+    }
+
+    return changed;
 }
 
 void KickSnareHatEngine::markPreviewDirty (bool forceEmit)
 {
     previewDirty = true;
     ++playbackSnapshotVersion_;
-
-    if (! nativeTransportRefreshInProgress)
-        ++cycleDefinitionVersion_;
 
     if (forceEmit)
         flushPreview();
@@ -1019,13 +1051,12 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
 
+    // Hidden channels and steps beyond the current lengths are part of the document too.
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
-        const int sourceSteps = sourceSettings[static_cast<size_t> (source)].stepCount;
-
-        for (int channel = 0; channel < channelCount; ++channel)
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
         {
-            for (int step = 0; step < sourceSteps; ++step)
+            for (int step = 0; step < Constants::maxSteps; ++step)
             {
                 const auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
 
@@ -1054,7 +1085,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         }
     }
 
-    for (int channel = 0; channel < channelCount; ++channel)
+    for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
         const auto& channelState = channels[static_cast<size_t> (channel)];
         channelsOut.push_back (nlohmann::json::array ({
@@ -1085,7 +1116,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
     {
         nlohmann::json row = nlohmann::json::array();
 
-        for (int channel = 0; channel < channelCount; ++channel)
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
             row.push_back (sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] ? 1 : 0);
 
         mutes.push_back (row);
@@ -1112,18 +1143,103 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
     };
 }
 
-bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
+bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
 {
-    if (! state.is_object()
-        || ! state.contains ("v")
-        || ! state["v"].is_number_integer()
-        || state["v"].get<int>() != 1
-        || ! state.contains ("channels")
-        || ! state["channels"].is_array()
-        || ! state.contains ("sourceChannelMutes")
-        || ! state["sourceChannelMutes"].is_array()
-        || ! state.contains ("cells")
-        || ! state["cells"].is_array())
+    if (! state.is_object())
+        return false;
+
+    const auto keyIs = [&state] (const char* key, bool (nlohmann::json::*predicate)() const noexcept)
+    {
+        const auto it = state.find (key);
+        return it != state.end() && ((*it).*predicate)();
+    };
+    const auto optionalKeyIs = [&state] (const char* key, bool (nlohmann::json::*predicate)() const noexcept)
+    {
+        const auto it = state.find (key);
+        return it == state.end() || ((*it).*predicate)();
+    };
+    const auto allNumbers = [] (const nlohmann::json& values)
+    {
+        return values.is_array()
+               && std::all_of (values.begin(), values.end(), [] (const nlohmann::json& value) { return value.is_number(); });
+    };
+
+    if (! keyIs ("v", &nlohmann::json::is_number_integer) || state.at ("v").get<int>() != 1)
+        return false;
+
+    for (const auto* key : { "stepCount", "channelCount", "refreshSteps", "staticSource", "swing", "velocityHumanize", "timingHumanize" })
+    {
+        if (! keyIs (key, &nlohmann::json::is_number))
+            return false;
+    }
+
+    if (! keyIs ("rate", &nlohmann::json::is_string)
+        || ! keyIs ("channels", &nlohmann::json::is_array)
+        || ! keyIs ("sourceChannelMutes", &nlohmann::json::is_array)
+        || ! keyIs ("cells", &nlohmann::json::is_array)
+        || ! optionalKeyIs ("tempo", &nlohmann::json::is_number)
+        || ! optionalKeyIs ("swingSubdivisionIndex", &nlohmann::json::is_number)
+        || ! optionalKeyIs ("sourceSettings", &nlohmann::json::is_array))
+        return false;
+
+    if (! keyIs ("deviceActive", &nlohmann::json::is_boolean) && ! keyIs ("deviceActive", &nlohmann::json::is_number))
+        return false;
+
+    for (const auto& row : state.at ("channels"))
+    {
+        if (! row.is_array() || row.size() < 4
+            || ! row[0].is_string() || ! row[1].is_number() || ! row[2].is_number() || ! row[3].is_number()
+            || (row.size() > 4 && ! row[4].is_string())
+            || (row.size() > 5 && ! row[5].is_number()))
+            return false;
+    }
+
+    for (const auto& row : state.at ("sourceChannelMutes"))
+    {
+        if (! allNumbers (row))
+            return false;
+    }
+
+    for (const auto& entry : state.at ("cells"))
+    {
+        if (entry.is_array() && entry.size() >= 7 && ! allNumbers (entry))
+            return false;
+    }
+
+    if (state.contains ("sourceSettings"))
+    {
+        const auto validRanges = [&allNumbers] (const nlohmann::json& ranges)
+        {
+            return ranges.is_array()
+                   && std::all_of (ranges.begin(), ranges.end(), [&allNumbers] (const nlohmann::json& range)
+                                   { return ! range.is_array() || allNumbers (range); });
+        };
+
+        for (const auto& row : state.at ("sourceSettings"))
+        {
+            if (row.is_array())
+            {
+                if ((! row.empty() && ! row[0].is_number())
+                    || (row.size() > 1 && ! row[1].is_string())
+                    || (row.size() > 2 && row[2].is_array() && ! validRanges (row[2])))
+                    return false;
+            }
+            else if (row.is_object())
+            {
+                if ((row.contains ("stepCount") && ! row.at ("stepCount").is_number())
+                    || (row.contains ("rate") && ! row.at ("rate").is_string())
+                    || (row.contains ("loopRanges") && row.at ("loopRanges").is_array() && ! validRanges (row.at ("loopRanges"))))
+                    return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state, bool keepGeneratedSources)
+{
+    if (! isValidPersistenceState (state))
         return false;
 
     stepCount = clampInt (state["stepCount"].get<int>(), 1, Constants::maxSteps);
@@ -1221,8 +1337,9 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
         source = makeEmptySourcePattern();
 
     const auto& channelsIn = state["channels"];
+    initChannels();
 
-    for (int channel = 0; channel < channelCount; ++channel)
+    for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
         if (channel < static_cast<int> (channelsIn.size()))
         {
@@ -1283,7 +1400,7 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
 
         const auto& muteRow = mutesIn[static_cast<size_t> (source)];
 
-        for (int channel = 0; channel < channelCount; ++channel)
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
         {
             if (channel >= static_cast<int> (muteRow.size()))
                 continue;
@@ -1328,7 +1445,11 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state)
             });
     }
 
-    resetPlayback (false);
+    if (keepGeneratedSources)
+        recomposeWindow (0, stepCount, true);
+    else
+        resetPlayback (false);
+
     return true;
 }
 

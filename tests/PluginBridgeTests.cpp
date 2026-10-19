@@ -135,6 +135,90 @@ TEST_CASE ("MIDI uses the final edit after a burst while audio processing is sus
     plugin.setPlayHead (nullptr);
 }
 
+TEST_CASE ("host macro edits after a MIDI pattern switch keep the new pattern's rate", "[plugin][bridge][midi-input]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("rate", { "8n" }));
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 1, static_cast<juce::uint8> (100)), 0);
+    plugin.processBlock (buffer, midi);
+    PluginProcessorTestPeer::tick (plugin);
+
+    auto& parameters = plugin.getValueTreeState();
+    REQUIRE (plugin.engineStateSnapshot().staticSource == 1);
+    REQUIRE (plugin.engineStateSnapshot().rate == "16n");
+    REQUIRE (static_cast<int> (parameters.getRawParameterValue ("rate")->load()) == 4);
+
+    auto* swing = parameters.getParameter ("swing");
+    swing->setValueNotifyingHost (swing->convertTo0to1 (40.0f));
+    PluginProcessorTestPeer::tick (plugin);
+
+    const auto engine = plugin.engineStateSnapshot();
+    REQUIRE (engine.swing == 40);
+    REQUIRE (engine.rate == "16n");
+    REQUIRE (engine.sourceSettings[0].rate == "8n");
+    REQUIRE (engine.sourceSettings[1].rate == "16n");
+}
+
+TEST_CASE ("bypass and state restore release notes that are still sounding", "[plugin][bridge][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 256);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+
+    juce::AudioBuffer<float> buffer (2, 256);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOn (midi, 36));
+    REQUIRE_FALSE (containsNoteOff (midi, 36));
+
+    SECTION ("bypass")
+    {
+        midi.clear();
+        plugin.processBlockBypassed (buffer, midi);
+        REQUIRE (containsNoteOff (midi, 36));
+    }
+
+    SECTION ("state restore")
+    {
+        juce::MemoryBlock state;
+        plugin.getStateInformation (state);
+        plugin.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+        REQUIRE (containsNoteOff (midi, 36));
+    }
+
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("in-app edits mark the project modified until it is saved or loaded", "[plugin][bridge][persistence]")
+{
+    PluginProcessor plugin;
+    REQUIRE_FALSE (plugin.isDocumentModified());
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    REQUIRE (plugin.isDocumentModified());
+
+    juce::MemoryBlock state;
+    plugin.getStateInformation (state);
+    REQUIRE (plugin.loadStateFromData (state.getData(), static_cast<int> (state.getSize())));
+    REQUIRE_FALSE (plugin.isDocumentModified());
+
+    plugin.setProjectMetadata ("Renamed", {}, {}, {});
+    REQUIRE (plugin.isDocumentModified());
+    plugin.markDocumentClean();
+
+    const std::string_view incomplete = R"({"v":1,"channels":[],"sourceChannelMutes":[],"cells":[]})";
+    REQUIRE_FALSE (plugin.loadStateFromData (incomplete.data(), static_cast<int> (incomplete.size())));
+    REQUIRE (plugin.engineStateSnapshot().sources[0][0][0].enabled);
+}
+
 TEST_CASE ("ui bridge sync_all does not crash without webview", "[plugin][bridge]")
 {
     PluginProcessor plugin;

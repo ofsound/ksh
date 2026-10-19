@@ -24,6 +24,7 @@ struct MidiPlaybackResult
     int currentStepOneBased = 0; ///< Playing step for the UI (0 = stopped).
     int latestGlobalStep = 0;    ///< Newest global step the audio thread reached.
     bool playing = false;        ///< Whether the transport was advancing this block.
+    bool generatedSourcesChanged = false; ///< A refresh window picked new sources this block.
 
     void addNoteHit (const NativeHit& hit)
     {
@@ -69,6 +70,14 @@ struct MidiPatternSelectionBlock
     }
 };
 
+/** Host cycle/loop region in quarter notes, when the host reports one. */
+struct HostLoopRange
+{
+    bool active = false;
+    double startPpq = 0.0;
+    double endPpq = 0.0;
+};
+
 /** Audio-thread playback: evaluates {@link PlaybackSnapshot} live at each step boundary. */
 class MidiPlaybackRunner
 {
@@ -77,13 +86,22 @@ public:
     void reset (bool clearAuditions = true);
     void queueAuditionNote (const MidiNoteEvent& note);
 
+    /** Sends note-offs for every sounding note at sample 0 and drops queued note-ons. */
+    void releaseHeldNotes (juce::MidiBuffer& midiOut);
+    /** Releases held notes and treats the next block as a fresh transport start (bypass). */
+    void suspend (juce::MidiBuffer& midiOut);
+
     MidiPlaybackResult processBlock (const PlaybackSnapshot& snapshot,
                                      double ppqPosition,
                                      double bpm,
                                      bool isPlaying,
                                      int numSamples,
                                      juce::MidiBuffer& midiOut,
-                                     const MidiPatternSelectionBlock& patternSelections = {});
+                                     const MidiPatternSelectionBlock& patternSelections = {},
+                                     const HostLoopRange& hostLoop = {});
+
+    /** Sources currently chosen for generative modes, tagged with the engine generation they extend. */
+    [[nodiscard]] GeneratedSourcesFrame generatedSourcesFrame() const;
 
 private:
     static constexpr size_t cycleCounterSlots =
@@ -113,13 +131,25 @@ private:
     int64_t blockStartSample = 0;
     int64_t nextBlockStartSample = 0;
     bool wasPlaying = false;
+    double expectedNextPpq = 0.0;
     std::optional<int> lastEmittedGlobalStep;
-    std::optional<unsigned long> lastCycleDefinitionVersion;
     std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
     size_t pendingNoteOffCount = 0;
     std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};
     size_t pendingNoteOnCount = 0;
+
+    struct CycleDefinition
+    {
+        int cycle = 0;
+        int mask = 0;
+
+        [[nodiscard]] bool operator== (const CycleDefinition&) const = default;
+    };
+
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
+    std::array<CycleDefinition, cycleCounterSlots> cycleDefinitions {};
+    GeneratedSources generatedSources {};
+    std::optional<unsigned long> adoptedGenerationVersion;
     uint32_t rngState = 0x12345678u;
     static constexpr int noStaticSourceOverride = Constants::mutedStaticSource - 1;
     int pendingStaticSourceOverride = noStaticSourceOverride;
@@ -134,6 +164,9 @@ private:
     void dropPendingNoteOnsAtOrAfter (int sampleOffset);
     void resetCycleCounters();
     [[nodiscard]] double nextRandomUnit();
+    void adoptGeneratedSources (const PlaybackSnapshot& snapshot);
+    [[nodiscard]] bool regenerateWindowIfDue (const PlaybackSnapshot& snapshot, int globalStep);
+    [[nodiscard]] Cell generatedCellForStep (const PlaybackSnapshot& snapshot, int channel, int playbackStep) const;
     [[nodiscard]] int staticSourceForStep (const PlaybackSnapshot& snapshot,
                                            const MidiPatternSelectionBlock& patternSelections,
                                            int stepSampleOffset);

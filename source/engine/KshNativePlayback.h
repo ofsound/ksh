@@ -4,6 +4,7 @@
 #include "KshTypes.h"
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 namespace ksh
@@ -74,6 +75,15 @@ using NativePlaybackTable = std::vector<NativePlaybackRow>;
     return flat;
 }
 
+/** Source chosen for each generated cell (-1 = none), as picked by the audio thread. */
+using GeneratedSources = std::array<std::array<int8_t, Constants::maxSteps>, Constants::maxChannels>;
+
+struct GeneratedSourcesFrame
+{
+    GeneratedSources sources {};
+    unsigned long basisVersion = 0; ///< Engine generation the audio thread had adopted.
+};
+
 struct TransportProtection
 {
     int globalStep = 0;
@@ -91,7 +101,9 @@ struct NativePlaybackBuild
     Built on the message thread and handed to the audio thread via a lock-free mailbox. */
 struct PlaybackSnapshot
 {
-    unsigned long cycleDefinitionVersion = 0;
+    /** Bumped when the message thread deliberately chooses new generated sources;
+        the audio thread then adopts {@link generated} instead of its own choices. */
+    unsigned long generationVersion = 0;
     GeneratedPattern generated {};
     std::array<SourcePattern, Constants::sourceCount> sources {};
     std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
@@ -101,6 +113,7 @@ struct PlaybackSnapshot
     int staticSource = 0;
     int stepCount = 16;
     int channelCount = Constants::defaultChannelCount;
+    int refreshSteps = 16;
     double beatsPerStep = 0.25;
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
