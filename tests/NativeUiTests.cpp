@@ -1486,3 +1486,133 @@ TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]"
     ksh::restoreStandaloneUiScale (processor, settings);
     CHECK (processor.getProjectUiScalePercent() == 120);
 }
+
+namespace
+{
+    struct GestureCounter final : juce::AudioProcessorListener
+    {
+        int parameterIndex = -1, begins = 0, ends = 0, depth = 0, maxDepth = 0;
+        void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+        void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+        void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int index) override
+        {
+            if (index != parameterIndex)
+                return;
+            ++begins;
+            maxDepth = juce::jmax (maxDepth, ++depth);
+        }
+        void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int index) override
+        {
+            if (index != parameterIndex)
+                return;
+            ++ends;
+            --depth;
+        }
+    };
+
+    ValueControl* findValueControl (juce::Component& parent, const juce::String& caption)
+    {
+        for (auto* child : parent.getChildren())
+            if (auto* control = dynamic_cast<ValueControl*> (child); control && control->caption == caption)
+                return control;
+        return nullptr;
+    }
+
+    void scroll (ValueControl& control, int ticks)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), { 4, 4 }, {}, 1, 0, 0, 0, 0, &control, &control, now, { 4, 4 }, now, 0, false);
+        juce::MouseWheelDetails wheel {};
+        wheel.deltaY = ticks > 0 ? 0.1f : -0.1f;
+        for (int i = 0; i < std::abs (ticks); ++i)
+            control.mouseWheelMove (event, wheel);
+    }
+}
+
+TEST_CASE ("Scroll wheel ticks on a value control make one undo step and one host gesture", "[native-ui]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    GestureCounter gestures;
+    gestures.parameterIndex = processor.getValueTreeState().getParameter ("swing")->getParameterIndex();
+    processor.addListener (&gestures);
+    auto* swing = findValueControl (editor, "Swing");
+    REQUIRE (swing != nullptr);
+
+    scroll (*swing, 5);
+    CHECK (swing->isWheelGestureActive());
+    CHECK (processor.engineStateSnapshot().swing == 5);
+    CHECK (gestures.begins == 1);
+    CHECK (gestures.ends == 0);
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+    CHECK_FALSE (swing->isWheelGestureActive());
+    CHECK (gestures.begins == 1);
+    CHECK (gestures.ends == 1);
+    CHECK (gestures.maxDepth == 1);
+    CHECK (processor.getValueTreeState().getRawParameterValue ("swing")->load() == 5.0f);
+
+    REQUIRE (editor.controller.canUndo());
+    editor.controller.undo();
+    CHECK (processor.engineStateSnapshot().swing == 0);
+    CHECK_FALSE (editor.controller.canUndo());
+    processor.removeListener (&gestures);
+}
+
+TEST_CASE ("A new edit closes an idle scroll gesture instead of joining it", "[native-ui]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    auto& controller = editor.controller;
+    auto* swing = findValueControl (editor, "Swing");
+    REQUIRE (swing != nullptr);
+
+    scroll (*swing, 2);
+    REQUIRE (swing->isWheelGestureActive());
+    controller.begin ("Toggle cell");
+    CHECK_FALSE (swing->isWheelGestureActive());
+    auto cell = controller.cell ({ 0, 0 });
+    cell.enabled = true;
+    controller.editCell ({ 0, 0 }, cell);
+    controller.commit();
+
+    controller.undo();
+    CHECK_FALSE (controller.cell ({ 0, 0 }).enabled);
+    CHECK (processor.engineStateSnapshot().swing == 2);
+    controller.undo();
+    CHECK (processor.engineStateSnapshot().swing == 0);
+
+    scroll (*swing, 3);
+    controller.cancel();
+    CHECK_FALSE (swing->isWheelGestureActive());
+    CHECK (processor.engineStateSnapshot().swing == 3);
+}
+
+TEST_CASE ("Macro gestures reach the host once and settings undo stays conditional", "[native-ui]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    GestureCounter gestures;
+    gestures.parameterIndex = processor.getValueTreeState().getParameter ("swing")->getParameterIndex();
+    processor.addListener (&gestures);
+
+    controller.begin ("Change swing", "swing");
+    for (const int value : { 10, 20, 30 })
+        controller.command ("swing", { value });
+    controller.commit();
+    CHECK (gestures.begins == 1);
+    CHECK (gestures.ends == 1);
+    CHECK (gestures.maxDepth == 1);
+
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_note", { 1, 50 }));
+    controller.undo();
+    CHECK (processor.engineStateSnapshot().swing == 0);
+    CHECK (controller.state.playback.channels[0].note == 50);
+    controller.redo();
+    CHECK (processor.engineStateSnapshot().swing == 30);
+
+    REQUIRE (processor.dispatchUiEngineCommand ("swing", { 45 }));
+    controller.undo();
+    CHECK (processor.engineStateSnapshot().swing == 45);
+    processor.removeListener (&gestures);
+}

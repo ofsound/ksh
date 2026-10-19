@@ -18,7 +18,7 @@ Generative modes pick sources on the audio thread at each refresh boundary with 
 
 Discrete commands go directly to `dispatchUiEngineCommand`, without JavaScript or serialized command messages. Convert native zero-based indices to the engine's one-based command indices once at this boundary. Numeric APVTS gestures pair begin/end callbacks. Row audition calls `triggerRowFromUi` directly through the existing realtime queue.
 
-History groups a gesture into one action and conditionally merges only its changed fields. External changes are rebased out of active transactions; undo/cancel preserve unrelated recording and automation. Histories are capped at 128 entries. Text fields retain their native text undo. Project loads use the existing strict v:1 persistence validator and atomic file replacement.
+History groups a gesture into one action and conditionally merges only its changed fields. External changes are rebased out of active transactions; undo/cancel preserve unrelated recording and automation. Histories are capped at 128 entries. History stores typed document settings plus only the cells a gesture changed; JSON is used only to apply an undo through the persistence validator. A scroll-wheel adjustment is one action and one host gesture, closed after 350 ms without ticks or as soon as another edit begins. Text fields retain their native text undo. Project loads use the existing strict v:1 persistence validator and atomic file replacement.
 
 `KshLayout` supplies cell bounds and hit tests. The grid and generated preview remain together in one native editor. Overall scale is stored in project/host metadata at 50–120%. Imported theme metadata remains readable; all rendering uses the fixed Alternative palette and newly saved projects use `alt`.
 

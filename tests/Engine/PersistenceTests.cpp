@@ -172,6 +172,41 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (restored.engine.channelAt (1).note == 50);
 }
 
+TEST_CASE ("typed document state round-trips through persistence", "[engine][persistence]")
+{
+    EngineFixture original;
+    original.engine.setStepCount (12);
+    original.engine.setSwing (25);
+    original.engine.setTempo (133.5);
+    original.engine.setCell (3, 1, 7, true, 64, 30, 2, 0, false, 3);
+    original.engine.setChannelLabel (0, "Sub");
+    original.engine.setChannelNote (1, 50);
+
+    const auto document = original.engine.documentState();
+    REQUIRE (KickSnareHatEngine::documentToJson (document) == original.engine.serializeForPersistence());
+
+    EngineFixture restored;
+    REQUIRE (restored.engine.deserializeForPersistence (KickSnareHatEngine::documentToJson (document)));
+    CHECK (restored.engine.documentState() == document);
+    restored.engine.setCellVelocity (3, 1, 7, 65);
+    CHECK_FALSE (restored.engine.documentState() == document);
+}
+
+TEST_CASE ("engine change notifications do not need status messages", "[engine][persistence]")
+{
+    int changes = 0;
+    EngineCallbacks callbacks;
+    callbacks.changed = [&] { ++changes; };
+    KickSnareHatEngine engine { callbacks };
+    engine.setSwing (40);
+    CHECK (changes > 0);
+    const auto afterSwing = changes;
+    engine.setCell (0, 0, 0, true, 100, 100, 1, 0, false, 1);
+    REQUIRE (engine.isPreviewDirty());
+    engine.flushPreview();
+    CHECK (changes > afterSwing);
+}
+
 TEST_CASE ("legacy persistence defaults swing subdivision to .5", "[engine][persistence]")
 {
     EngineFixture fixture;

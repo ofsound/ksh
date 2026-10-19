@@ -193,6 +193,7 @@ namespace ksh::ui
             control->captionGap = compact ? 2 : 6;
         }
         resized();
+        repaint();
     }
     void PreviewPanel::cancelGesture()
     {
@@ -274,7 +275,24 @@ namespace ksh::ui
         else
             roll.mixed = true;
         cycle.sync();
-        repaint();
+        Painted next;
+        next.selectedCount = selected.size();
+        if (randomSection)
+        {
+            next.channelCount = p.channelCount;
+            next.stepCount = p.stepCount;
+            for (size_t ch = 0; ch < next.labels.size(); ++ch)
+            {
+                next.labels[ch] = p.channels[ch].label;
+                for (size_t s = 0; s < next.generated[ch].size(); ++s)
+                    next.generated[ch][s] = p.generated[ch][s].enabled;
+            }
+        }
+        if (painted != next)
+        {
+            painted = std::move (next);
+            repaint();
+        }
     }
     void PreviewPanel::paint (juce::Graphics& g)
     {

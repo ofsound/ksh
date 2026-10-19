@@ -12,6 +12,9 @@ namespace ksh::ui
         bool compact = false;
         float compactWidth = 814.0f, compactHeight = 409.0f;
         int firstStep = 0;
+        JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wfloat-equal")
+        bool operator== (const Layout&) const = default;
+        JUCE_END_IGNORE_WARNINGS_GCC_LIKE
         int visibleSteps() const { return compact ? juce::jmin (16, steps - firstStep) : steps; }
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
         float transportHeight() const { return standalone ? 44.0f : 0.0f; }

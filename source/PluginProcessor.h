@@ -82,9 +82,18 @@ public:
         ksh::Cell expected, value;
     };
     [[nodiscard]] UiState nativeUiState();
+    /** nativeUiState() written into existing storage, avoiding a second snapshot copy. */
+    void copyNativeUiState (UiState& state);
     [[nodiscard]] bool applyNativeCellEdits (const std::vector<CellEdit>& edits, uint64_t epoch);
     [[nodiscard]] bool dispatchUiEngineCommand (std::string_view selector, const nlohmann::json& args);
     [[nodiscard]] bool applyPersistenceFromUi (const nlohmann::json& state);
+    /** Typed project document for undo/redo; applying keeps the current generated choices. */
+    [[nodiscard]] ksh::DocumentState editorDocument();
+    [[nodiscard]] bool applyEditorDocument (const ksh::DocumentState& document);
+
+    /** UI-owned host gesture. Engine-driven parameter writes inside it do not open nested gestures. */
+    void beginUiParameterGesture (const juce::String& parameterID);
+    void endUiParameterGesture (const juce::String& parameterID);
 
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without the JSON command bus.
         When pattern recording is armed, also enqueues a quantized cell write (deferred UI sync). */
@@ -146,13 +155,15 @@ private:
     void adoptGeneratedSourcesLocked();
     void markDocumentModified();
     void notifyHostOfStateChangeIfDue();
-    ksh::MidiPatternSelectionBlock consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages);
-    ksh::MidiPatternSelectionBlock consumeMidiInput (juce::MidiBuffer& midiMessages,
-                                                     const ksh::PlaybackSnapshot& snapshot,
-                                                     double ppqPosition,
-                                                     double bpm,
-                                                     bool isPlaying,
-                                                     int numSamples);
+    void applyPendingHostTempoLocked();
+    /** Reads pattern selections and record hits; returns whether selection notes must be filtered. */
+    bool consumeMidiInput (const juce::MidiBuffer& midiMessages,
+                           const ksh::PlaybackSnapshot& snapshot,
+                           double ppqPosition,
+                           double bpm,
+                           bool isPlaying,
+                           ksh::MidiPatternSelectionBlock& selections);
+    juce::MidiBuffer& reservedMidiOutputBuffer();
     void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying);
     void drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
@@ -192,6 +203,8 @@ private:
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
+    double lastHostTempoApplyMs = 0.0; // message-thread only
+    std::atomic<uint32_t> uiGestureParameters { 0 }; // one bit per kMacroParameterIDs entry
 
     std::atomic<bool> messageThreadWorkPending { false };
     std::atomic<bool> playbackResetRequested { false };
@@ -220,7 +233,11 @@ private:
     std::atomic<int> auditionStepCount { 16 };
     std::atomic<double> auditionBeatsPerStep { 0.25 };
 
-    juce::MidiBuffer midiInputScratch;
+    // Output is assembled here and swapped into the host buffer, so the audio thread writes
+    // only into storage reserved in prepareToPlay. After a swap a slot holds the host's
+    // storage, so slots are told apart by their storage address.
+    std::array<juce::MidiBuffer, 2> midiOutputBuffers;
+    std::array<const juce::uint8*, 2> reservedMidiStorage {};
 
     EditorResizeCallback editorResizeCallback;
 

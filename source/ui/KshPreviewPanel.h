@@ -29,6 +29,16 @@ namespace ksh::ui
         std::vector<std::pair<Location, Cell>> valueStarts;
         std::optional<Layer> previousLayer;
         std::array<std::array<bool, 32>, 8> flashes {};
+        // Everything paint() reads from the controller; sync() repaints only when it changes.
+        struct Painted
+        {
+            size_t selectedCount = 0;
+            int channelCount = 0, stepCount = 0;
+            std::array<std::string, 8> labels {};
+            std::array<std::array<bool, 32>, 8> generated {};
+            bool operator== (const Painted&) const = default;
+        };
+        std::optional<Painted> painted;
         void beginRelative (const juce::String&);
         void applyRelative (Layer, int);
     };

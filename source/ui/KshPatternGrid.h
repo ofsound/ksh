@@ -86,6 +86,7 @@ namespace ksh::ui
         Layer displayedLayer = Layer::velocity;
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;
+        std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         int boundary = 0, lineVelocity = 100;
         int valueStep = 0, valueVelocity = 100;
         void updateSelection();

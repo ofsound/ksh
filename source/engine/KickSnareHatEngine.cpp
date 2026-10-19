@@ -249,12 +249,6 @@ double KickSnareHatEngine::nextRandom() const
     return callbacks.rng ? callbacks.rng() : defaultEngineRandom();
 }
 
-void KickSnareHatEngine::status (const std::string& message)
-{
-    if (callbacks.emitStatus)
-        callbacks.emitStatus (message);
-}
-
 int KickSnareHatEngine::mod (int value, int divisor)
 {
     const auto result = value % divisor;
@@ -310,7 +304,7 @@ void KickSnareHatEngine::setStepCount (int count)
     }
 
     recomposeWindow (0, stepCount, true);
-    status ("steps " + std::to_string (stepCount));
+    status ([&] { return "steps " + std::to_string (stepCount); });
 }
 
 void KickSnareHatEngine::setSourceStepCount (int source, int count)
@@ -320,7 +314,7 @@ void KickSnareHatEngine::setSourceStepCount (int source, int count)
     if (source == activeSettingsSource())
     {
         setStepCount (count);
-        status ("source_steps " + std::to_string (source + 1) + " " + std::to_string (stepCount));
+        status ([&] { return "source_steps " + std::to_string (source + 1) + " " + std::to_string (stepCount); });
         return;
     }
 
@@ -329,29 +323,28 @@ void KickSnareHatEngine::setSourceStepCount (int source, int count)
     for (auto& range : settings.loopRanges)
         clampLoopRange (range, settings.stepCount);
     ++playbackSnapshotVersion_;
-    status ("source_steps " + std::to_string (source + 1) + " "
-            + std::to_string (settings.stepCount));
+    status ([&] { return "source_steps " + std::to_string (source + 1) + " " + std::to_string (settings.stepCount); });
 }
 
 void KickSnareHatEngine::setChannelCount (int count)
 {
     channelCount = clampInt (count, 1, Constants::maxChannels);
     recomposeWindow (0, stepCount, true);
-    status ("channels " + std::to_string (channelCount));
+    status ([&] { return "channels " + std::to_string (channelCount); });
 }
 
 void KickSnareHatEngine::setRefreshSteps (int count)
 {
     refreshSteps = clampInt (count, 1, stepCount);
     ++playbackSnapshotVersion_;
-    status ("refresh_steps " + std::to_string (refreshSteps));
+    status ([&] { return "refresh_steps " + std::to_string (refreshSteps); });
 }
 
 void KickSnareHatEngine::setGenerationMode (GenerationMode mode)
 {
     generationMode = mode;
     recomposeWindow (0, stepCount, true);
-    status ("mode " + std::string { generationModeToString (generationMode) });
+    status ([&] { return "mode " + std::string { generationModeToString (generationMode) }; });
 }
 
 void KickSnareHatEngine::setStaticSource (int source)
@@ -366,7 +359,7 @@ void KickSnareHatEngine::setStaticSource (int source)
     if (generationMode == GenerationMode::staticSource)
         recomposeWindow (0, stepCount, true);
 
-    status (staticSource < 0 ? "static_source M" : "static_source " + std::to_string (staticSource + 1));
+    status ([&] { return staticSource < 0 ? std::string { "static_source M" } : "static_source " + std::to_string (staticSource + 1); });
 }
 
 void KickSnareHatEngine::setRate (std::string_view rateIn)
@@ -375,7 +368,7 @@ void KickSnareHatEngine::setRate (std::string_view rateIn)
     sourceSettings[static_cast<size_t> (activeSettingsSource())].rate = rate;
     updateStepIntervalMs();
     ++playbackSnapshotVersion_;
-    status ("rate " + rate);
+    status ([&] { return "rate " + rate; });
 }
 
 void KickSnareHatEngine::setSourceRate (int source, std::string_view rateIn)
@@ -390,8 +383,7 @@ void KickSnareHatEngine::setSourceRate (int source, std::string_view rateIn)
         ++playbackSnapshotVersion_;
     }
 
-    status ("source_rate " + std::to_string (source + 1) + " "
-            + sourceSettings[static_cast<size_t> (source)].rate);
+    status ([&] { return "source_rate " + std::to_string (source + 1) + " " + sourceSettings[static_cast<size_t> (source)].rate; });
 }
 
 void KickSnareHatEngine::setTempo (double bpm)
@@ -402,49 +394,49 @@ void KickSnareHatEngine::setTempo (double bpm)
     tempo = std::clamp (bpm, 20.0, 300.0);
     updateStepIntervalMs();
     ++playbackSnapshotVersion_;
-    status ("tempo " + std::to_string (static_cast<int> (tempo)));
+    status ([&] { return "tempo " + std::to_string (static_cast<int> (tempo)); });
 }
 
 void KickSnareHatEngine::setSwing (int amount)
 {
     swing = clampInt (amount, 0, 100);
     ++playbackSnapshotVersion_;
-    status ("swing " + std::to_string (swing));
+    status ([&] { return "swing " + std::to_string (swing); });
 }
 
 void KickSnareHatEngine::setSwingSubdivisionIndex (int subdivisionIndex)
 {
     swingSubdivisionIndex = clampSwingSubdivisionIndex (subdivisionIndex);
     ++playbackSnapshotVersion_;
-    status ("swing_subdivision " + std::to_string (swingSubdivisionIndex));
+    status ([&] { return "swing_subdivision " + std::to_string (swingSubdivisionIndex); });
 }
 
 void KickSnareHatEngine::setVelocityHumanize (int amount)
 {
     velocityHumanize = clampInt (amount, 0, 100);
     ++playbackSnapshotVersion_;
-    status ("velocity_humanize " + std::to_string (velocityHumanize));
+    status ([&] { return "velocity_humanize " + std::to_string (velocityHumanize); });
 }
 
 void KickSnareHatEngine::setTimingHumanize (int amount)
 {
     timingHumanize = clampInt (amount, 0, 100);
     ++playbackSnapshotVersion_;
-    status ("timing_humanize " + std::to_string (timingHumanize));
+    status ([&] { return "timing_humanize " + std::to_string (timingHumanize); });
 }
 
 void KickSnareHatEngine::setDeviceActive (bool active)
 {
     deviceActive = active;
     ++playbackSnapshotVersion_;
-    status (std::string { "device_active " } + (deviceActive ? "1" : "0"));
+    status ([&] { return std::string { "device_active " } + (deviceActive ? "1" : "0"); });
 }
 
 void KickSnareHatEngine::setChannelLabel (int channel, std::string_view label)
 {
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].label = std::string { label };
-    status ("channel_label " + std::to_string (channel + 1) + " " + channels[static_cast<size_t> (channel)].label);
+    status ([&] { return "channel_label " + std::to_string (channel + 1) + " " + channels[static_cast<size_t> (channel)].label; });
 }
 
 void KickSnareHatEngine::setChannelNote (int channel, int note)
@@ -452,7 +444,7 @@ void KickSnareHatEngine::setChannelNote (int channel, int note)
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].note = clampInt (note, 0, 127);
     ++playbackSnapshotVersion_;
-    status ("channel_note " + std::to_string (channel + 1) + " " + std::to_string (channels[static_cast<size_t> (channel)].note));
+    status ([&] { return "channel_note " + std::to_string (channel + 1) + " " + std::to_string (channels[static_cast<size_t> (channel)].note); });
 }
 
 void KickSnareHatEngine::setChannelLock (int channel, int lock)
@@ -462,8 +454,7 @@ void KickSnareHatEngine::setChannelLock (int channel, int lock)
     recomposeWindow (0, stepCount, true);
 
     const auto& locked = channels[static_cast<size_t> (channel)].lock;
-    status ("channel_lock " + std::to_string (channel + 1) + " "
-            + (locked < 0 ? "random" : std::to_string (locked + 1)));
+    status ([&] { return "channel_lock " + std::to_string (channel + 1) + " " + (locked < 0 ? "random" : std::to_string (locked + 1)); });
 }
 
 void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int loopStart)
@@ -476,8 +467,7 @@ void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int 
     auto& channelState = channels[static_cast<size_t> (channel)];
     copyLoopRange (channelState, range);
     recomposeWindow (0, stepCount, true);
-    status ("channel_loop_length " + std::to_string (channel + 1) + " "
-            + std::to_string (channelState.loopLength) + " " + std::to_string (channelState.loopStart + 1));
+    status ([&] { return "channel_loop_length " + std::to_string (channel + 1) + " " + std::to_string (channelState.loopLength) + " " + std::to_string (channelState.loopStart + 1); });
 }
 
 void KickSnareHatEngine::setChannelPlaybackMode (int channel, PlaybackMode mode)
@@ -485,7 +475,7 @@ void KickSnareHatEngine::setChannelPlaybackMode (int channel, PlaybackMode mode)
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].playbackMode = mode;
     ++playbackSnapshotVersion_;
-    status ("channel_playback_mode " + std::to_string (channel + 1) + " " + playbackModeToString (mode));
+    status ([&] { return "channel_playback_mode " + std::to_string (channel + 1) + " " + playbackModeToString (mode); });
 }
 
 bool KickSnareHatEngine::isSourceChannelMuted (int source, int channel) const
@@ -697,8 +687,7 @@ void KickSnareHatEngine::setSourceChannelMute (int source, int channel, bool mut
     channel = clampChannel (channel);
     sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] = muted;
     recomposeWindow (0, stepCount, true);
-    status ("source_channel_mute " + std::to_string (source + 1) + " "
-            + std::to_string (channel + 1) + " " + (muted ? "1" : "0"));
+    status ([&] { return "source_channel_mute " + std::to_string (source + 1) + " " + std::to_string (channel + 1) + " " + (muted ? "1" : "0"); });
 }
 
 void KickSnareHatEngine::resetSourceChannel (int source, int channel)
@@ -718,9 +707,8 @@ void KickSnareHatEngine::resetSourceChannel (int source, int channel)
     if (source == activeSettingsSource())
         copyLoopRange (channels[static_cast<size_t> (channel)], range);
     recomposeWindow (0, stepCount, true);
-    status ("channel_loop_length " + std::to_string (channel + 1) + " "
-            + std::to_string (range.loopLength) + " 1");
-    status ("source_channel_reset " + std::to_string (source + 1) + " " + std::to_string (channel + 1));
+    status ([&] { return "channel_loop_length " + std::to_string (channel + 1) + " " + std::to_string (range.loopLength) + " 1"; });
+    status ([&] { return "source_channel_reset " + std::to_string (source + 1) + " " + std::to_string (channel + 1); });
 }
 
 void KickSnareHatEngine::copySourcePattern (int source, int destination)
@@ -736,7 +724,7 @@ void KickSnareHatEngine::copySourcePattern (int source, int destination)
     sourceChannelMutes[static_cast<size_t> (destination)] = sourceChannelMutes[static_cast<size_t> (source)];
 
     recomposeWindow (0, stepCount, true);
-    status ("source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1));
+    status ([&] { return "source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1); });
 }
 
 bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const
@@ -947,6 +935,9 @@ void KickSnareHatEngine::flushPreview()
 
     if (callbacks.emitPreview)
         callbacks.emitPreview (snapshot());
+
+    if (callbacks.changed)
+        callbacks.changed();
 }
 
 void KickSnareHatEngine::resetPlayback (bool emitStatus)
@@ -956,7 +947,7 @@ void KickSnareHatEngine::resetPlayback (bool emitStatus)
     generateWindow (0, stepCount, true);
 
     if (emitStatus)
-        status ("reset");
+        status ([] { return std::string { "reset" }; });
 }
 
 void KickSnareHatEngine::reset()
@@ -1044,8 +1035,37 @@ nlohmann::json KickSnareHatEngine::snapshot() const
     };
 }
 
+DocumentState KickSnareHatEngine::documentState() const
+{
+    DocumentState document;
+    auto& settings = document.settings;
+    settings.stepCount = stepCount;
+    settings.channelCount = channelCount;
+    settings.refreshSteps = refreshSteps;
+    settings.generationMode = generationMode;
+    settings.staticSource = staticSource;
+    settings.rate = rate;
+    settings.tempo = tempo;
+    settings.swing = swing;
+    settings.swingSubdivisionIndex = swingSubdivisionIndex;
+    settings.velocityHumanize = velocityHumanize;
+    settings.timingHumanize = timingHumanize;
+    settings.deviceActive = deviceActive;
+    settings.channels = channels;
+    settings.sourceSettings = sourceSettings;
+    settings.sourceChannelMutes = sourceChannelMutes;
+    document.sources = sources;
+    return document;
+}
+
 nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 {
+    return documentToJson (documentState());
+}
+
+nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document)
+{
+    const auto& settingsIn = document.settings;
     nlohmann::json cells = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
@@ -1058,7 +1078,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         {
             for (int step = 0; step < Constants::maxSteps; ++step)
             {
-                const auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
+                const auto& cell = document.sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
 
                 if (! cell.enabled
                     && cell.velocity == 100
@@ -1087,7 +1107,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 
     for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
-        const auto& channelState = channels[static_cast<size_t> (channel)];
+        const auto& channelState = settingsIn.channels[static_cast<size_t> (channel)];
         channelsOut.push_back (nlohmann::json::array ({
             channelState.label,
             channelState.note,
@@ -1100,7 +1120,7 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
-        const auto& settings = sourceSettings[static_cast<size_t> (source)];
+        const auto& settings = settingsIn.sourceSettings[static_cast<size_t> (source)];
         nlohmann::json loopRanges = nlohmann::json::array();
         for (const auto& range : settings.loopRanges)
             loopRanges.push_back ({ range.loopStart, range.loopLength });
@@ -1117,25 +1137,25 @@ nlohmann::json KickSnareHatEngine::serializeForPersistence() const
         nlohmann::json row = nlohmann::json::array();
 
         for (int channel = 0; channel < Constants::maxChannels; ++channel)
-            row.push_back (sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] ? 1 : 0);
+            row.push_back (settingsIn.sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] ? 1 : 0);
 
         mutes.push_back (row);
     }
 
     return {
         { "v", 1 },
-        { "stepCount", stepCount },
-        { "channelCount", channelCount },
-        { "refreshSteps", refreshSteps },
-        { "generationMode", std::string { generationModeToString (generationMode) } },
-        { "staticSource", staticSource },
-        { "rate", rate },
-        { "tempo", tempo },
-        { "swing", swing },
-        { "swingSubdivisionIndex", swingSubdivisionIndex },
-        { "velocityHumanize", velocityHumanize },
-        { "timingHumanize", timingHumanize },
-        { "deviceActive", deviceActive ? 1 : 0 },
+        { "stepCount", settingsIn.stepCount },
+        { "channelCount", settingsIn.channelCount },
+        { "refreshSteps", settingsIn.refreshSteps },
+        { "generationMode", std::string { generationModeToString (settingsIn.generationMode) } },
+        { "staticSource", settingsIn.staticSource },
+        { "rate", settingsIn.rate },
+        { "tempo", settingsIn.tempo },
+        { "swing", settingsIn.swing },
+        { "swingSubdivisionIndex", settingsIn.swingSubdivisionIndex },
+        { "velocityHumanize", settingsIn.velocityHumanize },
+        { "timingHumanize", settingsIn.timingHumanize },
+        { "deviceActive", settingsIn.deviceActive ? 1 : 0 },
         { "channels", channelsOut },
         { "sourceSettings", sourceSettingsOut },
         { "sourceChannelMutes", mutes },

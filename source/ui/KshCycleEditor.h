@@ -43,6 +43,11 @@ namespace ksh::ui
             const auto list = locations();
             setEnabled (!list.empty());
             const auto c = list.empty() ? Cell {} : controller.cell (list.front());
+            updatePlayback();
+            const std::tuple shown { !list.empty(), c.cycle, c.cycleMask, compact };
+            if (displayed == shown)
+                return;
+            displayed = shown;
             cycleLength = c.cycle;
             resized();
             for (int i = 0; i < 8; ++i)
@@ -52,7 +57,6 @@ namespace ksh::ui
                 bit.setToggleState (i < c.cycle && (c.cycleMask & (1 << i)) != 0, juce::dontSendNotification);
                 bit.repaint();
             }
-            updatePlayback();
             repaint();
         }
         void updatePlayback()
@@ -131,6 +135,7 @@ namespace ksh::ui
         }
         int cycleLength = 1;
         int cellStride = 4;
+        std::optional<std::tuple<bool, int, int, bool>> displayed;
         class LengthHandle : public juce::Component, public juce::SettableTooltipClient
         {
         public:

@@ -254,7 +254,9 @@ namespace ksh::ui
         randomPanel.sync();
         if (layout.compact)
             syncChannel();
-        resized();
+        // The compact layout also decides visibility from editor state, so it always re-runs.
+        if (layout.compact || laidOut != std::pair { layout, getLocalBounds() })
+            resized();
         repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
         repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
         syncing = false;
@@ -263,6 +265,7 @@ namespace ksh::ui
     }
     void NativeEditor::resized()
     {
+        laidOut = { layout, getLocalBounds() };
         if (layout.compact)
         {
             resizedCompact();

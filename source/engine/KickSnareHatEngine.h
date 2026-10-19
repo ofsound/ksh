@@ -29,9 +29,50 @@ struct MidiNoteEvent
 struct EngineCallbacks
 {
     std::function<double()> rng;
+    /** Status text and preview JSON are only built when these are set. */
     std::function<void (const std::string&)> emitStatus;
     std::function<void (const nlohmann::json&)> emitPreview;
     std::function<void (const MidiNoteEvent&)> emitNote;
+    /** Payload-free notification for every status or preview emission. */
+    std::function<void()> changed;
+};
+
+/** Every value a `v:1` project stores, typed. Generated choices and transport state are not part of it. */
+struct DocumentSettings
+{
+    int stepCount = 16;
+    int channelCount = Constants::defaultChannelCount;
+    int refreshSteps = 16;
+    GenerationMode generationMode = GenerationMode::staticSource;
+    int staticSource = 0;
+    std::string rate = std::string { Constants::defaultRate };
+    double tempo = 120.0;
+    int swing = 0;
+    int swingSubdivisionIndex = Constants::defaultSwingSubdivisionIndex;
+    int velocityHumanize = 0;
+    int timingHumanize = 0;
+    bool deviceActive = true;
+    std::array<Channel, Constants::maxChannels> channels {};
+    std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
+    std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
+
+    // Exact comparison is intended: it detects any stored change, including tempo.
+#if defined(__clang__) || defined(__GNUC__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wfloat-equal"
+#endif
+    [[nodiscard]] bool operator== (const DocumentSettings&) const = default;
+#if defined(__clang__) || defined(__GNUC__)
+    #pragma GCC diagnostic pop
+#endif
+};
+
+struct DocumentState
+{
+    DocumentSettings settings;
+    std::array<SourcePattern, Constants::sourceCount> sources {};
+
+    [[nodiscard]] bool operator== (const DocumentState&) const = default;
 };
 
 struct EngineStateSnapshot
@@ -203,6 +244,9 @@ public:
     [[nodiscard]] bool isSourceEmpty (int sourceIndex) const;
 
     [[nodiscard]] nlohmann::json snapshot() const;
+    [[nodiscard]] DocumentState documentState() const;
+    /** The `v:1` encoding of a document; serializeForPersistence() is documentToJson (documentState()). */
+    [[nodiscard]] static nlohmann::json documentToJson (const DocumentState& document);
     [[nodiscard]] nlohmann::json serializeForPersistence() const;
     /** Replaces the whole document. Returns false without mutating anything when required
         `v:1` keys are missing or mistyped. With keepGeneratedSources the current generated
@@ -222,6 +266,8 @@ public:
 
     /** Immutable view for the audio thread. Built on the message thread. */
     [[nodiscard]] PlaybackSnapshot makePlaybackSnapshot() const;
+    /** Same as makePlaybackSnapshot, written into existing storage so no ~140 KB temporary is copied. */
+    void fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const;
 
     /** Bumped whenever playback-affecting state changes; lets owners publish only on change. */
     [[nodiscard]] unsigned long playbackSnapshotVersion() const { return playbackSnapshotVersion_; }
@@ -252,7 +298,15 @@ private:
     [[nodiscard]] int activeSettingsSource() const;
     void applyActiveSourceSettings();
     double nextRandom() const;
-    void status (const std::string& message);
+    template <typename MakeMessage>
+    void status (MakeMessage&& makeMessage)
+    {
+        if (callbacks.emitStatus)
+            callbacks.emitStatus (makeMessage());
+
+        if (callbacks.changed)
+            callbacks.changed();
+    }
     void markPreviewDirty (bool forceEmit);
 
     [[nodiscard]] ActiveSourceList activeSourceIndices() const;

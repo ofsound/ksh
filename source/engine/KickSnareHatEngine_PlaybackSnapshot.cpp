@@ -286,6 +286,12 @@ void KickSnareHatEngine::commitNativePlaybackBuild (NativePlaybackBuild build)
 PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
 {
     PlaybackSnapshot snapshot;
+    fillPlaybackSnapshot (snapshot);
+    return snapshot;
+}
+
+void KickSnareHatEngine::fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const
+{
     snapshot.generationVersion = generationVersion_;
     snapshot.generated = generated;
     snapshot.sources = sources;
@@ -305,7 +311,6 @@ PlaybackSnapshot KickSnareHatEngine::makePlaybackSnapshot() const
     snapshot.velocityHumanize = velocityHumanize;
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;
-    return snapshot;
 }
 
 int KickSnareHatEngine::currentNativePlaybackStep() const

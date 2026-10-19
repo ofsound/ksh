@@ -35,13 +35,21 @@ public:
         Producer calls (including drainRetired) must be serialized by the caller. */
     void publish (T value)
     {
+        publishWith ([&value] (T& slot) { slot = std::move (value); });
+    }
+
+    /** Producer thread: like publish, but `fill (T&)` writes straight into a recycled slot.
+        The slot still holds an older value, so fill must assign every field. */
+    template <typename Fill>
+    void publishWith (Fill&& fill)
+    {
         drainRetired();
 
         // At most three slots are held by the consumer, in transit, or pending.
         // The fourth remains available after retired slots have been drained.
         assert (freeSlotCount > 0);
         auto* ptr = freeSlots[--freeSlotCount];
-        *ptr = std::move (value);
+        fill (*ptr);
 
         if (auto* superseded = pending.exchange (ptr, std::memory_order_acq_rel))
             freeSlots[freeSlotCount++] = superseded;

@@ -32,14 +32,20 @@ namespace ksh::ui
         g.setFont (font (size, bold));
         g.drawText (value, bounds, align, true);
     }
+    /** tone maps every colour drawn, e.g. to fade the surface toward a known backdrop. */
+    template <typename Tone>
+    void surface (juce::Graphics& g, juce::Rectangle<float> r, bool active, bool hover, Tone&& tone)
+    {
+        g.setGradientFill (juce::ColourGradient (tone (hover ? Palette::raised.brighter (0.12f) : Palette::raised), r.getTopLeft(), tone (Palette::app), r.getBottomLeft(), false));
+        g.fillRoundedRectangle (r, 5.0f);
+        g.setColour (tone (active ? Palette::accent : Palette::border.withAlpha (0.65f)));
+        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
+        g.setColour (tone (Palette::text.withAlpha (0.06f)));
+        g.drawLine (r.getX() + 5, r.getY() + 1, r.getRight() - 5, r.getY() + 1);
+    }
     inline void surface (juce::Graphics& g, juce::Rectangle<float> r, bool active = false, bool hover = false)
     {
-        g.setGradientFill (juce::ColourGradient (hover ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
-        g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (active ? Palette::accent : Palette::border.withAlpha (0.65f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
-        g.setColour (Palette::text.withAlpha (0.06f));
-        g.drawLine (r.getX() + 5, r.getY() + 1, r.getRight() - 5, r.getY() + 1);
+        surface (g, r, active, hover, [] (juce::Colour colour) { return colour; });
     }
     class LookAndFeel final : public juce::LookAndFeel_V4
     {
@@ -373,7 +379,7 @@ namespace ksh::ui
     };
 
     /** Native numeric control: drag, arrows, wheel, double-click to type, context reset. */
-    class ValueControl : public juce::Component, public juce::SettableTooltipClient
+    class ValueControl : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
     {
     public:
         ValueControl()
@@ -397,8 +403,11 @@ namespace ksh::ui
         std::function<void()> onCancel;
         void cancelGesture()
         {
-            const bool wasActive = dragging || input.isVisible();
-            dragging = false;
+            const bool wasActive = dragging || wheeling || input.isVisible();
+            dragging = wheeling = false;
+            stopTimer();
+            if (pendingWheel == this)
+                pendingWheel = nullptr;
             input.setVisible (false);
             if (wasActive && onCancel)
                 onCancel();
@@ -407,7 +416,7 @@ namespace ksh::ui
         std::function<void (int)> onChange;
         void setValue (int v)
         {
-            if (!dragging && !input.isVisible() && value != v)
+            if (!dragging && !wheeling && !input.isVisible() && value != v)
             {
                 value = v;
                 repaint();
@@ -456,6 +465,7 @@ namespace ksh::ui
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            endWheelGesture();
             if (!isEnabled())
                 return;
             if (e.mods.isPopupMenu())
@@ -497,6 +507,7 @@ namespace ksh::ui
         }
         void mouseDoubleClick (const juce::MouseEvent&) override
         {
+            endWheelGesture();
             dragging = false;
             if (onEnd)
                 onEnd();
@@ -507,14 +518,38 @@ namespace ksh::ui
         }
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
         {
-            if (!isEnabled() || std::abs (w.deltaY) < 0.00001f)
+            if (!isEnabled() || dragging || std::abs (w.deltaY) < 0.00001f)
                 return;
-            if (onBegin)
-                onBegin();
+            // A trackpad scroll arrives as many ticks: keep them in one undo step and host gesture.
+            if (!wheeling)
+            {
+                if (onBegin)
+                    onBegin();
+                wheeling = true;
+                pendingWheel = this;
+            }
             update (value + (w.deltaY > 0 ? 1 : -1));
+            startTimer (wheelGestureIdleMs);
+        }
+        /** Closes a pending scroll-wheel gesture now instead of after the idle timeout. */
+        void endWheelGesture()
+        {
+            stopTimer();
+            if (!wheeling)
+                return;
+            wheeling = false;
+            if (pendingWheel == this)
+                pendingWheel = nullptr;
             if (onEnd)
                 onEnd();
         }
+        /** Any new edit gesture must close an idle scroll first, or the two would share one undo step. */
+        static void endPendingWheelGesture()
+        {
+            if (auto* control = pendingWheel.getComponent())
+                control->endWheelGesture();
+        }
+        bool isWheelGestureActive() const { return wheeling; }
         std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
         {
             class Value : public juce::AccessibilityRangedNumericValueInterface
@@ -527,6 +562,7 @@ namespace ksh::ui
                 {
                     if (control.isEnabled())
                     {
+                        control.endWheelGesture();
                         if (control.onBegin)
                             control.onBegin();
                         control.update (juce::roundToInt (v));
@@ -545,6 +581,7 @@ namespace ksh::ui
         {
             if (k == juce::KeyPress::upKey || k == juce::KeyPress::downKey)
             {
+                endWheelGesture();
                 if (onBegin)
                     onBegin();
                 update (value + (k == juce::KeyPress::upKey ? 1 : -1));
@@ -556,9 +593,12 @@ namespace ksh::ui
         }
 
     private:
+        static constexpr int wheelGestureIdleMs = 350;
         juce::TextEditor input;
-        bool dragging = false;
+        static inline juce::Component::SafePointer<ValueControl> pendingWheel;
+        bool dragging = false, wheeling = false;
         int start = 0;
+        void timerCallback() override { endWheelGesture(); }
         void update (int next)
         {
             next = juce::jlimit (minimum, maximum, next);
@@ -575,6 +615,7 @@ namespace ksh::ui
         {
             const int next = input.getText().getIntValue();
             input.setVisible (false);
+            endWheelGesture();
             if (onBegin)
                 onBegin();
             update (next);

@@ -9,6 +9,7 @@ class PluginProcessorTestPeer
 public:
     static bool asyncUpdatePending (const PluginProcessor& processor) { return processor.isUpdatePending(); }
     static void tick (PluginProcessor& processor) { processor.timerCallback(); }
+    static bool hostTempoPending (const PluginProcessor& processor) { return processor.hostBpmChangePending.load(); }
 };
 
 namespace
@@ -31,6 +32,11 @@ public:
     void setPpqPosition (double ppqPosition)
     {
         position.setPpqPosition (ppqPosition);
+    }
+
+    void setBpm (double bpm)
+    {
+        position.setBpm (bpm);
     }
 
 private:
@@ -496,6 +502,98 @@ TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve ot
 
     juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 3);
+}
+
+TEST_CASE ("filtered MIDI keeps SysEx and controllers intact beside generated notes", "[plugin][bridge][midi-input][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+
+    std::array<juce::uint8, 300> sysex {};
+    for (size_t i = 0; i < sysex.size(); ++i)
+        sysex[i] = static_cast<juce::uint8> (i & 0x7f);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 0, static_cast<juce::uint8> (100)), 0);
+    midi.addEvent (juce::MidiMessage::createSysExMessage (sysex.data(), static_cast<int> (sysex.size())), 3);
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 74, 20), 5);
+
+    plugin.processBlock (buffer, midi);
+
+    CHECK_FALSE (containsNoteOn (midi, 0));
+    CHECK (containsNoteOn (midi, 36));
+    bool sysexIntact = false, controllerIntact = false;
+    for (const auto metadata : midi)
+    {
+        const auto message = metadata.getMessage();
+        if (message.isSysEx() && metadata.samplePosition == 3 && message.getSysExDataSize() == static_cast<int> (sysex.size()))
+            sysexIntact = std::equal (sysex.begin(), sysex.end(), message.getSysExData());
+        if (message.isController() && metadata.samplePosition == 5)
+            controllerIntact = message.getControllerNumber() == 74 && message.getControllerValue() == 20;
+    }
+    CHECK (sysexIntact);
+    CHECK (controllerIntact);
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("host tempo outside the engine range is applied once instead of every block", "[plugin][bridge][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setBpm (400.0);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    plugin.processBlock (buffer, midi);
+    REQUIRE (PluginProcessorTestPeer::hostTempoPending (plugin));
+    PluginProcessorTestPeer::tick (plugin);
+    CHECK (std::abs (plugin.engineStateSnapshot().tempo - 300.0) < 0.001);
+
+    for (int block = 1; block <= 4; ++block)
+    {
+        midi.clear();
+        playHead.setPpqPosition (block * 0.02);
+        plugin.processBlock (buffer, midi);
+        CHECK_FALSE (PluginProcessorTestPeer::hostTempoPending (plugin));
+    }
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("host tempo ramps are applied at a bounded rate and settle on the latest tempo", "[plugin][bridge][realtime]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setBpm (130.0);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    plugin.processBlock (buffer, midi);
+    PluginProcessorTestPeer::tick (plugin);
+    REQUIRE (std::abs (plugin.engineStateSnapshot().tempo - 130.0) < 0.001);
+
+    for (const double bpm : { 131.0, 132.0, 133.0 })
+    {
+        playHead.setBpm (bpm);
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+        PluginProcessorTestPeer::tick (plugin);
+    }
+    CHECK (std::abs (plugin.engineStateSnapshot().tempo - 130.0) < 0.001);
+    CHECK (PluginProcessorTestPeer::hostTempoPending (plugin));
+
+    juce::Thread::sleep (120);
+    PluginProcessorTestPeer::tick (plugin);
+    CHECK (std::abs (plugin.engineStateSnapshot().tempo - 133.0) < 0.001);
+    CHECK_FALSE (PluginProcessorTestPeer::hostTempoPending (plugin));
+    plugin.setPlayHead (nullptr);
 }
 
 TEST_CASE ("incoming row MIDI notes monitor when pattern recording is off", "[plugin][bridge][midi-input]")

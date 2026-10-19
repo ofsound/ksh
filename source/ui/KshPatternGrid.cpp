@@ -4,6 +4,11 @@ namespace ksh::ui
     namespace
     {
         constexpr float velocityEdgeHitRadius = 6.0f;
+
+        juce::String accessibleDescription (const Cell& value)
+        {
+            return juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", roll " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle);
+        }
     }
 
     PatternGrid::PatternGrid (EditorController& c) : controller (c)
@@ -18,6 +23,8 @@ namespace ksh::ui
                 const Location location { ch, step };
                 auto& cell = accessibleCells[static_cast<size_t> (location.key())];
                 addAndMakeVisible (cell);
+                cell.setTitle ("Channel " + juce::String (ch + 1) + ", step " + juce::String (step + 1));
+                cell.setDescription (accessibleDescription (displayedCells[static_cast<size_t> (location.key())]));
                 cell.onClick = [this, location] { controller.begin ("Toggle cell"); auto value = controller.cell (location); value.enabled = ! value.enabled; controller.editCell (location, value); controller.commit(); controller.notify(); };
                 cell.navigate = [this, location] (const juce::KeyPress& key) {
                     auto targetCell = location;
@@ -255,21 +262,23 @@ namespace ksh::ui
                 const auto index = static_cast<size_t> (location.key());
                 if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index])
                     repaint (layout.cell (location).expanded (3).getSmallestIntegerContainer());
+                if (displayedCells[index] != value)
+                    accessible.setDescription (accessibleDescription (value));
                 displayedCells[index] = value;
                 accessible.setVisible (ch < layout.channels && layout.stepVisible (step));
                 accessible.setEnabled (controller.source() >= 0);
-                accessible.setTitle ("Channel " + juce::String (ch + 1) + ", step " + juce::String (step + 1));
-                accessible.setDescription (juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", roll " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle));
                 accessible.setToggleState (value.enabled, juce::dontSendNotification);
             }
         displayedSelection = controller.selected;
         displayedNames = controller.noteNames;
-        resized();
+        if (laidOut != std::pair { layout, getLocalBounds() })
+            resized();
         if (fullPaint)
             repaint();
     }
     void PatternGrid::resized()
     {
+        laidOut = { layout, getLocalBounds() };
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
                 accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (layout.cell ({ ch, step }).toNearestInt());
@@ -299,7 +308,10 @@ namespace ksh::ui
     }
     void PatternGrid::paint (juce::Graphics& g)
     {
-        g.fillAll (Palette::shell.interpolatedWith (Palette::app, 0.28f));
+        const auto gridBackdrop = Palette::shell.interpolatedWith (Palette::app, 0.28f);
+        const auto loopTint = Palette::accent.withAlpha (0.08f);
+        const auto loopBackdrop = gridBackdrop.overlaidWith (loopTint);
+        g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
@@ -317,12 +329,14 @@ namespace ksh::ui
             auto brace = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth()).expanded (layout.compact ? 0.0f : 16.0f, 1);
             if (layout.compact)
                 brace = brace.getIntersection ({ layout.gridLeft(), brace.getY(), layout.gridWidth(), brace.getHeight() });
-            g.setColour (Palette::accent.withAlpha (0.08f));
+            g.setColour (loopTint);
             g.fillRoundedRectangle (brace, 6);
+            const auto braceArea = brace.toNearestInt();
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 const Location pos { ch, step };
-                if (!g.clipRegionIntersects (layout.cell (pos).expanded (3).getSmallestIntegerContainer()))
+                const auto cellArea = layout.cell (pos).expanded (3).getSmallestIntegerContainer();
+                if (!g.clipRegionIntersects (cellArea))
                     continue;
                 const auto& c = controller.cell (pos);
                 auto r = layout.cell (pos).reduced (0.8f);
@@ -342,72 +356,97 @@ namespace ksh::ui
                 const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
                 const auto light = colour.brighter (0.18f);
                 const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
-                juce::Graphics::ScopedSaveState save (g);
-                if (!inLoop)
-                    g.beginTransparencyLayer (0.33f);
-                if (dimmed)
-                    g.beginTransparencyLayer (0.16f);
-                surface (g, r);
-                if (groupStart && !c.enabled)
+                // Out-of-loop and dimmed cells are faded toward the backdrop. Blending every colour
+                // against an opaque backdrop matches a transparency layer without the offscreen pass.
+                const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.16f : 1.0f);
+                const auto paintCell = [&] (juce::Colour backdrop)
                 {
-                    g.setColour (juce::Colours::black.withAlpha (0.22f));
-                    g.fillRoundedRectangle (r.reduced (0.5f), 5);
-                }
-                if (c.enabled)
-                {
-                    juce::Path clip;
-                    clip.addRoundedRectangle (r, 5);
-                    g.saveState();
-                    g.reduceClipRegion (clip);
-                    g.setGradientFill (juce::ColourGradient (light, r.getTopLeft(), fillBottom, r.getBottomLeft(), false));
-                    g.fillRect (r);
+                    const auto tone = [opacity, backdrop] (juce::Colour value)
+                    {
+                        return opacity >= 1.0f ? value : backdrop.interpolatedWith (value.withAlpha (1.0f), opacity).withAlpha (value.getFloatAlpha());
+                    };
+                    surface (g, r, false, false, tone);
+                    if (groupStart && !c.enabled)
+                    {
+                        g.setColour (tone (juce::Colours::black.withAlpha (0.22f)));
+                        g.fillRoundedRectangle (r.reduced (0.5f), 5);
+                    }
+                    if (!c.enabled)
+                        return;
+                    juce::ColourGradient fill (tone (light), r.getTopLeft(), tone (fillBottom), r.getBottomLeft(), false);
                     if (layer == Layer::velocity)
                     {
-                        g.setColour (dark);
-                        g.fillRect (r.withHeight (r.getHeight() * (1.0f - static_cast<float> (c.velocity) / 127.0f)));
+                        // The unlit share of the cell becomes a hard-edged leading band of the same gradient.
+                        const double shade = 1.0 - c.velocity / 127.0;
+                        const double edge = juce::jmin (1.0, shade + 0.5 / juce::jmax (1.0, static_cast<double> (r.getHeight())));
+                        if (shade > 0.0)
+                        {
+                            fill.clearColours();
+                            fill.addColour (0.0, tone (dark));
+                            fill.addColour (shade, tone (dark));
+                            fill.addColour (edge, tone (light.interpolatedWith (fillBottom, static_cast<float> (edge))));
+                            fill.addColour (1.0, tone (fillBottom));
+                        }
                     }
+                    g.setGradientFill (fill);
+                    g.fillRoundedRectangle (r, 5);
                     // Roll subdivisions stay visible beneath every layer's value treatment.
                     if (c.roll > 1)
                     {
+                        juce::Graphics::ScopedSaveState rollClip (g);
+                        juce::Path clip;
+                        clip.addRoundedRectangle (r, 5);
+                        g.reduceClipRegion (clip);
                         const float width = r.getWidth() / static_cast<float> (c.roll);
                         for (int part = 0; part < c.roll; ++part)
                         {
                             const float x = r.getX() + static_cast<float> (part) * width;
                             if (part % 2 == 1)
                             {
-                                g.setColour (Palette::app.withAlpha (0.14f));
+                                g.setColour (tone (Palette::app.withAlpha (0.14f)));
                                 g.fillRect (x, r.getY(), width, r.getHeight());
                             }
                             if (part > 0)
                             {
-                                g.setColour (Palette::text.withAlpha (0.18f));
+                                g.setColour (tone (Palette::text.withAlpha (0.18f)));
                                 g.fillRect (x, r.getY(), 0.75f, r.getHeight());
                             }
                         }
                     }
-                    g.restoreState();
-                    g.setColour (Palette::text.withAlpha (0.22f));
+                    g.setColour (tone (Palette::text.withAlpha (0.22f)));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                     // Lift the smaller probability label so its glyph top matches velocity.
                     const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
                     const float labelSize = layer == Layer::chance ? juce::jmax (1.0f, valueSize - 3.0f) : valueSize;
                     const auto labelBounds = layer == Layer::chance ? r.translated (0.0f, -1.0f) : r;
-                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), labelBounds, labelSize, valueColour);
+                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), labelBounds, labelSize, tone (valueColour));
                     if (layer == Layer::chance)
                     {
                         const int bits = juce::jmin (c.cycle, 30);
                         const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
                         for (int i = 0; i < bits; ++i)
                         {
-                            g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
+                            g.setColour (tone ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app));
                             g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
                         }
                     }
+                };
+                if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
+                {
+                    paintCell (inLoop ? loopBackdrop : gridBackdrop);
+                    continue;
                 }
-                if (dimmed)
-                    g.endTransparencyLayer();
-                if (!inLoop)
-                    g.endTransparencyLayer();
+                // Loop handles extend under the neighbouring cells, so those sit on two backdrops.
+                {
+                    juce::Graphics::ScopedSaveState outside (g);
+                    g.excludeClipRegion (braceArea);
+                    paintCell (gridBackdrop);
+                }
+                {
+                    juce::Graphics::ScopedSaveState inside (g);
+                    g.reduceClipRegion (braceArea);
+                    paintCell (loopBackdrop);
+                }
             }
             // Paint selection over the completed row so neighboring cells cannot
             // cover its outer halo. Keep the cell interior free of inset borders.

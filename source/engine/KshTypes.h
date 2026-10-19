@@ -183,12 +183,16 @@ struct Channel
     int loopStart = 0;
     int loopLength = Constants::maxSteps;
     PlaybackMode playbackMode = PlaybackMode::normal;
+
+    [[nodiscard]] bool operator== (const Channel&) const = default;
 };
 
 struct LoopRange
 {
     int loopStart = 0;
     int loopLength = Constants::maxSteps;
+
+    [[nodiscard]] bool operator== (const LoopRange&) const = default;
 };
 
 [[nodiscard]] inline Channel defaultChannel (int index)
@@ -208,6 +212,8 @@ struct SourceSettings
     int stepCount = 16;
     std::string rate = std::string { Constants::defaultRate };
     std::array<LoopRange, Constants::maxChannels> loopRanges {};
+
+    [[nodiscard]] bool operator== (const SourceSettings&) const = default;
 };
 
 [[nodiscard]] inline SourceSettings defaultSourceSettings()

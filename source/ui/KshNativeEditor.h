@@ -41,6 +41,7 @@ namespace ksh::ui
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;
         int previousScale = 100;
+        std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         bool syncing = false;
         enum class Panel { none, patterns, project, pattern, feel, generate, channel, help };
         Panel panel = Panel::none;

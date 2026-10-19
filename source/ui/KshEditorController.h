@@ -124,21 +124,29 @@ namespace ksh::ui
         }
 
     private:
+        struct CellChange
+        {
+            int index = 0; // source * 256 + channel * 32 + step
+            Cell before, after;
+        };
+        // Settings are small enough to keep whole; cells keep only what the gesture changed.
         struct Entry
         {
-            nlohmann::json before, after;
+            DocumentSettings before, after;
+            std::vector<CellChange> cells;
             juce::String label;
         };
         std::vector<Entry> undoEntries, redoEntries;
         std::vector<PluginProcessor::CellEdit> pending;
-        nlohmann::json before, lastOwn;
+        DocumentState before, lastOwn;
         juce::String gestureLabel, gestureParameter;
         bool transaction = false;
         std::array<bool, 8> soloRestore {};
         int soloChannel = -1;
         uint64_t epoch = 0;
-        void applyHistory (const nlohmann::json& expected, const nlohmann::json& desired);
-        nlohmann::json capture();
+        void applyHistory (const Entry&, bool redoing);
+        void applyDocument (const DocumentState&);
+        void reloadState();
         void rebaseExternal();
         void finishParameter();
     };

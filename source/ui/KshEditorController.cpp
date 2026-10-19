@@ -1,7 +1,95 @@
 #include "KshEditorController.h"
+#include "KshStyle.h"
 
 namespace ksh::ui
 {
+    namespace
+    {
+        constexpr int cellCount = Constants::sourceCount * Constants::maxChannels * Constants::maxSteps;
+
+        template <typename Document>
+        auto& cellAt (Document& document, int index)
+        {
+            return document.sources[static_cast<size_t> (index / 256)][static_cast<size_t> (index / 32 % 8)][static_cast<size_t> (index % 32)];
+        }
+
+        // Undo compares stored values exactly, so floating-point fields are compared bit-for-bit on purpose.
+        JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wfloat-equal")
+        constexpr auto mergeField = [] (auto& current, const auto& expected, const auto& desired)
+        {
+            if (expected != desired && current == expected)
+                current = desired;
+        };
+        constexpr auto rebaseField = [] (auto& baseline, const auto& own, const auto& now)
+        {
+            if (own != now)
+                baseline = now;
+        };
+        JUCE_END_IGNORE_WARNINGS_GCC_LIKE
+
+        // Undo granularity is one persisted field: visit(target, a, b) runs on each matching leaf.
+        template <typename Visit>
+        void visitCell (Cell& target, const Cell& a, const Cell& b, Visit&& visit)
+        {
+            visit (target.enabled, a.enabled, b.enabled);
+            visit (target.velocity, a.velocity, b.velocity);
+            visit (target.probability, a.probability, b.probability);
+            visit (target.cycle, a.cycle, b.cycle);
+            visit (target.cycleMask, a.cycleMask, b.cycleMask);
+            visit (target.roll, a.roll, b.roll);
+        }
+
+        template <typename Visit>
+        void visitSettings (DocumentSettings& target, const DocumentSettings& a, const DocumentSettings& b, Visit&& visit)
+        {
+            visit (target.stepCount, a.stepCount, b.stepCount);
+            visit (target.channelCount, a.channelCount, b.channelCount);
+            visit (target.refreshSteps, a.refreshSteps, b.refreshSteps);
+            visit (target.generationMode, a.generationMode, b.generationMode);
+            visit (target.staticSource, a.staticSource, b.staticSource);
+            visit (target.rate, a.rate, b.rate);
+            visit (target.tempo, a.tempo, b.tempo);
+            visit (target.swing, a.swing, b.swing);
+            visit (target.swingSubdivisionIndex, a.swingSubdivisionIndex, b.swingSubdivisionIndex);
+            visit (target.velocityHumanize, a.velocityHumanize, b.velocityHumanize);
+            visit (target.timingHumanize, a.timingHumanize, b.timingHumanize);
+            visit (target.deviceActive, a.deviceActive, b.deviceActive);
+            for (size_t ch = 0; ch < target.channels.size(); ++ch)
+            {
+                auto& t = target.channels[ch];
+                const auto &x = a.channels[ch], &y = b.channels[ch];
+                visit (t.label, x.label, y.label);
+                visit (t.note, x.note, y.note);
+                visit (t.lock, x.lock, y.lock);
+                visit (t.loopStart, x.loopStart, y.loopStart);
+                visit (t.loopLength, x.loopLength, y.loopLength);
+                visit (t.playbackMode, x.playbackMode, y.playbackMode);
+            }
+            for (size_t src = 0; src < target.sourceSettings.size(); ++src)
+            {
+                auto& t = target.sourceSettings[src];
+                const auto &x = a.sourceSettings[src], &y = b.sourceSettings[src];
+                visit (t.stepCount, x.stepCount, y.stepCount);
+                visit (t.rate, x.rate, y.rate);
+                for (size_t ch = 0; ch < t.loopRanges.size(); ++ch)
+                {
+                    visit (t.loopRanges[ch].loopStart, x.loopRanges[ch].loopStart, y.loopRanges[ch].loopStart);
+                    visit (t.loopRanges[ch].loopLength, x.loopRanges[ch].loopLength, y.loopRanges[ch].loopLength);
+                }
+                for (size_t ch = 0; ch < target.sourceChannelMutes[src].size(); ++ch)
+                    visit (target.sourceChannelMutes[src][ch], a.sourceChannelMutes[src][ch], b.sourceChannelMutes[src][ch]);
+            }
+        }
+
+        template <typename Visit>
+        void visitDocument (DocumentState& target, const DocumentState& a, const DocumentState& b, Visit&& visit)
+        {
+            visitSettings (target.settings, a.settings, b.settings, visit);
+            for (int index = 0; index < cellCount; ++index)
+                visitCell (cellAt (target, index), cellAt (a, index), cellAt (b, index), visit);
+        }
+    }
+
     EditorController::EditorController (PluginProcessor& p) : processor (p), state (p.nativeUiState()), epoch (state.documentEpoch)
     {
         processor.getUiBridge().onNoteHit = [this] (const NativeHit& hit) {
@@ -43,25 +131,27 @@ namespace ksh::ui
     }
     void EditorController::finishParameter()
     {
-        if (auto* p = processor.getValueTreeState().getParameter (gestureParameter))
-            p->endChangeGesture();
+        if (gestureParameter.isNotEmpty())
+            processor.endUiParameterGesture (gestureParameter);
         gestureParameter.clear();
     }
     void EditorController::begin (const juce::String& label, const juce::String& parameter)
     {
+        ValueControl::endPendingWheelGesture();
         if (transaction)
             return;
         refresh();
-        before = capture();
+        before = processor.editorDocument();
         lastOwn = before;
         gestureLabel = label;
         gestureParameter = parameter;
-        if (auto* p = processor.getValueTreeState().getParameter (parameter))
-            p->beginChangeGesture();
+        if (parameter.isNotEmpty())
+            processor.beginUiParameterGesture (parameter);
         transaction = true;
     }
     void EditorController::commit()
     {
+        ValueControl::endPendingWheelGesture();
         if (!transaction)
             return;
         if (epoch != processor.getUiBridge().getDocumentEpoch())
@@ -76,115 +166,66 @@ namespace ksh::ui
         rebaseExternal();
         if (before != lastOwn)
         {
-            // Retain only changed top-level fields and cells, rather than two entire
-            // 4096-cell projects per undo entry. Conditional merge still compares each field.
-            auto compactBefore = nlohmann::json::object(), compactAfter = nlohmann::json::object();
-            for (const auto& item : before.items())
-                if (item.key() != "cells" && (!lastOwn.contains (item.key()) || item.value() != lastOwn[item.key()]))
-                    compactBefore[item.key()] = item.value();
-            for (const auto& item : lastOwn.items())
-                if (item.key() != "cells" && (!before.contains (item.key()) || item.value() != before[item.key()]))
-                    compactAfter[item.key()] = item.value();
-            compactBefore["cells"] = nlohmann::json::object();
-            compactAfter["cells"] = nlohmann::json::object();
-            for (const auto& item : before["cells"].items())
-                if (!lastOwn["cells"].contains (item.key()) || item.value() != lastOwn["cells"][item.key()])
-                    compactBefore["cells"][item.key()] = item.value();
-            for (const auto& item : lastOwn["cells"].items())
-                if (!before["cells"].contains (item.key()) || item.value() != before["cells"][item.key()])
-                    compactAfter["cells"][item.key()] = item.value();
-            undoEntries.push_back ({ std::move (compactBefore), std::move (compactAfter), gestureLabel });
+            Entry entry { before.settings, lastOwn.settings, {}, gestureLabel };
+            for (int index = 0; index < cellCount; ++index)
+            {
+                const auto& from = cellAt (before, index);
+                const auto& to = cellAt (lastOwn, index);
+                if (from != to)
+                    entry.cells.push_back ({ index, from, to });
+            }
+            undoEntries.push_back (std::move (entry));
             if (undoEntries.size() > 128)
                 undoEntries.erase (undoEntries.begin());
             redoEntries.clear();
         }
         transaction = false;
-        before = {};
         finishParameter();
         notify();
-    }
-    namespace
-    {
-        nlohmann::json conditionalMerge (nlohmann::json current, const nlohmann::json& expected, const nlohmann::json& desired)
-        {
-            for (const auto& operation : nlohmann::json::diff (expected, desired))
-            {
-                const nlohmann::json::json_pointer path (operation.at ("path").get<std::string>());
-                if (current.contains (path) != expected.contains (path))
-                    continue;
-                if (current.contains (path) && current.at (path) != expected.at (path))
-                    continue;
-                try
-                {
-                    current = current.patch (nlohmann::json::array ({ operation }));
-                } catch (const nlohmann::json::exception&)
-                {
-                }
-            }
-            return current;
-        }
-    }
-    nlohmann::json EditorController::capture()
-    {
-        auto data = processor.enginePersistenceState();
-        // Stable cell identities prevent sparse-array insertion/deletion from shifting undo targets.
-        data["cells"] = nlohmann::json::object();
-        const auto native = processor.nativeUiState();
-        for (int src = 0; src < 16; ++src)
-            for (int ch = 0; ch < 8; ++ch)
-                for (int step = 0; step < 32; ++step)
-                {
-                    const auto& c = native.playback.sources[static_cast<size_t> (src)][static_cast<size_t> (ch)][static_cast<size_t> (step)];
-                    if (c == Cell {})
-                        continue;
-                    data["cells"][std::to_string (src * 256 + ch * 32 + step)] = { src, ch, step, c.enabled ? 1 : 0, c.velocity, c.probability, c.cycle, c.cycleMask, c.roll };
-                }
-        return data;
     }
     void EditorController::rebaseExternal()
     {
         if (!transaction)
             return;
-        const auto current = capture();
+        auto current = processor.editorDocument();
         // External changes become part of the baseline, never part of this gesture's undo action.
-        for (const auto& operation : nlohmann::json::diff (lastOwn, current))
-        {
-            const nlohmann::json::json_pointer path (operation.at ("path").get<std::string>());
-            if (operation.at ("op") != "remove")
-                before[path] = operation.at ("value");
-            else if (before.contains (path))
-                before = before.patch (nlohmann::json::array ({ operation }));
-        }
-        lastOwn = current;
+        visitDocument (before, lastOwn, current, rebaseField);
+        lastOwn = std::move (current);
     }
-    void EditorController::applyHistory (const nlohmann::json& expected, const nlohmann::json& desired)
+    void EditorController::applyHistory (const Entry& entry, bool redoing)
     {
-        auto current = conditionalMerge (capture(), expected, desired);
-        auto cells = nlohmann::json::array();
-        for (const auto& cell : current["cells"].items())
-            cells.push_back (cell.value());
-        current["cells"] = cells;
-        (void) processor.applyPersistenceFromUi (current);
+        // Conditional merge: a field is written only while it still holds the value this entry left behind.
+        auto current = processor.editorDocument();
+        visitSettings (current.settings, redoing ? entry.before : entry.after, redoing ? entry.after : entry.before, mergeField);
+        for (const auto& change : entry.cells)
+            visitCell (cellAt (current, change.index), redoing ? change.before : change.after, redoing ? change.after : change.before, mergeField);
+        applyDocument (current);
+    }
+    void EditorController::applyDocument (const DocumentState& document)
+    {
+        (void) processor.applyEditorDocument (document);
         processor.getUiBridge().invalidate();
         refresh();
     }
     void EditorController::cancel()
     {
+        ValueControl::endPendingWheelGesture();
         pending.clear();
         if (transaction && epoch == processor.getUiBridge().getDocumentEpoch())
         {
-            applyHistory (lastOwn, before);
+            auto current = processor.editorDocument();
+            visitDocument (current, lastOwn, before, mergeField);
+            applyDocument (current);
         }
         transaction = false;
-        before = {};
         finishParameter();
         refresh();
     }
     void EditorController::clearHistory()
     {
+        ValueControl::endPendingWheelGesture();
         pending.clear();
         transaction = false;
-        before = {};
         finishParameter();
         undoEntries.clear();
         redoEntries.clear();
@@ -192,14 +233,18 @@ namespace ksh::ui
         copySource = -1;
         soloChannel = -1;
     }
-    void EditorController::refresh()
+    void EditorController::reloadState()
     {
-        state = processor.nativeUiState();
+        processor.copyNativeUiState (state);
         if (epoch != state.documentEpoch)
         {
             clearHistory();
             epoch = state.documentEpoch;
         }
+    }
+    void EditorController::refresh()
+    {
+        reloadState();
         notify();
     }
     void EditorController::command (std::string_view selector, const nlohmann::json& args, const juce::String& label)
@@ -211,7 +256,7 @@ namespace ksh::ui
         rebaseExternal();
         (void) processor.dispatchUiEngineCommand (selector, args);
         if (transaction)
-            lastOwn = capture();
+            lastOwn = processor.editorDocument();
         processor.scheduleUiPreviewFlush();
         refresh();
         if (single)
@@ -242,15 +287,14 @@ namespace ksh::ui
             // External recording/restoration won the race. Never write the stale draft.
             pending.clear();
             transaction = false;
-            before = {};
             finishParameter();
             refresh();
             return;
         }
         pending.clear();
         if (transaction)
-            lastOwn = capture();
-        state = processor.nativeUiState();
+            lastOwn = processor.editorDocument();
+        reloadState();
     }
     bool EditorController::poll()
     {
@@ -258,15 +302,16 @@ namespace ksh::ui
         if (processor.getUiBridge().getDocumentEpoch() != epoch)
         {
             clearHistory();
-            refresh();
+            reloadState();
         }
         flush();
         if (processor.getUiBridge().getRevision() != state.revision)
-            refresh();
+            reloadState();
         playingStep = processor.getCurrentStepForUi();
-        if (previousRevision != state.revision)
+        const bool revised = previousRevision != state.revision;
+        if (revised)
             notify();
-        return previousRevision != state.revision;
+        return revised;
     }
     void EditorController::undo()
     {
@@ -276,7 +321,7 @@ namespace ksh::ui
             return;
         auto entry = std::move (undoEntries.back());
         undoEntries.pop_back();
-        applyHistory (entry.after, entry.before);
+        applyHistory (entry, false);
         redoEntries.push_back (std::move (entry));
         notify();
     }
@@ -288,7 +333,7 @@ namespace ksh::ui
             return;
         auto entry = std::move (redoEntries.back());
         redoEntries.pop_back();
-        applyHistory (entry.before, entry.after);
+        applyHistory (entry, true);
         undoEntries.push_back (std::move (entry));
         notify();
     }

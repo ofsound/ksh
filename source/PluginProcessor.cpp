@@ -54,6 +54,19 @@ uint32_t macroParameterBit (const juce::String& id)
 }
 
 constexpr double kHostStateChangeIntervalMs = 250.0;
+// Tempo ramps report a new BPM every block; each apply republishes the snapshot and resyncs the UI.
+constexpr double kHostTempoApplyIntervalMs = 100.0;
+constexpr int kMidiOutputReserveBytes = 32768;
+
+bool isNoteOnBytes (const juce::uint8* data, int numBytes)
+{
+    return numBytes >= 3 && (data[0] & 0xf0) == 0x90 && data[2] != 0;
+}
+
+bool isNoteOffBytes (const juce::uint8* data, int numBytes)
+{
+    return numBytes >= 3 && ((data[0] & 0xf0) == 0x80 || ((data[0] & 0xf0) == 0x90 && data[2] == 0));
+}
 
 juce::String juceStringFromView (std::string_view text)
 {
@@ -131,7 +144,8 @@ float parameterValue (juce::AudioProcessorValueTreeState& parameters, const juce
 void setParameterValue (juce::AudioProcessorValueTreeState& parameters,
                         const juce::String& id,
                         float plainValue,
-                        bool notifyHost)
+                        bool notifyHost,
+                        bool insideGesture = false)
 {
     auto* parameter = parameters.getParameter (id);
 
@@ -145,9 +159,14 @@ void setParameterValue (juce::AudioProcessorValueTreeState& parameters,
 
     if (notifyHost)
     {
-        parameter->beginChangeGesture();
+        if (! insideGesture)
+            parameter->beginChangeGesture();
+
         parameter->setValueNotifyingHost (normalized);
-        parameter->endChangeGesture();
+
+        if (! insideGesture)
+            parameter->endChangeGesture();
+
         return;
     }
 
@@ -263,9 +282,11 @@ void PluginProcessor::refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnaps
 
 void PluginProcessor::publishPlaybackSnapshotLocked()
 {
-    const auto snapshot = engine.makePlaybackSnapshot();
-    refreshAuditionCacheFromSnapshot (snapshot);
-    playbackMailbox.publish (snapshot);
+    playbackMailbox.publishWith ([this] (ksh::PlaybackSnapshot& snapshot)
+                                 {
+                                     engine.fillPlaybackSnapshot (snapshot);
+                                     refreshAuditionCacheFromSnapshot (snapshot);
+                                 });
     lastPublishedSnapshotVersion = engine.playbackSnapshotVersion();
 }
 
@@ -323,20 +344,13 @@ ksh::EngineCallbacks PluginProcessor::makeEngineCallbacks()
 {
     ksh::EngineCallbacks callbacks;
 
-    callbacks.emitPreview = [this] (const nlohmann::json& preview)
+    // The native editor re-reads typed state on each revision, so status text and preview JSON are never built.
+    callbacks.changed = [this]
     {
         if (suppressEngineCallbacks.load (std::memory_order_relaxed))
             return;
 
-        uiBridge.emitPreview (preview);
-    };
-
-    callbacks.emitStatus = [this] (const std::string& message)
-    {
-        if (suppressEngineCallbacks.load (std::memory_order_relaxed))
-            return;
-
-        uiBridge.emitStatus (message);
+        uiBridge.invalidate();
     };
 
     callbacks.emitNote = [this] (const ksh::MidiNoteEvent& note)
@@ -383,15 +397,7 @@ void PluginProcessor::handleAsyncUpdate()
         drainPendingMidiPatternSelectionsLocked();
         drainPendingPatternRecordEventsLocked();
         adoptGeneratedSourcesLocked();
-
-        if (hostBpmChangePending.exchange (false, std::memory_order_acquire))
-        {
-            const auto bpm = pendingHostBpm.load (std::memory_order_relaxed);
-
-            if (bpm > 0.0 && std::abs (engine.getTempo() - bpm) > 0.01)
-                engine.setTempo (bpm);
-        }
-
+        applyPendingHostTempoLocked();
         publishPlaybackSnapshotIfChangedLocked();
 
         if (engine.isPreviewDirty())
@@ -406,6 +412,29 @@ void PluginProcessor::handleAsyncUpdate()
 
     if (fullUiSyncPending.exchange (false, std::memory_order_acquire))
         uiBridge.syncAll();
+}
+
+void PluginProcessor::applyPendingHostTempoLocked()
+{
+    if (! hostBpmChangePending.load (std::memory_order_acquire))
+        return;
+
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs - lastHostTempoApplyMs < kHostTempoApplyIntervalMs)
+    {
+        messageThreadWorkPending.store (true, std::memory_order_release);
+        return;
+    }
+
+    hostBpmChangePending.store (false, std::memory_order_release);
+    const auto bpm = clampStandaloneTempoBpm (pendingHostBpm.load (std::memory_order_relaxed));
+
+    if (std::abs (engine.getTempo() - bpm) > 0.01)
+    {
+        engine.setTempo (bpm);
+        lastHostTempoApplyMs = nowMs;
+    }
 }
 
 PluginProcessor::~PluginProcessor()
@@ -490,7 +519,14 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     midiPlayback.prepare (sampleRate);
-    midiInputScratch.ensureSize (8192);
+
+    for (size_t i = 0; i < midiOutputBuffers.size(); ++i)
+    {
+        midiOutputBuffers[i].clear();
+        midiOutputBuffers[i].ensureSize (kMidiOutputReserveBytes);
+        reservedMidiStorage[i] = midiOutputBuffers[i].data.begin();
+    }
+
     publishPlaybackSnapshot();
 }
 
@@ -642,18 +678,41 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     publishPatternRecordTransportPosition (ppqPosition, bpm, isPlaying);
 
     // Consume input before adding generated MIDI so our note-offs are never mistaken for pattern selections.
-    const auto midiPatternSelections = consumeMidiInput (midiMessages, *snapshot, ppqPosition, bpm, isPlaying, numSamples);
+    ksh::MidiPatternSelectionBlock midiPatternSelections;
+    const bool filterSelectionNotes = consumeMidiInput (midiMessages, *snapshot, ppqPosition, bpm, isPlaying, midiPatternSelections);
+
+    auto& midiOut = reservedMidiOutputBuffer();
+    midiOut.clear();
+
+    if (! filterSelectionNotes)
+    {
+        midiOut.data.addArray (midiMessages.data);
+    }
+    else
+    {
+        for (const auto metadata : midiMessages)
+        {
+            if ((isNoteOnBytes (metadata.data, metadata.numBytes) || isNoteOffBytes (metadata.data, metadata.numBytes))
+                && isMidiPatternSelectionNoteNumber (metadata.data[1]))
+                continue;
+
+            midiOut.addEvent (metadata.data, metadata.numBytes, metadata.samplePosition);
+        }
+    }
 
     if (playbackReset || standaloneReset)
     {
-        midiPlayback.releaseHeldNotes (midiMessages);
+        midiPlayback.releaseHeldNotes (midiOut);
         midiPlayback.reset (false);
     }
 
     if (stopAllNotes)
     {
         for (int channel = 1; channel <= 16; ++channel)
-            midiMessages.addEvent (juce::MidiMessage::allNotesOff (channel), 0);
+        {
+            const juce::uint8 allNotesOff[] { static_cast<juce::uint8> (0xb0 | (channel - 1)), 123, 0 };
+            midiOut.addEvent (allNotesOff, 3, 0);
+        }
     }
 
     const auto playback = midiPlayback.processBlock (*snapshot,
@@ -661,9 +720,12 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                                                      bpm,
                                                      isPlaying,
                                                      numSamples,
-                                                     midiMessages,
+                                                     midiOut,
                                                      midiPatternSelections,
                                                      hostLoop);
+
+    midiMessages.swapWith (midiOut);
+    midiOut.clear();
 
     if (hasStandaloneTransport() && isPlaying && bpm > 0.0)
     {
@@ -681,7 +743,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         notify = generatedSourcesForEngine.try_enqueue (midiPlayback.generatedSourcesFrame()) || notify;
 
     // Defer host tempo changes to the message thread (engine mutation + UI emit are not RT-safe).
-    if (isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - bpm) > 0.01)
+    // The engine clamps to 20-300 BPM, so compare clamped or out-of-range tempos never settle.
+    if (isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - clampStandaloneTempoBpm (bpm)) > 0.01)
     {
         pendingHostBpm.store (bpm, std::memory_order_relaxed);
         hostBpmChangePending.store (true, std::memory_order_release);
@@ -707,25 +770,29 @@ void PluginProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, ju
     currentStepForUi.store (0, std::memory_order_relaxed);
 }
 
-ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiPatternSelectionInput (juce::MidiBuffer& midiMessages)
+juce::MidiBuffer& PluginProcessor::reservedMidiOutputBuffer()
 {
-    const auto* snapshot = playbackMailbox.current();
-    const double bpm = snapshot != nullptr ? snapshot->tempo : 120.0;
-    return snapshot != nullptr ? consumeMidiInput (midiMessages, *snapshot, 0.0, bpm, false, 0)
-                               : ksh::MidiPatternSelectionBlock {};
+    for (auto& buffer : midiOutputBuffers)
+    {
+        const auto* storage = buffer.data.begin();
+
+        if (storage != nullptr && std::find (reservedMidiStorage.begin(), reservedMidiStorage.end(), storage) != reservedMidiStorage.end())
+            return buffer;
+    }
+
+    // Only reached when the host hands over fresh buffers each block; this slot may then grow.
+    return midiOutputBuffers.front();
 }
 
-ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuffer& midiMessages,
-                                                                  const ksh::PlaybackSnapshot& snapshot,
-                                                                  double ppqPosition,
-                                                                  double bpm,
-                                                                  bool isPlaying,
-                                                                  int numSamples)
+bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
+                                        const ksh::PlaybackSnapshot& snapshot,
+                                        double ppqPosition,
+                                        double bpm,
+                                        bool isPlaying,
+                                        ksh::MidiPatternSelectionBlock& selections)
 {
-    ksh::MidiPatternSelectionBlock selections;
     bool shouldFilter = false;
     bool recordQueued = false;
-    juce::ignoreUnused (numSamples);
     const bool recordEnabled = patternRecordingEnabled.load (std::memory_order_acquire) != 0;
     const int recordSource = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
                                            0,
@@ -744,61 +811,45 @@ ksh::MidiPatternSelectionBlock PluginProcessor::consumeMidiInput (juce::MidiBuff
         return -1;
     };
 
+    // Raw bytes only: building a MidiMessage per event can allocate for SysEx.
     for (const auto metadata : midiMessages)
     {
-        const auto message = metadata.getMessage();
+        const bool noteOn = isNoteOnBytes (metadata.data, metadata.numBytes);
+        const bool noteOff = isNoteOffBytes (metadata.data, metadata.numBytes);
 
-        if (recordEnabled && (message.isNoteOn() || message.isNoteOff()))
+        if (! noteOn && ! noteOff)
+            continue;
+
+        const int noteNumber = metadata.data[1];
+
+        if (recordEnabled && noteOn && isPlaying && quartersPerSample > 0.0)
         {
-            const int row = rowForNote (message.getNoteNumber());
-
-            if (row >= 0)
+            if (const int row = rowForNote (noteNumber); row >= 0)
             {
-                if (message.isNoteOn() && isPlaying && quartersPerSample > 0.0)
-                {
-                    const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
-                    const int step = quantizedStepForPpq (snapshot, eventPpq);
-                    recordQueued = enqueuePatternRecordEvent (recordSource, row, step, message.getVelocity())
-                                || recordQueued;
-                }
+                const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
+                const int step = quantizedStepForPpq (snapshot, eventPpq);
+                recordQueued = enqueuePatternRecordEvent (recordSource, row, step, metadata.data[2])
+                            || recordQueued;
             }
         }
 
-        if (message.isNoteOn() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
+        if (! isMidiPatternSelectionNoteNumber (noteNumber))
+            continue;
+
+        shouldFilter = true;
+
+        if (noteOn)
         {
-            const int source = sourceForMidiPatternSelectionNoteNumber (message.getNoteNumber());
+            const int source = sourceForMidiPatternSelectionNoteNumber (noteNumber);
             [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (source);
             selections.add (metadata.samplePosition, source);
-            shouldFilter = true;
-        }
-        else if (message.isNoteOff() && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
-        {
-            shouldFilter = true;
         }
     }
 
     if (recordQueued)
         messageThreadWorkPending.store (true, std::memory_order_release);
 
-    if (! shouldFilter)
-        return selections;
-
-    midiInputScratch.clear();
-
-    for (const auto metadata : midiMessages)
-    {
-        const auto message = metadata.getMessage();
-
-        if ((message.isNoteOn() || message.isNoteOff()) && isMidiPatternSelectionNoteNumber (message.getNoteNumber()))
-            continue;
-
-        midiInputScratch.addEvent (metadata.data, metadata.numBytes, metadata.samplePosition);
-    }
-
-    midiMessages.swapWith (midiInputScratch);
-    midiInputScratch.clear();
-
-    return selections;
+    return shouldFilter;
 }
 
 void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying)
@@ -1195,12 +1246,14 @@ void PluginProcessor::applyMacroParametersToEngineLocked (uint32_t parameterMask
 void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
 {
     const auto previousSuppression = suppressParameterCallbacks.exchange (true, std::memory_order_acq_rel);
+    const auto gestures = uiGestureParameters.load (std::memory_order_acquire);
+    const auto inGesture = [gestures] (uint32_t bit) { return (gestures & bit) != 0; };
 
-    setParameterValue (parameters, "rate", static_cast<float> (rateIndexForValue (engine.getRate())), notifyHost);
-    setParameterValue (parameters, "swing", static_cast<float> (engine.getSwing()), notifyHost);
-    setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.getVelocityHumanize()), notifyHost);
-    setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.getTimingHumanize()), notifyHost);
-    setParameterValue (parameters, "device_active", engine.isDeviceActive() ? 1.0f : 0.0f, notifyHost);
+    setParameterValue (parameters, "rate", static_cast<float> (rateIndexForValue (engine.getRate())), notifyHost, inGesture (rateBit));
+    setParameterValue (parameters, "swing", static_cast<float> (engine.getSwing()), notifyHost, inGesture (swingBit));
+    setParameterValue (parameters, "velocity_humanize", static_cast<float> (engine.getVelocityHumanize()), notifyHost, inGesture (velocityHumanizeBit));
+    setParameterValue (parameters, "timing_humanize", static_cast<float> (engine.getTimingHumanize()), notifyHost, inGesture (timingHumanizeBit));
+    setParameterValue (parameters, "device_active", engine.isDeviceActive() ? 1.0f : 0.0f, notifyHost, inGesture (deviceActiveBit));
 
     suppressParameterCallbacks.store (previousSuppression, std::memory_order_release);
 }
@@ -1473,11 +1526,54 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 
 PluginProcessor::UiState PluginProcessor::nativeUiState()
 {
+    UiState state;
+    copyNativeUiState (state);
+    return state;
+}
+
+void PluginProcessor::copyNativeUiState (UiState& state)
+{
     std::scoped_lock lock { engineStateMutex };
     applyPendingMacroParametersLocked();
     publishPlaybackSnapshotIfChangedLocked();
-    return { engine.makePlaybackSnapshot(), engine.getRefreshSteps(),
-             uiBridge.getRevision(), uiBridge.getDocumentEpoch() };
+    engine.fillPlaybackSnapshot (state.playback);
+    state.refreshSteps = engine.getRefreshSteps();
+    state.revision = uiBridge.getRevision();
+    state.documentEpoch = uiBridge.getDocumentEpoch();
+}
+
+ksh::DocumentState PluginProcessor::editorDocument()
+{
+    std::scoped_lock lock { engineStateMutex };
+    applyPendingMacroParametersLocked();
+    return engine.documentState();
+}
+
+bool PluginProcessor::applyEditorDocument (const ksh::DocumentState& document)
+{
+    return applyPersistenceFromUi (ksh::KickSnareHatEngine::documentToJson (document));
+}
+
+void PluginProcessor::beginUiParameterGesture (const juce::String& parameterID)
+{
+    const auto bit = macroParameterBit (parameterID);
+    auto* parameter = parameters.getParameter (parameterID);
+
+    if (bit == 0 || parameter == nullptr || (uiGestureParameters.fetch_or (bit, std::memory_order_acq_rel) & bit) != 0)
+        return;
+
+    parameter->beginChangeGesture();
+}
+
+void PluginProcessor::endUiParameterGesture (const juce::String& parameterID)
+{
+    const auto bit = macroParameterBit (parameterID);
+    auto* parameter = parameters.getParameter (parameterID);
+
+    if (bit == 0 || parameter == nullptr || (uiGestureParameters.fetch_and (~bit, std::memory_order_acq_rel) & bit) == 0)
+        return;
+
+    parameter->endChangeGesture();
 }
 
 bool PluginProcessor::applyNativeCellEdits (const std::vector<CellEdit>& edits, uint64_t epoch)
