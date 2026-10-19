@@ -27,10 +27,9 @@ namespace ksh::ui
     private:
         LookAndFeel look;
         std::unique_ptr<juce::PropertiesFile> uiPreferences;
-        std::unique_ptr<juce::TooltipWindow> tooltips;
+        FooterHelp footerHelp { *this };
         juce::TextButton tooltipToggle { "Tips" };
         PatternGrid grid;
-        juce::Label patternHeading;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
         std::array<juce::TextButton, 16> patterns;
@@ -38,7 +37,7 @@ namespace ksh::ui
         juce::TextEditor title, description;
         GestureButton selectMode { "Select" };
         juce::TextButton stop { "Stop" };
-        juce::TextButton mutePattern { "M" }, heading, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
+        juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, chanceLayer { "Chance" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;
         int previousScale = 100;

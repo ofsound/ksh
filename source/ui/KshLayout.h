@@ -4,6 +4,8 @@ namespace ksh::ui
 {
     struct Layout
     {
+        static constexpr int outerGutter = 12;
+        static constexpr int footerHeight = 56;
         int channels = 8, steps = 16;
         float patternScale = 1.0f;
         bool standalone = false, randomVisible = false;
@@ -24,7 +26,7 @@ namespace ksh::ui
         float cellsY() const { return compact ? 18.0f : 58.0f; }
         float gridHeight() const { return compact ? compactHeight - gridY() - 84.0f : cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
         float previewY() const { return gridY() + gridHeight(); }
-        float height() const { return compact ? compactHeight : previewY() + 204; }
+        float height() const { return compact ? compactHeight : previewY() + 164 + footerHeight; }
         juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step - firstStep) * cellWidth(), cellsY() + static_cast<float> (p.channel) * rowHeight(), cellWidth(), cellHeight() }; }
         Location at (juce::Point<float> point) const
         {

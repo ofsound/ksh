@@ -55,9 +55,6 @@ namespace ksh::ui
             setColour (juce::PopupMenu::textColourId, Palette::text);
             setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::raised);
             setColour (juce::PopupMenu::highlightedTextColourId, Palette::accent);
-            setColour (juce::TooltipWindow::backgroundColourId, Palette::raised);
-            setColour (juce::TooltipWindow::textColourId, Palette::text);
-            setColour (juce::TooltipWindow::outlineColourId, Palette::border);
         }
         void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
         {
@@ -146,10 +143,12 @@ namespace ksh::ui
                 g.drawRoundedRectangle (r, 7, 1);
                 return;
             }
-            if (b.getProperties().contains ("selectMode"))
+            if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment"))
             {
+                const bool first = b.getProperties().contains ("layerSegment") && static_cast<int> (b.getProperties()["layerSegment"]) == 0;
+                const bool last = b.getProperties().contains ("selectMode");
                 juce::Path outline;
-                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, false, true, false, true);
+                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, first, last, first, last);
                 g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
                 g.fillPath (outline);
                 if (b.getToggleState())
@@ -157,26 +156,7 @@ namespace ksh::ui
                     g.setColour (Palette::accent.withAlpha (0.24f));
                     g.fillPath (outline);
                 }
-                g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
-                g.strokePath (outline, juce::PathStrokeType (1));
-                return;
-            }
-            if (b.getProperties().contains ("heading"))
-            {
-                juce::Path outline;
-                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, true, false, true, false);
-                g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
-                g.fillPath (outline);
-                const float centre = static_cast<float> (b.getWidth()) * 0.5f;
-                {
-                    juce::Graphics::ScopedSaveState save (g);
-                    g.reduceClipRegion (outline);
-                    g.setColour (Palette::accent.withAlpha (static_cast<bool> (b.getProperties()["selectActive"]) ? 0.0f : 0.14f));
-                    g.fillRect (b.getToggleState() ? r.withLeft (centre) : r.withRight (centre));
-                }
-                g.setColour (Palette::border);
-                g.drawLine (centre, r.getY(), centre, r.getBottom(), 1.0f);
-                g.setColour (b.hasKeyboardFocus (true) ? Palette::accent : Palette::border);
+                g.setColour (b.getToggleState() ? Palette::accent : Palette::border);
                 g.strokePath (outline, juce::PathStrokeType (1));
                 return;
             }
@@ -295,36 +275,61 @@ namespace ksh::ui
                 g.strokePath (path, juce::PathStrokeType (2, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
             }
-            if (b.getProperties().contains ("selectMode"))
+            if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment"))
             {
-                text (g, "Select", b.getLocalBounds().toFloat(), 13.3f, b.getToggleState() ? Palette::accent : Palette::muted, true);
+                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 13.3f, b.getToggleState() ? Palette::accent : Palette::muted, true);
                 return;
             }
-            if (b.getProperties().contains ("heading"))
-            {
-                for (int choice = 0; choice < 2; ++choice)
-                {
-                    const bool active = !static_cast<bool> (b.getProperties()["selectActive"]) && b.getToggleState() == (choice == 1);
-                    const float width = static_cast<float> (b.getWidth()) * 0.5f;
-                    const juce::Rectangle<float> bounds { static_cast<float> (choice) * width + 3, 3, width - 6, static_cast<float> (b.getHeight() - 6) };
-                    text (g, choice == 0 ? "Velocity" : "Chance", bounds, 13.3f, active ? Palette::accent : Palette::muted, true);
-                }
-                return;
-            }
+
             text (g, b.getButtonText(), b.getLocalBounds().toFloat(), b.getButtonText() == "M" ? 30.0f : 12.0f, !b.isEnabled() ? Palette::faint : (b.getToggleState() || down ? Palette::app : Palette::text), true);
         }
     };
 
-    class HoverTooltipWindow : public juce::TooltipWindow
+    /** One hover-help destination for every TooltipClient in an editor's tree. */
+    class FooterHelp : public juce::Label
     {
     public:
-        explicit HoverTooltipWindow (juce::Component& parent) : juce::TooltipWindow (&parent, 600)
+        explicit FooterHelp (juce::Component& editor) : owner (editor)
         {
-            // The rounded LookAndFeel leaves transparent corners. An opaque
-            // component makes those corners appear as a second, square box.
-            setOpaque (false);
+            setTitle ("Control help");
+            setFont (ksh::ui::font (13));
+            setColour (juce::Label::textColourId, juce::Colours::white);
+            setJustificationType (juce::Justification::centredLeft);
+            setBorderSize (juce::BorderSize<int> (0));
+            setMinimumHorizontalScale (1.0f);
             setInterceptsMouseClicks (false, false);
+            owner.addMouseListener (this, true);
         }
+        ~FooterHelp() override { owner.removeMouseListener (this); }
+        void setHelpEnabled (bool enabled)
+        {
+            helpEnabled = enabled;
+            if (!enabled)
+                setText ({}, juce::dontSendNotification);
+        }
+        bool isHelpEnabled() const { return helpEnabled; }
+        void showHelpFor (juce::Component* component)
+        {
+            juce::String help;
+            if (helpEnabled && component != nullptr && owner.isParentOf (component))
+                for (auto* target = component; target != &owner; target = target->getParentComponent())
+                    if (auto* client = dynamic_cast<juce::TooltipClient*> (target))
+                    {
+                        help = client->getTooltip();
+                        if (help.isNotEmpty())
+                            break;
+                    }
+            setText (help, juce::dontSendNotification);
+        }
+        void refresh() { showHelpFor (juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse()); }
+        void mouseEnter (const juce::MouseEvent& e) override { showHelpFor (e.eventComponent); }
+        void mouseMove (const juce::MouseEvent& e) override { showHelpFor (e.eventComponent); }
+        void mouseDown (const juce::MouseEvent& e) override { showHelpFor (e.eventComponent); }
+        void mouseExit (const juce::MouseEvent& e) override { showHelpFor (e.source.getComponentUnderMouse()); }
+
+    private:
+        juce::Component& owner;
+        bool helpEnabled = true;
     };
 
     /** Buttons with continuous gestures still use the native button accessibility handler. */

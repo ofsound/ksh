@@ -11,6 +11,7 @@ namespace ksh::ui
         setWantsKeyboardFocus (true);
         setTitle ("Pattern grid");
         setDescription ("Select cells with Shift-click or a long press, drag to paint or change values; Option copies selected cells.");
+        setTooltip ("Click to toggle cells; drag across cells to paint or vertically to change values. Shift/Select or a long press selects cells; Option-drag copies selected cells. Drag an enabled cell's left edge to draw a velocity line.");
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
             {
@@ -49,6 +50,7 @@ namespace ksh::ui
             addAndMakeVisible (r.note);
             addChildComponent (r.more);
             r.more.setTitle ("Settings channel " + juce::String (ch + 1));
+            r.more.setTooltip ("Open this channel's note, loop, and playback settings");
             r.more.onClick = [this, ch] { if (channelSettings) channelSettings (ch); };
             r.label.setEditable (false, true);
             r.label.setFont (font (22, true));
@@ -206,8 +208,7 @@ namespace ksh::ui
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
             clearHoverMarker();
         const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
-                               || displayedSelection.any() != controller.selected.any() || displayedSelecting != controller.shiftDown (modifiers);
-        displayedSelecting = controller.shiftDown (modifiers);
+                               || displayedSelection.any() != controller.selected.any();
         displayedSteps = layout.steps;
         displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
@@ -272,8 +273,7 @@ namespace ksh::ui
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
                 accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (layout.cell ({ ch, step }).toNearestInt());
-        const float gridRight = layout.cell ({ 0, layout.steps - 1 }).getRight() + 16.0f;
-        const int arrowsX = juce::roundToInt ((gridRight + static_cast<float> (getWidth()) - 84.0f) * 0.5f);
+        const int arrowsX = getWidth() - Layout::outerGutter - 80;
         for (int ch = 0; ch < 8; ++ch)
         {
             auto& r = rows[static_cast<size_t> (ch)];
@@ -288,7 +288,7 @@ namespace ksh::ui
                 continue;
             }
             r.clear.setBounds (arrowsX + 60, y + 4, 20, 24);
-            r.label.setBounds (12, y - 2, 76, 36);
+            r.label.setBounds (Layout::outerGutter, y - 2, 76, 36);
             r.note.setBounds (101, y, 44, 32);
             r.reverse.setBounds (163, y, 34, 32);
             r.ping.setBounds (215, y, 28, 32);
@@ -301,7 +301,6 @@ namespace ksh::ui
     {
         g.fillAll (Palette::shell.interpolatedWith (Palette::app, 0.28f));
         const auto layer = displayLayer();
-        const bool selecting = controller.shiftDown (modifiers);
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
         for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
@@ -347,7 +346,7 @@ namespace ksh::ui
                 if (!inLoop)
                     g.beginTransparencyLayer (0.33f);
                 if (dimmed)
-                    g.beginTransparencyLayer (0.38f);
+                    g.beginTransparencyLayer (0.16f);
                 surface (g, r);
                 if (groupStart && !c.enabled)
                 {
@@ -362,13 +361,13 @@ namespace ksh::ui
                     g.reduceClipRegion (clip);
                     g.setGradientFill (juce::ColourGradient (light, r.getTopLeft(), fillBottom, r.getBottomLeft(), false));
                     g.fillRect (r);
-                    if (!selecting && layer == Layer::velocity)
+                    if (layer == Layer::velocity)
                     {
                         g.setColour (dark);
                         g.fillRect (r.withHeight (r.getHeight() * (1.0f - static_cast<float> (c.velocity) / 127.0f)));
                     }
                     // Roll subdivisions stay visible beneath every layer's value treatment.
-                    if (!selecting && c.roll > 1)
+                    if (c.roll > 1)
                     {
                         const float width = r.getWidth() / static_cast<float> (c.roll);
                         for (int part = 0; part < c.roll; ++part)
@@ -389,21 +388,18 @@ namespace ksh::ui
                     g.restoreState();
                     g.setColour (Palette::text.withAlpha (0.22f));
                     g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    if (!selecting)
+                    // Both value labels share the cell's vertical center.
+                    const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
+                    const float labelSize = layer == Layer::chance ? juce::jmax (1.0f, valueSize - 2.0f) : valueSize;
+                    text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), r, labelSize, valueColour);
+                    if (layer == Layer::chance)
                     {
-                        // Keep values anchored between layers, with space below for cycle marks.
-                        const auto valueBounds = r.withHeight (r.getHeight() * 0.76f).translated (0, r.getHeight() * 0.05f);
-                        const float valueSize = juce::jmin (18.0f, r.getWidth() * 0.38f, r.getHeight() * 0.5f);
-                        text (g, juce::String (cellValue (c, layer)) + (layer == Layer::chance ? "%" : ""), valueBounds, valueSize, valueColour);
-                        if (layer == Layer::chance)
+                        const int bits = juce::jmin (c.cycle, 30);
+                        const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
+                        for (int i = 0; i < bits; ++i)
                         {
-                            const int bits = juce::jmin (c.cycle, 30);
-                            const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f).withHeight (r.getHeight() * 0.14f).reduced (3, 0);
-                            for (int i = 0; i < bits; ++i)
-                            {
-                                g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
-                                g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 1), strip.getHeight());
-                            }
+                            g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
+                            g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
                         }
                     }
                 }

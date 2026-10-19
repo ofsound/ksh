@@ -28,6 +28,7 @@ namespace ksh::ui
         addChildComponent (cycleLength);
         cycleLength.caption = "Length";
         cycleLength.setTitle ("Selected cycle length");
+        cycleLength.setTooltip ("Set the cycle length of selected cells from 1 to 8 beats");
         cycleLength.minimum = 1;
         cycleLength.maximum = 8;
         cycleLength.resetValue = 1;
@@ -46,7 +47,9 @@ namespace ksh::ui
         cycleLength.onEnd = [this] { controller.commit(); };
         cycleLength.onCancel = [this] { controller.cancel(); };
         mode.onClick = [this] { const auto m = controller.state.playback.generationMode; controller.command ("mode", { m == GenerationMode::staticSource ? "stack" : m == GenerationMode::stack ? "per_channel" : "static" }, "Generation mode"); };
+        mode.setTooltip ("Switch generation mode: Off, Stack, or Per Channel");
         refresh.setTitle ("Generation refresh length");
+        refresh.setTooltip ("Set how many steps play before the generated pattern refreshes");
         refresh.caption = "Length";
         refresh.minimum = 1;
         refresh.maximum = 32;
@@ -64,6 +67,7 @@ namespace ksh::ui
             lock.sensitivity = 14;
             lock.caption = juce::String (ch + 1);
             lock.setTitle ("Pattern lock channel " + juce::String (ch + 1));
+            lock.setTooltip ("Choose this channel's source pattern; Off lets generation choose");
             lock.format = [] (int v) { return v < 0 ? juce::String ("OFF") : "P" + juce::String (v + 1); };
             lock.onBegin = [this] { controller.begin ("Channel lock"); };
             lock.onChange = [this, ch] (int v) { controller.command ("channel_lock", v < 0 ? nlohmann::json::array ({ ch + 1, "random" }) : nlohmann::json::array ({ ch + 1, v + 1 })); };
@@ -72,6 +76,9 @@ namespace ksh::ui
         velocity.setTitle ("Selected velocity offset");
         probability.setTitle ("Selected probability offset");
         roll.setTitle ("Selected roll");
+        velocity.setTooltip ("Adjust selected cell velocities together, preserving their differences");
+        probability.setTooltip ("Adjust selected cell probabilities together, preserving their differences");
+        roll.setTooltip ("Set the number of repeated hits per step for selected cells");
         velocity.caption = "Velocity";
         probability.caption = "Probability";
         roll.caption = "Roll";

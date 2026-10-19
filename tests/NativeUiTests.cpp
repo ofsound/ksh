@@ -97,6 +97,157 @@ TEST_CASE ("Standalone transport swaps Play and Stop in one position with clicks
     checkTransport (false);
 }
 
+TEST_CASE ("Footer help preserves every control tooltip and resolves nested children", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    FooterHelp* help = nullptr;
+    juce::TextButton* select = nullptr;
+    juce::TextButton* rate = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<FooterHelp*> (child)) help = candidate;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getProperties().contains ("selectMode")) select = button;
+            if (button->getTitle() == "Pattern rate") rate = button;
+        }
+    }
+    REQUIRE (help != nullptr);
+    REQUIRE (select != nullptr);
+    REQUIRE (rate != nullptr);
+    help->setHelpEnabled (true);
+    int checked = 0;
+    std::function<void (juce::Component&)> audit = [&] (juce::Component& component)
+    {
+        if (auto* client = dynamic_cast<juce::TooltipClient*> (&component); client && client->getTooltip().isNotEmpty())
+        {
+            INFO (component.getTitle().toStdString());
+            help->showHelpFor (&component);
+            CHECK (help->getText() == client->getTooltip());
+            juce::TextLayout textLayout;
+            juce::AttributedString text (client->getTooltip());
+            text.setFont (help->getFont());
+            textLayout.createLayout (text, static_cast<float> (help->getWidth()));
+            CHECK (textLayout.getHeight() <= static_cast<float> (help->getHeight()));
+            ++checked;
+        }
+        for (auto* child : component.getChildren()) audit (*child);
+    };
+    audit (editor);
+    CHECK (checked > 100);
+    juce::Component nested;
+    rate->addAndMakeVisible (nested);
+    const auto now = juce::Time::getCurrentTime();
+    help->mouseMove (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 2, 2 }, {}, 1, 0, 0, 0, 0,
+        &nested, &nested, now, { 2, 2 }, now, 0, false));
+    CHECK (help->getText() == rate->getTooltip());
+    rate->setEnabled (false);
+    help->showHelpFor (&nested);
+    CHECK (help->getText() == rate->getTooltip());
+    help->setHelpEnabled (false);
+    help->showHelpFor (select);
+    CHECK (help->getText().isEmpty());
+    help->setHelpEnabled (true);
+    help->showHelpFor (select);
+    CHECK (help->getText() == select->getTooltip());
+    help->showHelpFor (nullptr);
+    CHECK (help->getText().isEmpty());
+    help->showHelpFor (&editor);
+    CHECK (help->getText().isEmpty());
+    juce::TextButton unrelated;
+    unrelated.setTooltip ("Another editor's help");
+    help->showHelpFor (&unrelated);
+    CHECK (help->getText().isEmpty());
+    help->showHelpFor (select);
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile ("footer-help.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        stream->setPosition (0);
+        REQUIRE (stream->truncate().wasOk());
+        const auto footer = editor.getLocalBounds().removeFromBottom (Layout::footerHeight);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (footer, true, 2), *stream));
+    }
+}
+
+TEST_CASE ("Layer segments keep one active highlight across Select and Option transitions", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    const bool compact = GENERATE (false, true);
+    if (compact)
+    {
+        editor.setCompactViewport (true, 814, 409);
+        editor.setSize (814, 409);
+    }
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    juce::TextButton* velocity = nullptr;
+    juce::TextButton* chance = nullptr;
+    juce::TextButton* select = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getProperties().contains ("layerSegment"))
+                (static_cast<int> (button->getProperties()["layerSegment"]) == 0 ? velocity : chance) = button;
+            if (button->getProperties().contains ("selectMode")) select = button;
+        }
+    REQUIRE (velocity != nullptr);
+    REQUIRE (chance != nullptr);
+    REQUIRE (select != nullptr);
+    const auto checkActive = [&] (juce::TextButton* active)
+    {
+        for (auto* button : { velocity, chance, select })
+            CHECK (button->getToggleState() == (button == active));
+    };
+    checkActive (velocity);
+    chance->onClick();
+    checkActive (chance);
+    select->onClick();
+    checkActive (select);
+    select->onClick();
+    checkActive (chance);
+    editor.modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+    checkActive (select);
+    editor.modifierKeysChanged ({});
+    checkActive (chance);
+    select->onClick();
+    velocity->onClick();
+    CHECK_FALSE (editor.controller.selectLatched);
+    checkActive (velocity);
+    editor.modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+    checkActive (chance);
+    editor.modifierKeysChanged ({});
+    checkActive (velocity);
+
+    // Reproduce the screenshot: layer control keeps focus while Select is active.
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    editor.setVisible (true);
+    velocity->grabKeyboardFocus();
+    select->onClick();
+    checkActive (select);
+    const auto image = velocity->createComponentSnapshot (velocity->getLocalBounds());
+    CHECK (image.getPixelAt (velocity->getWidth() / 2, 0) != Palette::accent);
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        const auto bounds = velocity->getBounds().getUnion (chance->getBounds()).getUnion (select->getBounds()).expanded (2);
+        for (auto* active : { select, velocity, chance })
+        {
+            if (active != select)
+                active->onClick();
+            checkActive (active);
+            auto stream = juce::File (directory).getChildFile ((compact ? "compact-layer-" : "desktop-layer-") + active->getButtonText().toLowerCase() + ".png").createOutputStream();
+            REQUIRE (stream != nullptr);
+            stream->setPosition (0);
+            REQUIRE (stream->truncate().wasOk());
+            REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (bounds, true, 3), *stream));
+        }
+    }
+}
+
 TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift feedback", "[native-ui]")
 {
     PluginProcessor processor;
@@ -402,7 +553,7 @@ TEST_CASE ("Native layout and gesture constants match reference", "[native-ui]")
     CHECK (withValue (c, Layer::chance, 2).cycleMask == c.cycleMask);
 }
 
-TEST_CASE ("Select mode hides cell data in both layers", "[native-ui][render]")
+TEST_CASE ("Select mode preserves cell data in both layers", "[native-ui][render]")
 {
     PluginProcessor processor;
     EditorController controller (processor);
@@ -411,7 +562,8 @@ TEST_CASE ("Select mode hides cell data in both layers", "[native-ui][render]")
     controller.selectLatched = mode == 0;
     controller.selectHeld = mode == 1;
     PatternGrid grid (controller);
-    grid.setSize (1338, 560);
+    grid.layout.compact = GENERATE (false, true);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
     grid.modifierKeysChanged (juce::ModifierKeys (mode == 2 ? juce::ModifierKeys::shiftModifier : 0));
     const auto render = [&] (bool alternate)
     {
@@ -430,11 +582,20 @@ TEST_CASE ("Select mode hides cell data in both layers", "[native-ui][render]")
         return true;
     };
     const auto first = render (false);
-    CHECK (equalPixels (first, render (true)));
+    CHECK_FALSE (equalPixels (first, render (true)));
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (mode == 0 && directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile ("select-cell-" + juce::String (grid.layout.compact ? "compact-" : "desktop-") + juce::String (static_cast<int> (controller.layer)) + ".png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        stream->setPosition (0);
+        REQUIRE (stream->truncate().wasOk());
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (grid.createComponentSnapshot (grid.layout.cell ({ 0, 0 }).getSmallestIntegerContainer(), true, 4), *stream));
+    }
     controller.selectLatched = controller.selectHeld = false;
     grid.modifierKeysChanged ({});
     const auto detailed = render (false);
-    CHECK_FALSE (equalPixels (first, detailed));
+    CHECK (equalPixels (first, detailed));
     CHECK_FALSE (equalPixels (detailed, render (true)));
 }
 
@@ -909,7 +1070,7 @@ TEST_CASE ("Option temporarily shows Chance while the button preserves its latch
     {
         if (auto* candidate = dynamic_cast<PatternGrid*> (child))
             grid = candidate;
-        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("heading"))
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("layerSegment") && static_cast<int> (button->getProperties()["layerSegment"]) == 1)
             toggle = button;
     }
     REQUIRE (grid != nullptr);
@@ -918,7 +1079,7 @@ TEST_CASE ("Option temporarily shows Chance while the button preserves its latch
     grid->modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
     CHECK (grid->displayLayer() == Layer::chance);
     CHECK (toggle->getToggleState());
-    CHECK (toggle->getTitle().contains ("chance active"));
+    CHECK (toggle->getTitle() == "Chance editing layer");
     CHECK (editor.controller.layer == Layer::velocity);
     editor.sync();
     CHECK (grid->displayLayer() == Layer::chance);
@@ -994,7 +1155,7 @@ TEST_CASE ("Option arms selection duplication without switching layers or editin
             grid = candidate;
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
-            if (button->getProperties().contains ("heading"))
+            if (button->getProperties().contains ("layerSegment") && static_cast<int> (button->getProperties()["layerSegment"]) == 1)
                 heading = button;
             if (button->getTitle() == "Copy selected cells when dragging")
                 copy = button;
@@ -1107,19 +1268,28 @@ TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity an
     for (char key : { '1', '2', '3', '4' })
         CHECK_FALSE (editor.keyPressed (juce::KeyPress (key, {}, static_cast<juce::juce_wchar> (key))));
     CHECK (editor.controller.layer == Layer::velocity);
+    juce::TextButton* velocity = nullptr;
+    juce::TextButton* chance = nullptr;
     for (auto* child : editor.getChildren())
-        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("heading"))
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getProperties().contains ("layerSegment"))
         {
-            CHECK (button->getButtonText().contains ("Velocity / Chance"));
-            CHECK_FALSE (button->getToggleState());
-            button->onClick();
-            CHECK (editor.controller.layer == Layer::chance);
-            CHECK (button->getToggleState());
-            button->onClick();
-            CHECK (editor.controller.layer == Layer::velocity);
-            CHECK_FALSE (button->getToggleState());
-            CHECK (button->getButtonText().contains ("Velocity / Chance"));
+            if (button->getButtonText() == "Velocity") velocity = button;
+            if (button->getButtonText() == "Chance") chance = button;
         }
+    REQUIRE (velocity != nullptr);
+    REQUIRE (chance != nullptr);
+    CHECK (velocity->getToggleState());
+    CHECK_FALSE (chance->getToggleState());
+    chance->onClick();
+    chance->onClick();
+    CHECK (editor.controller.layer == Layer::chance);
+    CHECK (chance->getToggleState());
+    CHECK_FALSE (velocity->getToggleState());
+    velocity->onClick();
+    velocity->onClick();
+    CHECK (editor.controller.layer == Layer::velocity);
+    CHECK (velocity->getToggleState());
+    CHECK_FALSE (chance->getToggleState());
 
     auto& controller = editor.controller;
     controller.selected.set (0);

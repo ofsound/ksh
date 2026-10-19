@@ -3,7 +3,7 @@
 #include "KshStyle.h"
 namespace ksh::ui
 {
-    class PatternGrid : public juce::Component, private juce::Timer
+    class PatternGrid : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
     {
     public:
         explicit PatternGrid (EditorController&);
@@ -24,6 +24,7 @@ namespace ksh::ui
         void cancelGesture();
         Layer displayLayer() const;
         bool isCopyMode() const;
+        bool isSelectMode() const { return controller.shiftDown (modifiers); }
 
     private:
         EditorController& controller;
@@ -83,7 +84,6 @@ namespace ksh::ui
         int displayedSteps = -1;
         int displayedFirstStep = -1;
         Layer displayedLayer = Layer::velocity;
-        bool displayedSelecting = false;
         bool displayedColors = true, displayedNames = true;
         int previousStep = 0;
         int boundary = 0, lineVelocity = 100;
