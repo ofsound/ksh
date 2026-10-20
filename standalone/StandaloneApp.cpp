@@ -34,7 +34,10 @@ public:
     {
         if (settingsToUse != nullptr)
             if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+            {
                 ksh::restoreStandaloneUiScale (*plugin, *settingsToUse);
+                ksh::restoreStandaloneProjectFile (*plugin, *settingsToUse);
+            }
 
         createVirtualMidiOutput();
         useVirtualMidiOutputIfAvailable();
@@ -205,7 +208,10 @@ private:
         {
             if (holder.settings != nullptr)
                 if (auto* plugin = dynamic_cast<PluginProcessor*> (holder.processor.get()))
+                {
                     ksh::saveStandaloneUiScale (*plugin, *holder.settings);
+                    ksh::saveStandaloneProjectFile (*plugin, *holder.settings);
+                }
             holder.savePluginState();
         };
         if (pluginHolder != nullptr)

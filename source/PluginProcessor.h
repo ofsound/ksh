@@ -244,7 +244,7 @@ private:
     juce::String projectName { "Untitled Project" };
     juce::String projectDescription;
     juce::String projectAuthor;
-    juce::File projectFile; // Session-only save destination; never written into project/host state.
+    juce::File projectFile; // Save destination; standalone settings preserve it, never project/host state.
     juce::String projectCreatedAt;
     juce::String projectModifiedAt;
 

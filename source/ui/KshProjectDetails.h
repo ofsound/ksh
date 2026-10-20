@@ -79,24 +79,14 @@ namespace ksh::ui
             modified.setTitle ("Last modified date, read only");
             addAndMakeVisible (cancel);
             addAndMakeVisible (apply);
-            addAndMakeVisible (saveAs);
             cancel.onClick = [this] { dismiss(); };
             apply.onClick = [this]
             {
                 applyChanges();
                 dismiss();
             };
-            saveAs.setTooltip ("Apply these details and save a copy to a new project file");
-            saveAs.onClick = [this]
-            {
-                const bool currentDocument = applyChanges();
-                dismiss();
-                if (currentDocument && onSaveAs)
-                    onSaveAs();
-            };
         }
         std::function<void()> onClose;
-        std::function<void()> onSaveAs;
         void open()
         {
             epoch = processor.getUiBridge().getDocumentEpoch();
@@ -149,7 +139,6 @@ namespace ksh::ui
             modified.setBounds (x + (width + 16) / 2, datesY, (width - 16) / 2, 22);
             apply.setBounds (card.getRight() - 144, card.getBottom() - 52, 120, 32);
             cancel.setBounds (apply.getX() - 96, apply.getY(), 80, 32);
-            saveAs.setBounds (card.getX() + 24, apply.getY(), 112, 32);
         }
         void paint (juce::Graphics& g) override
         {
@@ -187,6 +176,6 @@ namespace ksh::ui
         juce::Rectangle<int> card;
         juce::TextEditor name, author, description;
         juce::Label created, modified;
-        juce::TextButton cancel { "Cancel" }, apply { "Apply" }, saveAs { "Save As..." };
+        juce::TextButton cancel { "Cancel" }, apply { "Apply" };
     };
 }

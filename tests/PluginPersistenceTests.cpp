@@ -1,5 +1,6 @@
 #include <PluginProcessor.h>
 #include <PluginEditor.h>
+#include "../standalone/StandalonePreferences.h"
 
 #include <engine/KshMidiPlayback.h>
 #include <engine/KshPersistence.h>
@@ -264,6 +265,49 @@ TEST_CASE ("Save updates the current project file and keeps author and created d
     processor.resetProject();
     CHECK (processor.getProjectFile() == juce::File());
     CHECK (file.deleteFile());
+}
+
+TEST_CASE ("Standalone keeps the save destination across restarts without adding it to project state", "[plugin][persistence]")
+{
+    PluginProcessor processor;
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-save-restart", ".kshproject");
+    auto data = getPluginState (processor);
+    REQUIRE (file.replaceWithData (data.getData(), data.getSize()));
+    {
+        PluginEditor editor (processor);
+        juce::String error;
+        REQUIRE (PluginEditorTestPeer::load (editor, file, error));
+    }
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 63 }));
+    juce::PropertySet settings;
+    ksh::saveStandaloneProjectFile (processor, settings);
+    data = getPluginState (processor);
+    CHECK_FALSE (nlohmann::json::parse (std::string_view (static_cast<const char*> (data.getData()), data.getSize())).contains ("projectFile"));
+    PluginProcessor restarted;
+    setPluginState (restarted, data);
+    ksh::restoreStandaloneProjectFile (restarted, settings);
+    REQUIRE (restarted.getProjectFile() == file);
+    {
+        PluginEditor editor (restarted);
+        bool completed = false;
+        editor.saveProject ([&] (juce::var result)
+        {
+            completed = true;
+            CHECK (static_cast<int> (result["success"]) == 1);
+        });
+        REQUIRE (completed);
+    }
+    const auto saved = nlohmann::json::parse (file.loadFileAsString().toStdString());
+    PluginProcessor loaded;
+    setPluginStateText (loaded, saved.dump());
+    CHECK (loaded.engineStateSnapshot().sources[0][0][0].velocity == 63);
+    CHECK (loaded.getProjectFile() == juce::File());
+    REQUIRE (file.deleteFile());
+    ksh::restoreStandaloneProjectFile (restarted, settings);
+    CHECK (restarted.getProjectFile() == juce::File());
+    processor.resetProject();
+    ksh::saveStandaloneProjectFile (processor, settings);
+    CHECK (settings.getValue ("projectFile").isEmpty());
 }
 
 TEST_CASE ("project author survives metadata saves and resets for old or new projects", "[plugin][persistence]")

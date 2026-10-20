@@ -477,8 +477,6 @@ namespace ksh::ui
                     auto r = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).reduced (0.8f);
                     const juce::Graphics::ScopedSaveState cellClip (g);
                     g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), r.getY() - 2, layout.gridWidth(), r.getHeight() + 4).getSmallestIntegerContainer());
-                    const bool selected = controller.selected.test (static_cast<size_t> (pos.key()));
-                    const bool dimmed = hasSelection && !selected;
                     const bool groupStart = step % 4 == 0;
                     const bool inLoop = step >= range.loopStart && step < range.loopStart + range.loopLength;
                     auto colour = Palette::channel (ch, controller.drumColors);
@@ -486,16 +484,16 @@ namespace ksh::ui
                         colour = colour.interpolatedWith (Palette::app, 0.12f);
                     if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                         colour = colour.interpolatedWith (Palette::surface, 0.58f);
-                    if (dimmed)
-                        colour = colour.withMultipliedSaturation (0.85f);
+                    if (c.enabled && hasSelection && !controller.selected.test (static_cast<size_t> (pos.key())))
+                        colour = colour.withMultipliedSaturation (0.8f).interpolatedWith (Palette::app, 0.28f);
                     const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
                     const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
                     const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
                     const auto light = colour.brighter (0.18f);
                     const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
-                    // Out-of-loop and dimmed cells are faded toward the backdrop. Blending every colour
+                    // Out-of-loop cells are faded toward the backdrop. Blending every colour
                     // against an opaque backdrop matches a transparency layer without the offscreen pass.
-                    const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.65f : 1.0f);
+                    const float opacity = inLoop ? 1.0f : 0.33f;
                     const auto paintCell = [&] (juce::Colour backdrop)
                     {
                         const auto tone = [opacity, backdrop] (juce::Colour value)
@@ -606,13 +604,12 @@ namespace ksh::ui
                     if (!cell.enabled || cell.roll <= 1)
                         continue;
                     const float bottom = layout.cell (pos).getBottom() - 2;
-                    const bool dimmed = hasSelection && !controller.selected.test (static_cast<size_t> (pos.key()));
-                    g.setColour (Palette::text.withAlpha (dimmed ? 0.35f : 0.75f));
+                    g.setColour (Palette::text.withAlpha (0.75f));
                     for (int part = 0; part < juce::jmin (cell.roll, Constants::maxRoll); ++part)
                         g.fillRect (hitPosition (pos, part).x, bottom - 5, 1.0f, 5.0f);
                 }
             }
-            // Paint a single thin selection outline above the completed row.
+            // Keep the white selection outline crisp, with a soft glow just outside it.
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 const Location pos { ch, step };
@@ -621,7 +618,12 @@ namespace ksh::ui
                     continue;
                 const auto frame = cellBounds (pos).reduced (0.15f);
                 const juce::Graphics::ScopedSaveState selectionClip (g);
-                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), frame.getY() - 2, layout.gridWidth(), frame.getHeight() + 4).getSmallestIntegerContainer());
+                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), frame.getY() - 3, layout.gridWidth(), frame.getHeight() + 6).getSmallestIntegerContainer());
+                for (const auto [spread, alpha] : { std::pair { 2.0f, 0.035f }, std::pair { 1.3f, 0.065f }, std::pair { 0.7f, 0.12f } })
+                {
+                    g.setColour (Palette::text.withAlpha (alpha));
+                    g.drawRoundedRectangle (frame.expanded (spread), 5.65f + spread, 1.0f);
+                }
                 g.setColour (Palette::text.withAlpha (0.9f));
                 g.drawRoundedRectangle (frame, 5.65f, 1.0f);
             }
@@ -757,7 +759,7 @@ namespace ksh::ui
             return;
         original = controller.cell (anchor);
         valueStep = anchor.step;
-        valueVelocity = velocityAtY (e.position.y);
+        valueVelocity = original.velocity;
         originals.clear();
         if (selectedAtStart)
             for (auto p : controller.selection())
@@ -778,7 +780,7 @@ namespace ksh::ui
         }
         drag = Drag::pending;
         if (e.mods.isLeftButtonDown() && !additive && !isCopyMode())
-            startTimer (500);
+            startTimer (800);
     }
     void PatternGrid::timerCallback()
     {
@@ -880,7 +882,7 @@ namespace ksh::ui
             {
                 const auto loop = controller.loop (anchor.channel);
                 const int step = juce::jlimit (loop.loopStart, loop.loopStart + loop.loopLength - 1, target.step);
-                const int velocity = velocityAtY (current.y);
+                const int velocity = juce::jlimit (1, 127, original.velocity + offset);
                 // Join successive mouse positions so quick sweeps do not skip cells.
                 for (int s = juce::jmin (valueStep, step); s <= juce::jmax (valueStep, step); ++s)
                 {

@@ -287,8 +287,12 @@ namespace ksh::ui
                 break;
             case Panel::project:
                 place (projectHeader, 128, 100, w - 150, 44);
-                for (int i = 0; i < 5; ++i)
-                    place (projectButtons[static_cast<size_t> (i)], 128 + i * 112, 214, 100, 48);
+                for (int i = 0; i < 6; ++i)
+                {
+                    constexpr std::array<size_t, 6> order { 0, 1, 2, 5, 3, 4 };
+                    const int stride = (w - 150) / 6;
+                    place (projectButtons[order[static_cast<size_t> (i)]], 128 + i * stride, 214, stride - 12, 48);
+                }
                 break;
             case Panel::pattern:
                 place (steps, 20, 114, 130, 60);

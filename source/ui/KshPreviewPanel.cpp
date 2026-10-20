@@ -86,12 +86,12 @@ namespace ksh::ui
         roll.caption = "Roll";
         nudge.caption = "Nudge";
         nudge.setTitle ("Selected timing nudge");
-        nudge.setTooltip ("Move selected hits earlier (-) or later (+) by a percentage of one step, preserving their timing differences. Zero places the first selected hit on the beat.");
+        nudge.setTooltip ("Drag left to move selected hits earlier, or right to move them later, preserving their timing differences.");
         nudge.minimum = -100;
         nudge.maximum = 100;
         nudge.resetValue = 0;
         nudge.sensitivity = 2;
-        nudge.format = [] (int v) { return (v > 0 ? "+" : "") + juce::String (v) + "%"; };
+        nudge.horizontalAdjustment = true;
         nudge.onBegin = [this] { beginRelative ("Selected nudge"); };
         nudge.onChange = [this] (int v)
         {
@@ -290,7 +290,7 @@ namespace ksh::ui
             probability.setBounds (166, 8, 88, 64);
             roll.setBounds (262, 8, 56, 64);
             cycleLength.setBounds (326, 8, 56, 64);
-            remove.setBounds (getWidth() - 48, 28, 42, 44);
+            remove.setBounds (getWidth() - 48, 29, 35, 42);
             cycle.setBounds (390, 26, juce::jlimit (0, cycle.preferredWidth (48), remove.getX() - 398), 48);
             return;
         }
@@ -307,7 +307,7 @@ namespace ksh::ui
         velocity.setBounds (x + 130, 32, 76, captionHeight + inputHeight);
         probability.setBounds (x + 222, 32, 92, captionHeight + inputHeight);
         roll.setBounds (x + 330, 32, 56, captionHeight + inputHeight);
-        remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, inputHeight);
+        remove.setBounds (inspectorBounds.getRight() - 96, 56, inputHeight * 20 / 24, inputHeight);
         cycle.setBounds (x + 402, 52, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - x - 418), inputHeight + 8);
     }
     void PreviewPanel::sync()
@@ -417,7 +417,7 @@ namespace ksh::ui
             const auto selectedCount = controller.selection (true).size();
             const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
             text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).withWidth (76).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
         }
         else
         {

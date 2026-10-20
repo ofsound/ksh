@@ -10,6 +10,36 @@
 using namespace ksh;
 using namespace ksh::ui;
 
+TEST_CASE ("Numeric controls repaint their outlines when focus and hover change", "[native-ui]")
+{
+    struct RepaintTracker : juce::CachedComponentImage
+    {
+        int invalidations = 0;
+        void paint (juce::Graphics&) override {}
+        bool invalidateAll() override { ++invalidations; return true; }
+        bool invalidate (const juce::Rectangle<int>&) override { ++invalidations; return true; }
+        void releaseResources() override {}
+    };
+    ValueControl control;
+    control.setBounds (0, 0, 100, 42);
+    control.setVisible (true);
+    auto* tracker = new RepaintTracker;
+    control.setCachedComponentImage (tracker);
+    auto expectRepaint = [&] (auto callback)
+    {
+        const auto before = tracker->invalidations;
+        callback();
+        CHECK (tracker->invalidations > before);
+    };
+    expectRepaint ([&] { control.focusGained (juce::Component::focusChangedByTabKey); });
+    expectRepaint ([&] { control.focusLost (juce::Component::focusChangedByMouseClick); });
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), {}, {}, 1, 0, 0, 0, 0,
+                                  &control, &control, now, {}, now, 0, false);
+    expectRepaint ([&] { control.mouseEnter (event); });
+    expectRepaint ([&] { control.mouseExit (event); });
+}
+
 TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom", "[native-ui][render]")
 {
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
@@ -146,6 +176,13 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     juce::TextEditor* description = nullptr;
     juce::TextButton* apply = nullptr;
     juce::TextButton* saveAs = nullptr;
+    juce::TextButton* save = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText() == "SAVE AS") saveAs = button;
+            if (button->getButtonText() == "SAVE") save = button;
+        }
     int dates = 0;
     for (auto* child : details->getChildren())
     {
@@ -165,7 +202,7 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
             if (button->getButtonText() == "Apply") apply = button;
-            if (button->getButtonText() == "Save As...") saveAs = button;
+            CHECK (button->getButtonText() != "Save As...");
         }
     }
     REQUIRE (name != nullptr);
@@ -173,6 +210,10 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     REQUIRE (description != nullptr);
     REQUIRE (apply != nullptr);
     REQUIRE (saveAs != nullptr);
+    REQUIRE (save != nullptr);
+    CHECK (saveAs->isVisible());
+    CHECK (saveAs->getX() > save->getRight());
+    CHECK (saveAs->getY() == save->getY());
     CHECK (dates == 2);
     CHECK (author->getText() == "ofsound");
     capture ("project-details");
@@ -195,6 +236,7 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     editor.projectAction = [&] (int value) { action = value; };
     info->onClick();
     author->setText ("Copy author");
+    apply->onClick();
     saveAs->onClick();
     CHECK (action == 5);
     CHECK (processor.getProjectAuthor() == "Copy author");
@@ -786,7 +828,7 @@ TEST_CASE ("Native editor constructs renders and tears down without a browser", 
 
 namespace
 {
-    juce::MouseEvent gridEvent (PatternGrid& grid, juce::Point<float> position, juce::Point<float> origin, int modifiers, bool dragged = false)
+    juce::MouseEvent gridEvent (juce::Component& grid, juce::Point<float> position, juce::Point<float> origin, int modifiers, bool dragged = false)
     {
         const auto now = juce::Time::getCurrentTime();
         return { juce::Desktop::getInstance().getMainMouseSource(), position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid, now, origin, now, 1, dragged };
@@ -865,7 +907,7 @@ TEST_CASE ("Native mouse gestures respect thresholds cancellation and one-step u
     CHECK_FALSE (controller.canUndo());
     grid.mouseDown (down);
     grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, juce::ModifierKeys::leftButtonModifier, true));
-    CHECK (controller.cell ({ 0, 0 }).velocity == 111);
+    CHECK (controller.cell ({ 0, 0 }).velocity == 108);
     grid.cancelGesture();
     CHECK_FALSE (controller.cell ({ 0, 0 }).enabled);
     const auto beforeRightClick = controller.cell ({ 0, 0 });
@@ -992,6 +1034,58 @@ TEST_CASE ("Velocity edge lines still interpolate beside active cells", "[native
         CHECK (controller.cell ({ 0, s }) == before[static_cast<size_t> (s)]);
 }
 
+TEST_CASE ("Cell velocity adjustments follow drag distance from the original value", "[native-ui]")
+{
+    PluginProcessor processor;
+    const int initialVelocity = GENERATE (30, 90, 125);
+    const float clickHeight = GENERATE (0.2f, 0.8f);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, initialVelocity }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const auto bounds = grid.layout.cell ({ 0, 0 });
+    const juce::Point<float> start { bounds.getCentreX(), bounds.getY() + bounds.getHeight() * clickHeight };
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const auto down = gridEvent (grid, start, start, left);
+    grid.mouseDown (down);
+    grid.mouseDrag (gridEvent (grid, start.translated (0, -20), start, left, true));
+    CHECK (controller.cell ({ 0, 0 }).velocity == juce::jmin (127, initialVelocity + 8));
+    grid.mouseDrag (gridEvent (grid, start.translated (0, 20), start, left, true));
+    CHECK (controller.cell ({ 0, 0 }).velocity == initialVelocity - 8);
+    grid.mouseDrag (gridEvent (grid, start, start, left, true));
+    CHECK (controller.cell ({ 0, 0 }).velocity == initialVelocity);
+    grid.cancelGesture();
+    CHECK (controller.cell ({ 0, 0 }).velocity == initialVelocity);
+}
+
+TEST_CASE ("Selection mutes only unselected active cell colors and leaves empty slots unchanged", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 70, 80, 3, 2, 4 }));
+    EditorController controller (processor);
+    controller.layer = GENERATE (Layer::velocity, Layer::chance);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const auto before = grid.createComponentSnapshot (grid.getLocalBounds());
+    controller.selectLatched = true;
+    controller.selected.set (0);
+    grid.sync();
+    const auto after = grid.createComponentSnapshot (grid.getLocalBounds());
+    for (int step : { 0, 2, 3 })
+    {
+        INFO ("Step " << step);
+        const auto bounds = grid.cellBounds ({ 0, step }).reduced (8).getSmallestIntegerContainer();
+        bool identical = true;
+        for (int y = bounds.getY(); y < bounds.getBottom(); ++y)
+            for (int x = bounds.getX(); x < bounds.getRight(); ++x)
+                identical = identical && before.getPixelAt (x, y) == after.getPixelAt (x, y);
+        CHECK (identical == (step != 2));
+    }
+}
+
 TEST_CASE ("Single velocity drags draw across the row in one gesture", "[native-ui]")
 {
     PluginProcessor processor;
@@ -1012,19 +1106,19 @@ TEST_CASE ("Single velocity drags draw across the row in one gesture", "[native-
     };
     grid.mouseDown (down);
     dragTo (0, -20);
-    REQUIRE (controller.cell ({ 0, 0 }).velocity == 111);
+    REQUIRE (controller.cell ({ 0, 0 }).velocity == 108);
     dragTo (4, -40);
     for (int s = 0; s <= 4; ++s)
     {
         auto expected = before[static_cast<size_t> (s)];
         expected.enabled = true;
-        expected.velocity = 111 + s * 4;
+        expected.velocity = jsRound (108.0 + s * 2.5);
         CHECK (controller.cell ({ 0, s }) == expected);
     }
     dragTo (1, -40);
     for (int s = 1; s <= 4; ++s)
-        CHECK (controller.cell ({ 0, s }).velocity == 127);
-    CHECK (controller.cell ({ 0, 0 }).velocity == 111);
+        CHECK (controller.cell ({ 0, s }).velocity == 118);
+    CHECK (controller.cell ({ 0, 0 }).velocity == 108);
     CHECK_FALSE (controller.cell ({ 1, 1 }).enabled);
 
     SECTION ("Release and undo restores every touched cell")
@@ -1061,7 +1155,7 @@ TEST_CASE ("Velocity sweeps stay inside the starting row loop", "[native-ui]")
     {
         CHECK (controller.cell ({ 0, s }).enabled == (s >= 1 && s <= 3));
         if (s >= 1 && s <= 3)
-            CHECK (controller.cell ({ 0, s }).velocity == 111);
+            CHECK (controller.cell ({ 0, s }).velocity == 108);
     }
 }
 
@@ -1938,6 +2032,22 @@ TEST_CASE ("Nudge adjusts a selection together, preserves differences, and suppo
     CHECK (nudge->mixed);
     const auto first = editor.controller.cell ({ 0, 2 });
     const auto second = editor.controller.cell ({ 0, 5 });
+    REQUIRE (nudge->horizontalAdjustment);
+    const auto start = nudge->getLocalBounds().toFloat().getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const auto down = gridEvent (*nudge, start, start, left);
+    nudge->mouseDown (down);
+    nudge->mouseDrag (gridEvent (*nudge, start.translated (64, 0), start, left, true));
+    CHECK (editor.controller.cell ({ 0, 2 }).nudge == 10);
+    CHECK (editor.controller.cell ({ 0, 5 }).nudge == 60);
+    nudge->mouseDrag (gridEvent (*nudge, start.translated (-24, 0), start, left, true));
+    CHECK (editor.controller.cell ({ 0, 2 }).nudge == -30);
+    CHECK (editor.controller.cell ({ 0, 5 }).nudge == 20);
+    nudge->mouseDrag (gridEvent (*nudge, start.translated (0, -40), start, left, true));
+    CHECK (editor.controller.cell ({ 0, 2 }).nudge == first.nudge);
+    CHECK (editor.controller.cell ({ 0, 5 }).nudge == second.nudge);
+    nudge->cancelGesture();
+    editor.sync();
     nudge->onBegin();
     nudge->onChange (10);
     nudge->onEnd();

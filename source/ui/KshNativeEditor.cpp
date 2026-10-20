@@ -69,9 +69,9 @@ namespace ksh::ui
         aboutViewport.setViewedComponent (&randomPanel, false);
         aboutViewport.setScrollBarsShown (true, false);
         preview.onLogoDoubleClick = [this] { toggleAboutPanel(); };
-        const std::array<juce::String, 5> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶") };
-        const std::array<juce::String, 5> projectTips { "Create a new project", "Load a project from disk", "Save the current project", "Load the previous project in this folder", "Load the next project in this folder" };
-        for (int i = 0; i < 5; ++i)
+        const std::array<juce::String, 6> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
+        const std::array<juce::String, 6> projectTips { "Create a new project", "Load a project from disk", "Save the current project", "Load the previous project in this folder", "Load the next project in this folder", "Save a copy to a new project file" };
+        for (int i = 0; i < 6; ++i)
         {
             auto& button = projectButtons[static_cast<size_t> (i)];
             addAndMakeVisible (button);
@@ -92,7 +92,6 @@ namespace ksh::ui
             if (isShowing())
                 grabKeyboardFocus();
         };
-        projectDetails.onSaveAs = [this] { if (projectAction) projectAction (5); };
         for (auto* b : { &mutePattern, &velocityLayer, &chanceLayer, &clear, &record, &left, &right, &undoButton, &redoButton, &rate, &play, &dc })
             addAndMakeVisible (*b);
         addAndMakeVisible (selectMode);
@@ -306,25 +305,26 @@ namespace ksh::ui
             resizedCompact();
             return;
         }
-        const int top = static_cast<int> (layout.transportHeight());
+        const int top = static_cast<int> (layout.transportHeight()) + 4;
         const int rightEdge = getWidth() - Layout::outerGutter;
         projectButtons[0].setBounds (Layout::outerGutter, top + 27, 54, 32);
         projectButtons[1].setBounds (74, top + 27, 54, 32);
         projectButtons[2].setBounds (136, top + 27, 54, 32);
-        projectButtons[3].setBounds (198, top + 27, 30, 32);
-        projectHeader.setBounds (236, top + 27, 278, 32);
+        projectButtons[5].setBounds (198, top + 27, 76, 32);
+        projectButtons[3].setBounds (282, top + 27, 30, 32);
+        projectHeader.setBounds (320, top + 27, 194, 32);
         projectButtons[4].setBounds (522, top + 27, 30, 32);
         swing.setBounds (582, top + 25, 72, 43);
         subdivision.setBounds (662, top + 25, 72, 43);
         velocityHumanize.setBounds (758, top + 25, 72, 43);
         timingHumanize.setBounds (838, top + 25, 72, 43);
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setBounds (rightEdge - 400 + (i % 8) * 42, top + 10 + (i / 8) * 36, 36, 30);
-        mutePattern.setBounds (rightEdge - 58, top + 10, 58, 66);
+            patterns[static_cast<size_t> (i)].setBounds (rightEdge - 400 + (i % 8) * 42, top + 6 + (i / 8) * 38, 38, 32);
+        mutePattern.setBounds (rightEdge - 58, top + 6, 58, 70);
         const int y = static_cast<int> (layout.toolbarY());
-        velocityLayer.setBounds (Layout::outerGutter, y + 23, 65, 29);
-        chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 65, velocityLayer.getHeight());
-        selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 64, velocityLayer.getHeight());
+        velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
+        chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
+        selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         record.setBounds (375, y + 13, 40, 41);
         left.setBounds (425, y + 13, 40, 41);
         right.setBounds (475, y + 13, 40, 41);
@@ -391,8 +391,8 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        paintControlGroup (g, { 574, layout.transportHeight() + 6, 168, 70 }, "Swing");
-        paintControlGroup (g, { 750, layout.transportHeight() + 6, 168, 70 }, "Humanize");
+        paintControlGroup (g, { 574, layout.transportHeight() + 10, 168, 70 }, "Swing");
+        paintControlGroup (g, { 750, layout.transportHeight() + 10, 168, 70 }, "Humanize");
     }
     void NativeEditor::rateMenu()
     {

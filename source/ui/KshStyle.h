@@ -168,6 +168,8 @@ namespace ksh::ui
             }
             if (b.getProperties().contains ("icon"))
             {
+                if (b.getProperties()["icon"].toString() == "info")
+                    return;
                 if (b.isEnabled() && (hover || down) && static_cast<bool> (b.getProperties()["soloHint"]))
                 {
                     g.setColour (Palette::accent.withAlpha (0.18f));
@@ -319,7 +321,7 @@ namespace ksh::ui
             }
             if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment"))
             {
-                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 13.3f, b.getToggleState() ? Palette::accent : Palette::muted, true);
+                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 14.0f, Palette::text, true);
                 return;
             }
 
@@ -433,7 +435,7 @@ namespace ksh::ui
         float valueFontSize = 14, captionFontSize = 10;
         int captionGap = 0;
         juce::String suffix, caption;
-        bool mixed = false, showAdjustmentHintAtZero = false;
+        bool mixed = false, showAdjustmentHintAtZero = false, horizontalAdjustment = false;
         std::function<juce::String (int)> format;
         std::function<void()> onBegin, onEnd, onClick;
         std::function<void()> onCancel;
@@ -467,7 +469,7 @@ namespace ksh::ui
                 r.removeFromTop (static_cast<float> (captionGap));
             }
             surface (g, r.reduced (0.5f), dragging || hasKeyboardFocus (true), isMouseOver());
-            if (showAdjustmentHintAtZero && value == 0 && !mixed)
+            if (horizontalAdjustment || (showAdjustmentHintAtZero && value == 0 && !mixed))
             {
                 const auto centre = r.getCentre();
                 const float halfHeight = juce::jmin (9.0f, r.getHeight() * 0.25f);
@@ -483,6 +485,8 @@ namespace ksh::ui
                     arrows.lineTo (centre.x, tip);
                     arrows.lineTo (centre.x + wing, base);
                 }
+                if (horizontalAdjustment)
+                    arrows.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::halfPi, centre.x, centre.y));
                 g.setColour (isEnabled() ? Palette::text : Palette::faint);
                 g.strokePath (arrows, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
@@ -499,6 +503,10 @@ namespace ksh::ui
             input.setBounds (getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 + captionGap : 0));
             input.setFont (font (valueFontSize));
         }
+        void focusGained (FocusChangeType) override { repaint(); }
+        void focusLost (FocusChangeType) override { repaint(); }
+        void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { repaint(); }
         void mouseDown (const juce::MouseEvent& e) override
         {
             endWheelGesture();
@@ -525,9 +533,11 @@ namespace ksh::ui
         {
             if (dragging)
             {
-                const auto delta = -e.getDistanceFromDragStartY();
+                const auto delta = horizontalAdjustment ? e.getDistanceFromDragStartX() : -e.getDistanceFromDragStartY();
                 if (std::abs (delta) > 4)
                     update (start + (delta < 0 ? -1 : 1) * static_cast<int> (std::floor ((static_cast<float> (std::abs (delta)) - 4) / sensitivity + 0.5f)));
+                else if (horizontalAdjustment)
+                    update (start);
             }
         }
         void mouseUp (const juce::MouseEvent& e) override
@@ -543,6 +553,8 @@ namespace ksh::ui
         }
         void mouseDoubleClick (const juce::MouseEvent&) override
         {
+            if (horizontalAdjustment)
+                return;
             endWheelGesture();
             dragging = false;
             if (onEnd)
@@ -615,12 +627,14 @@ namespace ksh::ui
         }
         bool keyPressed (const juce::KeyPress& k) override
         {
-            if (k == juce::KeyPress::upKey || k == juce::KeyPress::downKey)
+            const int increaseKey = horizontalAdjustment ? juce::KeyPress::rightKey : juce::KeyPress::upKey;
+            const int decreaseKey = horizontalAdjustment ? juce::KeyPress::leftKey : juce::KeyPress::downKey;
+            if (k == increaseKey || k == decreaseKey)
             {
                 endWheelGesture();
                 if (onBegin)
                     onBegin();
-                update (value + (k == juce::KeyPress::upKey ? 1 : -1));
+                update (value + (k == increaseKey ? 1 : -1));
                 if (onEnd)
                     onEnd();
                 return true;

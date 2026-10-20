@@ -35,7 +35,7 @@ namespace ksh::ui
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
         std::array<juce::TextButton, 16> patterns;
-        std::array<juce::TextButton, 5> projectButtons;
+        std::array<juce::TextButton, 6> projectButtons;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
         GestureButton selectMode { "Select" };
