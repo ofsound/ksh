@@ -127,6 +127,68 @@ TEST_CASE ("Standalone transport swaps Play and Stop in one position with clicks
     checkTransport (false);
 }
 
+TEST_CASE ("Discard confirmation uses the native card and only proceeds on explicit discard", "[native-ui][discard][render]")
+{
+    PluginProcessor processor;
+    processor.setProjectMetadata ("Night drive", "", "", "");
+    NativeEditor editor (processor);
+    const bool compact = GENERATE (false, true);
+    if (compact)
+        editor.setCompactViewport (true, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    DiscardChanges* dialog = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* candidate = dynamic_cast<DiscardChanges*> (child))
+            dialog = candidate;
+    REQUIRE (dialog != nullptr);
+    CHECK_FALSE (dialog->isVisible());
+    int discarded = 0;
+    const auto open = [&] { editor.confirmDiscardingChanges ([&] { ++discarded; }); };
+    open();
+    editor.sync();
+    REQUIRE (dialog->isVisible());
+    CHECK (dialog->isCurrentlyModal());
+    CHECK (dialog->getBounds() == editor.getLocalBounds());
+    juce::TextButton* cancel = nullptr;
+    juce::TextButton* discard = nullptr;
+    for (auto* child : dialog->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText() == "Cancel") cancel = button;
+            if (button->getButtonText() == "Discard Changes") discard = button;
+        }
+    REQUIRE (cancel != nullptr);
+    REQUIRE (discard != nullptr);
+    CHECK (discard->findColour (juce::TextButton::buttonColourId) == cancel->findColour (juce::TextButton::buttonColourId));
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        REQUIRE (juce::File (directory).createDirectory().wasOk());
+        auto stream = juce::File (directory).getChildFile (compact ? "discard-compact.png" : "discard-desktop.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
+    }
+    cancel->onClick();
+    CHECK_FALSE (dialog->isVisible());
+    CHECK_FALSE (dialog->isCurrentlyModal());
+    CHECK (discarded == 0);
+    open();
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (dialog->isVisible());
+    CHECK (discarded == 0);
+    open();
+    discard->onClick();
+    CHECK_FALSE (dialog->isVisible());
+    CHECK_FALSE (dialog->isCurrentlyModal());
+    CHECK (discarded == 1);
+    open();
+    processor.resetProject();
+    editor.controller.refresh();
+    editor.sync();
+    CHECK_FALSE (dialog->isVisible());
+    CHECK (discarded == 1);
+}
+
 TEST_CASE ("Project details keep header and dates read only and apply metadata explicitly", "[native-ui][project-details][render]")
 {
     PluginProcessor processor;

@@ -17,6 +17,7 @@ namespace ksh::ui
         juce::String projectTitle() const { return controller.processor.getProjectName(); }
         juce::String projectDescription() const { return controller.processor.getProjectDescription(); }
         void sync();
+        void confirmDiscardingChanges (std::function<void()>);
         void useViewportFit();
         void setCompactViewport (bool, int width, int height);
         void paint (juce::Graphics&) override;
@@ -40,6 +41,8 @@ namespace ksh::ui
         std::array<juce::TextButton, 6> projectButtons;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
+        DiscardChanges discardChanges;
+        uint64_t discardEpoch = 0;
         GestureButton selectMode { "Select" };
         juce::TextButton stop { "Stop" };
         juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, chanceLayer { "Chance" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };

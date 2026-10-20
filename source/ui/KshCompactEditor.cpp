@@ -232,6 +232,8 @@ namespace ksh::ui
         {
             if (projectDetails.isVisible())
                 visible.push_back (&projectDetails);
+            if (discardChanges.isVisible())
+                visible.push_back (&discardChanges);
             for (auto* child : getChildren())
                 child->setVisible (std::find (visible.begin(), visible.end(), child) != visible.end());
         };

@@ -114,16 +114,7 @@ void PluginEditor::confirmDiscardingChanges (std::function<void()> proceed)
         return;
     }
 
-    juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon,
-        "Unsaved changes",
-        "\"" + processorRef.getProjectName() + "\" has changes that have not been saved. Discard them?",
-        "Discard Changes",
-        "Cancel",
-        this,
-        juce::ModalCallbackFunction::create ([discardAndProceed = std::move (proceed)] (int result) {
-            if (result == 1)
-                discardAndProceed();
-        }));
+    nativeView->confirmDiscardingChanges (std::move (proceed));
 }
 
 juce::File PluginEditor::getDefaultProjectsDirectory() const

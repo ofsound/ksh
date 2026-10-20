@@ -4,6 +4,76 @@
 
 namespace ksh::ui
 {
+    class DiscardChanges : public juce::Component
+    {
+    public:
+        DiscardChanges()
+        {
+            setTitle ("Unsaved changes");
+            setWantsKeyboardFocus (true);
+            setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
+            addAndMakeVisible (cancel);
+            addAndMakeVisible (discard);
+            cancel.onClick = [this] { dismiss(); };
+            discard.onClick = [this]
+            {
+                auto proceed = std::move (onDiscard);
+                dismiss();
+                if (proceed)
+                    proceed();
+            };
+        }
+        void open (const juce::String& projectName, std::function<void()> proceed)
+        {
+            if (isVisible())
+                return;
+            message = "\"" + projectName + "\" has changes that have not been saved. Discard them?";
+            onDiscard = std::move (proceed);
+            setVisible (true);
+            toFront (false);
+            enterModalState (false);
+            if (isShowing())
+                cancel.grabKeyboardFocus();
+            repaint();
+        }
+        void dismiss()
+        {
+            onDiscard = {};
+            exitModalState (0);
+            setVisible (false);
+        }
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (key == juce::KeyPress::escapeKey)
+                dismiss();
+            else
+                return false;
+            return true;
+        }
+        void resized() override
+        {
+            card = getLocalBounds().withSizeKeepingCentre (juce::jmin (560, getWidth() - 24), juce::jmin (224, getHeight() - 24));
+            discard.setBounds (card.getRight() - 184, card.getBottom() - 56, 160, 32);
+            cancel.setBounds (discard.getX() - 96, discard.getY(), 80, 32);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colours::black.withAlpha (0.58f));
+            surface (g, card.toFloat());
+            const auto content = card.toFloat().reduced (24, 0);
+            text (g, "Unsaved changes", content.withY (content.getY() + 20).withHeight (26), 20, Palette::text, true, juce::Justification::centredLeft);
+            g.setColour (Palette::text);
+            g.setFont (font (14));
+            g.drawFittedText (message, content.withY (content.getY() + 66).withHeight (card.getHeight() - 138).toNearestInt(), juce::Justification::topLeft, 3);
+        }
+
+    private:
+        juce::Rectangle<int> card;
+        juce::String message;
+        std::function<void()> onDiscard;
+        juce::TextButton cancel { "Cancel" }, discard { "Discard Changes" };
+    };
+
     class ProjectHeader : public juce::Component, public juce::SettableTooltipClient
     {
     public:

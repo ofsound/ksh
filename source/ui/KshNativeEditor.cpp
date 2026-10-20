@@ -121,6 +121,7 @@ namespace ksh::ui
         }
         addAndMakeVisible (projectHeader);
         addChildComponent (projectDetails);
+        addChildComponent (discardChanges);
         projectHeader.onDetails = [this]
         {
             cancelCompactGestures();
@@ -337,6 +338,13 @@ namespace ksh::ui
             resized();
         if (projectDetails.isVisible())
             projectDetails.toFront (false);
+        if (discardChanges.isVisible())
+        {
+            if (discardEpoch != controller.processor.getUiBridge().getDocumentEpoch())
+                discardChanges.dismiss();
+            else
+                discardChanges.toFront (false);
+        }
         repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
         repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
         syncing = false;
@@ -347,6 +355,7 @@ namespace ksh::ui
     {
         laidOut = { layout, getLocalBounds() };
         projectDetails.setBounds (getLocalBounds());
+        discardChanges.setBounds (getLocalBounds());
         if (layout.compact)
         {
             resizedCompact();
@@ -491,8 +500,16 @@ namespace ksh::ui
         repaint();
     }
     bool NativeEditor::textFocused() const { return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr; }
+    void NativeEditor::confirmDiscardingChanges (std::function<void()> proceed)
+    {
+        cancelCompactGestures();
+        discardEpoch = controller.processor.getUiBridge().getDocumentEpoch();
+        discardChanges.open (controller.processor.getProjectName(), std::move (proceed));
+    }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
+        if (discardChanges.isVisible())
+            return discardChanges.keyPressed (key);
         if (projectDetails.isVisible())
             return projectDetails.keyPressed (key);
         if (textFocused())
