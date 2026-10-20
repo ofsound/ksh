@@ -774,7 +774,8 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
 {
     bool shouldFilter = false;
     bool recordQueued = false;
-    const bool recordEnabled = patternRecordingEnabled.load (std::memory_order_acquire) != 0;
+    const auto recordSession = patternRecordingSession.load (std::memory_order_acquire);
+    const bool recordEnabled = recordSession != 0;
     const int recordSource = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),
                                            0,
                                            ksh::Constants::sourceCount - 1);
@@ -809,7 +810,7 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
             {
                 const double eventPpq = ppqPosition + static_cast<double> (metadata.samplePosition) * quartersPerSample;
                 const int step = quantizedStepForPpq (snapshot, eventPpq);
-                recordQueued = enqueuePatternRecordEvent (pendingMidiPatternRecordEvents, recordSource, row, step, metadata.data[2])
+                recordQueued = enqueuePatternRecordEvent (pendingMidiPatternRecordEvents, recordSource, row, step, metadata.data[2], recordSession)
                             || recordQueued;
             }
         }
@@ -858,14 +859,62 @@ void PluginProcessor::drainPendingMidiPatternSelectionsLocked()
 }
 
 bool PluginProcessor::enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
-                                                 int source, int channel, int step, int velocity)
+                                                 int source, int channel, int step, int velocity, uint64_t session)
 {
+    if (session == 0)
+        return false;
     PatternRecordEvent event;
+    event.session = session;
     event.source = ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1);
     event.channel = ksh::clampInt (channel, 0, ksh::Constants::maxChannels - 1);
     event.step = ksh::clampInt (step, 0, ksh::Constants::maxSteps - 1);
     event.velocity = ksh::clampInt (velocity, 1, 127);
     return queue.try_enqueue (event);
+}
+
+void PluginProcessor::recordPatternCellLocked (int source, int channel, int step, int velocity)
+{
+    const auto before = engine.sourceCellAt (source, channel, step);
+    engine.setCell (source, channel, step, true, velocity, 100, 1, 0, false, 1);
+    const auto after = engine.sourceCellAt (source, channel, step);
+    if (before == after)
+        return;
+    auto& edits = patternRecordingEdits.cells;
+    const auto existing = std::find_if (edits.begin(), edits.end(), [=] (const auto& edit)
+    {
+        return edit.source == source && edit.channel == channel && edit.step == step;
+    });
+    if (existing == edits.end())
+        edits.push_back ({ source, channel, step, before, after });
+    else
+    {
+        // A manual/external edit between loop iterations becomes the new baseline
+        // for that field, rather than being swept into the recording's undo.
+        const auto rebase = [] (auto& baseline, const auto& last, const auto& now)
+        {
+            if (last != now)
+                baseline = now;
+        };
+        rebase (existing->expected.enabled, existing->value.enabled, before.enabled);
+        rebase (existing->expected.velocity, existing->value.velocity, before.velocity);
+        rebase (existing->expected.probability, existing->value.probability, before.probability);
+        rebase (existing->expected.cycle, existing->value.cycle, before.cycle);
+        rebase (existing->expected.cycleMask, existing->value.cycleMask, before.cycleMask);
+        rebase (existing->expected.roll, existing->value.roll, before.roll);
+        rebase (existing->expected.nudge, existing->value.nudge, before.nudge);
+        existing->value = after;
+    }
+}
+
+PluginProcessor::PatternRecordingEdits PluginProcessor::takePatternRecordingEdits()
+{
+    std::scoped_lock lock { engineStateMutex };
+    drainPendingPatternRecordEventsLocked();
+    publishPlaybackSnapshotIfChangedLocked();
+    PatternRecordingEdits result { patternRecordingEdits.session, patternRecordingEdits.documentEpoch,
+                                   patternRecordingEdits.armed, std::move (patternRecordingEdits.cells) };
+    patternRecordingEdits.cells.clear();
+    return result;
 }
 
 void PluginProcessor::drainPendingPatternRecordEventsLocked()
@@ -877,7 +926,10 @@ void PluginProcessor::drainPendingPatternRecordEventsLocked()
         PatternRecordEvent event;
         while (queue.try_dequeue (event))
         {
-            engine.setCell (event.source, event.channel, event.step, true, event.velocity, 100, 1, 0, false, 1);
+            if (!patternRecordingEdits.armed || event.session != patternRecordingEdits.session
+                || patternRecordingEdits.documentEpoch != uiBridge.getDocumentEpoch())
+                continue;
+            recordPatternCellLocked (event.source, event.channel, event.step, event.velocity);
             changed = true;
         }
     };
@@ -961,6 +1013,10 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
 
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
+        patternRecordingSession.store (0, std::memory_order_release);
+        patternRecordingEnabled.store (0, std::memory_order_release);
+        patternRecordingEdits.armed = false;
+        patternRecordingEdits.cells.clear();
         uiBridge.documentReplaced();
     }
 
@@ -1250,9 +1306,30 @@ void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 
 void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
 {
-    patternRecordingSource.store (ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1),
-                                  std::memory_order_release);
-    patternRecordingEnabled.store (shouldRecord ? 1 : 0, std::memory_order_release);
+    std::scoped_lock lock { engineStateMutex };
+    if (!shouldRecord)
+    {
+        // Stop producers first, then include every hit already queued in this pass.
+        patternRecordingSession.store (0, std::memory_order_release);
+        patternRecordingEnabled.store (0, std::memory_order_release);
+        drainPendingPatternRecordEventsLocked();
+        patternRecordingEdits.armed = false;
+        publishPlaybackSnapshotIfChangedLocked();
+    }
+    else if (!patternRecordingEdits.armed || patternRecordingEdits.documentEpoch != uiBridge.getDocumentEpoch())
+    {
+        ++patternRecordingEdits.session;
+        patternRecordingEdits.documentEpoch = uiBridge.getDocumentEpoch();
+        patternRecordingEdits.cells.clear();
+        patternRecordingEdits.armed = true;
+    }
+    patternRecordingSource.store (ksh::clampInt (source, 0, ksh::Constants::sourceCount - 1), std::memory_order_release);
+    if (shouldRecord)
+    {
+        patternRecordingSession.store (patternRecordingEdits.session, std::memory_order_release);
+        patternRecordingEnabled.store (1, std::memory_order_release);
+    }
+    uiBridge.invalidate();
 }
 
 bool PluginProcessor::isPatternRecordingEnabled() const
@@ -1345,7 +1422,7 @@ bool PluginProcessor::triggerRowFromUi (int channelZeroBased, int velocity)
                                      0,
                                      ksh::Constants::sourceCount - 1);
     const int step = quantizedStepForUiTrigger();
-    const bool queued = enqueuePatternRecordEvent (pendingUiPatternRecordEvents, source, channelZeroBased, step, vel);
+    const bool queued = enqueuePatternRecordEvent (pendingUiPatternRecordEvents, source, channelZeroBased, step, vel, patternRecordingSession.load (std::memory_order_acquire));
 
     if (queued)
         messageThreadWorkPending.store (true, std::memory_order_release);
@@ -1371,7 +1448,9 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
 
     std::scoped_lock lock { engineStateMutex };
     const int row = ksh::clampInt (channel, 0, engine.getChannelCount() - 1);
-    engine.setCell (source, row, step, true, vel, 100, 1, 0, false, 1);
+    if (!patternRecordingEdits.armed || patternRecordingEdits.documentEpoch != uiBridge.getDocumentEpoch())
+        return false;
+    recordPatternCellLocked (source, row, step, vel);
     [[maybe_unused]] const bool auditioned = queueRowAudition (row, vel);
     publishPlaybackSnapshotIfChangedLocked();
     engine.flushPreview();
@@ -1485,6 +1564,10 @@ void PluginProcessor::resetProject()
         suppressEngineCallbacks.store (previousSuppression, std::memory_order_release);
         syncMacroParametersFromEngineLocked (false);
         publishPlaybackSnapshotLocked();
+        patternRecordingSession.store (0, std::memory_order_release);
+        patternRecordingEnabled.store (0, std::memory_order_release);
+        patternRecordingEdits.armed = false;
+        patternRecordingEdits.cells.clear();
         uiBridge.documentReplaced();
     }
 

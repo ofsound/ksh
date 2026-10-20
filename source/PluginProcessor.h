@@ -80,6 +80,14 @@ public:
         int source = 0, channel = 0, step = 0;
         ksh::Cell expected, value;
     };
+    struct PatternRecordingEdits
+    {
+        uint64_t session = 0, documentEpoch = 0;
+        bool armed = false;
+        std::vector<CellEdit> cells;
+    };
+    /** Message-thread recording changes only, consumed by the editor's undo history. */
+    [[nodiscard]] PatternRecordingEdits takePatternRecordingEdits();
     [[nodiscard]] UiState nativeUiState();
     /** nativeUiState() written into existing storage, avoiding a second snapshot copy. */
     void copyNativeUiState (UiState& state);
@@ -134,6 +142,7 @@ private:
     friend class PluginProcessorTestPeer;
     struct PatternRecordEvent
     {
+        uint64_t session = 0;
         int source = 0;
         int channel = 0;
         int step = 0;
@@ -172,8 +181,9 @@ private:
     void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying);
     void drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
+    void recordPatternCellLocked (int source, int channel, int step, int velocity);
     [[nodiscard]] static bool enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
-                                                         int source, int channel, int step, int velocity);
+                                                         int source, int channel, int step, int velocity, uint64_t session);
     [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
     [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity);
     [[nodiscard]] int quantizedStepForUiTrigger() const;
@@ -221,6 +231,8 @@ private:
     std::atomic<int> standaloneTransportResetRequested { 0 };
     std::atomic<int> standaloneStopAllNotesRequested { 0 };
     std::atomic<int> patternRecordingEnabled { 0 };
+    std::atomic<uint64_t> patternRecordingSession { 0 };
+    PatternRecordingEdits patternRecordingEdits; // engineStateMutex; bounded by the document's cell count
     std::atomic<int> patternRecordingSource { 0 };
     std::atomic<double> patternRecordTransportPpq { 0.0 };
     std::atomic<double> patternRecordTransportBpm { 120.0 };

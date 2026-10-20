@@ -22,6 +22,7 @@ namespace ksh::ui
         void setCompactViewport (bool, int width, int height);
         void paint (juce::Graphics&) override;
         void resized() override;
+        void mouseDown (const juce::MouseEvent&) override;
         bool keyPressed (const juce::KeyPress&) override;
         bool keyStateChanged (bool) override;
         void focusLost (FocusChangeType) override;

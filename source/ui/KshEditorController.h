@@ -111,7 +111,7 @@ namespace ksh::ui
         void refresh();
         void undo();
         void redo();
-        bool canUndo() const { return !undoEntries.empty(); }
+        bool canUndo() const { return !undoEntries.empty() || !recordingEntry.cells.empty(); }
         bool canRedo() const { return !redoEntries.empty(); }
         void clearHistory();
         void deleteSelection();
@@ -141,6 +141,8 @@ namespace ksh::ui
             juce::String label;
         };
         std::vector<Entry> undoEntries, redoEntries;
+        Entry recordingEntry;
+        uint64_t recordingSession = 0;
         std::vector<PluginProcessor::CellEdit> pending;
         DocumentState before, lastOwn;
         juce::String gestureLabel, gestureParameter;
@@ -153,5 +155,7 @@ namespace ksh::ui
         void reloadState();
         void rebaseExternal();
         void finishParameter();
+        void collectRecordingEdits();
+        void commitRecordingEdits();
     };
 }

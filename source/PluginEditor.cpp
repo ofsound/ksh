@@ -76,6 +76,12 @@ void PluginEditor::updateNativeSize()
     resized();
 }
 void PluginEditor::paint (juce::Graphics& g) { g.fillAll (ksh::ui::Palette::app); }
+void PluginEditor::mouseDown (const juce::MouseEvent& event)
+{
+    // Include the margins around the scaled editor in standalone/mobile layouts.
+    if (nativeView != nullptr)
+        nativeView->mouseDown (event);
+}
 void PluginEditor::resized()
 {
     if (!nativeView)

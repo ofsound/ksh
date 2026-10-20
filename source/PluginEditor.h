@@ -19,6 +19,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
 
     void showSaveProjectDialog (const juce::Array<juce::var>& args,
         std::function<void (juce::var)> complete);

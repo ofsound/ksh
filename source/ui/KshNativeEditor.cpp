@@ -103,6 +103,7 @@ namespace ksh::ui
         setLookAndFeel (&look);
         setOpaque (true);
         setWantsKeyboardFocus (true);
+        addMouseListener (this, true);
         addAndMakeVisible (grid);
         addAndMakeVisible (preview);
         addChildComponent (aboutViewport);
@@ -250,6 +251,7 @@ namespace ksh::ui
     NativeEditor::~NativeEditor()
     {
         stopTimer();
+        removeMouseListener (this);
         juce::PopupMenu::dismissAllActiveMenus();
         controller.changed = {};
         setLookAndFeel (nullptr);
@@ -346,6 +348,8 @@ namespace ksh::ui
                 discardChanges.toFront (false);
         }
         repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
+        if (!layout.compact)
+            repaint (getWidth() / 2, juce::roundToInt (layout.toolbarY()), getWidth() - getWidth() / 2, 68);
         repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
         syncing = false;
         if ((scaleChanged || std::abs (oldHeight - layout.height()) > 0.01f || std::abs (oldWidth - layout.width()) > 0.01f) && preferredSizeChanged)
@@ -446,11 +450,39 @@ namespace ksh::ui
             }
             return;
         }
+        const float dividerX = std::floor (static_cast<float> (getWidth()) * 0.5f);
+        const juce::Rectangle<float> patternHeader { dividerX, layout.toolbarY(), static_cast<float> (getWidth()) - dividerX, 68.0f };
+        g.setGradientFill (juce::ColourGradient (Palette::surface, patternHeader.getTopLeft(), Palette::shell, patternHeader.getBottomLeft(), false));
+        g.fillRect (patternHeader);
+        g.setColour (Palette::border.withAlpha (0.7f));
+        g.drawVerticalLine (static_cast<int> (dividerX), patternHeader.getY(), patternHeader.getBottom());
+        const auto patternLabel = controller.source() >= 0 ? "P" + juce::String (controller.source() + 1) + ":" : juce::String ("M:");
+        text (g, patternLabel, { dividerX + 24.0f, layout.toolbarY() + 13.0f, static_cast<float> (record.getX()) - dividerX - 40.0f, 41.0f }, 18, Palette::accent, true, juce::Justification::centredLeft);
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
         paintControlGroup (g, { 574, layout.transportHeight() + 10, 168, 70 }, "Swing");
         paintControlGroup (g, { 750, layout.transportHeight() + 10, 168, 70 }, "Humanize");
+    }
+    void NativeEditor::mouseDown (const juce::MouseEvent& event)
+    {
+        if (!event.mods.isLeftButtonDown() || controller.selected.none()
+            || projectDetails.isVisible() || discardChanges.isVisible())
+            return;
+        // Child listeners receive clicks on nested labels and editors too.
+        // Keep selection available to every control that can act on it.
+        for (auto* component = event.originalComponent; component != nullptr && component != this && isParentOf (component); component = component->getParentComponent())
+            if (component == &grid || dynamic_cast<juce::Button*> (component) != nullptr
+                || dynamic_cast<ValueControl*> (component) != nullptr
+                || dynamic_cast<juce::TextEditor*> (component) != nullptr
+                || dynamic_cast<juce::Slider*> (component) != nullptr
+                || dynamic_cast<juce::ComboBox*> (component) != nullptr
+                || dynamic_cast<juce::ScrollBar*> (component) != nullptr
+                || component->getWantsKeyboardFocus())
+                return;
+        controller.commit();
+        controller.selected.reset();
+        controller.notify();
     }
     void NativeEditor::rateMenu()
     {
@@ -581,7 +613,7 @@ namespace ksh::ui
     }
     void NativeEditor::updateLayerHeading()
     {
-        const bool selecting = grid.isSelectMode();
+        const bool selecting = grid.isSelectMode() || controller.selected.any();
         const bool chance = grid.displayLayer() == Layer::chance;
         velocityLayer.setToggleState (!selecting && !chance, juce::dontSendNotification);
         chanceLayer.setToggleState (!selecting && chance, juce::dontSendNotification);

@@ -828,7 +828,7 @@ namespace ksh::ui
                 return;
             if (selectedAtStart && isCopyMode())
                 drag = Drag::copy;
-            else if (dragLayer == Layer::chance)
+            else if (selectedAtStart && dragLayer == Layer::chance)
                 drag = Drag::value;
             else if (selectedAtStart)
                 drag = controller.useSelectionModifier (e.mods) ? Drag::value : Drag::move;
@@ -917,7 +917,7 @@ namespace ksh::ui
             {
                 controller.selected.reset (static_cast<size_t> (anchor.key()));
             }
-            else if (dragLayer == Layer::velocity || !controller.cell (anchor).enabled)
+            else
             {
                 controller.begin ("Toggle cell");
                 auto c = controller.cell (anchor);

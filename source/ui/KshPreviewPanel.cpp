@@ -18,7 +18,9 @@ namespace ksh::ui
     }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
     {
-        addMouseListener (this, true);
+        // Observe child hover without delivering our own double-click handler
+        // a second time through Component's mouse-listener dispatch.
+        addMouseListener (&childHoverListener, true);
         addAndMakeVisible (mode);
         addAndMakeVisible (refresh);
         addAndMakeVisible (velocity);
@@ -186,7 +188,7 @@ namespace ksh::ui
     }
     PreviewPanel::~PreviewPanel()
     {
-        removeMouseListener (this);
+        removeMouseListener (&childHoverListener);
         if (!randomSection)
             controller.inspectorHoverLayer.reset();
     }

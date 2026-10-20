@@ -1,8 +1,10 @@
 #include <PluginProcessor.h>
 
 #include <KshUiBridge.h>
+#include <ui/KshEditorController.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <thread>
 
@@ -15,6 +17,11 @@ public:
     static std::array<size_t, 2> pendingRecordCounts (const PluginProcessor& processor)
     {
         return { processor.pendingMidiPatternRecordEvents.size_approx(), processor.pendingUiPatternRecordEvents.size_approx() };
+    }
+    static uint64_t recordingSession (const PluginProcessor& processor) { return processor.patternRecordingSession.load(); }
+    static bool enqueueLateRecord (PluginProcessor& processor, uint64_t session)
+    {
+        return PluginProcessor::enqueuePatternRecordEvent (processor.pendingMidiPatternRecordEvents, 0, 0, 7, 99, session);
     }
 };
 
@@ -383,6 +390,175 @@ TEST_CASE ("triggerRowFromUi queues audition without engine lock", "[plugin][bri
 
     REQUIRE (containsNoteOnWithVelocity (midi, 55, 100));
     REQUIRE (containsNoteOnWithVelocity (midi, 60, 110));
+}
+
+TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterations", "[plugin][record][record-undo]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 72, 63, 4, 5, 3 }));
+    ksh::ui::EditorController controller (plugin);
+    const auto original = plugin.editorDocument();
+    juce::AudioBuffer<float> buffer (2, 512);
+    const auto midiHit = [&] (double beat, int note, int velocity)
+    {
+        playHead.setPpqPosition (beat);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, note, static_cast<juce::uint8> (velocity)), 0);
+        plugin.processBlock (buffer, midi);
+    };
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    const auto session = PluginProcessorTestPeer::recordingSession (plugin);
+    midiHit (0.0, 36, 100);
+    (void) controller.poll();
+    REQUIRE (controller.canUndo());
+    REQUIRE (plugin.triggerRowFromUi (2, 91));
+    (void) controller.poll();
+    midiHit (4.25, 36, 85); // Second traversal of the same loop.
+    (void) controller.poll();
+    midiHit (8.0, 36, 110); // A later overwrite belongs to the same pass.
+    (void) controller.poll();
+
+    controller.begin ("Manual edit during recording");
+    auto manual = controller.cell ({ 1, 5 });
+    manual.enabled = true;
+    manual.probability = 42;
+    controller.editCell ({ 1, 5 }, manual);
+    controller.commit();
+    midiHit (8.5, 36, 80); // Still queued when Record is clicked off.
+    controller.command ("pattern_record_enabled", { 0, 1 });
+    const auto recorded = plugin.editorDocument();
+    CHECK (recorded.sources[0][0][0].velocity == 110);
+    CHECK (recorded.sources[0][0][1].enabled);
+    CHECK (recorded.sources[0][0][2].enabled);
+    CHECK (recorded.sources[0][2][0].enabled);
+    CHECK_FALSE (plugin.isPatternRecordingEnabled());
+
+    controller.undo();
+    auto expected = original;
+    expected.sources[0][1][5] = manual;
+    CHECK (plugin.editorDocument() == expected);
+    controller.redo();
+    CHECK (plugin.editorDocument() == recorded);
+    controller.undo();
+    controller.undo();
+    CHECK (plugin.editorDocument() == original);
+    CHECK_FALSE (controller.canUndo());
+
+    // An in-flight audio block cannot resurrect a stopped take after undo.
+    REQUIRE (PluginProcessorTestPeer::enqueueLateRecord (plugin, session));
+    PluginProcessorTestPeer::tick (plugin);
+    CHECK (plugin.editorDocument() == original);
+}
+
+TEST_CASE ("Recording undo separates passes and supports undo while still armed", "[plugin][record][record-undo]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    ksh::ui::EditorController controller (plugin);
+    const auto original = plugin.editorDocument();
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    controller.command ("pattern_record_enabled", { 0, 1 });
+    CHECK_FALSE (controller.canUndo());
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    REQUIRE (plugin.triggerRowFromUi (0, 90));
+    controller.command ("pattern_record_enabled", { 0, 1 });
+    const auto firstPass = plugin.editorDocument();
+    REQUIRE (firstPass != original);
+
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    REQUIRE (plugin.triggerRowFromUi (1, 80));
+    const bool stopBeforeUndo = GENERATE (false, true);
+    if (stopBeforeUndo)
+        controller.command ("pattern_record_enabled", { 0, 1 });
+    controller.undo();
+    CHECK (plugin.editorDocument() == firstPass);
+    CHECK (plugin.isPatternRecordingEnabled() == !stopBeforeUndo);
+    if (!stopBeforeUndo)
+    {
+        REQUIRE (plugin.triggerRowFromUi (2, 70));
+        controller.command ("pattern_record_enabled", { 0, 1 });
+        controller.undo();
+        CHECK (plugin.editorDocument() == firstPass);
+    }
+    controller.undo();
+    CHECK (plugin.editorDocument() == original);
+}
+
+TEST_CASE ("Recording undo preserves intervening and later edits to the same cell", "[plugin][record][record-undo]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 72, 63, 4, 5, 3 }));
+    ksh::ui::EditorController controller (plugin);
+    auto expected = plugin.editorDocument();
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 1, 90 }));
+    if (GENERATE (false, true))
+        (void) controller.poll();
+    const auto previous = plugin.editorDocument().sources[0][0][0];
+    auto external = previous;
+    external.velocity = 55;
+    external.probability = 33;
+    REQUIRE (plugin.applyNativeCellEdits ({ { 0, 0, 0, previous, external } }, controller.state.documentEpoch));
+    REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 1, 110 }));
+    controller.command ("pattern_record_enabled", { 0, 1 });
+    const auto recorded = plugin.editorDocument();
+    expected.sources[0][0][0].velocity = 55;
+    expected.sources[0][0][0].probability = 33;
+    controller.undo();
+    CHECK (plugin.editorDocument() == expected);
+    controller.redo();
+    CHECK (plugin.editorDocument() == recorded);
+
+    auto later = recorded.sources[0][0][0];
+    later.probability = 41;
+    REQUIRE (plugin.applyNativeCellEdits ({ { 0, 0, 0, recorded.sources[0][0][0], later } }, controller.state.documentEpoch));
+    controller.undo();
+    expected.sources[0][0][0].probability = 41;
+    CHECK (plugin.editorDocument() == expected);
+}
+
+TEST_CASE ("Replacing the project discards recording history and in-flight hits", "[plugin][record][record-undo]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    ksh::ui::EditorController controller (plugin);
+    juce::MemoryBlock saved;
+    plugin.getStateInformation (saved);
+    const auto original = plugin.editorDocument();
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    const auto session = PluginProcessorTestPeer::recordingSession (plugin);
+    REQUIRE (plugin.triggerRowFromUi (0, 90));
+    (void) controller.poll();
+    REQUIRE (controller.canUndo());
+    if (GENERATE (false, true))
+        plugin.resetProject();
+    else
+        plugin.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    REQUIRE (PluginProcessorTestPeer::enqueueLateRecord (plugin, session));
+    (void) controller.poll();
+    CHECK_FALSE (plugin.isPatternRecordingEnabled());
+    CHECK_FALSE (controller.canUndo());
+    CHECK_FALSE (controller.canRedo());
+    CHECK (plugin.editorDocument() == original);
 }
 
 TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][bridge][latency][record]")

@@ -166,8 +166,18 @@ namespace ksh::ui
                     g.setColour (Palette::accent.withAlpha (0.24f));
                     g.fillPath (outline);
                 }
-                g.setColour (b.getToggleState() || (history && b.hasKeyboardFocus (true)) ? Palette::accent : Palette::border);
+                g.setColour (b.getToggleState() ? Palette::accent : Palette::border);
                 g.strokePath (outline, juce::PathStrokeType (1));
+                if (history && b.hasKeyboardFocus (true))
+                {
+                    // Segments overlap at the divider; keep focus inside the button
+                    // so its neighbour cannot paint over the focused edge.
+                    const auto focusBounds = r.reduced (1.0f);
+                    juce::Path focusOutline;
+                    focusOutline.addRoundedRectangle (focusBounds.getX(), focusBounds.getY(), focusBounds.getWidth(), focusBounds.getHeight(), 6, 6, first, last, first, last);
+                    g.setColour (Palette::accent);
+                    g.strokePath (focusOutline, juce::PathStrokeType (1));
+                }
                 return;
             }
             if (b.getProperties().contains ("icon"))
@@ -499,39 +509,49 @@ namespace ksh::ui
                 g.strokePath (arrows, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
             }
-            if (!mixed && !format && suffix == "%")
+            const auto label = mixed ? juce::String::fromUTF8 ("—") : format ? format (value) : juce::String (value) + suffix;
+            // Reserve the whole numeric range for plain values, so suffixes stay
+            // anchored even across 9/10 and 99/100. Formatted labels also use
+            // equal-width digits without changing their nonnumeric text.
+            const int slots = !mixed && !format ? juce::jmax (2, juce::String (minimum).length(), juce::String (maximum).length()) : 0;
+            if (numericText != label || numericSlots != slots || std::abs (numericFontSize - valueFontSize) > 0.001f)
             {
-                const auto number = juce::String (value);
-                if (percentageText != number || std::abs (percentageFontSize - valueFontSize) > 0.001f)
+                numericText = label;
+                numericSlots = slots;
+                numericFontSize = valueFontSize;
+                const auto labelFont = font (valueFontSize, true);
+                float digitWidth = 0;
+                for (const auto digit : juce::String ("0123456789"))
+                    digitWidth = juce::jmax (digitWidth, juce::GlyphArrangement::getStringWidth (labelFont, juce::String::charToString (digit)));
+                numericBaseline = (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
+                numericGlyphs.clear();
+                numericWidth = slots > 0 ? static_cast<float> (juce::jmax (0, slots - juce::String (value).length())) * digitWidth : 0.0f;
+                for (int i = 0; i < label.length();)
                 {
-                    percentageText = number;
-                    percentageFontSize = valueFontSize;
-                    const auto labelFont = font (valueFontSize, true);
-                    const float digitWidth = juce::GlyphArrangement::getStringWidth (labelFont, "0");
-                    const int slots = juce::jmax (2, number.length());
-                    percentageWidth = static_cast<float> (slots) * digitWidth + juce::GlyphArrangement::getStringWidth (labelFont, "%");
-                    percentageBaseline = (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
-                    percentageGlyphs.clear();
-                    percentageGlyphs.addLineOfText (labelFont, number + "%", 0.0f, 0.0f);
-                    // Match the inspector's equal-width numerals, reserving two slots even below 10%.
-                    for (int i = 0; i < percentageGlyphs.getNumGlyphs(); ++i)
+                    const auto character = label[i];
+                    if ((character >= '0' && character <= '9') || (slots > 0 && character == '-'))
                     {
-                        auto& glyph = percentageGlyphs.getGlyph (i);
-                        const float slot = static_cast<float> (slots - number.length() + i) * digitWidth;
-                        const float inset = i < number.length() ? (digitWidth - glyph.getBounds().getWidth()) * 0.5f : 0.0f;
-                        glyph.moveBy (slot + inset - glyph.getLeft(), 0.0f);
+                        juce::GlyphArrangement digit;
+                        digit.addLineOfText (labelFont, juce::String::charToString (character), 0, 0);
+                        const auto bounds = digit.getBoundingBox (0, -1, true);
+                        digit.moveRangeOfGlyphs (0, -1, numericWidth + (digitWidth - bounds.getWidth()) * 0.5f - bounds.getX(), 0);
+                        numericGlyphs.addGlyphArrangement (digit);
+                        numericWidth += digitWidth;
+                        ++i;
+                    }
+                    else
+                    {
+                        const int runStart = i++;
+                        while (i < label.length() && !(label[i] >= '0' && label[i] <= '9'))
+                            ++i;
+                        const auto run = label.substring (runStart, i);
+                        numericGlyphs.addLineOfText (labelFont, run, numericWidth, 0);
+                        numericWidth += juce::GlyphArrangement::getStringWidth (labelFont, run);
                     }
                 }
-                g.setColour (isEnabled() ? Palette::text : Palette::faint);
-                percentageGlyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - percentageWidth * 0.5f, r.getCentreY() + percentageBaseline));
-                return;
             }
-            text (g, mixed ? juce::String (juce::String::fromUTF8 ("—")) : format ? format (value)
-                                                                                  : juce::String (value) + suffix,
-                r,
-                valueFontSize,
-                isEnabled() ? Palette::text : Palette::faint,
-                true);
+            g.setColour (isEnabled() ? Palette::text : Palette::faint);
+            numericGlyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - numericWidth * 0.5f, r.getCentreY() + numericBaseline));
         }
         void resized() override
         {
@@ -681,9 +701,10 @@ namespace ksh::ui
         static constexpr int wheelGestureIdleMs = 350;
         juce::TextEditor input;
         static inline juce::Component::SafePointer<ValueControl> pendingWheel;
-        juce::GlyphArrangement percentageGlyphs;
-        juce::String percentageText;
-        float percentageFontSize = 0, percentageWidth = 0, percentageBaseline = 0;
+        juce::GlyphArrangement numericGlyphs;
+        juce::String numericText;
+        int numericSlots = -1;
+        float numericFontSize = 0, numericWidth = 0, numericBaseline = 0;
         bool dragging = false, wheeling = false;
         int start = 0;
         void timerCallback() override { endWheelGesture(); }

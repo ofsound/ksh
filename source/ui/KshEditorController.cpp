@@ -93,6 +93,8 @@ namespace ksh::ui
 
     EditorController::EditorController (PluginProcessor& p) : processor (p), state (p.nativeUiState()), epoch (state.documentEpoch)
     {
+        // History belongs to this editor; don't adopt hits from before it opened.
+        (void) processor.takePatternRecordingEdits();
         processor.getUiBridge().onNoteHit = [this] (const NativeHit& hit) {
             const auto until = juce::Time::getMillisecondCounterHiRes() + 200.0;
             const auto row = hit.uiChannel - 1;
@@ -230,6 +232,8 @@ namespace ksh::ui
         finishParameter();
         undoEntries.clear();
         redoEntries.clear();
+        recordingEntry = {};
+        recordingSession = 0;
         selected.reset();
         copySource = -1;
         soloChannel = -1;
@@ -248,14 +252,63 @@ namespace ksh::ui
         reloadState();
         notify();
     }
+    void EditorController::commitRecordingEdits()
+    {
+        std::erase_if (recordingEntry.cells, [] (const auto& change) { return change.before == change.after; });
+        if (recordingEntry.cells.empty())
+            return;
+        undoEntries.push_back (std::move (recordingEntry));
+        recordingEntry = {};
+        if (undoEntries.size() > 128)
+            undoEntries.erase (undoEntries.begin());
+        redoEntries.clear();
+    }
+    void EditorController::collectRecordingEdits()
+    {
+        if (epoch != processor.getUiBridge().getDocumentEpoch())
+        {
+            clearHistory();
+            reloadState();
+        }
+        auto edits = processor.takePatternRecordingEdits();
+        if (edits.documentEpoch != epoch)
+            return;
+        if (recordingSession != edits.session)
+        {
+            commitRecordingEdits();
+            recordingSession = edits.session;
+        }
+        recordingEntry.label = "Record pattern";
+        for (const auto& edit : edits.cells)
+        {
+            const int index = edit.source * 256 + edit.channel * 32 + edit.step;
+            const auto existing = std::find_if (recordingEntry.cells.begin(), recordingEntry.cells.end(),
+                                               [index] (const auto& change) { return change.index == index; });
+            if (existing == recordingEntry.cells.end())
+                recordingEntry.cells.push_back ({ index, edit.expected, edit.value });
+            else
+            {
+                visitCell (existing->before, existing->after, edit.expected, rebaseField);
+                existing->after = edit.value;
+            }
+        }
+        if (!edits.cells.empty())
+            redoEntries.clear();
+        if (!edits.armed)
+            commitRecordingEdits();
+    }
     void EditorController::command (std::string_view selector, const nlohmann::json& args, const juce::String& label)
     {
+        collectRecordingEdits();
         const bool single = !transaction && label.isNotEmpty();
         if (single)
             begin (label, juce::String (selector.data(), selector.size()));
         flush();
         rebaseExternal();
         (void) processor.dispatchUiEngineCommand (selector, args);
+        collectRecordingEdits();
+        if (selector == "pattern_record_enabled")
+            rebaseExternal();
         if (transaction)
             lastOwn = processor.editorDocument();
         refresh();
@@ -304,6 +357,7 @@ namespace ksh::ui
             clearHistory();
             reloadState();
         }
+        collectRecordingEdits();
         flush();
         if (processor.getUiBridge().getRevision() != state.revision)
             reloadState();
@@ -320,6 +374,8 @@ namespace ksh::ui
     {
         refresh();
         commit();
+        collectRecordingEdits();
+        commitRecordingEdits();
         if (undoEntries.empty())
             return;
         auto entry = std::move (undoEntries.back());
@@ -332,6 +388,8 @@ namespace ksh::ui
     {
         refresh();
         commit();
+        collectRecordingEdits();
+        commitRecordingEdits();
         if (redoEntries.empty())
             return;
         auto entry = std::move (redoEntries.back());

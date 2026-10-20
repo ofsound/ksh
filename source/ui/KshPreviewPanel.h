@@ -23,6 +23,15 @@ namespace ksh::ui
         bool reverseRows = false;
 
     private:
+        struct ChildHoverListener : juce::MouseListener
+        {
+            explicit ChildHoverListener (PreviewPanel& p) : owner (p) {}
+            void mouseEnter (const juce::MouseEvent& event) override { owner.mouseEnter (event); }
+            void mouseMove (const juce::MouseEvent& event) override { owner.mouseMove (event); }
+            void mouseExit (const juce::MouseEvent& event) override { owner.mouseExit (event); }
+            PreviewPanel& owner;
+        };
+        ChildHoverListener childHoverListener { *this };
         EditorController& controller;
         const bool randomSection;
         bool compact = false;
