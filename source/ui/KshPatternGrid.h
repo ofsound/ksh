@@ -23,11 +23,16 @@ namespace ksh::ui
         void modifierKeysChanged (const juce::ModifierKeys&) override;
         void cancelGesture();
         Layer displayLayer() const;
+        juce::Rectangle<float> cellBounds (Location) const;
+        juce::Point<float> hitPosition (Location, int rollIndex = 0) const;
         bool isCopyMode() const;
         bool isSelectMode() const { return controller.shiftDown (modifiers); }
 
     private:
         EditorController& controller;
+        Location cellAt (juce::Point<float>) const;
+        juce::Rectangle<float> cellPaintBounds (Location) const;
+        int playbackPositionForCell (Location) const;
         class AccessibleCell : public juce::Button
         {
         public:
@@ -78,6 +83,9 @@ namespace ksh::ui
         std::array<std::array<bool, 32>, 8> lastFlash {};
         bool mutePainting = false, muteValue = false;
         std::array<Cell, 256> displayedCells {};
+        std::array<juce::Rectangle<float>, 256> displayedPaintBounds {};
+        std::pair<int, int> displayedSwing { -1, -1 };
+        int displayedSwingPhase = 0;
         Selection displayedSelection;
         std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
         std::array<bool, 8> displayedMutes {};

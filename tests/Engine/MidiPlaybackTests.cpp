@@ -59,6 +59,103 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 }
 } // namespace
 
+TEST_CASE ("bipolar cell nudges move every roll hit by a percentage of the step", "[engine][transport][realtime][nudge]")
+{
+    const int nudge = GENERATE (-100, -50, -1, 0, 1, 50, 100);
+    const int blockSize = GENERATE (64, 512, 4096, 13000);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 1, true, 100, 100, 1, 1, 2);
+    fixture.engine.setCellNudge (0, 0, 1, nudge);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    std::vector<int> ons;
+    for (int sample = 0, block = 0; sample < 17000; ++block)
+    {
+        const int size = block % 2 == 0 ? blockSize : 73;
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (sample) / 24000.0, 120.0, true, size);
+        for (const auto event : result.midi)
+            if (event.getMessage().isNoteOn())
+                ons.push_back (sample + event.samplePosition);
+        sample += size;
+    }
+    CHECK (ons == std::vector<int> { 6000 + nudge * 60, 9000 + nudge * 60 });
+}
+
+TEST_CASE ("nudged generative playback is repeatable across different callback sizes", "[engine][transport][nudge]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setGenerationMode (GenerationMode::perChannel);
+    fixture.engine.setRefreshSteps (4);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (23);
+    fixture.engine.setVelocityHumanize (11);
+    fixture.engine.setTimingHumanize (12);
+    for (int source = 0; source < 2; ++source)
+        for (int channel = 0; channel < 2; ++channel)
+            for (int step = 0; step < 16; ++step)
+            {
+                fixture.engine.setCell (source, channel, step, true, 75 + source * 20, 80, 2, 3, 2);
+                fixture.engine.setCellNudge (source, channel, step, (step % 3 - 1) * 50);
+            }
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto render = [&] (int blockSize)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<std::tuple<int, int, int>> hits;
+        for (int sample = 0; sample < 200000;)
+        {
+            const int size = std::min (blockSize, 200000 - sample);
+            const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (sample) / 24000.0, 120.0, true, size);
+            for (const auto event : result.midi)
+                if (event.getMessage().isNoteOn())
+                    hits.emplace_back (sample + event.samplePosition, event.getMessage().getNoteNumber(), event.getMessage().getVelocity());
+            sample += size;
+        }
+        return hits;
+    };
+    const auto small = render (257);
+    REQUIRE_FALSE (small.empty());
+    CHECK (render (8189) == small);
+}
+
+TEST_CASE ("early cells repeat across host loop wraps without duplicate hits", "[engine][transport][nudge]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, true, 100);
+    fixture.engine.setCellNudge (0, 0, 0, -50);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    std::vector<int> ons;
+    constexpr int loopSamples = 24000;
+    const HostLoopRange loop { true, 0.0, 1.0 };
+    for (int sample = 0; sample < loopSamples * 3; sample += 300)
+    {
+        juce::MidiBuffer midi;
+        runner.processBlock (snapshot, static_cast<double> (sample % loopSamples) / 24000.0,
+                             120.0, true, 300, midi, {}, loop);
+        for (const auto event : midi)
+            if (event.getMessage().isNoteOn())
+                ons.push_back (sample + event.samplePosition);
+    }
+    CHECK (ons == std::vector<int> { 0, 21000, 45000, 69000 });
+}
+
 TEST_CASE ("deferred roll notes and gates keep exact sample timing across buffer boundaries", "[engine][transport][realtime]")
 {
     const int blockSize = GENERATE (64, 128, 512, 1024, 3000);

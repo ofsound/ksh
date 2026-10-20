@@ -133,6 +133,8 @@ private:
     bool wasPlaying = false;
     double expectedNextPpq = 0.0;
     std::optional<int> lastEmittedGlobalStep;
+    std::optional<int> lastScheduledGlobalStep;
+    std::optional<int> anticipatedLoopStep;
     std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
     size_t pendingNoteOffCount = 0;
     std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};
@@ -176,7 +178,8 @@ private:
                              int numSamples,
                              juce::MidiBuffer& midiOut,
                              MidiPlaybackResult& result,
-                             int staticSourceOverride);
+                             int staticSourceOverride,
+                             double stepDurationMs);
     void scheduleHit (int stepSampleOffset,
                       int numSamples,
                       const NativeHit& hit,

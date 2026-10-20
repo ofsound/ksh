@@ -9,6 +9,7 @@ namespace ksh::ui
         int channels = 8, steps = 16;
         bool standalone = false, randomVisible = false;
         bool compact = false;
+        bool reverseRows = false;
         float compactWidth = 814.0f, compactHeight = 409.0f;
         int firstStep = 0;
         JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wfloat-equal")
@@ -29,10 +30,17 @@ namespace ksh::ui
         float gridHeight() const { return compact ? compactHeight - gridY() - 84.0f : cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
         float previewY() const { return gridY() + gridHeight(); }
         float height() const { return compact ? compactHeight : previewY() + 164 + footerHeight; }
-        juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step - firstStep) * cellWidth(), cellsY() + static_cast<float> (p.channel) * rowHeight(), cellWidth(), cellHeight() }; }
+        int displayRow (int channel) const { return reverseRows ? channels - 1 - channel : channel; }
+        int channelForRow (int row) const { return reverseRows ? channels - 1 - row : row; }
+        int channelAtY (float y) const
+        {
+            const int row = static_cast<int> (std::floor ((y - cellsY()) / rowHeight()));
+            return row >= 0 && row < channels ? channelForRow (row) : -1;
+        }
+        juce::Rectangle<float> cell (Location p) const { return { gridLeft() + static_cast<float> (p.step - firstStep) * cellWidth(), cellsY() + static_cast<float> (displayRow (p.channel)) * rowHeight(), cellWidth(), cellHeight() }; }
         Location at (juce::Point<float> point) const
         {
-            const int ch = static_cast<int> (std::floor ((point.y - cellsY()) / rowHeight()));
+            const int ch = channelAtY (point.y);
             const int step = firstStep + static_cast<int> (std::floor ((point.x - gridLeft()) / cellWidth()));
             return ch >= 0 && ch < channels && stepVisible (step) && cell ({ ch, step }).contains (point) ? Location { ch, step } : Location {};
         }

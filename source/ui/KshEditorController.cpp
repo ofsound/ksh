@@ -37,6 +37,7 @@ namespace ksh::ui
             visit (target.cycle, a.cycle, b.cycle);
             visit (target.cycleMask, a.cycleMask, b.cycleMask);
             visit (target.roll, a.roll, b.roll);
+            visit (target.nudge, a.nudge, b.nudge);
         }
 
         template <typename Visit>
@@ -306,9 +307,12 @@ namespace ksh::ui
         flush();
         if (processor.getUiBridge().getRevision() != state.revision)
             reloadState();
+        const int previousGlobalStep = playingStep > 0 ? playingGlobalStep : 0;
         playingStep = processor.getCurrentStepForUi();
+        playingGlobalStep = playingStep > 0 ? processor.getGlobalStepForUi() : 0;
+        const bool swingPhaseChanged = state.playback.swing > 0 && previousGlobalStep != playingGlobalStep;
         const bool revised = previousRevision != state.revision;
-        if (revised)
+        if (revised || swingPhaseChanged)
             notify();
         return revised;
     }

@@ -718,6 +718,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
 
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
+    globalStepForUi.store (playback.latestGlobalStep, std::memory_order_relaxed);
 
     bool notify = midiPatternSelections.count > 0;
 
@@ -1533,6 +1534,7 @@ bool PluginProcessor::applyNativeCellEdits (const std::vector<CellEdit>& edits, 
         const auto& c = edit.value;
         engine.setCell (edit.source, edit.channel, edit.step, c.enabled, c.velocity,
                         c.probability, c.cycle, c.cycleMask, c.roll);
+        engine.setCellNudge (edit.source, edit.channel, edit.step, c.nudge);
     }
     publishPlaybackSnapshotIfChangedLocked();
     uiBridge.invalidate();

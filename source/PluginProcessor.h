@@ -100,6 +100,7 @@ public:
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
+    int getGlobalStepForUi() const { return globalStepForUi.load (std::memory_order_relaxed); }
     /** Drain queued note-hit flashes to the native editor (safe on the message thread). */
     int emitPendingNoteHitsForUi();
     bool hasStandaloneTransport() const;
@@ -195,6 +196,7 @@ private:
     // Generated-source choices made by the audio thread, mirrored into the engine for the UI.
     moodycamel::ReaderWriterQueue<ksh::GeneratedSourcesFrame> generatedSourcesForEngine { 16 };
     std::atomic<int> currentStepForUi { 0 };
+    std::atomic<int> globalStepForUi { 0 };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
     double lastHostTempoApplyMs = 0.0; // message-thread only

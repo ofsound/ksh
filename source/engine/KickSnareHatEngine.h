@@ -221,6 +221,7 @@ public:
     /** Legacy bridge/API alias; the value is now a cycle-position mask. */
     void setCellCycleOffset (int source, int channel, int step, int cycleMask);
     void setCellRoll (int source, int channel, int step, int roll);
+    void setCellNudge (int source, int channel, int step, int nudge);
 
     void setSourceChannelMute (int source, int channel, bool muted);
     void resetSourceChannel (int source, int channel);

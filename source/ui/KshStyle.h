@@ -262,6 +262,22 @@ namespace ksh::ui
                     g.fillPath (path);
                     return;
                 }
+                else if (icon == "rowOrder")
+                {
+                    const bool reversed = b.getToggleState();
+                    path.startNewSubPath (5, reversed ? 19.0f : 5.0f);
+                    path.lineTo (5, reversed ? 5.0f : 19.0f);
+                    path.startNewSubPath (2, reversed ? 8.0f : 16.0f);
+                    path.lineTo (5, reversed ? 5.0f : 19.0f);
+                    path.lineTo (8, reversed ? 8.0f : 16.0f);
+                    for (int row = 0; row < 3; ++row)
+                    {
+                        const float y = 6.0f + static_cast<float> (row) * 6.0f;
+                        const float length = 4.0f + static_cast<float> (reversed ? 2 - row : row) * 3.0f;
+                        path.startNewSubPath (11, y);
+                        path.lineTo (11 + length, y);
+                    }
+                }
                 else if (icon == "power")
                 {
                     path.addCentredArc (12, 12, 8, 8, 0, 0.7f, juce::MathConstants<float>::twoPi - 0.7f, true);

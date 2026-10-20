@@ -87,6 +87,7 @@ nlohmann::json cellToJson (const Cell& cell, bool oneBasedSource = false)
         { "cycle", cell.cycle },
         { "cycleMask", cell.cycleMask },
         { "roll", cell.roll },
+        { "nudge", cell.nudge },
         { "source", oneBasedSource ? cell.source + 1 : cell.source }
     };
 }
@@ -657,6 +658,15 @@ void KickSnareHatEngine::setCellCycleMask (int source, int channel, int step, in
     refreshGeneratedCellsForSourceEdit (source, channel, step);
 }
 
+void KickSnareHatEngine::setCellNudge (int source, int channel, int step, int nudge)
+{
+    source = clampSource (source);
+    channel = clampChannel (channel);
+    step = clampStep (step);
+    sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)].nudge = clampInt (nudge, -100, 100);
+    refreshGeneratedCellsForSourceEdit (source, channel, step);
+}
+
 void KickSnareHatEngine::setCellCycleOffset (int source, int channel, int step, int cycleMask)
 {
     setCellCycleMask (source, channel, step, cycleMask);
@@ -1058,6 +1068,7 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
 {
     const auto& settingsIn = document.settings;
     nlohmann::json cells = nlohmann::json::array();
+    nlohmann::json nudges = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
@@ -1070,6 +1081,11 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
             for (int step = 0; step < Constants::maxSteps; ++step)
             {
                 const auto& cell = document.sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
+
+                // Keep the existing v1 cell rows unambiguous with the historical
+                // ten-field cycle-offset layout. Nudge is an optional sparse extension.
+                if (cell.nudge != 0)
+                    nudges.push_back ({ source, channel, step, cell.nudge });
 
                 if (! cell.enabled
                     && cell.velocity == 100
@@ -1150,7 +1166,8 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
         { "channels", channelsOut },
         { "sourceSettings", sourceSettingsOut },
         { "sourceChannelMutes", mutes },
-        { "cells", cells }
+        { "cells", cells },
+        { "cellNudges", nudges }
     };
 }
 
@@ -1215,6 +1232,16 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
     {
         if (entry.is_array() && entry.size() >= 7 && ! allNumbers (entry))
             return false;
+    }
+
+    if (state.contains ("cellNudges"))
+    {
+        if (! state["cellNudges"].is_array())
+            return false;
+        for (const auto& entry : state["cellNudges"])
+            if (! entry.is_array() || entry.size() != 4
+                || ! std::all_of (entry.begin(), entry.end(), [] (const auto& value) { return value.is_number_integer(); }))
+                return false;
     }
 
     if (state.contains ("sourceSettings"))
@@ -1454,6 +1481,19 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
                 .cycleMask = cycleMask,
                 .roll = roll
             });
+    }
+
+    if (state.contains ("cellNudges"))
+    {
+        for (const auto& entry : state["cellNudges"])
+        {
+            const int source = entry[0].get<int>();
+            const int channel = entry[1].get<int>();
+            const int step = entry[2].get<int>();
+            if (source >= 0 && source < Constants::sourceCount && channel >= 0 && channel < Constants::maxChannels
+                && step >= 0 && step < Constants::maxSteps)
+                sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)].nudge = clampInt (entry[3].get<int>(), -100, 100);
+        }
     }
 
     if (keepGeneratedSources)

@@ -9,6 +9,36 @@
 using namespace ksh;
 using ksh::test::EngineFixture;
 
+TEST_CASE ("cell nudges round trip in v1 without confusing legacy cycle rows", "[engine][persistence][nudge]")
+{
+    EngineFixture original, restored;
+    original.clearAll();
+    original.engine.setCell (0, 0, 2, true, 77, 63, 4, 5, 3);
+    original.engine.setCellNudge (0, 0, 2, -37);
+    original.engine.setCellNudge (15, 7, 31, 82);
+    auto payload = original.engine.serializeForPersistence();
+    CHECK (payload["v"] == 1);
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.sourceCellAt (0, 0, 2) == original.engine.sourceCellAt (0, 0, 2));
+    CHECK (restored.engine.sourceCellAt (15, 7, 31).nudge == 82);
+    CHECK_FALSE (restored.engine.sourceCellAt (15, 7, 31).enabled);
+    const nlohmann::json cellJson = original.engine.sourceCellAt (0, 0, 2);
+    CHECK (cellJson.get<Cell>().nudge == -37);
+    payload.erase ("cellNudges");
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).nudge == 0);
+    CHECK (restored.engine.sourceCellAt (15, 7, 31).nudge == 0);
+    payload["cells"] = { { 0, 0, 2, 1, 77, 63, 4, 2, 0, 3 } };
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).cycleMask == 4);
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).roll == 3);
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).nudge == 0);
+    payload["cellNudges"] = { { 0, 0, 2, "bad" } };
+    CHECK_FALSE (restored.engine.deserializeForPersistence (payload));
+    original.engine.setCellNudge (0, 0, 2, -500);
+    CHECK (original.engine.sourceCellAt (0, 0, 2).nudge == -100);
+}
+
 TEST_CASE ("persistence payload restores source data", "[engine][persistence]")
 {
     EngineFixture original;

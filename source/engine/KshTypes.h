@@ -98,6 +98,7 @@ struct Cell
     int cycle = 1;
     int cycleMask = 1;
     int roll = 1;
+    int nudge = 0; // Signed percent of one step; negative plays early.
     int source = -1;
     int sourceStep = 0;
 
@@ -112,6 +113,7 @@ struct CellDefaults
     static constexpr int cycle = 1;
     static constexpr int cycleMask = 1;
     static constexpr int roll = 1;
+    static constexpr int nudge = 0;
     static constexpr int source = -1;
 };
 
@@ -170,6 +172,7 @@ inline constexpr int maxCycleMaskBits = 30;
     out.cycle = cycle;
     out.cycleMask = normalizeCycleMask (cycleMask, cycle);
     out.roll = clampInt (roll, 1, Constants::maxRoll);
+    out.nudge = clampInt (cell.nudge, -100, 100);
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;
     return out;

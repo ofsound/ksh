@@ -299,6 +299,15 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "cell_nudge")
+    {
+        engine.setCellNudge (zeroBased (argInt (args, 0, 1)),
+                             zeroBased (argInt (args, 1, 1)),
+                             zeroBased (argInt (args, 2, 1)),
+                             argInt (args, 3, 0));
+        return true;
+    }
+
     if (selector == "cell_enabled")
     {
         engine.setCellEnabled (zeroBased (argInt (args, 0, 1)),

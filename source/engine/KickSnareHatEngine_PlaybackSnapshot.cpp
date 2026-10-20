@@ -30,6 +30,11 @@ void KickSnareHatEngine::fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const
     snapshot.velocityHumanize = velocityHumanize;
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;
+    snapshot.hasEarlyCells = false;
+    for (const auto& pattern : sources)
+        for (const auto& channel : pattern)
+            for (const auto& cell : channel)
+                snapshot.hasEarlyCells = snapshot.hasEarlyCells || (cell.enabled && cell.nudge < 0);
 }
 
 } // namespace ksh

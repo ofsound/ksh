@@ -29,6 +29,7 @@ namespace ksh::ui
         std::unique_ptr<juce::PropertiesFile> uiPreferences;
         FooterHelp footerHelp { *this };
         juce::TextButton tooltipToggle { "Tips" };
+        juce::TextButton rowOrder;
         PatternGrid grid;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;

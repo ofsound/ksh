@@ -1,4 +1,5 @@
 #include "KshPatternGrid.h"
+#include "../engine/KshMath.h"
 namespace ksh::ui
 {
     namespace
@@ -7,7 +8,7 @@ namespace ksh::ui
 
         juce::String accessibleDescription (const Cell& value)
         {
-            return juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", roll " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle);
+            return juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", roll " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle) + ", nudge " + juce::String (value.nudge) + "%";
         }
     }
 
@@ -33,9 +34,9 @@ namespace ksh::ui
                     else if (key == juce::KeyPress::rightKey)
                         targetCell.step = wrap (location.step + 1, layout.steps);
                     else if (key == juce::KeyPress::upKey)
-                        targetCell.channel = wrap (location.channel - 1, layout.channels);
+                        targetCell.channel = wrap (location.channel + (layout.reverseRows ? 1 : -1), layout.channels);
                     else if (key == juce::KeyPress::downKey)
-                        targetCell.channel = wrap (location.channel + 1, layout.channels);
+                        targetCell.channel = wrap (location.channel + (layout.reverseRows ? -1 : 1), layout.channels);
                     else
                         return false;
                     accessibleCells[static_cast<size_t> (targetCell.key())].grabKeyboardFocus();
@@ -115,7 +116,7 @@ namespace ksh::ui
             r.mute.dragged = [this] (const juce::MouseEvent& e) {
                 if (!mutePainting)
                     return;
-                const int row = static_cast<int> (std::floor ((e.getEventRelativeTo (this).position.y - layout.cellsY()) / layout.rowHeight()));
+                const int row = layout.channelAtY (e.getEventRelativeTo (this).position.y);
                 if (row >= 0 && row < layout.channels && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (row)] != muteValue)
                     controller.command ("source_channel_mute", { controller.source() + 1, row + 1, muteValue });
             };
@@ -126,11 +127,74 @@ namespace ksh::ui
             r.right.setTooltip ("Shift row right within loop");
         }
     }
+    juce::Rectangle<float> PatternGrid::cellBounds (Location location) const
+    {
+        const auto& cell = controller.cell (location);
+        const auto bounds = layout.cell (location);
+        return cell.enabled ? bounds.withX (hitPosition (location).x) : bounds;
+    }
+    int PatternGrid::playbackPositionForCell (Location location) const
+    {
+        const auto loop = controller.loop (location.channel);
+        const int offset = location.step - loop.loopStart;
+        if (offset < 0 || offset >= loop.loopLength)
+            return location.step;
+        const auto mode = controller.state.playback.channels[static_cast<size_t> (location.channel)].playbackMode;
+        const int length = juce::jmax (1, loop.loopLength);
+        const int referenceStep = controller.playingStep > 0 ? controller.playingGlobalStep : 0;
+        const auto next = [referenceStep] (int phase, int period)
+        {
+            return referenceStep + wrap (phase - referenceStep, period);
+        };
+        switch (mode)
+        {
+            case PlaybackMode::normal: return next (offset, length);
+            case PlaybackMode::reverse: return next (length - 1 - offset, length);
+            case PlaybackMode::ping_pong:
+                return juce::jmin (next (offset, length * 2), next (length * 2 - 1 - offset, length * 2));
+            case PlaybackMode::reverse_ping_pong:
+                return juce::jmin (next (wrap (offset - length, length * 2), length * 2), next (length - 1 - offset, length * 2));
+        }
+        return location.step;
+    }
+    juce::Point<float> PatternGrid::hitPosition (Location location, int rollIndex) const
+    {
+        const auto& cell = controller.cell (location);
+        const int roll = juce::jlimit (1, Constants::maxRoll, cell.roll);
+        const double part = static_cast<double> (juce::jlimit (0, roll - 1, rollIndex)) / static_cast<double> (roll);
+        const auto& playback = controller.state.playback;
+        const double offset = static_cast<double> (cell.nudge) / 100.0 + part
+                              + swingDelayStepsForPosition (static_cast<double> (playbackPositionForCell (location)) + part,
+                                                            playback.swing, playback.swingSubdivisionIndex);
+        return layout.cell (location).getTopLeft().translated (static_cast<float> (offset) * layout.cellWidth(), 0);
+    }
+    juce::Rectangle<float> PatternGrid::cellPaintBounds (Location location) const
+    {
+        auto bounds = cellBounds (location);
+        const auto& cell = controller.cell (location);
+        if (cell.enabled && cell.roll > 1)
+            for (int part = 0; part < juce::jmin (cell.roll, Constants::maxRoll); ++part)
+                bounds = bounds.getUnion ({ hitPosition (location, part).x - 1, bounds.getY(), 2, bounds.getHeight() });
+        return bounds.expanded (3);
+    }
+    Location PatternGrid::cellAt (juce::Point<float> point) const
+    {
+        // Match the topmost painted hit before falling back to the empty beat slot.
+        if (point.x >= layout.gridLeft() && point.x < layout.gridLeft() + layout.gridWidth())
+            for (int ch = 0; ch < layout.channels; ++ch)
+                for (int step = layout.firstStep + layout.visibleSteps() - 1; step >= layout.firstStep; --step)
+                {
+                    const Location location { ch, step };
+                    if (controller.cell (location).enabled && cellBounds (location).contains (point))
+                        return location;
+                }
+        return layout.at (point);
+    }
     Layer PatternGrid::displayLayer() const
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        return modifiers.isAltDown() && controller.selected.none() ? Layer::chance : controller.layer;
+        return modifiers.isAltDown() && controller.selected.none() ? Layer::chance : controller.inspectorHoverLayer.value_or (controller.layer);
     }
     bool PatternGrid::isCopyMode() const
     {
@@ -176,6 +240,14 @@ namespace ksh::ui
     }
     Location PatternGrid::velocityEdgeAt (juce::Point<float> point) const
     {
+        const auto hit = cellAt (point);
+        if (hit.valid() && controller.cell (hit).enabled
+            && std::abs (cellBounds (hit).getX() - layout.cell (hit).getX()) > 0.001f)
+        {
+            const auto loop = controller.loop (hit.channel);
+            return hit.step >= loop.loopStart && hit.step < loop.loopStart + loop.loopLength
+                       && std::abs (point.x - cellBounds (hit).getX()) < velocityEdgeHitRadius ? hit : Location {};
+        }
         const int boundaryStep = layout.firstStep + jsRound ((point.x - layout.gridLeft()) / layout.cellWidth());
         const float edgeX = layout.gridLeft() + static_cast<float> (boundaryStep - layout.firstStep) * layout.cellWidth();
         const auto location = layout.at ({ edgeX + 0.01f, point.y });
@@ -225,12 +297,18 @@ namespace ksh::ui
     {
         setMouseCursor (isCopyMode() ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::NormalCursor);
         const auto& p = controller.state.playback;
+        const std::pair swing { p.swing, p.swingSubdivisionIndex };
+        const int swingPhase = p.swing > 0 && controller.playingStep > 0 ? controller.playingGlobalStep : 0;
+        const bool swingChanged = displayedSwing != swing || displayedSwingPhase != swingPhase;
+        displayedSwingPhase = swingPhase;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
             clearHoverMarker();
         const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
-                               || displayedSelection.any() != controller.selected.any();
+                               || displayedSelection.any() != controller.selected.any()
+                               || !laidOut.has_value() || laidOut->first.reverseRows != layout.reverseRows || swingChanged;
+        displayedSwing = swing;
         displayedSteps = layout.steps;
         displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
@@ -275,8 +353,13 @@ namespace ksh::ui
                 auto& accessible = accessibleCells[static_cast<size_t> (location.key())];
                 const auto& value = controller.cell (location);
                 const auto index = static_cast<size_t> (location.key());
-                if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index])
-                    repaint (layout.cell (location).expanded (3).getSmallestIntegerContainer());
+                const auto paintBounds = cellPaintBounds (location);
+                if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index] || swingChanged)
+                {
+                    repaint (layout.cell (location).getUnion (displayedPaintBounds[index]).getUnion (paintBounds).getSmallestIntegerContainer());
+                    accessible.setBounds (cellBounds (location).toNearestInt());
+                }
+                displayedPaintBounds[index] = paintBounds;
                 if (displayedCells[index] != value)
                     accessible.setDescription (accessibleDescription (value));
                 displayedCells[index] = value;
@@ -297,7 +380,7 @@ namespace ksh::ui
         laidOut = { layout, getLocalBounds() };
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
-                accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (layout.cell ({ ch, step }).toNearestInt());
+                accessibleCells[static_cast<size_t> (ch * 32 + step)].setBounds (cellBounds ({ ch, step }).toNearestInt());
         const int arrowsX = getWidth() - Layout::outerGutter - 80;
         for (int ch = 0; ch < 8; ++ch)
         {
@@ -356,8 +439,8 @@ namespace ksh::ui
         const auto loopBackdrop = gridBackdrop.overlaidWith (loopTint);
         g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
-        const auto cellBounds = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
-        const float valueSize = juce::jmin (18.0f, cellBounds.getWidth() * 0.38f, cellBounds.getHeight() * 0.5f);
+        const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
+        const float valueSize = juce::jmin (18.0f, referenceCell.getWidth() * 0.38f, referenceCell.getHeight() * 0.5f);
         if (layer == Layer::chance)
             prepareProbabilityLabels (juce::jmax (1.0f, valueSize - 3.0f));
         const auto now = juce::Time::getMillisecondCounterHiRes();
@@ -379,122 +462,154 @@ namespace ksh::ui
             g.setColour (loopTint);
             g.fillRoundedRectangle (brace, 6);
             const auto braceArea = brace.toNearestInt();
-            for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
+            // Lay down all beat slots before drawing shifted hits over them.
+            for (int pass = 0; pass < 2; ++pass)
             {
-                const Location pos { ch, step };
-                const auto cellArea = layout.cell (pos).expanded (3).getSmallestIntegerContainer();
-                if (!g.clipRegionIntersects (cellArea))
-                    continue;
-                const auto& c = controller.cell (pos);
-                auto r = layout.cell (pos).reduced (0.8f);
-                const bool selected = controller.selected.test (static_cast<size_t> (pos.key()));
-                const bool dimmed = hasSelection && !selected;
-                const bool groupStart = step % 4 == 0;
-                const bool inLoop = step >= range.loopStart && step < range.loopStart + range.loopLength;
-                auto colour = Palette::channel (ch, controller.drumColors);
-                if (groupStart)
-                    colour = colour.interpolatedWith (Palette::app, 0.12f);
-                if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
-                    colour = colour.interpolatedWith (Palette::surface, 0.58f);
-                if (dimmed)
-                    colour = colour.withMultipliedSaturation (0.85f);
-                const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
-                const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
-                const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
-                const auto light = colour.brighter (0.18f);
-                const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
-                // Out-of-loop and dimmed cells are faded toward the backdrop. Blending every colour
-                // against an opaque backdrop matches a transparency layer without the offscreen pass.
-                const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.65f : 1.0f);
-                const auto paintCell = [&] (juce::Colour backdrop)
+                for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
                 {
-                    const auto tone = [opacity, backdrop] (juce::Colour value)
+                    const Location pos { ch, step };
+                    if (pass == 1 && !controller.cell (pos).enabled)
+                        continue;
+                    const auto cellArea = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).expanded (3).getSmallestIntegerContainer();
+                    if (!g.clipRegionIntersects (cellArea))
+                        continue;
+                    const auto& c = controller.cell (pos);
+                    auto r = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).reduced (0.8f);
+                    const juce::Graphics::ScopedSaveState cellClip (g);
+                    g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), r.getY() - 2, layout.gridWidth(), r.getHeight() + 4).getSmallestIntegerContainer());
+                    const bool selected = controller.selected.test (static_cast<size_t> (pos.key()));
+                    const bool dimmed = hasSelection && !selected;
+                    const bool groupStart = step % 4 == 0;
+                    const bool inLoop = step >= range.loopStart && step < range.loopStart + range.loopLength;
+                    auto colour = Palette::channel (ch, controller.drumColors);
+                    if (groupStart)
+                        colour = colour.interpolatedWith (Palette::app, 0.12f);
+                    if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
+                        colour = colour.interpolatedWith (Palette::surface, 0.58f);
+                    if (dimmed)
+                        colour = colour.withMultipliedSaturation (0.85f);
+                    const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
+                    const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
+                    const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
+                    const auto light = colour.brighter (0.18f);
+                    const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
+                    // Out-of-loop and dimmed cells are faded toward the backdrop. Blending every colour
+                    // against an opaque backdrop matches a transparency layer without the offscreen pass.
+                    const float opacity = (inLoop ? 1.0f : 0.33f) * (dimmed ? 0.65f : 1.0f);
+                    const auto paintCell = [&] (juce::Colour backdrop)
                     {
-                        return opacity >= 1.0f ? value : backdrop.interpolatedWith (value.withAlpha (1.0f), opacity).withAlpha (value.getFloatAlpha());
+                        const auto tone = [opacity, backdrop] (juce::Colour value)
+                        {
+                            return opacity >= 1.0f ? value : backdrop.interpolatedWith (value.withAlpha (1.0f), opacity).withAlpha (value.getFloatAlpha());
+                        };
+                        if (pass == 0)
+                        {
+                            surface (g, r, false, false, tone);
+                            if (groupStart && !c.enabled)
+                            {
+                                g.setColour (tone (juce::Colours::black.withAlpha (0.22f)));
+                                g.fillRoundedRectangle (r.reduced (0.5f), 5);
+                            }
+                            return;
+                        }
+                        if (!c.enabled)
+                            return;
+                        juce::ColourGradient fill (tone (light), r.getTopLeft(), tone (fillBottom), r.getBottomLeft(), false);
+                        if (layer == Layer::velocity)
+                        {
+                            // The unlit share of the cell becomes a hard-edged leading band of the same gradient.
+                            const double shade = 1.0 - c.velocity / 127.0;
+                            const double edge = juce::jmin (1.0, shade + 0.5 / juce::jmax (1.0, static_cast<double> (r.getHeight())));
+                            if (shade > 0.0)
+                            {
+                                fill.clearColours();
+                                fill.addColour (0.0, tone (dark));
+                                fill.addColour (shade, tone (dark));
+                                fill.addColour (edge, tone (light.interpolatedWith (fillBottom, static_cast<float> (edge))));
+                                fill.addColour (1.0, tone (fillBottom));
+                            }
+                        }
+                        g.setGradientFill (fill);
+                        g.fillRoundedRectangle (r, 5);
+                        // Roll subdivisions stay visible beneath every layer's value treatment.
+                        if (c.roll > 1)
+                        {
+                            juce::Graphics::ScopedSaveState rollClip (g);
+                            juce::Path clip;
+                            clip.addRoundedRectangle (r, 5);
+                            g.reduceClipRegion (clip);
+                            for (int part = 0; part < c.roll; ++part)
+                            {
+                                const float x = hitPosition (pos, part).x;
+                                const float end = part + 1 < c.roll ? hitPosition (pos, part + 1).x : r.getRight();
+                                if (part % 2 == 1)
+                                {
+                                    g.setColour (tone (Palette::app.withAlpha (0.14f)));
+                                    if (end > x)
+                                        g.fillRect (x, r.getY(), end - x, r.getHeight());
+                                }
+                                if (part > 0)
+                                {
+                                    g.setColour (tone (Palette::text.withAlpha (0.18f)));
+                                    g.fillRect (x, r.getY(), 0.75f, r.getHeight());
+                                }
+                            }
+                        }
+                        g.setColour (tone (Palette::text.withAlpha (0.22f)));
+                        g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
+                        if (layer == Layer::chance)
+                        {
+                            // Lift the smaller probability label so its glyph top matches velocity.
+                            const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
+                            g.setColour (tone (valueColour));
+                            label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
+                                                     r.getCentreY() - 3.0f + probabilityBaseline));
+                            const int bits = juce::jmin (c.cycle, 30);
+                            const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
+                            for (int i = 0; i < bits; ++i)
+                            {
+                                g.setColour (tone ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app));
+                                // Split the two-pixel gap between both sides to centre the cycle strip.
+                                g.fillRect (strip.getX() + 1.0f + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
+                            }
+                        }
+                        else
+                            text (g, juce::String (c.velocity), r, valueSize, tone (valueColour));
                     };
-                    surface (g, r, false, false, tone);
-                    if (groupStart && !c.enabled)
+                    if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
                     {
-                        g.setColour (tone (juce::Colours::black.withAlpha (0.22f)));
-                        g.fillRoundedRectangle (r.reduced (0.5f), 5);
+                        paintCell (inLoop ? loopBackdrop : gridBackdrop);
+                        continue;
                     }
-                    if (!c.enabled)
-                        return;
-                    juce::ColourGradient fill (tone (light), r.getTopLeft(), tone (fillBottom), r.getBottomLeft(), false);
-                    if (layer == Layer::velocity)
+                    // Loop handles extend under the neighbouring cells, so those sit on two backdrops.
                     {
-                        // The unlit share of the cell becomes a hard-edged leading band of the same gradient.
-                        const double shade = 1.0 - c.velocity / 127.0;
-                        const double edge = juce::jmin (1.0, shade + 0.5 / juce::jmax (1.0, static_cast<double> (r.getHeight())));
-                        if (shade > 0.0)
-                        {
-                            fill.clearColours();
-                            fill.addColour (0.0, tone (dark));
-                            fill.addColour (shade, tone (dark));
-                            fill.addColour (edge, tone (light.interpolatedWith (fillBottom, static_cast<float> (edge))));
-                            fill.addColour (1.0, tone (fillBottom));
-                        }
+                        juce::Graphics::ScopedSaveState outside (g);
+                        g.excludeClipRegion (braceArea);
+                        paintCell (gridBackdrop);
                     }
-                    g.setGradientFill (fill);
-                    g.fillRoundedRectangle (r, 5);
-                    // Roll subdivisions stay visible beneath every layer's value treatment.
-                    if (c.roll > 1)
                     {
-                        juce::Graphics::ScopedSaveState rollClip (g);
-                        juce::Path clip;
-                        clip.addRoundedRectangle (r, 5);
-                        g.reduceClipRegion (clip);
-                        const float width = r.getWidth() / static_cast<float> (c.roll);
-                        for (int part = 0; part < c.roll; ++part)
-                        {
-                            const float x = r.getX() + static_cast<float> (part) * width;
-                            if (part % 2 == 1)
-                            {
-                                g.setColour (tone (Palette::app.withAlpha (0.14f)));
-                                g.fillRect (x, r.getY(), width, r.getHeight());
-                            }
-                            if (part > 0)
-                            {
-                                g.setColour (tone (Palette::text.withAlpha (0.18f)));
-                                g.fillRect (x, r.getY(), 0.75f, r.getHeight());
-                            }
-                        }
+                        juce::Graphics::ScopedSaveState inside (g);
+                        g.reduceClipRegion (braceArea);
+                        paintCell (loopBackdrop);
                     }
-                    g.setColour (tone (Palette::text.withAlpha (0.22f)));
-                    g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-                    if (layer == Layer::chance)
-                    {
-                        // Lift the smaller probability label so its glyph top matches velocity.
-                        const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
-                        g.setColour (tone (valueColour));
-                        label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
-                                                 r.getCentreY() - 1.0f + probabilityBaseline));
-                        const int bits = juce::jmin (c.cycle, 30);
-                        const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
-                        for (int i = 0; i < bits; ++i)
-                        {
-                            g.setColour (tone ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app));
-                            g.fillRect (strip.getX() + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
-                        }
-                    }
-                    else
-                        text (g, juce::String (c.velocity), r, valueSize, tone (valueColour));
-                };
-                if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
-                {
-                    paintCell (inLoop ? loopBackdrop : gridBackdrop);
-                    continue;
                 }
-                // Loop handles extend under the neighbouring cells, so those sit on two backdrops.
+            }
+            // Mark each roll onset at its exact swung position, including hits
+            // that extend beyond the body of the cell.
+            {
+                const juce::Graphics::ScopedSaveState markers (g);
+                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), first.getY(), layout.gridWidth(), first.getHeight()).getSmallestIntegerContainer());
+                for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
                 {
-                    juce::Graphics::ScopedSaveState outside (g);
-                    g.excludeClipRegion (braceArea);
-                    paintCell (gridBackdrop);
-                }
-                {
-                    juce::Graphics::ScopedSaveState inside (g);
-                    g.reduceClipRegion (braceArea);
-                    paintCell (loopBackdrop);
+                    const Location pos { ch, step };
+                    const auto& cell = controller.cell (pos);
+                    if (!cell.enabled || cell.roll <= 1)
+                        continue;
+                    const float bottom = layout.cell (pos).getBottom() - 2;
+                    const bool dimmed = hasSelection && !controller.selected.test (static_cast<size_t> (pos.key()));
+                    g.setColour (Palette::text.withAlpha (dimmed ? 0.35f : 0.75f));
+                    for (int part = 0; part < juce::jmin (cell.roll, Constants::maxRoll); ++part)
+                        g.fillRect (hitPosition (pos, part).x, bottom - 5, 1.0f, 5.0f);
                 }
             }
             // Paint a single thin selection outline above the completed row.
@@ -502,9 +617,11 @@ namespace ksh::ui
             {
                 const Location pos { ch, step };
                 if (!controller.selected.test (static_cast<size_t> (pos.key()))
-                    || !g.clipRegionIntersects (layout.cell (pos).expanded (3).getSmallestIntegerContainer()))
+                    || !g.clipRegionIntersects (cellBounds (pos).expanded (3).getSmallestIntegerContainer()))
                     continue;
-                const auto frame = layout.cell (pos).reduced (0.15f);
+                const auto frame = cellBounds (pos).reduced (0.15f);
+                const juce::Graphics::ScopedSaveState selectionClip (g);
+                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), frame.getY() - 2, layout.gridWidth(), frame.getHeight() + 4).getSmallestIntegerContainer());
                 g.setColour (Palette::text.withAlpha (0.9f));
                 g.drawRoundedRectangle (frame, 5.65f, 1.0f);
             }
@@ -530,7 +647,7 @@ namespace ksh::ui
             g.drawEllipse (marker, 2);
         };
         if (hoverMarkerVisible && velocityHintAt (hoverPosition) == hoverCell)
-            paintMarker ({ layout.cell (hoverCell).getX(), hoverPosition.y });
+            paintMarker ({ cellBounds (hoverCell).getX(), hoverPosition.y });
         if (drag == Drag::velocityLine && anchor.valid())
         {
             const auto row = layout.cell (anchor);
@@ -554,8 +671,12 @@ namespace ksh::ui
             for (auto p : controller.selection())
             {
                 Location d { wrap (target.channel + p.channel - anchor.channel, layout.channels), wrap (target.step + p.step - anchor.step, layout.steps) };
+                const auto& cell = controller.cell (p);
+                const auto& playback = controller.state.playback;
+                const auto offset = static_cast<float> (static_cast<double> (cell.nudge) / 100.0
+                                                        + swingDelayStepsForPosition (playbackPositionForCell (d), playback.swing, playback.swingSubdivisionIndex));
                 g.setColour (Palette::accent.withAlpha (0.3f));
-                g.fillRoundedRectangle (layout.cell (d).reduced (2), 4);
+                g.fillRoundedRectangle (layout.cell (d).translated (offset * layout.cellWidth(), 0).reduced (2), 4);
             }
     }
     void PatternGrid::updatePlayback()
@@ -569,7 +690,7 @@ namespace ksh::ui
                 if (last != flash)
                 {
                     last = flash;
-                    repaint (layout.cell ({ ch, s }).expanded (3).getSmallestIntegerContainer());
+                    repaint (cellPaintBounds ({ ch, s }).getSmallestIntegerContainer());
                 }
             }
         if (previousStep != controller.playingStep)
@@ -588,11 +709,11 @@ namespace ksh::ui
             grabKeyboardFocus();
         modifiers = e.mods;
         origin = current = e.position;
-        anchor = target = layout.at (e.position);
+        anchor = target = cellAt (e.position);
         dragLayer = displayLayer();
         initialSelection = controller.selected;
         additive = controller.useSelectionModifier (e.mods);
-        const int row = static_cast<int> (std::floor ((e.position.y - layout.cellsY()) / layout.rowHeight()));
+        const int row = layout.channelAtY (e.position.y);
         if (!layout.compact && row >= 0 && row < layout.channels)
         {
             const auto loop = controller.loop (row);
@@ -609,7 +730,8 @@ namespace ksh::ui
         }
         const bool rightBoundary = !layout.compact && row >= 0 && row < layout.channels
                                    && std::abs (e.position.x - (layout.gridLeft() + layout.steps * layout.cellWidth())) < velocityEdgeHitRadius
-                                   && controller.cell ({ row, layout.steps - 1 }).enabled;
+                                   && controller.cell ({ row, layout.steps - 1 }).enabled
+                                   && std::abs (cellBounds ({ row, layout.steps - 1 }).getX() - layout.cell ({ row, layout.steps - 1 }).getX()) < 0.001f;
         const auto edge = !layout.compact && dragLayer == Layer::velocity ? velocityEdgeAt (e.position) : Location {};
         if (edge.valid())
             anchor = edge;
@@ -684,7 +806,7 @@ namespace ksh::ui
         else
             for (int ch = 0; ch < layout.channels; ++ch)
                 for (int s = 0; s < layout.steps; ++s)
-                    if (rectangle.intersects (layout.cell ({ ch, s })))
+                    if (rectangle.intersects (cellBounds ({ ch, s })))
                         controller.selected.set (static_cast<size_t> (ch * 32 + s));
         controller.notify();
         repaint();
@@ -718,7 +840,8 @@ namespace ksh::ui
             controller.command ("channel_loop_length", { anchor.channel + 1, end - start + 1, start + 1 });
             return;
         }
-        target = { juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - layout.cellsY()) / layout.rowHeight()))), juce::jlimit (layout.firstStep, layout.firstStep + layout.visibleSteps() - 1, layout.firstStep + static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
+        const int targetRow = juce::jlimit (0, layout.channels - 1, static_cast<int> (std::floor ((current.y - layout.cellsY()) / layout.rowHeight())));
+        target = { layout.channelForRow (targetRow), juce::jlimit (layout.firstStep, layout.firstStep + layout.visibleSteps() - 1, layout.firstStep + static_cast<int> (std::floor ((current.x - layout.gridLeft()) / layout.cellWidth()))) };
         if (drag == Drag::pending)
         {
             if (origin.getDistanceFrom (current) < (selectedAtStart ? 5.0f : 4.0f))
@@ -814,7 +937,7 @@ namespace ksh::ui
             {
                 controller.selected.reset (static_cast<size_t> (anchor.key()));
             }
-            else if (dragLayer == Layer::velocity)
+            else if (dragLayer == Layer::velocity || !controller.cell (anchor).enabled)
             {
                 controller.begin ("Toggle cell");
                 auto c = controller.cell (anchor);

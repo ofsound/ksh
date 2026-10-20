@@ -60,6 +60,7 @@ struct PlaybackSnapshot
     int velocityHumanize = 0;
     int timingHumanize = 0;
     bool deviceActive = true;
+    bool hasEarlyCells = false;
 };
 
 } // namespace ksh

@@ -56,6 +56,7 @@ namespace ksh::ui
         PluginProcessor::UiState state;
         Selection selected;
         Layer layer = Layer::velocity;
+        std::optional<Layer> inspectorHoverLayer;
         bool drumColors = true, noteNames = true;
         bool selectLatched = false, selectHeld = false, selectUsed = false;
         bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || mods.isShiftDown(); }
@@ -90,6 +91,7 @@ namespace ksh::ui
         std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {};
         std::array<std::array<int, 32>, 8> sourceCycleSteps {};
         int playingStep = 0;
+        int playingGlobalStep = 0;
 
         int source() const { return state.playback.staticSource; }
         const Cell& cell (Location p) const;

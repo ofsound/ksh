@@ -162,6 +162,8 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
     wasPlaying = false;
     expectedNextPpq = 0.0;
     lastEmittedGlobalStep = std::nullopt;
+    lastScheduledGlobalStep.reset();
+    anticipatedLoopStep.reset();
     adoptedGenerationVersion = std::nullopt;
     pendingNoteOffCount = 0;
     pendingNoteOnCount = 0;
@@ -373,7 +375,9 @@ int MidiPlaybackRunner::sampleOffsetForGlobalStep (const PlaybackSnapshot& snaps
     if (numSamples <= 0)
         return 0;
 
-    return std::clamp (sampleOffset, 0, numSamples - 1);
+    // Look-ahead steps may start in a later callback. Their signed nudge can
+    // bring the note into this block; later hits retain an absolute deadline.
+    return std::max (0, sampleOffset);
 }
 
 void MidiPlaybackRunner::emitHitAtSample (int onSample,
@@ -428,7 +432,8 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                                              int numSamples,
                                              juce::MidiBuffer& midiOut,
                                              MidiPlaybackResult& result,
-                                             int staticSourceOverride)
+                                             int staticSourceOverride,
+                                             double stepDurationMs)
 {
     if (! snapshot.deviceActive || snapshot.stepCount <= 0 || snapshot.channelCount <= 0)
         return;
@@ -513,7 +518,8 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                                                                      snapshot.swingSubdivisionIndex)
                                       * snapshot.stepIntervalMs;
             const double timingDelayMs = rollIndex == 0 ? timingOffsetMs : 0.0;
-            const double delayMs = std::max (0.0, rollDelayMs + swingDelayMs + timingDelayMs);
+            const double delayMs = std::max (0.0, rollDelayMs + swingDelayMs + timingDelayMs)
+                                   + static_cast<double> (cell.nudge) * stepDurationMs / 100.0;
 
             scheduleHit (stepSampleOffset,
                          numSamples,
@@ -658,6 +664,13 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                                                 Constants::mutedStaticSource,
                                                 Constants::sourceCount - 1);
         dropPendingNoteOnsAtOrAfter (patternSelections.events[0].samplePosition);
+        if (snapshot.hasEarlyCells && bpm > 0.0)
+        {
+            const double selectionBeat = ppqPosition + static_cast<double> (patternSelections.events[0].samplePosition) * bpm / (60.0 * sampleRate);
+            const double stepBeats = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
+            lastScheduledGlobalStep = firstGlobalStepAtOrAfter (selectionBeat, stepBeats) - 1;
+            anticipatedLoopStep.reset();
+        }
     }
 
     if (! isPlaying || ! snapshot.deviceActive || bpm <= 0.0)
@@ -676,6 +689,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
         flushAuditionNotes (numSamples, midiOut);
         wasPlaying = false;
         lastEmittedGlobalStep = std::nullopt;
+        lastScheduledGlobalStep.reset();
+        anticipatedLoopStep.reset();
 
         return result;
     }
@@ -700,6 +715,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     if (! wasPlaying)
     {
         lastEmittedGlobalStep = globalStepStart - 1;
+        lastScheduledGlobalStep = globalStepStart - 1;
+        anticipatedLoopStep.reset();
         wasPlaying = true;
     }
     else if (lastEmittedGlobalStep.has_value())
@@ -709,7 +726,9 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
         const double jitterTolerance = std::min (0.25 * beatsPerStep, 64.0 * beatsPerSample);
         const bool ppqContinues = std::abs (ppqPosition - expectedNextPpq) <= jitterTolerance;
 
-        if (! stepsContinue && ! ppqContinues)
+        const bool loopRestart = hostLoopValid && expectedNextPpq >= hostLoop.endPpq - jitterTolerance
+                                 && ppqPosition < expectedNextPpq - jitterTolerance;
+        if ((! stepsContinue || loopRestart) && ! ppqContinues)
         {
             const bool loopWrapped = hostLoopValid
                                      && expectedNextPpq >= hostLoop.endPpq - jitterTolerance
@@ -730,6 +749,9 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
             // Steps that start at the landing position play; a mid-step landing waits for the next boundary.
             lastEmittedGlobalStep = firstGlobalStepAtOrAfter (landingPpq - edgeTolerance, beatsPerStep) - 1;
+            lastScheduledGlobalStep = lastEmittedGlobalStep;
+            if (!loopWrapped)
+                anticipatedLoopStep.reset();
         }
     }
 
@@ -740,19 +762,45 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     flushAuditionNotes (numSamples, midiOut);
 
     expectedNextPpq = ppqPosition + static_cast<double> (numSamples) * beatsPerSample;
-    const int firstStep = lastEmittedGlobalStep.has_value() ? *lastEmittedGlobalStep + 1 : globalStepStart;
+    const int firstStep = lastScheduledGlobalStep.has_value() ? *lastScheduledGlobalStep + 1 : globalStepStart;
+    int scheduledStepEnd = globalStepEnd + (snapshot.hasEarlyCells ? 1 : 0);
+    if (hostLoopValid && ppqPosition < hostLoop.endPpq)
+        scheduledStepEnd = std::min (scheduledStepEnd, firstGlobalStepAtOrAfter (hostLoop.endPpq - edgeTolerance, beatsPerStep) - 1);
+    const double stepDurationMs = beatsPerStep * 60000.0 / bpm;
 
-    for (int globalStep = firstStep; globalStep <= globalStepEnd; ++globalStep)
+    for (int globalStep = firstStep; globalStep <= scheduledStepEnd; ++globalStep)
     {
+        if (anticipatedLoopStep == globalStep)
+        {
+            anticipatedLoopStep.reset();
+            lastScheduledGlobalStep = globalStep;
+            continue;
+        }
         const int stepSample = sampleOffsetForGlobalStep (snapshot, ppqPosition, bpm, globalStep, numSamples);
 
         if (regenerateWindowIfDue (snapshot, globalStep))
             result.generatedSourcesChanged = true;
 
         const int staticSourceOverride = staticSourceForStep (snapshot, patternSelections, stepSample);
-        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result, staticSourceOverride);
-        lastEmittedGlobalStep = globalStep;
-        result.latestGlobalStep = globalStep;
+        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result, staticSourceOverride, stepDurationMs);
+        lastScheduledGlobalStep = globalStep;
+    }
+
+    // The logical playhead follows the host, even when notes have been scheduled ahead.
+    lastEmittedGlobalStep = std::max (lastEmittedGlobalStep.value_or (globalStepStart - 1), globalStepEnd);
+    result.latestGlobalStep = std::max (globalStepStart, globalStepEnd);
+
+    if (snapshot.hasEarlyCells && hostLoopValid && ppqPosition < hostLoop.endPpq
+        && blockLastSamplePpq + beatsPerStep >= hostLoop.endPpq && !anticipatedLoopStep.has_value())
+    {
+        const int loopStep = firstGlobalStepAtOrAfter (hostLoop.startPpq - edgeTolerance, beatsPerStep);
+        const double loopBeat = hostLoop.endPpq + static_cast<double> (loopStep) * beatsPerStep - hostLoop.startPpq;
+        const int stepSample = std::max (0, static_cast<int> (std::llround ((loopBeat - ppqPosition) / beatsPerSample)));
+        if (regenerateWindowIfDue (snapshot, loopStep))
+            result.generatedSourcesChanged = true;
+        const int source = staticSourceForStep (snapshot, patternSelections, stepSample);
+        evaluateGlobalStep (snapshot, loopStep, stepSample, numSamples, midiOut, result, source, stepDurationMs);
+        anticipatedLoopStep = loopStep;
     }
 
     return result;

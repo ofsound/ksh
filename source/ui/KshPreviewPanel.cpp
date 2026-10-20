@@ -18,11 +18,13 @@ namespace ksh::ui
     }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
     {
+        addMouseListener (this, true);
         addAndMakeVisible (mode);
         addAndMakeVisible (refresh);
         addAndMakeVisible (velocity);
         addAndMakeVisible (probability);
         addAndMakeVisible (roll);
+        addAndMakeVisible (nudge);
         addAndMakeVisible (remove);
         addAndMakeVisible (cycle);
         addChildComponent (cycleLength);
@@ -82,6 +84,35 @@ namespace ksh::ui
         velocity.caption = "Velocity";
         probability.caption = "Probability";
         roll.caption = "Roll";
+        nudge.caption = "Nudge";
+        nudge.setTitle ("Selected timing nudge");
+        nudge.setTooltip ("Move selected hits earlier (-) or later (+) by a percentage of one step, preserving their timing differences. Zero places the first selected hit on the beat.");
+        nudge.minimum = -100;
+        nudge.maximum = 100;
+        nudge.resetValue = 0;
+        nudge.sensitivity = 2;
+        nudge.format = [] (int v) { return (v > 0 ? "+" : "") + juce::String (v) + "%"; };
+        nudge.onBegin = [this] { beginRelative ("Selected nudge"); };
+        nudge.onChange = [this] (int v)
+        {
+            if (valueStarts.empty())
+                return;
+            int minimumDelta = -200, maximumDelta = 200;
+            for (const auto& [p, initial] : valueStarts)
+            {
+                juce::ignoreUnused (p);
+                minimumDelta = juce::jmax (minimumDelta, -100 - initial.nudge);
+                maximumDelta = juce::jmin (maximumDelta, 100 - initial.nudge);
+            }
+            const int delta = juce::jlimit (minimumDelta, maximumDelta, v - valueStarts.front().second.nudge);
+            for (const auto& [p, initial] : valueStarts)
+            {
+                auto next = controller.cell (p);
+                next.nudge = initial.nudge + delta;
+                controller.editCell (p, next);
+            }
+            controller.notify();
+        };
         velocity.minimum = -127;
         velocity.maximum = 127;
         probability.minimum = -100;
@@ -108,7 +139,7 @@ namespace ksh::ui
                 controller.notify();
             };
         }
-        for (auto* control : { &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->onCancel = [this]
             {
@@ -138,7 +169,7 @@ namespace ksh::ui
         remove.onClick = [this] { controller.deleteSelection(); };
         cycle.locations = [this] { return controller.selection (true); };
         cycle.inlineLayout = !randomSection;
-        for (auto* control : { &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = 22;
             control->captionFontSize = 12;
@@ -148,10 +179,47 @@ namespace ksh::ui
         refresh.setVisible (randomSection);
         for (auto& lock : locks)
             lock.setVisible (randomSection);
-        for (auto* control : { &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
             control->setVisible (!randomSection);
         remove.setVisible (!randomSection);
         cycle.setVisible (!randomSection);
+    }
+    PreviewPanel::~PreviewPanel()
+    {
+        removeMouseListener (this);
+        if (!randomSection)
+            controller.inspectorHoverLayer.reset();
+    }
+    void PreviewPanel::setHoverLayer (std::optional<Layer> layer)
+    {
+        if (randomSection || controller.inspectorHoverLayer == layer)
+            return;
+        controller.inspectorHoverLayer = layer;
+        controller.notify();
+    }
+    void PreviewPanel::updateHoverLayer (juce::Point<int> position)
+    {
+        for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
+                 { &probability, Layer::chance }, { &cycle, Layer::chance }, { &cycleLength, Layer::chance } })
+        {
+            auto bounds = control->getBounds();
+            if (control == &cycle && !compact)
+                bounds = bounds.withTop (32);
+            if (control->isVisible() && control->isEnabled() && bounds.contains (position))
+            {
+                setHoverLayer (layer);
+                return;
+            }
+        }
+        setHoverLayer (std::nullopt);
+    }
+    void PreviewPanel::mouseEnter (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
+    void PreviewPanel::mouseMove (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
+    void PreviewPanel::mouseExit (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
+    void PreviewPanel::visibilityChanged()
+    {
+        if (!isVisible())
+            setHoverLayer (std::nullopt);
     }
     void PreviewPanel::mouseDoubleClick (const juce::MouseEvent& event)
     {
@@ -186,7 +254,7 @@ namespace ksh::ui
         compact = enabled;
         cycle.compact = enabled;
         cycleLength.setVisible (compact && !randomSection);
-        for (auto* control : { &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = compact ? 17.0f : 22.0f;
             control->captionFontSize = compact ? 11.0f : 12.0f;
@@ -197,7 +265,8 @@ namespace ksh::ui
     }
     void PreviewPanel::cancelGesture()
     {
-        for (auto* control : { &velocity, &probability, &roll, &cycleLength, &refresh })
+        setHoverLayer (std::nullopt);
+        for (auto* control : { &velocity, &probability, &roll, &nudge, &cycleLength, &refresh })
             control->cancelGesture();
         for (auto& lock : locks)
             lock.cancelGesture();
@@ -216,6 +285,7 @@ namespace ksh::ui
                     locks[static_cast<size_t> (ch)].setBounds (18 + ch * stride, 98, stride - 6, 66);
                 return;
             }
+            nudge.setBounds (6, 8, 64, 64);
             velocity.setBounds (76, 8, 82, 64);
             probability.setBounds (166, 8, 88, 64);
             roll.setBounds (262, 8, 56, 64);
@@ -233,6 +303,7 @@ namespace ksh::ui
         const int x = inspectorBounds.getX();
         constexpr int inputHeight = 42;
         constexpr int captionHeight = 24;
+        nudge.setBounds (x + 20, 32, 94, captionHeight + inputHeight);
         velocity.setBounds (x + 130, 32, 76, captionHeight + inputHeight);
         probability.setBounds (x + 222, 32, 92, captionHeight + inputHeight);
         roll.setBounds (x + 330, 32, 56, captionHeight + inputHeight);
@@ -253,12 +324,14 @@ namespace ksh::ui
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
+        if (!active)
+            setHoverLayer (std::nullopt);
         cycleLength.setEnabled (active);
         cycleLength.setValue (active ? controller.cell (selected.front()).cycle : 1);
         cycleLength.mixed = active && std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).cycle != controller.cell (selected.front()).cycle; });
         const float inspectorAlpha = active ? 1.0f : 0.25f;
         cycleLength.setAlpha (inspectorAlpha);
-        for (auto* control : { &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->setEnabled (active);
             control->setAlpha (inspectorAlpha);
@@ -268,14 +341,20 @@ namespace ksh::ui
         cycle.setAlpha (inspectorAlpha);
         if (active)
         {
+            nudge.setValue (controller.cell (selected.front()).nudge);
+            nudge.mixed = std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).nudge != controller.cell (selected.front()).nudge; });
             const int value = controller.cell (selected.front()).roll;
             roll.setValue (value);
             roll.mixed = std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).roll != value; });
         }
         else
+        {
             roll.mixed = true;
+            nudge.mixed = true;
+        }
         cycle.sync();
         Painted next;
+        next.reverseRows = reverseRows;
         next.selectedCount = selected.size();
         if (randomSection)
         {
@@ -310,7 +389,8 @@ namespace ksh::ui
                 const float cw = static_cast<float> (getWidth() - 100) / static_cast<float> (state.stepCount);
                 for (int ch = 0; ch < state.channelCount; ++ch)
                 {
-                    const float y = 224.0f + static_cast<float> (ch) * 26.0f;
+                    const int row = reverseRows ? state.channelCount - 1 - ch : ch;
+                    const float y = 224.0f + static_cast<float> (row) * 26.0f;
                     text (g, state.channels[static_cast<size_t> (ch)].label, { 12, y, 78, 22 }, 11, Palette::muted, false, juce::Justification::centredLeft);
                     for (int step = 0; step < state.stepCount; ++step)
                     {
@@ -322,10 +402,6 @@ namespace ksh::ui
             }
             else
             {
-                const auto count = controller.selection (true).size();
-                text (g, count == 0 ? "INSPECT" : juce::String (count) + " CELLS", { 8, 10, 64, 20 }, 11, Palette::accent, true);
-                text (g, count == 0 ? "Hold cell" : "Drag values", { 6, 34, 66, 18 }, 10, Palette::muted);
-                text (g, count == 0 ? "or Select" : "to adjust", { 6, 52, 66, 18 }, 10, Palette::muted);
                 text (g, "Cycle beats", { 400, 8, 160, 18 }, 11, Palette::text, true, juce::Justification::centredLeft);
             }
             return;
@@ -340,8 +416,6 @@ namespace ksh::ui
             surface (g, inspectorBounds.toFloat());
             const auto selectedCount = controller.selection (true).size();
             const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
-            if (selectedCount > 0)
-                text (g, juce::String (selectedCount) + " Cells", { static_cast<float> (inspectorBounds.getX() + 20), 56, 100, 42 }, 22, labelColour, true, juce::Justification::centredLeft);
             text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
             text (g, "Delete", remove.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
         }
@@ -357,14 +431,15 @@ namespace ksh::ui
         if (randomSection)
         for (int ch = 0; ch < state.channelCount; ++ch)
         {
-            text (g, state.channels[static_cast<size_t> (ch)].label, { 8, 8 + static_cast<float> (ch) * 18, 48, 15 }, 9, Palette::muted, false, juce::Justification::centredLeft);
+            const int row = reverseRows ? state.channelCount - 1 - ch : ch;
+            text (g, state.channels[static_cast<size_t> (ch)].label, { 8, 8 + static_cast<float> (row) * 18, 48, 15 }, 9, Palette::muted, false, juce::Justification::centredLeft);
             for (int s = 0; s < state.stepCount; ++s)
             {
                 const auto colour = controller.generatedFlashes[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now ? Palette::text : state.generated[static_cast<size_t> (ch)][static_cast<size_t> (s)].enabled ? Palette::info
                                                                                                                                        : s % 4 == 0                                                                   ? Palette::app
                                                                                                                                                                                                                       : Palette::surface;
                 g.setColour (colour);
-                g.fillRoundedRectangle (60 + static_cast<float> (s) * cw, 8 + static_cast<float> (ch) * 18, cw - 3, 15, 3);
+                g.fillRoundedRectangle (60 + static_cast<float> (s) * cw, 8 + static_cast<float> (row) * 18, cw - 3, 15, 3);
             }
         }
         if (randomSection)

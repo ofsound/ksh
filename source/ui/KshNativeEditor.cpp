@@ -25,6 +25,20 @@ namespace ksh::ui
         options.millisecondsBeforeSaving = -1;
         uiPreferences = std::make_unique<juce::PropertiesFile> (options);
         footerHelp.setHelpEnabled (uiPreferences->getBoolValue ("footerTooltips", true));
+        layout.reverseRows = uiPreferences->getBoolValue ("reverseRows", false);
+        addAndMakeVisible (rowOrder);
+        rowOrder.setTitle ("Reverse row order");
+        rowOrder.setTooltip ("Flip the displayed rows: channel 1 at the bottom or top. MIDI and pattern data stay the same.");
+        rowOrder.getProperties().set ("icon", "rowOrder");
+        rowOrder.onClick = [this]
+        {
+            cancelCompactGestures();
+            layout.reverseRows = !layout.reverseRows;
+            uiPreferences->setValue ("reverseRows", layout.reverseRows);
+            uiPreferences->saveIfNeeded();
+            sync();
+            repaint();
+        };
         addAndMakeVisible (footerHelp);
         addAndMakeVisible (tooltipToggle);
         tooltipToggle.setTitle ("Footer tooltips");
@@ -212,6 +226,7 @@ namespace ksh::ui
             layout.firstStep = 0;
         layout.standalone = controller.processor.hasStandaloneTransport();
         grid.layout = layout;
+        preview.reverseRows = randomPanel.reverseRows = layout.reverseRows;
         compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
@@ -243,6 +258,7 @@ namespace ksh::ui
         stop.setToggleState (!playing, juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
+        rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
         tooltipToggle.setToggleState (footerHelp.isHelpEnabled(), juce::dontSendNotification);
         if (!title.hasKeyboardFocus (true))
             title.setText (controller.processor.getProjectName(), false);
@@ -312,7 +328,8 @@ namespace ksh::ui
         preview.setInspectorBounds ({ inspectorLeft, 12, rightEdge - inspectorLeft, 140 });
         const int footerControlY = getHeight() - Layout::footerHeight + Layout::outerGutter;
         dc.setBounds (rightEdge - 116, footerControlY, 36, 32);
-        tooltipToggle.setBounds (rightEdge - 178, footerControlY, 50, 32);
+        rowOrder.setBounds (rightEdge - 164, footerControlY, 36, 32);
+        tooltipToggle.setBounds (rightEdge - 226, footerControlY, 50, 32);
         scale.setBounds (rightEdge - 66, footerControlY, 66, 32);
         footerHelp.setBounds (Layout::outerGutter, footerControlY, tooltipToggle.getX() - 2 * Layout::outerGutter, 32);
     }

@@ -16,6 +16,7 @@ inline void to_json (nlohmann::json& json, const Cell& cell)
         { "cycle", cell.cycle },
         { "cycleMask", cell.cycleMask },
         { "roll", cell.roll },
+        { "nudge", cell.nudge },
         { "source", cell.source }
     };
 }
@@ -58,6 +59,8 @@ inline void from_json (const nlohmann::json& json, Cell& cell)
 
     if (json.contains ("roll"))
         cell.roll = json["roll"].get<int>();
+
+    cell.nudge = json.value ("nudge", 0);
 
     if (json.contains ("source"))
         cell.source = json["source"].get<int>();
