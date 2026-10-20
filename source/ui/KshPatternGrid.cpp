@@ -170,12 +170,7 @@ namespace ksh::ui
     }
     juce::Rectangle<float> PatternGrid::cellPaintBounds (Location location) const
     {
-        auto bounds = cellBounds (location);
-        const auto& cell = controller.cell (location);
-        if (cell.enabled && cell.roll > 1)
-            for (int part = 0; part < juce::jmin (cell.roll, Constants::maxRoll); ++part)
-                bounds = bounds.getUnion ({ hitPosition (location, part).x - 1, bounds.getY(), 2, bounds.getHeight() });
-        return bounds.expanded (3);
+        return cellBounds (location).expanded (3);
     }
     Location PatternGrid::cellAt (juce::Point<float> point) const
     {
@@ -529,7 +524,7 @@ namespace ksh::ui
                         }
                         g.setGradientFill (fill);
                         g.fillRoundedRectangle (r, 5);
-                        // Roll subdivisions stay visible beneath every layer's value treatment.
+                        // Divide the painted body evenly; swing affects playback timing, not these count indicators.
                         if (c.roll > 1)
                         {
                             juce::Graphics::ScopedSaveState rollClip (g);
@@ -538,8 +533,8 @@ namespace ksh::ui
                             g.reduceClipRegion (clip);
                             for (int part = 0; part < c.roll; ++part)
                             {
-                                const float x = hitPosition (pos, part).x;
-                                const float end = part + 1 < c.roll ? hitPosition (pos, part + 1).x : r.getRight();
+                                const float x = r.getX() + r.getWidth() * static_cast<float> (part) / static_cast<float> (c.roll);
+                                const float end = r.getX() + r.getWidth() * static_cast<float> (part + 1) / static_cast<float> (c.roll);
                                 if (part % 2 == 1)
                                 {
                                     g.setColour (tone (Palette::app.withAlpha (0.14f)));
@@ -549,7 +544,7 @@ namespace ksh::ui
                                 if (part > 0)
                                 {
                                     g.setColour (tone (Palette::text.withAlpha (0.18f)));
-                                    g.fillRect (x, r.getY(), 0.75f, r.getHeight());
+                                    g.fillRect (x - 0.375f, r.getY(), 0.75f, r.getHeight());
                                 }
                             }
                         }
@@ -590,23 +585,6 @@ namespace ksh::ui
                         g.reduceClipRegion (braceArea);
                         paintCell (loopBackdrop);
                     }
-                }
-            }
-            // Mark each roll onset at its exact swung position, including hits
-            // that extend beyond the body of the cell.
-            {
-                const juce::Graphics::ScopedSaveState markers (g);
-                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), first.getY(), layout.gridWidth(), first.getHeight()).getSmallestIntegerContainer());
-                for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
-                {
-                    const Location pos { ch, step };
-                    const auto& cell = controller.cell (pos);
-                    if (!cell.enabled || cell.roll <= 1)
-                        continue;
-                    const float bottom = layout.cell (pos).getBottom() - 2;
-                    g.setColour (Palette::text.withAlpha (0.75f));
-                    for (int part = 0; part < juce::jmin (cell.roll, Constants::maxRoll); ++part)
-                        g.fillRect (hitPosition (pos, part).x, bottom - 5, 1.0f, 5.0f);
                 }
             }
             // Keep the white selection outline crisp, with a soft glow just outside it.

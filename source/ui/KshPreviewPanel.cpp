@@ -172,7 +172,7 @@ namespace ksh::ui
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = 22;
-            control->captionFontSize = 12;
+            control->captionFontSize = 10;
             control->captionGap = 6;
         }
         mode.setVisible (randomSection);
@@ -257,7 +257,7 @@ namespace ksh::ui
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = compact ? 17.0f : 22.0f;
-            control->captionFontSize = compact ? 11.0f : 12.0f;
+            control->captionFontSize = 10.0f;
             control->captionGap = compact ? 2 : 6;
         }
         resized();
@@ -285,13 +285,15 @@ namespace ksh::ui
                     locks[static_cast<size_t> (ch)].setBounds (18 + ch * stride, 98, stride - 6, 66);
                 return;
             }
-            nudge.setBounds (6, 8, 64, 64);
-            velocity.setBounds (76, 8, 82, 64);
-            probability.setBounds (166, 8, 88, 64);
-            roll.setBounds (262, 8, 56, 64);
-            cycleLength.setBounds (326, 8, 56, 64);
+            constexpr int inputWidth = 56;
+            int inputX = 6;
+            for (auto* control : { &nudge, &velocity, &probability, &roll, &cycleLength })
+            {
+                control->setBounds (inputX, 8, inputWidth, 64);
+                inputX += inputWidth + 8;
+            }
             remove.setBounds (getWidth() - 48, 29, 35, 42);
-            cycle.setBounds (390, 26, juce::jlimit (0, cycle.preferredWidth (48), remove.getX() - 398), 48);
+            cycle.setBounds (326, 26, juce::jlimit (0, cycle.preferredWidth (48), remove.getX() - 334), 48);
             return;
         }
         mode.setBounds (378, 44, 164, 28);
@@ -303,12 +305,15 @@ namespace ksh::ui
         const int x = inspectorBounds.getX();
         constexpr int inputHeight = 42;
         constexpr int captionHeight = 24;
-        nudge.setBounds (x + 20, 32, 94, captionHeight + inputHeight);
-        velocity.setBounds (x + 130, 32, 76, captionHeight + inputHeight);
-        probability.setBounds (x + 222, 32, 92, captionHeight + inputHeight);
-        roll.setBounds (x + 330, 32, 56, captionHeight + inputHeight);
+        constexpr int inputWidth = 56;
+        int inputX = x + 20;
+        for (auto* control : { &nudge, &velocity, &probability, &roll })
+        {
+            control->setBounds (inputX, 32, inputWidth, captionHeight + inputHeight);
+            inputX += inputWidth + 16;
+        }
         remove.setBounds (inspectorBounds.getRight() - 96, 56, inputHeight * 20 / 24, inputHeight);
-        cycle.setBounds (x + 402, 52, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - x - 418), inputHeight + 8);
+        cycle.setBounds (inputX, 52, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - inputX - 16), inputHeight + 8);
     }
     void PreviewPanel::sync()
     {
@@ -402,7 +407,7 @@ namespace ksh::ui
             }
             else
             {
-                text (g, "Cycle beats", { 400, 8, 160, 18 }, 11, Palette::text, true, juce::Justification::centredLeft);
+                text (g, "Cycle beats", { 336, 8, 160, 18 }, 11, Palette::text, true, juce::Justification::centredLeft);
             }
             return;
         }
