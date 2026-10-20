@@ -97,6 +97,115 @@ TEST_CASE ("Standalone transport swaps Play and Stop in one position with clicks
     checkTransport (false);
 }
 
+TEST_CASE ("Project details keep header and dates read only and apply metadata explicitly", "[native-ui][project-details][render]")
+{
+    PluginProcessor processor;
+    processor.setProjectMetadata ("Night drive", "A sparse rhythm", "2026-07-08T10:00:00Z", "2026-07-09T11:00:00Z", "ofsound");
+    NativeEditor editor (processor);
+    const bool compact = GENERATE (false, true);
+    if (compact)
+        editor.setCompactViewport (true, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    if (compact)
+    {
+        for (const auto& caption : { juce::String ("Controls"), juce::String ("Project") })
+            for (auto* child : editor.getChildren())
+                if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == caption)
+                    button->onClick();
+    }
+    ProjectHeader* header = nullptr;
+    ProjectDetails* details = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<ProjectHeader*> (child)) header = candidate;
+        if (auto* candidate = dynamic_cast<ProjectDetails*> (child)) details = candidate;
+        CHECK ((dynamic_cast<juce::TextEditor*> (child) == nullptr || child->getTitle() != "Project title"));
+    }
+    REQUIRE (header != nullptr);
+    REQUIRE (details != nullptr);
+    CHECK (header->isVisible());
+    CHECK_FALSE (header->getWantsKeyboardFocus());
+    CHECK_FALSE (details->isVisible());
+    auto* info = dynamic_cast<juce::TextButton*> (header->getChildComponent (0));
+    REQUIRE (info != nullptr);
+    CHECK (info->getTitle() == "Project details");
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    const auto capture = [&] (const juce::String& name)
+    {
+        if (directory.isEmpty())
+            return;
+        auto stream = juce::File (directory).getChildFile (name + (compact ? "-compact.png" : "-desktop.png")).createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
+    };
+    capture ("project-header");
+    info->onClick();
+    CHECK (details->isVisible());
+    juce::TextEditor* name = nullptr;
+    juce::TextEditor* author = nullptr;
+    juce::TextEditor* description = nullptr;
+    juce::TextButton* apply = nullptr;
+    juce::TextButton* saveAs = nullptr;
+    int dates = 0;
+    for (auto* child : details->getChildren())
+    {
+        if (auto* field = dynamic_cast<juce::TextEditor*> (child))
+        {
+            if (field->getTitle() == "Project name") name = field;
+            if (field->getTitle() == "Project author") author = field;
+            if (field->getTitle() == "Project description") description = field;
+        }
+        if (auto* date = dynamic_cast<juce::Label*> (child))
+        {
+            CHECK_FALSE (date->isEditableOnSingleClick());
+            CHECK_FALSE (date->isEditableOnDoubleClick());
+            CHECK (date->getText().contains ("2026"));
+            ++dates;
+        }
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText() == "Apply") apply = button;
+            if (button->getButtonText() == "Save As...") saveAs = button;
+        }
+    }
+    REQUIRE (name != nullptr);
+    REQUIRE (author != nullptr);
+    REQUIRE (description != nullptr);
+    REQUIRE (apply != nullptr);
+    REQUIRE (saveAs != nullptr);
+    CHECK (dates == 2);
+    CHECK (author->getText() == "ofsound");
+    capture ("project-details");
+    name->setText ("Discard this");
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (details->isVisible());
+    CHECK (processor.getProjectName() == "Night drive");
+    info->onClick();
+    name->setText ("  Morning drive  ");
+    author->setText ("  Ben  ");
+    description->setText ("Updated notes\nSecond line");
+    apply->onClick();
+    CHECK (processor.getProjectName() == "Morning drive");
+    CHECK (processor.getProjectAuthor() == "Ben");
+    CHECK (processor.getProjectDescription() == "Updated notes\nSecond line");
+    CHECK (processor.getProjectCreatedAt() == "2026-07-08T10:00:00Z");
+    CHECK (processor.getProjectModifiedAt() != "2026-07-09T11:00:00Z");
+    CHECK_FALSE (details->isVisible());
+    int action = -1;
+    editor.projectAction = [&] (int value) { action = value; };
+    info->onClick();
+    author->setText ("Copy author");
+    saveAs->onClick();
+    CHECK (action == 5);
+    CHECK (processor.getProjectAuthor() == "Copy author");
+    info->onClick();
+    name->setText ("Stale draft");
+    processor.resetProject();
+    editor.sync();
+    CHECK_FALSE (details->isVisible());
+    CHECK (processor.getProjectName() == "Untitled Project");
+}
+
 TEST_CASE ("Footer row order toggle reverses presentation without editing the project", "[native-ui][render][row-order]")
 {
     PluginProcessor processor;
@@ -1909,7 +2018,7 @@ TEST_CASE ("Scroll wheel ticks on a value control make one undo step and one hos
     GestureCounter gestures;
     gestures.parameterIndex = processor.getValueTreeState().getParameter ("swing")->getParameterIndex();
     processor.addListener (&gestures);
-    auto* swing = findValueControl (editor, "Swing");
+    auto* swing = findValueControl (editor, "Amount");
     REQUIRE (swing != nullptr);
 
     scroll (*swing, 5);
@@ -1937,7 +2046,7 @@ TEST_CASE ("A new edit closes an idle scroll gesture instead of joining it", "[n
     PluginProcessor processor;
     NativeEditor editor (processor);
     auto& controller = editor.controller;
-    auto* swing = findValueControl (editor, "Swing");
+    auto* swing = findValueControl (editor, "Amount");
     REQUIRE (swing != nullptr);
 
     scroll (*swing, 2);

@@ -1,6 +1,15 @@
 #include "KshNativeEditor.h"
 namespace ksh::ui
 {
+    namespace
+    {
+        void paintControlGroup (juce::Graphics& g, juce::Rectangle<float> bounds, const juce::String& title)
+        {
+            g.setColour (Palette::border.withAlpha (0.65f));
+            g.drawRoundedRectangle (bounds, 5, 1);
+            text (g, title, bounds.reduced (8, 3).withHeight (15), 10, Palette::muted, true, juce::Justification::centredLeft);
+        }
+    }
     const std::array<juce::String, 8> NativeEditor::rateNames { "Quarter", "Quarter triplet", "Eighth", "Eighth triplet", "16th", "16th triplet", "32nd", "32nd triplet" };
 
     int NativeEditor::rateControlWidth()
@@ -15,7 +24,7 @@ namespace ksh::ui
         return width;
     }
 
-    NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true)
+    NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true), projectDetails (processor)
     {
         juce::PropertiesFile::Options options;
         options.applicationName = "KSH";
@@ -70,21 +79,20 @@ namespace ksh::ui
             button.setTooltip (projectTips[static_cast<size_t> (i)]);
             button.onClick = [this, i] { controller.commit(); if (projectAction) projectAction (i); };
         }
-        for (auto* edit : { &title, &description })
+        addAndMakeVisible (projectHeader);
+        addChildComponent (projectDetails);
+        projectHeader.onDetails = [this]
         {
-            addAndMakeVisible (*edit);
-            edit->setFont (font (12, edit == &title));
-            edit->setIndents (10, 0);
-            edit->setJustification (juce::Justification::centredLeft);
-            edit->getProperties().set ("projectMetadata", true);
-            edit->onFocusLost = [this] { if (! syncing) controller.processor.setProjectMetadata (title.getText(), description.getText(), controller.processor.getProjectCreatedAt(), controller.processor.getProjectModifiedAt()); };
-        }
-        title.setTextToShowWhenEmpty ("Untitled Project", Palette::faint);
-        description.setTextToShowWhenEmpty (juce::String::fromUTF8 ("Add Description…"), Palette::faint);
-        title.setTitle ("Project title");
-        description.setTitle ("Project description");
-        title.setTooltip ("Edit the project name");
-        description.setTooltip ("Edit the project description");
+            cancelCompactGestures();
+            projectDetails.open();
+        };
+        projectDetails.onClose = [this]
+        {
+            sync();
+            if (isShowing())
+                grabKeyboardFocus();
+        };
+        projectDetails.onSaveAs = [this] { if (projectAction) projectAction (5); };
         for (auto* b : { &mutePattern, &velocityLayer, &chanceLayer, &clear, &record, &left, &right, &undoButton, &redoButton, &rate, &play, &dc })
             addAndMakeVisible (*b);
         addAndMakeVisible (selectMode);
@@ -158,12 +166,22 @@ namespace ksh::ui
         stop.onClick = [this] { controller.command ("standalone_transport_playing", { false }); };
         dc.onClick = [this] { controller.drumColors = ! controller.drumColors; sync(); };
         dc.setTooltip ("Toggle channel colors");
-        configureValue (swing, "Swing", 0, 100, "swing");
-        configureValue (subdivision, "Sub", 0, 2, "swing_subdivision");
+        configureValue (swing, "Amount", 0, 100, "swing");
+        configureValue (subdivision, "Subdivision", 0, 2, "swing_subdivision");
+        swing.setTitle ("Swing amount");
+        swing.suffix = "%";
+        swing.setTooltip ("Delay the swung subdivisions. 0% is straight timing; the grid shows the resulting positions.");
+        subdivision.setTitle ("Swing subdivision");
+        subdivision.setTooltip ("Choose the subdivision used to group the swing timing");
         subdivision.format = [] (int v) { return juce::String (1 << v) + "x"; };
         subdivision.resetValue = 1;
-        configureValue (velocityHumanize, "Vel %", 0, 100, "velocity_humanize");
-        configureValue (timingHumanize, "Time %", 0, 100, "timing_humanize");
+        configureValue (velocityHumanize, "Velocity", 0, 100, "velocity_humanize");
+        configureValue (timingHumanize, "Timing", 0, 100, "timing_humanize");
+        velocityHumanize.setTitle ("Velocity humanization");
+        timingHumanize.setTitle ("Timing humanization");
+        velocityHumanize.setTooltip ("Randomly vary hit velocity by up to this percentage of the cell's velocity. 0% keeps it steady.");
+        timingHumanize.setTooltip ("Add subtle random timing variation. 0% is steady; 100% uses a range of one fifth of a step.");
+        velocityHumanize.suffix = timingHumanize.suffix = "%";
         configureValue (steps, "", 1, 32, "source_steps");
         steps.suffix = " steps";
         steps.resetValue = 16;
@@ -260,10 +278,9 @@ namespace ksh::ui
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
         rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
         tooltipToggle.setToggleState (footerHelp.isHelpEnabled(), juce::dontSendNotification);
-        if (!title.hasKeyboardFocus (true))
-            title.setText (controller.processor.getProjectName(), false);
-        if (!description.hasKeyboardFocus (true))
-            description.setText (controller.processor.getProjectDescription(), false);
+        projectHeader.setProjectName (controller.processor.getProjectName());
+        if (projectDetails.isVisible())
+            projectDetails.refresh();
         grid.sync();
         preview.sync();
         randomPanel.sync();
@@ -272,6 +289,8 @@ namespace ksh::ui
         // The compact layout also decides visibility from editor state, so it always re-runs.
         if (layout.compact || laidOut != std::pair { layout, getLocalBounds() })
             resized();
+        if (projectDetails.isVisible())
+            projectDetails.toFront (false);
         repaint (404, juce::roundToInt (layout.transportHeight()) + 63, 186, 16);
         repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
         syncing = false;
@@ -281,6 +300,7 @@ namespace ksh::ui
     void NativeEditor::resized()
     {
         laidOut = { layout, getLocalBounds() };
+        projectDetails.setBounds (getLocalBounds());
         if (layout.compact)
         {
             resizedCompact();
@@ -292,13 +312,12 @@ namespace ksh::ui
         projectButtons[1].setBounds (74, top + 27, 54, 32);
         projectButtons[2].setBounds (136, top + 27, 54, 32);
         projectButtons[3].setBounds (198, top + 27, 30, 32);
-        title.setBounds (236, top + 27, 160, 32);
-        description.setBounds (404, top + 27, 186, 32);
-        projectButtons[4].setBounds (598, top + 27, 30, 32);
-        swing.setBounds (650, top + 19, 42, 43);
-        subdivision.setBounds (700, top + 19, 42, 43);
-        velocityHumanize.setBounds (750, top + 19, 42, 43);
-        timingHumanize.setBounds (800, top + 19, 44, 43);
+        projectHeader.setBounds (236, top + 27, 278, 32);
+        projectButtons[4].setBounds (522, top + 27, 30, 32);
+        swing.setBounds (582, top + 25, 72, 43);
+        subdivision.setBounds (662, top + 25, 72, 43);
+        velocityHumanize.setBounds (758, top + 25, 72, 43);
+        timingHumanize.setBounds (838, top + 25, 72, 43);
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setBounds (rightEdge - 400 + (i % 8) * 42, top + 10 + (i / 8) * 36, 36, 30);
         mutePattern.setBounds (rightEdge - 58, top + 10, 58, 66);
@@ -348,7 +367,11 @@ namespace ksh::ui
                 else if (panel == Panel::project)
                     text (g, "PROJECT", { 18, 100, 110, 28 }, 12, Palette::accent, true, juce::Justification::centredLeft);
                 else if (panel == Panel::feel)
+                {
+                    paintControlGroup (g, { 12, 104, 336, 110 }, "Swing");
+                    paintControlGroup (g, { 356, 104, 392, 110 }, "Humanize");
                     text (g, "Drag a value vertically, or double-tap to enter it. Changes are shared with the host.", { 22, 218, static_cast<float> (getWidth() - 44), 36 }, 13, Palette::muted, false, juce::Justification::centredLeft);
+                }
                 else if (panel == Panel::channel)
                     text (g, "CHANNEL " + juce::String (selectedChannel + 1) + "  /  tap its name in the grid to audition", { 20, 96, static_cast<float> (getWidth() - 40), 24 }, 12, Palette::accent, true, juce::Justification::centredLeft);
                 else if (panel == Panel::help)
@@ -368,8 +391,8 @@ namespace ksh::ui
         g.setColour (Palette::border.withAlpha (0.5f));
         for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        const auto date = controller.processor.getProjectModifiedAt().substring (0, 10);
-        text (g, date, { 404, layout.transportHeight() + 63, 186, 16 }, 9, Palette::muted, false, juce::Justification::centredRight);
+        paintControlGroup (g, { 574, layout.transportHeight() + 6, 168, 70 }, "Swing");
+        paintControlGroup (g, { 750, layout.transportHeight() + 6, 168, 70 }, "Humanize");
     }
     void NativeEditor::rateMenu()
     {
@@ -421,6 +444,8 @@ namespace ksh::ui
     bool NativeEditor::textFocused() const { return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr; }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
+        if (projectDetails.isVisible())
+            return projectDetails.keyPressed (key);
         if (textFocused())
             return false;
         if (key.getModifiers().isCommandDown() && key.isKeyCode ('Z'))

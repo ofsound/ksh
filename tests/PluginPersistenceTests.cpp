@@ -1,4 +1,5 @@
 #include <PluginProcessor.h>
+#include <PluginEditor.h>
 
 #include <engine/KshMidiPlayback.h>
 #include <engine/KshPersistence.h>
@@ -13,6 +14,12 @@
 #include <vector>
 
 using namespace ksh;
+
+class PluginEditorTestPeer
+{
+public:
+    static bool load (PluginEditor& editor, const juce::File& file, juce::String& error) { return editor.loadProjectFile (file, error); }
+};
 
 namespace
 {
@@ -199,7 +206,7 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
     original.setProjectMetadata ("Pseudoflute",
                                  "External file test",
                                  "2026-07-08T10:00:00Z",
-                                 "2026-07-08T11:00:00Z");
+                                 "2026-07-08T11:00:00Z", "ofsound");
 
     const auto saved = getPluginState (original);
     const auto parsed = nlohmann::json::parse (
@@ -207,6 +214,7 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
 
     REQUIRE (parsed["projectName"] == "Pseudoflute");
     REQUIRE (parsed["projectDescription"] == "External file test");
+    REQUIRE (parsed["projectAuthor"] == "ofsound");
     CHECK_FALSE (parsed.contains ("projectThemeMode"));
     CHECK_FALSE (parsed.contains ("patternViewScale"));
     CHECK_FALSE (parsed.contains ("standaloneTempo"));
@@ -216,9 +224,61 @@ TEST_CASE ("project metadata and editor state roundtrip through plugin state", "
 
     REQUIRE (restored.getProjectName() == "Pseudoflute");
     REQUIRE (restored.getProjectDescription() == "External file test");
+    REQUIRE (restored.getProjectAuthor() == "ofsound");
     REQUIRE (restored.getProjectCreatedAt() == "2026-07-08T10:00:00Z");
     REQUIRE (restored.getProjectModifiedAt() == "2026-07-08T11:00:00Z");
     REQUIRE (restored.engineStateSnapshot().sources[0][1][4].enabled);
+}
+
+TEST_CASE ("Save updates the current project file and keeps author and created date", "[plugin][persistence]")
+{
+    PluginProcessor processor;
+    processor.setProjectMetadata ("Night drive", "Notes", "2026-07-08T10:00:00Z", "2026-07-09T11:00:00Z", "ofsound");
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-save-current", ".kshproject");
+    const auto data = getPluginState (processor);
+    REQUIRE (file.replaceWithData (data.getData(), data.getSize()));
+    auto editor = std::make_unique<PluginEditor> (processor);
+    juce::String error;
+    REQUIRE (PluginEditorTestPeer::load (*editor, file, error));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 77 }));
+    bool completed = false;
+    editor->saveProject ([&] (juce::var result)
+    {
+        completed = true;
+        CHECK (static_cast<int> (result["success"]) == 1);
+        CHECK (result["error"].toString().isEmpty());
+    });
+    CHECK (completed);
+    editor.reset();
+    PluginEditor reopened (processor);
+    CHECK (reopened.getCurrentProjectFileName() == file.getFileName());
+    const auto saved = nlohmann::json::parse (file.loadFileAsString().toStdString());
+    CHECK (saved["projectAuthor"] == "ofsound");
+    CHECK (saved["projectCreatedAt"] == "2026-07-08T10:00:00Z");
+    CHECK (saved["projectModifiedAt"] != "2026-07-09T11:00:00Z");
+    CHECK_FALSE (processor.isDocumentModified());
+    PluginProcessor restored;
+    setPluginStateText (restored, saved.dump());
+    CHECK (restored.engineStateSnapshot().sources[0][0][0].velocity == 77);
+    CHECK (restored.getProjectFile() == juce::File());
+    processor.resetProject();
+    CHECK (processor.getProjectFile() == juce::File());
+    CHECK (file.deleteFile());
+}
+
+TEST_CASE ("project author survives metadata saves and resets for old or new projects", "[plugin][persistence]")
+{
+    PluginProcessor processor;
+    processor.setProjectMetadata ("Title", "Notes", "created", "modified", "  ofsound  ");
+    processor.setProjectMetadata ("Renamed", "Notes", "created", "saved");
+    CHECK (processor.getProjectAuthor() == "ofsound");
+    auto legacy = processor.enginePersistenceState();
+    legacy.erase ("projectAuthor");
+    setPluginStateText (processor, legacy.dump());
+    CHECK (processor.getProjectAuthor().isEmpty());
+    processor.setProjectMetadata ("Title", "Notes", "created", "modified", "ofsound");
+    processor.resetProject();
+    CHECK (processor.getProjectAuthor().isEmpty());
 }
 
 TEST_CASE ("projects saved with retired editor keys still load", "[plugin][persistence]")

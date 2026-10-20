@@ -37,6 +37,11 @@ namespace ksh::ui
         std::function<std::vector<Location>()> locations = [] { return std::vector<Location>(); };
         bool inlineLayout = false;
         bool compact = false;
+        int preferredWidth (int height) const
+        {
+            const int side = juce::jmax (0, height - (inlineLayout ? 8 : 56));
+            return 20 + 8 * side + 7 * 4;
+        }
         void cancelGesture() { handle.cancel(); }
         void sync()
         {
@@ -82,7 +87,7 @@ namespace ksh::ui
         {
             const int top = inlineLayout ? 4 : 10;
             const int availableHeight = juce::jmax (0, getHeight() - (inlineLayout ? 8 : 56));
-            const int side = juce::jmax (0, juce::jmin ((getWidth() - 20) / 8 - 4, availableHeight));
+            const int side = juce::jmax (0, juce::jmin ((getWidth() - 20 - 7 * 4) / 8, availableHeight));
             cellStride = side + 4;
             for (int i = 0; i < 8; ++i)
             {

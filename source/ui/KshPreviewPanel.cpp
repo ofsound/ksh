@@ -291,7 +291,7 @@ namespace ksh::ui
             roll.setBounds (262, 8, 56, 64);
             cycleLength.setBounds (326, 8, 56, 64);
             remove.setBounds (getWidth() - 48, 28, 42, 44);
-            cycle.setBounds (390, 26, juce::jmax (0, remove.getX() - 398), 48);
+            cycle.setBounds (390, 26, juce::jlimit (0, cycle.preferredWidth (48), remove.getX() - 398), 48);
             return;
         }
         mode.setBounds (378, 44, 164, 28);
@@ -308,7 +308,7 @@ namespace ksh::ui
         probability.setBounds (x + 222, 32, 92, captionHeight + inputHeight);
         roll.setBounds (x + 330, 32, 56, captionHeight + inputHeight);
         remove.setBounds (inspectorBounds.getRight() - 96, 56, 76, inputHeight);
-        cycle.setBounds (x + 402, 52, remove.getX() - x - 418, inputHeight + 8);
+        cycle.setBounds (x + 402, 52, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - x - 418), inputHeight + 8);
     }
     void PreviewPanel::sync()
     {

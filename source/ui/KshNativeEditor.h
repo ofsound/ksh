@@ -1,6 +1,7 @@
 #pragma once
 #include "KshPatternGrid.h"
 #include "KshPreviewPanel.h"
+#include "KshProjectDetails.h"
 namespace ksh::ui
 {
     class NativeEditor : public juce::Component, private juce::Timer
@@ -10,10 +11,10 @@ namespace ksh::ui
         ~NativeEditor() override;
         EditorController controller;
         Layout layout;
-        std::function<void (int)> projectAction; // new, load, save, previous, next
+        std::function<void (int)> projectAction; // new, load, save, previous, next, save as
         std::function<void()> preferredSizeChanged;
-        juce::String projectTitle() const { return title.getText(); }
-        juce::String projectDescription() const { return description.getText(); }
+        juce::String projectTitle() const { return controller.processor.getProjectName(); }
+        juce::String projectDescription() const { return controller.processor.getProjectDescription(); }
         void sync();
         void useViewportFit();
         void setCompactViewport (bool, int width, int height);
@@ -35,7 +36,8 @@ namespace ksh::ui
         juce::Viewport aboutViewport;
         std::array<juce::TextButton, 16> patterns;
         std::array<juce::TextButton, 5> projectButtons;
-        juce::TextEditor title, description;
+        ProjectHeader projectHeader;
+        ProjectDetails projectDetails;
         GestureButton selectMode { "Select" };
         juce::TextButton stop { "Stop" };
         juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, chanceLayer { "Chance" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };

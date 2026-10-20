@@ -117,12 +117,16 @@ public:
     void setProjectMetadata (const juce::String& name,
                              const juce::String& description,
                              const juce::String& createdAt,
-                             const juce::String& modifiedAt);
+                             const juce::String& modifiedAt,
+                             std::optional<juce::String> author = std::nullopt);
     void resetProject();
     [[nodiscard]] juce::String getProjectName() const;
     [[nodiscard]] juce::String getProjectDescription() const;
+    [[nodiscard]] juce::String getProjectAuthor() const;
     [[nodiscard]] juce::String getProjectCreatedAt() const;
     [[nodiscard]] juce::String getProjectModifiedAt() const;
+    [[nodiscard]] juce::File getProjectFile() const;
+    void setProjectFile (const juce::File&);
 
 private:
     friend class PluginProcessorTestPeer;
@@ -239,6 +243,8 @@ private:
     mutable std::mutex projectMetadataMutex;
     juce::String projectName { "Untitled Project" };
     juce::String projectDescription;
+    juce::String projectAuthor;
+    juce::File projectFile; // Session-only save destination; never written into project/host state.
     juce::String projectCreatedAt;
     juce::String projectModifiedAt;
 

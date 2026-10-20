@@ -262,6 +262,13 @@ namespace ksh::ui
                     g.fillPath (path);
                     return;
                 }
+                else if (icon == "info")
+                {
+                    path.addEllipse (4, 4, 16, 16);
+                    path.startNewSubPath (12, 11);
+                    path.lineTo (12, 16);
+                    g.fillEllipse (11, 7, 2, 2);
+                }
                 else if (icon == "rowOrder")
                 {
                     const bool reversed = b.getToggleState();

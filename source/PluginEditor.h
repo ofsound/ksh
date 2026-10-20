@@ -22,6 +22,7 @@ public:
 
     void showSaveProjectDialog (const juce::Array<juce::var>& args,
         std::function<void (juce::var)> complete);
+    void saveProject (std::function<void (juce::var)> complete);
     void showLoadProjectDialog (std::function<void (juce::var)> complete);
     void createNewProject (std::function<void (juce::var)> complete);
     void cycleProject (int direction,
@@ -31,6 +32,7 @@ public:
     juce::String getCurrentProjectFileName() const;
 
 private:
+    friend class PluginEditorTestPeer;
     PluginProcessor& processorRef;
     const bool fitViewport;
 
@@ -45,7 +47,6 @@ private:
     std::unique_ptr<ksh::ui::NativeEditor> nativeView;
     void updateNativeSize();
     std::unique_ptr<juce::FileChooser> projectFileChooser;
-    juce::File currentProjectFile;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

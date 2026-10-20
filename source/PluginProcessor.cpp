@@ -999,6 +999,7 @@ nlohmann::json PluginProcessor::enginePersistenceState()
         std::scoped_lock metadataLock { projectMetadataMutex };
         state["projectName"] = projectName.toStdString();
         state["projectDescription"] = projectDescription.toStdString();
+        state["projectAuthor"] = projectAuthor.toStdString();
         state["projectCreatedAt"] = projectCreatedAt.toStdString();
         state["projectModifiedAt"] = projectModifiedAt.toStdString();
     }
@@ -1365,7 +1366,8 @@ bool PluginProcessor::recordPatternRowAtCurrentStep (int channel, int velocity)
 void PluginProcessor::setProjectMetadata (const juce::String& name,
                                           const juce::String& description,
                                           const juce::String& createdAt,
-                                          const juce::String& modifiedAt)
+                                          const juce::String& modifiedAt,
+                                          std::optional<juce::String> author)
 {
     bool changed = false;
 
@@ -1373,9 +1375,11 @@ void PluginProcessor::setProjectMetadata (const juce::String& name,
         std::scoped_lock lock { projectMetadataMutex };
         const auto nextName = name.trim().isNotEmpty() ? name.trim() : juce::String ("Untitled Project");
         const auto nextDescription = description.trim();
-        changed = nextName != projectName || nextDescription != projectDescription;
+        const auto nextAuthor = author.has_value() ? author->trim() : projectAuthor;
+        changed = nextName != projectName || nextDescription != projectDescription || nextAuthor != projectAuthor;
         projectName = nextName;
         projectDescription = nextDescription;
+        projectAuthor = nextAuthor;
         projectCreatedAt = createdAt;
         projectModifiedAt = modifiedAt;
     }
@@ -1396,6 +1400,12 @@ juce::String PluginProcessor::getProjectDescription() const
     return projectDescription;
 }
 
+juce::String PluginProcessor::getProjectAuthor() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectAuthor;
+}
+
 juce::String PluginProcessor::getProjectCreatedAt() const
 {
     std::scoped_lock lock { projectMetadataMutex };
@@ -1408,22 +1418,36 @@ juce::String PluginProcessor::getProjectModifiedAt() const
     return projectModifiedAt;
 }
 
+juce::File PluginProcessor::getProjectFile() const
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    return projectFile;
+}
+
+void PluginProcessor::setProjectFile (const juce::File& file)
+{
+    std::scoped_lock lock { projectMetadataMutex };
+    projectFile = file;
+}
+
 void PluginProcessor::applyProjectMetadataFromState (const nlohmann::json& state)
 {
     try
     {
         std::scoped_lock lock { projectMetadataMutex };
+        projectFile = juce::File();
         projectName = juceStringFromView (state.value ("projectName", std::string { "Untitled Project" })).trim();
         if (projectName.isEmpty())
             projectName = "Untitled Project";
 
         projectDescription = juceStringFromView (state.value ("projectDescription", std::string {})).trim();
+        projectAuthor = juceStringFromView (state.value ("projectAuthor", std::string {})).trim();
         projectCreatedAt = juceStringFromView (state.value ("projectCreatedAt", std::string {}));
         projectModifiedAt = juceStringFromView (state.value ("projectModifiedAt", std::string {}));
     }
     catch (...)
     {
-        setProjectMetadata ("Untitled Project", {}, {}, {});
+        setProjectMetadata ("Untitled Project", {}, {}, {}, juce::String {});
     }
 }
 
@@ -1448,7 +1472,8 @@ void PluginProcessor::resetProject()
         uiBridge.documentReplaced();
     }
 
-    setProjectMetadata ("Untitled Project", {}, {}, {});
+    setProjectMetadata ("Untitled Project", {}, {}, {}, juce::String {});
+    setProjectFile ({});
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);

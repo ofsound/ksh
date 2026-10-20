@@ -19,9 +19,12 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             safe->nativeView->controller.refresh();
             safe->updateNativeSize();
         };
-        if (action == 2)
+        if (action == 2 || action == 5)
         {
-            showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription() }, completed);
+            if (action == 2)
+                saveProject (completed);
+            else
+                showSaveProjectDialog ({ nativeView->projectTitle(), nativeView->projectDescription() }, completed);
             return;
         }
         confirmDiscardingChanges ([safe, action, completed] {
@@ -132,6 +135,7 @@ juce::File PluginEditor::getDefaultProjectsDirectory() const
 
 juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
 {
+    const auto currentProjectFile = processorRef.getProjectFile();
     const auto directory = currentProjectFile.existsAsFile()
                                ? currentProjectFile.getParentDirectory()
                                : getDefaultProjectsDirectory();
@@ -158,6 +162,7 @@ bool PluginEditor::hasNextProject() const
 
 juce::String PluginEditor::getCurrentProjectFileName() const
 {
+    const auto currentProjectFile = processorRef.getProjectFile();
     return currentProjectFile.existsAsFile() ? currentProjectFile.getFileName() : juce::String();
 }
 
@@ -172,6 +177,7 @@ juce::var PluginEditor::projectOperationResult (const bool success,
     {
         object->setProperty ("projectName", processorRef.getProjectName());
         object->setProperty ("projectDescription", processorRef.getProjectDescription());
+        object->setProperty ("projectAuthor", processorRef.getProjectAuthor());
         object->setProperty ("projectCreatedAt", processorRef.getProjectCreatedAt());
         object->setProperty ("projectModifiedAt", processorRef.getProjectModifiedAt());
         object->setProperty ("projectFileName", getCurrentProjectFileName());
@@ -220,7 +226,7 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
         return false;
     }
 
-    currentProjectFile = file;
+    processorRef.setProjectFile (file);
 
     if (!parsed->contains ("projectName"))
     {
@@ -262,27 +268,47 @@ bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorM
         return false;
     }
 
-    currentProjectFile = file;
+    processorRef.setProjectFile (file);
     processorRef.markDocumentClean();
     return true;
+}
+
+void PluginEditor::saveProject (std::function<void (juce::var)> complete)
+{
+    const auto currentProjectFile = processorRef.getProjectFile();
+    if (projectFileChooser != nullptr)
+    {
+        complete (projectOperationResult (false, "A project dialog is already open."));
+        return;
+    }
+    if (!currentProjectFile.existsAsFile())
+    {
+        showSaveProjectDialog ({ processorRef.getProjectName(), processorRef.getProjectDescription() }, std::move (complete));
+        return;
+    }
+    const auto now = juce::Time::getCurrentTime().toISO8601 (true);
+    const auto created = processorRef.getProjectCreatedAt().isEmpty() ? now : processorRef.getProjectCreatedAt();
+    processorRef.setProjectMetadata (processorRef.getProjectName(), processorRef.getProjectDescription(), created, now);
+    juce::String error;
+    const bool saved = saveProjectFile (currentProjectFile, error);
+    complete (projectOperationResult (saved, error));
 }
 
 void PluginEditor::showSaveProjectDialog (
     const juce::Array<juce::var>& args,
     std::function<void (juce::var)> complete)
 {
+    const auto currentProjectFile = processorRef.getProjectFile();
     if (projectFileChooser != nullptr)
     {
         complete (projectOperationResult (false, "A project dialog is already open."));
         return;
     }
 
-    const auto now = juce::Time::getCurrentTime().toISO8601 (true);
     const auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
     const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
-    const auto createdAt = processorRef.getProjectCreatedAt().isNotEmpty()
-                               ? processorRef.getProjectCreatedAt()
-                               : now;
+    const auto createdAt = processorRef.getProjectCreatedAt();
+    const auto epoch = processorRef.getUiBridge().getDocumentEpoch();
     auto directory = currentProjectFile.existsAsFile() ? currentProjectFile.getParentDirectory()
                                                        : getDefaultProjectsDirectory();
     directory.createDirectory();
@@ -307,7 +333,7 @@ void PluginEditor::showSaveProjectDialog (
             name,
             description,
             createdAt,
-            now] (const juce::FileChooser& chooser) mutable {
+            epoch] (const juce::FileChooser& chooser) mutable {
             if (safeThis == nullptr)
                 return;
 
@@ -318,18 +344,24 @@ void PluginEditor::showSaveProjectDialog (
                 completion (safeThis->projectOperationResult (false));
                 return;
             }
+            if (epoch != safeThis->processorRef.getUiBridge().getDocumentEpoch())
+            {
+                completion (safeThis->projectOperationResult (false, "The project changed while the save dialog was open. Please save again."));
+                return;
+            }
 
             if (!file.hasFileExtension (".kshproject"))
                 file = file.withFileExtension (".kshproject");
 
-            const auto previousProjectFile = safeThis->currentProjectFile;
+            const auto previousProjectFile = safeThis->processorRef.getProjectFile();
             const auto savedToNewPath = !previousProjectFile.existsAsFile()
                                         || previousProjectFile != file;
             const auto projectNameToSave = savedToNewPath ? file.getFileNameWithoutExtension()
                                                           : name;
 
+            const auto now = juce::Time::getCurrentTime().toISO8601 (true);
             safeThis->processorRef.setProjectMetadata (
-                projectNameToSave, description, createdAt, now);
+                projectNameToSave, description, createdAt.isEmpty() ? now : createdAt, now);
             juce::String error;
             const auto saved = safeThis->saveProjectFile (file, error);
             completion (safeThis->projectOperationResult (saved, error));
@@ -339,6 +371,7 @@ void PluginEditor::showSaveProjectDialog (
 void PluginEditor::showLoadProjectDialog (
     std::function<void (juce::var)> complete)
 {
+    const auto currentProjectFile = processorRef.getProjectFile();
     if (projectFileChooser != nullptr)
     {
         complete (projectOperationResult (false, "A project dialog is already open."));
@@ -380,7 +413,7 @@ void PluginEditor::createNewProject (
     }
 
     processorRef.resetProject();
-    currentProjectFile = juce::File();
+    processorRef.setProjectFile ({});
     complete (projectOperationResult (true));
 }
 
@@ -388,6 +421,7 @@ void PluginEditor::cycleProject (
     const int direction,
     std::function<void (juce::var)> complete)
 {
+    const auto currentProjectFile = processorRef.getProjectFile();
     const auto files = getSiblingProjectFiles();
 
     if (files.size() <= 1)

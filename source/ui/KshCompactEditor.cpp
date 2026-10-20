@@ -166,8 +166,10 @@ namespace ksh::ui
         randomPanel.setCompact (compact);
         if (!compact)
         {
+            const bool detailsVisible = projectDetails.isVisible();
             for (auto* child : getChildren())
                 child->setVisible (true);
+            projectDetails.setVisible (detailsVisible);
             for (auto* button : { &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                      &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
                 button->setVisible (false);
@@ -228,6 +230,8 @@ namespace ksh::ui
         std::vector<juce::Component*> visible;
         auto finish = [this, &visible]
         {
+            if (projectDetails.isVisible())
+                visible.push_back (&projectDetails);
             for (auto* child : getChildren())
                 child->setVisible (std::find (visible.begin(), visible.end(), child) != visible.end());
         };
@@ -282,8 +286,7 @@ namespace ksh::ui
                 place (mutePattern, w - 82, 132, 64, 130);
                 break;
             case Panel::project:
-                place (title, 128, 100, w - 150, 44);
-                place (description, 128, 152, w - 150, 44);
+                place (projectHeader, 128, 100, w - 150, 44);
                 for (int i = 0; i < 5; ++i)
                     place (projectButtons[static_cast<size_t> (i)], 128 + i * 112, 214, 100, 48);
                 break;
@@ -298,7 +301,7 @@ namespace ksh::ui
                 break;
             case Panel::feel:
                 place (swing, 22, 128, 152, 76);
-                place (subdivision, 194, 128, 152, 76);
+                place (subdivision, 190, 128, 148, 76);
                 place (velocityHumanize, 366, 128, 176, 76);
                 place (timingHumanize, 562, 128, 176, 76);
                 break;
