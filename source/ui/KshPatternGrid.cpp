@@ -189,11 +189,11 @@ namespace ksh::ui
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        return modifiers.isAltDown() && controller.selected.none() ? Layer::chance : controller.inspectorHoverLayer.value_or (controller.layer);
+        return controller.optionDown (modifiers) && controller.selected.none() ? Layer::chance : controller.inspectorHoverLayer.value_or (controller.layer);
     }
     bool PatternGrid::isCopyMode() const
     {
-        return controller.selected.any() && (copySelection || modifiers.isAltDown());
+        return controller.selected.any() && (copySelection || controller.optionDown (modifiers));
     }
     void PatternGrid::modifierKeysChanged (const juce::ModifierKeys& m)
     {
@@ -445,7 +445,7 @@ namespace ksh::ui
             auto r = layout.cell ({ 0, step });
             r.setY (layout.cellsY() - (layout.compact ? 18.0f : 32.0f));
             r.setHeight (layout.compact ? 16.0f : 22.0f);
-            text (g, juce::String (step + 1), r, 10, step + 1 == controller.playingStep ? Palette::accent : Palette::muted);
+            text (g, juce::String (step + 1), r, layout.compact ? 10.0f : 12.0f, step + 1 == controller.playingStep ? Palette::accent : Palette::muted);
         }
         for (int ch = 0; ch < layout.channels; ++ch)
         {

@@ -58,8 +58,10 @@ namespace ksh::ui
         Layer layer = Layer::velocity;
         std::optional<Layer> inspectorHoverLayer;
         bool drumColors = true, noteNames = true;
+        bool keyboardModifiersEnabled = true;
         bool selectLatched = false, selectHeld = false, selectUsed = false;
-        bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || mods.isShiftDown(); }
+        bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || (keyboardModifiersEnabled && mods.isShiftDown()); }
+        bool optionDown (const juce::ModifierKeys& mods) const { return keyboardModifiersEnabled && mods.isAltDown(); }
         bool useSelectionModifier (const juce::ModifierKeys& mods)
         {
             if (selectHeld)

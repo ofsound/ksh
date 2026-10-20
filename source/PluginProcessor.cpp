@@ -1279,6 +1279,22 @@ bool PluginProcessor::queueRowAudition (int channelZeroBased, int velocity)
     return true;
 }
 
+float PluginProcessor::getRecordingPulseForUi() const
+{
+    if (!isPatternRecordingEnabled() || patternRecordTransportPlaying.load (std::memory_order_acquire) == 0)
+        return 1.0f;
+
+    const auto updatedMs = patternRecordTransportUpdatedMs.load (std::memory_order_relaxed);
+    const auto ageMs = juce::Time::getMillisecondCounterHiRes() - updatedMs;
+    if (updatedMs <= 0.0 || ageMs < 0.0 || ageMs > kMaxPatternRecordTransportAgeMs)
+        return 1.0f;
+
+    const double beat = patternRecordTransportPpq.load (std::memory_order_relaxed)
+                        + ageMs * patternRecordTransportBpm.load (std::memory_order_relaxed) / 60000.0;
+    const double phase = beat - std::floor (beat);
+    return static_cast<float> (0.35 + 0.65 * std::exp (-6.0 * phase));
+}
+
 int PluginProcessor::quantizedStepForUiTrigger() const
 {
     const int stepCount = std::max (1, auditionStepCount.load (std::memory_order_acquire));

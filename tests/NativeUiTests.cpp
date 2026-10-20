@@ -375,6 +375,40 @@ TEST_CASE ("Footer help preserves every control tooltip and resolves nested chil
     }
 }
 
+TEST_CASE ("Keyboard modifier toggle gates Shift and Option without disabling explicit modes", "[native-ui]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    const juce::ModifierKeys shift (juce::ModifierKeys::shiftModifier);
+    const juce::ModifierKeys option (juce::ModifierKeys::altModifier);
+    CHECK (controller.useSelectionModifier (shift));
+    grid.modifierKeysChanged (option);
+    CHECK (grid.displayLayer() == Layer::chance);
+    controller.selected.set (0);
+    CHECK (grid.isCopyMode());
+
+    controller.keyboardModifiersEnabled = false;
+    CHECK_FALSE (controller.useSelectionModifier (shift));
+    CHECK_FALSE (grid.isCopyMode());
+    controller.selected.reset();
+    CHECK (grid.displayLayer() == Layer::velocity);
+    controller.selectLatched = true;
+    CHECK (controller.useSelectionModifier ({}));
+    controller.selectLatched = false;
+    controller.beginSelect();
+    CHECK (controller.useSelectionModifier ({}));
+    controller.cancelSelect();
+    controller.selected.set (0);
+    grid.copySelection = true;
+    CHECK (grid.isCopyMode());
+    grid.copySelection = false;
+
+    controller.keyboardModifiersEnabled = true;
+    CHECK (controller.useSelectionModifier (shift));
+    CHECK (grid.isCopyMode());
+}
+
 TEST_CASE ("Layer segments keep one active highlight across Select and Option transitions", "[native-ui][render]")
 {
     PluginProcessor processor;

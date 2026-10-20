@@ -61,6 +61,20 @@ namespace ksh::ui
         uiPreferences = std::make_unique<juce::PropertiesFile> (options);
         footerHelp.setHelpEnabled (uiPreferences->getBoolValue ("footerTooltips", true));
         layout.reverseRows = uiPreferences->getBoolValue ("reverseRows", false);
+        controller.keyboardModifiersEnabled = uiPreferences->getBoolValue ("keyboardModifiersEnabled", true);
+        addAndMakeVisible (modifierToggle);
+        modifierToggle.setTitle ("Shift/Option shortcuts");
+        modifierToggle.setTooltip ("Enable Shift for selection and solo, and Option for Chance preview and copying. The Select and Copy buttons remain available.");
+        modifierToggle.onClick = [this]
+        {
+            cancelCompactGestures();
+            controller.keyboardModifiersEnabled = !controller.keyboardModifiersEnabled;
+            uiPreferences->setValue ("keyboardModifiersEnabled", controller.keyboardModifiersEnabled);
+            uiPreferences->saveIfNeeded();
+            modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
+            sync();
+            grid.repaint();
+        };
         addAndMakeVisible (rowOrder);
         rowOrder.setTitle ("Reverse row order");
         rowOrder.setTooltip ("Flip the displayed rows: channel 1 at the bottom or top. MIDI and pattern data stay the same.");
@@ -156,6 +170,8 @@ namespace ksh::ui
         }
         velocityLayer.getProperties().set ("layerSegment", 0);
         chanceLayer.getProperties().set ("layerSegment", 1);
+        undoButton.getProperties().set ("historySegment", 0);
+        redoButton.getProperties().set ("historySegment", 1);
         const std::array<std::pair<juce::TextButton*, const char*>, 8> icons { { { &clear, "clear" }, { &record, "record" }, { &left, "previous" }, { &right, "next" }, { &undoButton, "undo" }, { &redoButton, "redo" }, { &projectButtons[3], "previous" }, { &projectButtons[4], "next" } } };
         for (auto [button, icon] : icons)
         {
@@ -305,6 +321,7 @@ namespace ksh::ui
         stop.setToggleState (!playing, juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
+        modifierToggle.setToggleState (controller.keyboardModifiersEnabled, juce::dontSendNotification);
         rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
         tooltipToggle.setToggleState (footerHelp.isHelpEnabled(), juce::dontSendNotification);
         projectHeader.setProjectName (controller.processor.getProjectName());
@@ -355,14 +372,14 @@ namespace ksh::ui
         velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
         chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
-        record.setBounds (375, y + 13, 40, 41);
-        left.setBounds (425, y + 13, 40, 41);
-        right.setBounds (475, y + 13, 40, 41);
-        clear.setBounds (525, y + 13, 40, 41);
-        undoButton.setBounds (686, y + 13, 40, 41);
-        redoButton.setBounds (736, y + 13, 40, 41);
+        undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
+        redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
         rate.setBounds (rightEdge - rateControlWidth(), y + 13, rateControlWidth(), 41);
         steps.setBounds (rate.getX() - 128, y + 13, 120, 41);
+        clear.setBounds (steps.getX() - 100, y + 13, 40, 41);
+        right.setBounds (clear.getX() - 50, y + 13, 40, 41);
+        left.setBounds (right.getX() - 40, y + 13, 40, 41);
+        record.setBounds (left.getX() - 50, y + 13, 40, 41);
         play.setBounds (rightEdge - 138, 6, 32, 32);
         stop.setBounds (play.getBounds());
         tempo.setBounds (rightEdge - 98, play.getY(), 98, play.getHeight());
@@ -372,13 +389,15 @@ namespace ksh::ui
         const int scrollWidth = aboutHeight < 540 ? aboutViewport.getScrollBarThickness() : 0;
         randomPanel.setSize (getWidth() - scrollWidth, juce::jmax (540, aboutHeight));
         grid.setBounds (0, static_cast<int> (layout.gridY()), getWidth(), static_cast<int> (layout.gridHeight()));
-        preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), 164);
+        preview.setBounds (0, static_cast<int> (layout.previewY()), getWidth(), Layout::previewHeight);
         const int inspectorLeft = juce::roundToInt (layout.gridLeft() - 16.0f);
-        preview.setInspectorBounds ({ inspectorLeft, 12, rightEdge - inspectorLeft, 140 });
+        const int inspectorRight = juce::roundToInt (layout.gridLeft() + layout.gridWidth() + 16.0f);
+        preview.setInspectorBounds ({ inspectorLeft, 12, inspectorRight - inspectorLeft, Layout::previewHeight - 24 });
         const int footerControlY = getHeight() - Layout::footerHeight + Layout::outerGutter;
         dc.setBounds (rightEdge - 116, footerControlY, 36, 32);
-        rowOrder.setBounds (rightEdge - 164, footerControlY, 36, 32);
-        tooltipToggle.setBounds (rightEdge - 226, footerControlY, 50, 32);
+        modifierToggle.setBounds (rightEdge - 180, footerControlY, 56, 32);
+        rowOrder.setBounds (rightEdge - 228, footerControlY, 36, 32);
+        tooltipToggle.setBounds (rightEdge - 290, footerControlY, 50, 32);
         scale.setBounds (rightEdge - 66, footerControlY, 66, 32);
         footerHelp.setBounds (Layout::outerGutter, footerControlY, tooltipToggle.getX() - 2 * Layout::outerGutter, 32);
     }
@@ -576,6 +595,11 @@ namespace ksh::ui
         // or an additional frame of delay between the processor and editor timers.
         controller.processor.emitPendingNoteHitsForUi();
         controller.poll();
+        if (record.getToggleState())
+        {
+            record.getProperties().set ("recordPulse", controller.processor.getRecordingPulseForUi());
+            record.repaint();
+        }
         modifierKeysChanged (juce::ModifierKeys::getCurrentModifiersRealtime());
         grid.updatePlayback();
         preview.updatePlayback();

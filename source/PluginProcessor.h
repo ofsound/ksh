@@ -113,6 +113,8 @@ public:
     void setProjectUiScalePercent (int uiScalePercent);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
+    /** Message-thread recording indicator, following the published host/standalone beat. */
+    [[nodiscard]] float getRecordingPulseForUi() const;
 
     void setProjectMetadata (const juce::String& name,
                              const juce::String& description,

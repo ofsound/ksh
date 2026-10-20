@@ -287,7 +287,7 @@ namespace ksh::ui
             }
             constexpr int inputWidth = 56;
             int inputX = 6;
-            for (auto* control : { &nudge, &velocity, &probability, &roll, &cycleLength })
+            for (auto* control : { &velocity, &probability, &nudge, &roll, &cycleLength })
             {
                 control->setBounds (inputX, 8, inputWidth, 64);
                 inputX += inputWidth + 8;
@@ -307,7 +307,7 @@ namespace ksh::ui
         constexpr int captionHeight = 24;
         constexpr int inputWidth = 56;
         int inputX = x + 20;
-        for (auto* control : { &nudge, &velocity, &probability, &roll })
+        for (auto* control : { &velocity, &probability, &nudge, &roll })
         {
             control->setBounds (inputX, 32, inputWidth, captionHeight + inputHeight);
             inputX += inputWidth + 16;

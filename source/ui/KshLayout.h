@@ -6,6 +6,7 @@ namespace ksh::ui
     {
         static constexpr int outerGutter = 12;
         static constexpr int footerHeight = 56;
+        static constexpr int previewHeight = 134;
         int channels = 8, steps = 16;
         bool standalone = false, randomVisible = false;
         bool compact = false;
@@ -26,10 +27,10 @@ namespace ksh::ui
         float gridLeft() const { return compact ? 132.0f : 322.0f; }
         float gridWidth() const { return compact ? compactWidth - gridLeft() - 6.0f : 870.0f; }
         float width() const { return compact ? compactWidth : juce::jmax (1338.0f, 436.0f + gridWidth()); }
-        float cellsY() const { return compact ? 18.0f : 58.0f; }
+        float cellsY() const { return compact ? 18.0f : 46.0f; }
         float gridHeight() const { return compact ? compactHeight - gridY() - 84.0f : cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
         float previewY() const { return gridY() + gridHeight(); }
-        float height() const { return compact ? compactHeight : previewY() + 164 + footerHeight; }
+        float height() const { return compact ? compactHeight : previewY() + previewHeight + footerHeight; }
         int displayRow (int channel) const { return reverseRows ? channels - 1 - channel : channel; }
         int channelForRow (int row) const { return reverseRows ? channels - 1 - row : row; }
         int channelAtY (float y) const

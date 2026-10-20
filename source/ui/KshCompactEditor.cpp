@@ -248,7 +248,7 @@ namespace ksh::ui
         place (deselect, 252, 3, 60, 40);
         place (duplicate, 316, 3, 46, 40);
         place (undoButton, 366, 3, 36, 40);
-        place (redoButton, 406, 3, 36, 40);
+        place (redoButton, 401, 3, 36, 40);
         if (layout.steps > 16)
             place (page, 446, 3, 84, 40);
         if (layout.standalone)
@@ -299,9 +299,10 @@ namespace ksh::ui
                 place (rate, 162, 114, rateControlWidth(), 60);
                 place (record, 354, 114, 60, 60);
                 place (left, 430, 114, 60, 60);
-                place (right, 502, 114, 60, 60);
+                place (right, 490, 114, 60, 60);
                 place (clear, 580, 114, 60, 60);
                 place (dc, 660, 114, 80, 60);
+                place (modifierToggle, 748, 114, 56, 60);
                 break;
             case Panel::feel:
                 place (swing, 22, 128, 152, 76);

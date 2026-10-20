@@ -694,6 +694,38 @@ TEST_CASE ("incoming row MIDI notes monitor when pattern recording is off", "[pl
     REQUIRE_FALSE (engine.sources[0][2][0].enabled);
 }
 
+TEST_CASE ("Recording indicator pulses on transport beats only while armed", "[plugin][bridge][record]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setBpm (20.0);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (44100.0, 512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    CHECK (plugin.getRecordingPulseForUi() == 1.0f);
+    plugin.setPatternRecordingEnabled (true, 0);
+    CHECK (plugin.getRecordingPulseForUi() == 1.0f);
+    for (double beat : { 0.0, 0.5, 1.0, 1.5, 4.0, -0.5 })
+    {
+        playHead.setPpqPosition (beat);
+        plugin.processBlock (buffer, midi);
+        const float pulse = plugin.getRecordingPulseForUi();
+        if (beat == std::floor (beat))
+            CHECK (pulse > 0.9f);
+        else
+            CHECK (pulse < 0.5f);
+        CHECK (pulse >= 0.35f);
+    }
+    plugin.setPatternRecordingEnabled (false, 0);
+    CHECK (plugin.getRecordingPulseForUi() == 1.0f);
+    plugin.setPlayHead (nullptr);
+    plugin.processBlock (buffer, midi);
+    plugin.setPatternRecordingEnabled (true, 0);
+    CHECK (plugin.getRecordingPulseForUi() == 1.0f);
+}
+
 TEST_CASE ("armed pattern recording captures incoming row MIDI notes", "[plugin][bridge][midi-input][record]")
 {
     PluginProcessor plugin;

@@ -8,6 +8,7 @@ namespace ksh::ui
     {
         static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfffbc04e }, strong { 0xffe8ad38 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
         static inline const juce::Colour play { 0xff76d99b };
+        static inline const juce::Colour recording { 0xffef4444 };
         static juce::Colour channel (int ch, bool colors = true)
         {
             static constexpr std::array<juce::uint32, 8> values { 0xffdb4047, 0xffed8c5c, 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
@@ -149,10 +150,13 @@ namespace ksh::ui
                 g.drawRoundedRectangle (r, 7, 1);
                 return;
             }
-            if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment"))
+            if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment") || b.getProperties().contains ("historySegment"))
             {
-                const bool first = b.getProperties().contains ("layerSegment") && static_cast<int> (b.getProperties()["layerSegment"]) == 0;
-                const bool last = b.getProperties().contains ("selectMode");
+                const bool history = b.getProperties().contains ("historySegment");
+                const bool first = history ? static_cast<int> (b.getProperties()["historySegment"]) == 0
+                                           : b.getProperties().contains ("layerSegment") && static_cast<int> (b.getProperties()["layerSegment"]) == 0;
+                const bool last = history ? static_cast<int> (b.getProperties()["historySegment"]) == 1
+                                          : b.getProperties().contains ("selectMode");
                 juce::Path outline;
                 outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7, first, last, first, last);
                 g.setGradientFill (juce::ColourGradient (hover || down ? Palette::raised.brighter (0.12f) : Palette::raised, r.getTopLeft(), Palette::app, r.getBottomLeft(), false));
@@ -162,7 +166,7 @@ namespace ksh::ui
                     g.setColour (Palette::accent.withAlpha (0.24f));
                     g.fillPath (outline);
                 }
-                g.setColour (b.getToggleState() ? Palette::accent : Palette::border);
+                g.setColour (b.getToggleState() || (history && b.hasKeyboardFocus (true)) ? Palette::accent : Palette::border);
                 g.strokePath (outline, juce::PathStrokeType (1));
                 return;
             }
@@ -254,6 +258,9 @@ namespace ksh::ui
                 }
                 else if (icon == "record")
                 {
+                    const float pulse = b.getToggleState() && b.getProperties().contains ("recordPulse")
+                                            ? static_cast<float> (b.getProperties()["recordPulse"]) : 1.0f;
+                    g.setColour (Palette::recording.withAlpha (b.isEnabled() ? pulse : 0.3f));
                     g.fillEllipse (4, 4, 16, 16);
                     return;
                 }
@@ -273,6 +280,7 @@ namespace ksh::ui
                 }
                 else if (icon == "rowOrder")
                 {
+                    g.setColour (Palette::text.withAlpha (b.isEnabled() ? 1.0f : 0.4f));
                     const bool reversed = b.getToggleState();
                     path.startNewSubPath (5, reversed ? 19.0f : 5.0f);
                     path.lineTo (5, reversed ? 5.0f : 19.0f);
@@ -491,6 +499,33 @@ namespace ksh::ui
                 g.strokePath (arrows, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
             }
+            if (!mixed && !format && suffix == "%")
+            {
+                const auto number = juce::String (value);
+                if (percentageText != number || std::abs (percentageFontSize - valueFontSize) > 0.001f)
+                {
+                    percentageText = number;
+                    percentageFontSize = valueFontSize;
+                    const auto labelFont = font (valueFontSize, true);
+                    const float digitWidth = juce::GlyphArrangement::getStringWidth (labelFont, "0");
+                    const int slots = juce::jmax (2, number.length());
+                    percentageWidth = static_cast<float> (slots) * digitWidth + juce::GlyphArrangement::getStringWidth (labelFont, "%");
+                    percentageBaseline = (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
+                    percentageGlyphs.clear();
+                    percentageGlyphs.addLineOfText (labelFont, number + "%", 0.0f, 0.0f);
+                    // Match the inspector's equal-width numerals, reserving two slots even below 10%.
+                    for (int i = 0; i < percentageGlyphs.getNumGlyphs(); ++i)
+                    {
+                        auto& glyph = percentageGlyphs.getGlyph (i);
+                        const float slot = static_cast<float> (slots - number.length() + i) * digitWidth;
+                        const float inset = i < number.length() ? (digitWidth - glyph.getBounds().getWidth()) * 0.5f : 0.0f;
+                        glyph.moveBy (slot + inset - glyph.getLeft(), 0.0f);
+                    }
+                }
+                g.setColour (isEnabled() ? Palette::text : Palette::faint);
+                percentageGlyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - percentageWidth * 0.5f, r.getCentreY() + percentageBaseline));
+                return;
+            }
             text (g, mixed ? juce::String (juce::String::fromUTF8 ("—")) : format ? format (value)
                                                                                   : juce::String (value) + suffix,
                 r,
@@ -646,6 +681,9 @@ namespace ksh::ui
         static constexpr int wheelGestureIdleMs = 350;
         juce::TextEditor input;
         static inline juce::Component::SafePointer<ValueControl> pendingWheel;
+        juce::GlyphArrangement percentageGlyphs;
+        juce::String percentageText;
+        float percentageFontSize = 0, percentageWidth = 0, percentageBaseline = 0;
         bool dragging = false, wheeling = false;
         int start = 0;
         void timerCallback() override { endWheelGesture(); }

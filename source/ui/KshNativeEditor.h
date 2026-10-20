@@ -32,6 +32,7 @@ namespace ksh::ui
         FooterHelp footerHelp { *this };
         juce::TextButton tooltipToggle { "Tips" };
         juce::TextButton rowOrder;
+        juce::TextButton modifierToggle { "Keys" };
         PatternGrid grid;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
