@@ -11,9 +11,9 @@ KSH started as a Max for Live prototype and is now a JUCE-driven MIDI effect plu
 | MIDI playback in JUCE `processBlock` | Complete |
 | Plugin state save/load | Complete |
 | Native JUCE editor (full, compact, iPhone) | Complete |
-| LiveAPI clip export | Not ported |
+| LiveAPI clip export | Desktop native MIDI file drag from pattern buttons |
 
-M4L clip export is intentionally skipped. There is no standard JUCE/Logic equivalent to LiveAPI clip writing.
+Direct LiveAPI clip writing is replaced by native Standard MIDI File dragging from pattern buttons to DAW MIDI tracks or clip slots. See `docs/ui-sync.md` for export behavior.
 
 ## Current Architecture
 

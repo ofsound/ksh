@@ -1,4 +1,5 @@
 #include "KshNativeEditor.h"
+#include "../engine/KshMidiExport.h"
 namespace ksh::ui
 {
     namespace
@@ -22,6 +23,31 @@ namespace ksh::ui
             return widest;
         }();
         return width;
+    }
+
+    void NativeEditor::dragPattern (int source)
+    {
+       #if !JUCE_IOS && !JUCE_ANDROID
+        controller.commit();
+        const auto name = projectTitle() + " - P" + juce::String (source + 1);
+        // Keep the source after the drag ends: some hosts import asynchronously or retain its path.
+        // The OS temporary directory owns cleanup; each drag gets an immutable, unique file.
+        const auto directory = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("ofsound-KSH-MIDI")
+                                   .getChildFile (juce::Uuid().toString());
+        const auto file = directory.getChildFile (juce::File::createLegalFileName (name).substring (0, 120) + ".mid");
+        auto result = directory.createDirectory();
+        if (result.wasOk())
+            result = writePatternMidiFile (controller.processor.enginePlaybackSnapshot(), source, file, name);
+        if (result.wasOk()
+            && !juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false,
+                                                                           &patterns[static_cast<size_t> (source)]))
+            result = juce::Result::fail ("The MIDI file was created, but the system could not start the drag. Try dragging the pattern again.");
+        if (result.failed())
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "MIDI export", result.getErrorMessage());
+       #else
+        juce::ignoreUnused (source);
+       #endif
     }
 
     NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true), projectDetails (processor)
@@ -123,6 +149,10 @@ namespace ksh::ui
             b.setButtonText (juce::String (i + 1));
             b.setTooltip (juce::String::fromUTF8 ("Select pattern • Shift-click chooses copy source, then click destination"));
             b.onClick = [this, i] { controller.selectSource (i, controller.useSelectionModifier (juce::ModifierKeys::getCurrentModifiersRealtime())); };
+           #if !JUCE_IOS && !JUCE_ANDROID
+            b.setTooltip (b.getTooltip() + ". Drag to a DAW MIDI track to export one pattern pass.");
+            b.onDrag = [this, i] { dragPattern (i); };
+           #endif
         }
         velocityLayer.getProperties().set ("layerSegment", 0);
         chanceLayer.getProperties().set ("layerSegment", 1);
@@ -166,12 +196,12 @@ namespace ksh::ui
         dc.onClick = [this] { controller.drumColors = ! controller.drumColors; sync(); };
         dc.setTooltip ("Toggle channel colors");
         configureValue (swing, "Amount", 0, 100, "swing");
-        configureValue (subdivision, "Subdivision", 0, 2, "swing_subdivision");
+        configureValue (subdivision, "Target", 0, 2, "swing_subdivision");
         swing.setTitle ("Swing amount");
         swing.suffix = "%";
         swing.setTooltip ("Delay the swung subdivisions. 0% is straight timing; the grid shows the resulting positions.");
-        subdivision.setTitle ("Swing subdivision");
-        subdivision.setTooltip ("Choose the subdivision used to group the swing timing");
+        subdivision.setTitle ("Swing target");
+        subdivision.setTooltip ("Choose the target used to group the swing timing");
         subdivision.format = [] (int v) { return juce::String (1 << v) + "x"; };
         subdivision.resetValue = 1;
         configureValue (velocityHumanize, "Velocity", 0, 100, "velocity_humanize");

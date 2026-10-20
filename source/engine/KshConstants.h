@@ -55,6 +55,15 @@ struct Constants
     static constexpr std::string_view defaultGenerationMode = "static";
     static constexpr std::string_view defaultChannelPlaybackMode = "normal";
 
+    [[nodiscard]] static double beatsForRate (std::string_view rate)
+    {
+        static constexpr std::array<double, 8> beats { 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0 };
+        for (size_t i = 0; i < rates.size(); ++i)
+            if (rates[i] == rate)
+                return beats[i];
+        return 0.25;
+    }
+
     [[nodiscard]] static std::string normalizeRate (std::string_view rate)
     {
         for (const auto candidate : rates)

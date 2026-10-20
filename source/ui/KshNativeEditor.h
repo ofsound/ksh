@@ -1,5 +1,6 @@
 #pragma once
 #include "KshPatternGrid.h"
+#include "KshPatternButton.h"
 #include "KshPreviewPanel.h"
 #include "KshProjectDetails.h"
 namespace ksh::ui
@@ -34,7 +35,7 @@ namespace ksh::ui
         PatternGrid grid;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
-        std::array<juce::TextButton, 16> patterns;
+        std::array<PatternButton, 16> patterns;
         std::array<juce::TextButton, 6> projectButtons;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
@@ -63,6 +64,7 @@ namespace ksh::ui
         void updateLayerHeading();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
+        void dragPattern (int source);
         static const std::array<juce::String, 8> rateNames;
         static int rateControlWidth();
         void toggleAboutPanel();

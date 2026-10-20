@@ -2208,3 +2208,38 @@ TEST_CASE ("Macro gestures reach the host once and settings undo stays condition
     CHECK (processor.engineStateSnapshot().swing == 45);
     processor.removeListener (&gestures);
 }
+
+TEST_CASE ("Pattern buttons distinguish clicks from MIDI drags and suppress selection after a drag", "[native-ui][midi-export]")
+{
+    PatternButton button;
+    button.setBounds (0, 0, 80, 40);
+    button.setVisible (true);
+    int clicks = 0, drags = 0;
+    button.onClick = [&] { ++clicks; };
+    button.onDrag = [&] { ++drags; };
+    const auto start = juce::Point<float> (20, 20);
+    const int modifiers = juce::ModifierKeys::leftButtonModifier | GENERATE (0, static_cast<int> (juce::ModifierKeys::shiftModifier));
+    auto down = [&]
+    {
+        button.mouseDown (gridEvent (button, start, start, modifiers));
+        CHECK (button.isDown());
+    };
+    down();
+    button.mouseUp (gridEvent (button, start, start, 0));
+    CHECK (clicks == 1);
+
+    down();
+    button.mouseDrag (gridEvent (button, start.translated (3, 0), start, modifiers, true));
+    CHECK (drags == 0);
+    button.mouseDrag (gridEvent (button, start.translated (8, 0), start, modifiers, true));
+    button.mouseDrag (gridEvent (button, start.translated (20, 0), start, modifiers, true));
+    CHECK (drags == 1);
+    // Returning over the button after a cancelled native drag must not select or copy it.
+    button.mouseUp (gridEvent (button, start, start, 0, true));
+    CHECK (clicks == 1);
+    CHECK_FALSE (button.isDown());
+
+    down();
+    button.mouseUp (gridEvent (button, start, start, 0));
+    CHECK (clicks == 2);
+}

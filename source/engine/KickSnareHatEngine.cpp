@@ -249,24 +249,7 @@ int KickSnareHatEngine::mod (int value, int divisor)
 
 double KickSnareHatEngine::beatsPerStep() const
 {
-    static constexpr std::array<std::pair<std::string_view, double>, 8> ratios {{
-        { "4n", 1.0 },
-        { "4nt", 2.0 / 3.0 },
-        { "8n", 0.5 },
-        { "8nt", 1.0 / 3.0 },
-        { "16n", 0.25 },
-        { "16nt", 1.0 / 6.0 },
-        { "32n", 0.125 },
-        { "32nt", 1.0 / 12.0 }
-    }};
-
-    for (const auto& [name, beats] : ratios)
-    {
-        if (name == rate)
-            return beats;
-    }
-
-    return 0.25;
+    return Constants::beatsForRate (rate);
 }
 
 void KickSnareHatEngine::updateStepIntervalMs()
