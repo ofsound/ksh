@@ -40,6 +40,7 @@ namespace ksh::ui
         bool viewportFit = false;
         juce::TextButton modifierToggle { "Keys" };
         PatternGrid grid;
+        juce::Label layerHint;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
         std::array<PatternButton, 16> patterns;

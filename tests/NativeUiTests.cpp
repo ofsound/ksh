@@ -370,6 +370,10 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
         REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
     };
     capture ("project-header");
+    header->onClick();
+    CHECK (details->isVisible());
+    details->dismiss();
+    CHECK_FALSE (details->isVisible());
     info->onClick();
     CHECK (details->isVisible());
     juce::TextEditor* name = nullptr;
@@ -1156,8 +1160,7 @@ TEST_CASE ("Background clicks deselect while grid and nested controls keep the s
     CHECK (editor.controller.selected.none());
     for (auto* child : editor.getChildren())
     {
-        if (dynamic_cast<PreviewPanel*> (child) != nullptr || dynamic_cast<FooterHelp*> (child) != nullptr
-            || dynamic_cast<ProjectHeader*> (child) != nullptr)
+        if (dynamic_cast<PreviewPanel*> (child) != nullptr || dynamic_cast<FooterHelp*> (child) != nullptr)
         {
             select();
             click (*child);
@@ -1454,6 +1457,47 @@ TEST_CASE ("Selection mutes only unselected active cell colors and leaves empty 
             for (int x = bounds.getX(); x < bounds.getRight(); ++x)
                 identical = identical && before.getPixelAt (x, y) == after.getPixelAt (x, y);
         CHECK (identical == (step != 2));
+    }
+}
+
+TEST_CASE ("Cells outside a channel loop are completely invisible in every layer", "[native-ui][render][loop-visibility]")
+{
+    PluginProcessor processor;
+    for (const int step : { 1, 4, 8 })
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, step, 1, 90, 60, 4, 5, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 4, 3 }));
+    EditorController controller (processor);
+    controller.layer = GENERATE (Layer::velocity, Layer::chance, Layer::nudge, Layer::roll, Layer::cycle);
+    controller.selected.set (0);
+    controller.selected.set (7);
+    PatternGrid grid (controller);
+    grid.layout.compact = GENERATE (false, true);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto before = processor.editorDocument();
+    const auto rendered = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto backdrop = Palette::shell.interpolatedWith (Palette::app, 0.28f);
+    for (const int step : { 0, 7, 10 })
+    {
+        const auto area = grid.cellBounds ({ 0, step }).reduced (3).getSmallestIntegerContainer();
+        bool invisible = true;
+        for (int y = area.getY(); y < area.getBottom(); ++y)
+            for (int x = area.getX(); x < area.getRight(); ++x)
+                invisible = invisible && rendered.getPixelAt (x, y) == backdrop;
+        INFO ("Step " << step + 1);
+        CHECK (invisible);
+    }
+    const auto visible = grid.cellBounds ({ 0, 3 }).getCentre().toInt();
+    CHECK (rendered.getPixelAt (visible.x, visible.y) != backdrop);
+    CHECK (controller.cell ({ 0, 0 }).enabled);
+    CHECK (controller.cell ({ 0, 7 }).enabled);
+    CHECK (processor.editorDocument() == before);
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile ("loop-visibility-" + juce::String (grid.layout.compact ? "compact-" : "desktop-") + juce::String (static_cast<int> (controller.layer)) + ".png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (rendered, *stream));
     }
 }
 
@@ -1945,6 +1989,7 @@ TEST_CASE ("Roll is edited in the inspector while permanent grid layers remain v
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 80, 4, 5, 1 }));
     NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
     for (char key : { '1', '2', '3', '4' })
         CHECK_FALSE (editor.keyPressed (juce::KeyPress (key, {}, static_cast<juce::juce_wchar> (key))));
     CHECK (editor.controller.layer == Layer::velocity);
@@ -1984,6 +2029,13 @@ TEST_CASE ("Roll is edited in the inspector while permanent grid layers remain v
     {
         controller.layer = layer;
         roll->onBegin();
+        const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+        if (directory.isNotEmpty())
+        {
+            auto stream = juce::File (directory).getChildFile ("layer-hint-" + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
+            REQUIRE (stream != nullptr);
+            REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
+        }
         roll->onChange (4);
         roll->onEnd();
         CHECK (controller.layer == layer);
@@ -2926,7 +2978,7 @@ TEST_CASE ("Pattern buttons distinguish clicks from MIDI drags and suppress sele
     CHECK (clicks == 2);
 }
 
-TEST_CASE ("Record lock is an independent superscript control in desktop and compact layouts", "[native-ui][record-ui][render]")
+TEST_CASE ("Record lock is an independent small button beside Record in desktop and compact layouts", "[native-ui][record-ui][render]")
 {
     const bool compact = GENERATE (false, true);
     PluginProcessor processor;
@@ -2970,10 +3022,14 @@ TEST_CASE ("Record lock is an independent superscript control in desktop and com
     CHECK (lock->getToggleState());
     CHECK (lock->getBounds().getCentreX() > record->getBounds().getCentreX());
     CHECK (lock->getBounds().getCentreY() < record->getBounds().getCentreY());
-    CHECK (lock->getBounds().intersects (record->getBounds()));
+    CHECK_FALSE (lock->getBounds().intersects (record->getBounds()));
+    CHECK (lock->getX() > record->getRight());
+    CHECK (lock->getY() == record->getY());
+    CHECK (lock->getHeight() == juce::roundToInt (record->getHeight() * 0.75f));
+    CHECK (static_cast<bool> (lock->getProperties()["outlinedIcon"]));
     CHECK_FALSE (lock->getBounds().contains (record->getBounds().getCentre()));
-    CHECK_FALSE (lock->hitTest (0, 0));
-    CHECK_FALSE (lock->hitTest (lock->getWidth() - 1, lock->getHeight() - 1));
+    CHECK (lock->hitTest (0, 0));
+    CHECK (lock->hitTest (lock->getWidth() - 1, lock->getHeight() - 1));
     CHECK (lock->hitTest (lock->getWidth() / 2, lock->getHeight() / 2 + 4));
     CHECK (lock->getTitle() == "Record quantization on");
     lock->setToggleState (false, juce::dontSendNotification);

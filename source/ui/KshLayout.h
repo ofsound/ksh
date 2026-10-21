@@ -20,11 +20,11 @@ namespace ksh::ui
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
         float transportHeight() const { return standalone ? 44.0f : 0.0f; }
         float toolbarY() const { return compact ? 0.0f : transportHeight() + 90; }
-        float gridY() const { return compact ? 46.0f : toolbarY() + 68; }
+        float gridY() const { return compact ? 46.0f : toolbarY() + 80; }
         float cellWidth() const { return compact ? gridWidth() / 16.0f : 54.375f * (steps > 16 ? 16.0f / static_cast<float> (steps) : 1.0f); }
         float cellHeight() const { return compact ? rowHeight() - 3.0f : 54.0f; }
         float rowHeight() const { return compact ? (compactHeight - gridY() - cellsY() - 84.0f) / 8.0f : cellHeight() + 4.0f; }
-        float gridLeft() const { return compact ? 132.0f : 322.0f; }
+        float gridLeft() const { return compact ? 132.0f : 346.0f; }
         float gridWidth() const { return compact ? compactWidth - gridLeft() - 6.0f : 870.0f; }
         float width() const { return compact ? compactWidth : juce::jmax (1338.0f, 436.0f + gridWidth()); }
         float cellsY() const { return compact ? 18.0f : 46.0f; }

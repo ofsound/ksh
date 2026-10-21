@@ -160,7 +160,7 @@ namespace ksh::ui
             void paint (juce::Graphics& g) override
             {
                 const auto centre = getLocalBounds().toFloat().getCentre();
-                g.setColour ((dragging || isMouseOver() ? Palette::accent : Palette::muted).withMultipliedAlpha (isEnabled() ? 1.0f : 0.35f));
+                g.setColour ((dragging || isMouseOver() ? Palette::accent : Palette::text).withMultipliedAlpha (isEnabled() ? 1.0f : 0.35f));
                 for (int dot = -2; dot <= 2; ++dot)
                     g.fillEllipse (centre.x - 0.6f, centre.y + static_cast<float> (dot) * 4, 1.2f, 1.2f);
             }

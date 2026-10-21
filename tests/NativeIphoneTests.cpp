@@ -124,7 +124,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
     CHECK (phoneButton (editor, "NEW").isVisible());
     CHECK_FALSE (phoneButton (editor, "Open controls").isVisible());
-    CHECK (grid.layout.gridLeft() == 322.0f);
+    CHECK (grid.layout.gridLeft() == 346.0f);
 }
 
 TEST_CASE ("iPhone second step page edits the correct cells and cancels a resized gesture", "[native-ui][iphone]")

@@ -387,11 +387,11 @@ namespace ksh::ui
                 continue;
             }
             r.clear.setBounds (arrowsX + 60, y + 4, 20, 24);
-            r.label.setBounds (Layout::outerGutter, y - 2, 76, 36);
-            r.note.setBounds (101, y, 44, 32);
-            r.reverse.setBounds (163, y, 34, 32);
-            r.ping.setBounds (215, y, 28, 32);
-            r.mute.setBounds (261, y, 24, 32);
+            r.mute.setBounds (juce::roundToInt (layout.gridLeft()) - 61, y, 24, 32);
+            r.ping.setBounds (r.mute.getX() - 46, y, 28, 32);
+            r.reverse.setBounds (r.ping.getX() - 52, y, 34, 32);
+            r.note.setBounds (r.reverse.getX() - 62, y, 44, 32);
+            r.label.setBounds (Layout::outerGutter, y - 2, r.note.getX() - Layout::outerGutter - 13, 36);
             r.left.setBounds (arrowsX, y, 26, 32);
             r.right.setBounds (arrowsX + 26, y, 26, 32);
         }
@@ -401,16 +401,14 @@ namespace ksh::ui
         if (std::abs (probabilityFontSize - size) < 0.001f)
             return;
         probabilityFontSize = size;
-        const auto labelFont = font (size);
+        const auto labelFont = font (size, true);
         const float digitWidth = juce::GlyphArrangement::getStringWidth (labelFont, "0");
         const float percentWidth = juce::GlyphArrangement::getStringWidth (labelFont, "%");
         probabilityBaseline = (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
         // Gantari has proportional numerals and no tabular-number feature.
         // Cache equal-width digit slots so matching digit counts keep % aligned.
-        for (int value = 0; value <= 100; ++value)
+        const auto prepare = [&] (ProbabilityLabel& label, const juce::String& number)
         {
-            auto& label = probabilityLabels[static_cast<size_t> (value)];
-            const auto number = juce::String (value);
             label.width = static_cast<float> (number.length()) * digitWidth + percentWidth;
             label.glyphs.clear();
             label.glyphs.addLineOfText (labelFont, number + "%", 0.0f, 0.0f);
@@ -421,24 +419,27 @@ namespace ksh::ui
                 const float inset = i < number.length() ? (digitWidth - glyph.getBounds().getWidth()) * 0.5f : 0.0f;
                 glyph.moveBy (slot + inset - glyph.getLeft(), 0.0f);
             }
-        }
+        };
+        for (int value = 0; value <= 100; ++value)
+            prepare (probabilityLabels[static_cast<size_t> (value)], juce::String (value));
+        for (int value = -100; value <= 100; ++value)
+            prepare (nudgeLabels[static_cast<size_t> (value + 100)], (value > 0 ? "+" : "") + juce::String (value));
     }
     void PatternGrid::paint (juce::Graphics& g)
     {
         const auto gridBackdrop = Palette::shell.interpolatedWith (Palette::app, 0.28f);
         const auto loopTint = Palette::accent.withAlpha (0.08f);
-        const auto loopBackdrop = gridBackdrop.overlaidWith (loopTint);
         g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
-        if (overviewLayer (layer))
+        if (layout.compact && overviewLayer (layer))
         {
             const auto name = layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle";
             text (g, juce::String (name) + " / overview", { 16.0f, layout.cellsY() - 32.0f, layout.gridLeft() - 24.0f, 22.0f }, 12, Palette::accent, true, juce::Justification::centredLeft);
         }
         const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
         const float valueSize = juce::jmin (18.0f, referenceCell.getWidth() * 0.38f, referenceCell.getHeight() * 0.5f);
-        if (layer == Layer::chance && !controller.graphicalCellValues)
-            prepareProbabilityLabels (juce::jmax (1.0f, valueSize - 3.0f));
+        if ((layer == Layer::chance && !controller.graphicalCellValues) || layer == Layer::nudge)
+            prepareProbabilityLabels (valueSize * 0.78f);
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
         for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
@@ -457,12 +458,13 @@ namespace ksh::ui
                 brace = brace.getIntersection ({ layout.gridLeft(), brace.getY(), layout.gridWidth(), brace.getHeight() });
             g.setColour (loopTint);
             g.fillRoundedRectangle (brace, 6);
-            const auto braceArea = brace.toNearestInt();
             // Lay down all beat slots before drawing shifted hits over them.
             for (int pass = 0; pass < 2; ++pass)
             {
                 for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
                 {
+                    if (step < range.loopStart || step >= range.loopStart + range.loopLength)
+                        continue;
                     const Location pos { ch, step };
                     if (pass == 1 && !controller.cell (pos).enabled)
                         continue;
@@ -474,7 +476,6 @@ namespace ksh::ui
                     const juce::Graphics::ScopedSaveState cellClip (g);
                     g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), r.getY() - 2, layout.gridWidth(), r.getHeight() + 4).getSmallestIntegerContainer());
                     const bool groupStart = step % 4 == 0;
-                    const bool inLoop = step >= range.loopStart && step < range.loopStart + range.loopLength;
                     auto colour = Palette::channel (ch, controller.drumColors);
                     if (groupStart)
                         colour = colour.interpolatedWith (Palette::app, 0.12f);
@@ -487,28 +488,21 @@ namespace ksh::ui
                     const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
                     const auto light = colour.brighter (0.18f);
                     const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
-                    // Out-of-loop cells are faded toward the backdrop. Blending every colour
-                    // against an opaque backdrop matches a transparency layer without the offscreen pass.
-                    const float opacity = inLoop ? 1.0f : 0.33f;
-                    const auto paintCell = [&] (juce::Colour backdrop)
+                    const auto paintCell = [&]
                     {
-                        const auto tone = [opacity, backdrop] (juce::Colour value)
-                        {
-                            return opacity >= 1.0f ? value : backdrop.interpolatedWith (value.withAlpha (1.0f), opacity).withAlpha (value.getFloatAlpha());
-                        };
                         if (pass == 0)
                         {
-                            surface (g, r, false, false, tone);
+                            surface (g, r);
                             if (groupStart && !c.enabled)
                             {
-                                g.setColour (tone (juce::Colours::black.withAlpha (0.22f)));
+                                g.setColour (juce::Colours::black.withAlpha (0.22f));
                                 g.fillRoundedRectangle (r.reduced (0.5f), 5);
                             }
                             return;
                         }
                         if (!c.enabled)
                             return;
-                        juce::ColourGradient fill (tone (light), r.getTopLeft(), tone (fillBottom), r.getBottomLeft(), false);
+                        juce::ColourGradient fill (light, r.getTopLeft(), fillBottom, r.getBottomLeft(), false);
                         if (layer == Layer::velocity)
                         {
                             // The unlit share of the cell becomes a hard-edged leading band of the same gradient.
@@ -517,16 +511,16 @@ namespace ksh::ui
                             if (shade > 0.0)
                             {
                                 fill.clearColours();
-                                fill.addColour (0.0, tone (dark));
-                                fill.addColour (shade, tone (dark));
-                                fill.addColour (edge, tone (light.interpolatedWith (fillBottom, static_cast<float> (edge))));
-                                fill.addColour (1.0, tone (fillBottom));
+                                fill.addColour (0.0, dark);
+                                fill.addColour (shade, dark);
+                                fill.addColour (edge, light.interpolatedWith (fillBottom, static_cast<float> (edge)));
+                                fill.addColour (1.0, fillBottom);
                             }
                         }
                         g.setGradientFill (fill);
                         g.fillRoundedRectangle (r, 5);
                         // Divide the painted body evenly; swing affects playback timing, not these count indicators.
-                        if (c.roll > 1 && !overviewLayer (layer))
+                        if (c.roll > 1 && (!overviewLayer (layer) || layer == Layer::roll))
                         {
                             juce::Graphics::ScopedSaveState rollClip (g);
                             juce::Path clip;
@@ -538,18 +532,18 @@ namespace ksh::ui
                                 const float end = r.getX() + r.getWidth() * static_cast<float> (part + 1) / static_cast<float> (c.roll);
                                 if (part % 2 == 1)
                                 {
-                                    g.setColour (tone (Palette::app.withAlpha (0.14f)));
+                                    g.setColour (Palette::app.withAlpha (0.14f));
                                     if (end > x)
                                         g.fillRect (x, r.getY(), end - x, r.getHeight());
                                 }
                                 if (part > 0)
                                 {
-                                    g.setColour (tone (Palette::text.withAlpha (0.18f)));
+                                    g.setColour (Palette::text.withAlpha (0.18f));
                                     g.fillRect (x - 0.375f, r.getY(), 0.75f, r.getHeight());
                                 }
                             }
                         }
-                        g.setColour (tone (Palette::text.withAlpha (0.22f)));
+                        g.setColour (Palette::text.withAlpha (0.22f));
                         g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                         if (layer == Layer::chance)
                         {
@@ -557,9 +551,9 @@ namespace ksh::ui
                             {
                                 const float diameter = juce::jmin (22.0f, r.getWidth() * 0.6f, r.getHeight() * 0.44f);
                                 const auto pie = juce::Rectangle<float> (diameter, diameter).withCentre ({ r.getCentreX(), r.getCentreY() - 3.0f });
-                                g.setColour (tone (juce::Colours::black));
+                                g.setColour (juce::Colours::black);
                                 g.fillEllipse (pie);
-                                g.setColour (tone (light));
+                                g.setColour (light);
                                 if (c.probability >= 100)
                                     g.fillEllipse (pie);
                                 else if (c.probability > 0)
@@ -568,14 +562,14 @@ namespace ksh::ui
                                     segment.addPieSegment (pie, 0, juce::MathConstants<float>::twoPi * static_cast<float> (c.probability) / 100.0f, 0);
                                     g.fillPath (segment);
                                 }
-                                g.setColour (tone (light.withAlpha (0.65f)));
+                                g.setColour (light.withAlpha (0.65f));
                                 g.drawEllipse (pie, 1.0f);
                             }
                             else
                             {
-                                // Lift the smaller probability label so its glyph top matches velocity.
+                                // Keep the percentage label above the cycle strip.
                                 const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
-                                g.setColour (tone (valueColour));
+                                g.setColour (valueColour);
                                 label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
                                                          r.getCentreY() - 3.0f + probabilityBaseline));
                             }
@@ -583,75 +577,53 @@ namespace ksh::ui
                             const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
                             for (int i = 0; i < bits; ++i)
                             {
-                                g.setColour (tone ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app));
+                                g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
                                 // Split the two-pixel gap between both sides to centre the cycle strip.
                                 g.fillRect (strip.getX() + 1.0f + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
                             }
                         }
+                        else if (layer == Layer::roll)
+                            text (g, juce::String (c.roll), r, valueSize, valueColour);
                         else if (overviewLayer (layer))
                         {
-                            const auto ink = tone (valueColour);
-                            const auto label = r.withHeight (r.getHeight() * 0.56f);
+                            const auto ink = valueColour;
                             if (layer == Layer::nudge)
                             {
-                                text (g, (c.nudge > 0 ? "+" : "") + juce::String (c.nudge) + "%", label, valueSize * 0.78f, ink, true);
-                                const auto bar = r.reduced (6, 0).withY (r.getY() + r.getHeight() * 0.72f).withHeight (4);
+                                const auto& label = nudgeLabels[static_cast<size_t> (juce::jlimit (-100, 100, c.nudge) + 100)];
+                                g.setColour (ink);
+                                label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
+                                                         r.getCentreY() - 3.0f + probabilityBaseline));
+                                const auto bar = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (4, 0);
                                 g.setColour (ink.withMultipliedAlpha (0.18f));
-                                g.fillRoundedRectangle (bar, 2);
+                                g.fillRoundedRectangle (bar, 1);
                                 const float end = bar.getCentreX() + bar.getWidth() * 0.5f * static_cast<float> (c.nudge) / 100.0f;
                                 g.setColour (ink.withMultipliedAlpha (0.8f));
                                 g.fillRect (juce::jmin (bar.getCentreX(), end), bar.getY(), juce::jmax (1.0f, std::abs (end - bar.getCentreX())), bar.getHeight());
-                                g.fillRect (bar.getCentreX() - 0.5f, bar.getY() - 2, 1.0f, 8.0f);
-                            }
-                            else if (layer == Layer::roll)
-                            {
-                                text (g, juce::String (c.roll) + juce::String::fromUTF8 ("×"), label, valueSize, ink, true);
-                                const auto strip = r.reduced (5, 0).withY (r.getY() + r.getHeight() * 0.66f).withHeight (r.getHeight() * 0.2f);
-                                for (int hit = 0; hit < c.roll; ++hit)
-                                {
-                                    g.setColour (ink.withMultipliedAlpha (0.7f));
-                                    const float stride = strip.getWidth() / static_cast<float> (c.roll);
-                                    g.fillRoundedRectangle (strip.getX() + static_cast<float> (hit) * stride + 0.5f, strip.getY(), juce::jmax (1.0f, stride - 1.5f), strip.getHeight(), 1);
-                                }
+                                g.fillRect (bar.getCentreX() - 0.5f, bar.getY(), 1.0f, bar.getHeight());
                             }
                             else
                             {
-                                text (g, juce::String (c.cycle) + (c.cycle == 1 ? " beat" : " beats"), label, valueSize * 0.7f, ink, true);
-                                const auto strip = r.reduced (4, 0).withY (r.getY() + r.getHeight() * 0.64f).withHeight (r.getHeight() * 0.24f);
+                                const auto strip = r.reduced (4, 0).withHeight (r.getHeight() * 0.24f).withCentre (r.getCentre());
                                 for (int beat = 0; beat < c.cycle; ++beat)
                                 {
                                     const float stride = strip.getWidth() / static_cast<float> (c.cycle);
-                                    auto bit = juce::Rectangle<float> (strip.getX() + static_cast<float> (beat) * stride + 0.5f, strip.getY(), juce::jmax (1.0f, stride - 1.5f), strip.getHeight());
-                                    g.setColour (ink.withMultipliedAlpha ((c.cycleMask & (1 << beat)) != 0 ? 0.85f : 0.25f));
-                                    if ((c.cycleMask & (1 << beat)) != 0) g.fillRoundedRectangle (bit, 1);
-                                    else g.drawRoundedRectangle (bit.reduced (0.4f), 1, 0.8f);
+                                    auto bit = juce::Rectangle<float> (strip.getX() + static_cast<float> (beat) * stride + 0.75f, strip.getY(), juce::jmax (1.0f, stride - 1.5f), strip.getHeight());
+                                    g.setColour ((c.cycleMask & (1 << beat)) != 0 ? light : Palette::app);
+                                    g.fillRoundedRectangle (bit, 1);
                                 }
                             }
                         }
                         else if (!controller.graphicalCellValues)
-                            text (g, juce::String (c.velocity), r, valueSize, tone (valueColour));
+                            text (g, juce::String (c.velocity), r.translated (0, 2), valueSize * 0.9f, valueColour, true);
                     };
-                    if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
-                    {
-                        paintCell (inLoop ? loopBackdrop : gridBackdrop);
-                        continue;
-                    }
-                    // Loop handles extend under the neighbouring cells, so those sit on two backdrops.
-                    {
-                        juce::Graphics::ScopedSaveState outside (g);
-                        g.excludeClipRegion (braceArea);
-                        paintCell (gridBackdrop);
-                    }
-                    {
-                        juce::Graphics::ScopedSaveState inside (g);
-                        g.reduceClipRegion (braceArea);
-                        paintCell (loopBackdrop);
-                    }
+                    paintCell();
                 }
             }
             // Keep the white selection outline crisp, with a soft glow just outside it.
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
+                if (step < range.loopStart || step >= range.loopStart + range.loopLength)
+                    continue;
                 const Location pos { ch, step };
                 if (!controller.selected.test (static_cast<size_t> (pos.key()))
                     || !g.clipRegionIntersects (cellBounds (pos).expanded (3).getSmallestIntegerContainer()))
@@ -667,7 +639,7 @@ namespace ksh::ui
                 g.setColour (Palette::text.withAlpha (0.9f));
                 g.drawRoundedRectangle (frame, 5.65f, 1.0f);
             }
-            // Keep the loop boundary and handles above cells outside the loop.
+            // Keep the loop boundary and handles above the cells.
             g.setColour (Palette::accent.withAlpha (0.42f));
             g.drawRoundedRectangle (brace, 6, 1);
             if (!layout.compact)
@@ -675,7 +647,7 @@ namespace ksh::ui
                 for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
                     for (int dot = -2; dot <= 2; ++dot)
                     {
-                        g.setColour (Palette::muted);
+                        g.setColour (Palette::text);
                         g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
                     }
             }

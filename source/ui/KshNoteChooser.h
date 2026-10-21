@@ -50,6 +50,7 @@ namespace ksh::ui
             setFocusContainerType (FocusContainerType::keyboardFocusContainer);
             addAndMakeVisible (close);
             close.setTitle ("Close note chooser");
+            close.getProperties().set ("icon", "clear");
             close.onClick = [this] { dismiss(); };
             for (int octave = 0; octave < 11; ++octave)
             {

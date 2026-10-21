@@ -202,6 +202,8 @@ namespace ksh::ui
             button->getProperties().set ("icon", icon);
             button->setTitle (icon);
         }
+        for (auto* button : { &record, &left, &right, &clear })
+            button->getProperties().set ("outlinedIcon", true);
         mutePattern.onClick = [this] { controller.selectSource (-1); };
         mutePattern.setTooltip ("Mute pattern playback");
         for (auto* button : { &velocityLayer, &chanceLayer })
@@ -212,6 +214,12 @@ namespace ksh::ui
                 sync();
             };
         grid.layerChanged = [this] { updateLayerHeading(); };
+        addAndMakeVisible (layerHint);
+        layerHint.setFont (font (12, true));
+        layerHint.setColour (juce::Label::textColourId, Palette::accent);
+        layerHint.setBorderSize ({});
+        layerHint.setJustificationType (juce::Justification::centredLeft);
+        layerHint.setInterceptsMouseClicks (false, false);
         velocityLayer.setTooltip ("Show and edit cell velocity");
         chanceLayer.setTooltip ("Show and edit cell probability and cycle");
         clear.setTooltip ("Double-click to clear pattern");
@@ -220,6 +228,7 @@ namespace ksh::ui
         record.onClick = [this] { controller.command ("pattern_record_enabled", { !controller.processor.isPatternRecordingEnabled(), controller.source() + 1 }); };
         addAndMakeVisible (recordQuantize);
         recordQuantize.getProperties().set ("icon", "recordLock");
+        recordQuantize.getProperties().set ("outlinedIcon", true);
         recordQuantize.setClickingTogglesState (true);
         recordQuantize.onClick = [this]
         {
@@ -262,7 +271,8 @@ namespace ksh::ui
         velocityHumanize.suffix = timingHumanize.suffix = "%";
         configureValue (steps, "Grid Length", 1, 32, "source_steps");
         steps.captionFontSize = 12;
-        steps.captionGap = 2;
+        steps.captionColour = Palette::muted;
+        steps.captionGap = 5;
         steps.resetValue = 16;
         configureValue (tempo, "", 20, 300, "standalone_tempo");
         tempo.suffix = " BPM";
@@ -278,6 +288,15 @@ namespace ksh::ui
         scale.maximum = 120;
         scale.resetValue = 100;
         scale.suffix = "%";
+        scale.valueFontSize = 12;
+        zen.getProperties().set ("icon", "zen");
+        modifierToggle.getProperties().set ("icon", "modifiers");
+        tooltipToggle.getProperties().set ("icon", "tips");
+        dc.getProperties().set ("icon", "palette");
+        dc.setTitle ("Channel colors");
+        for (auto* button : { &cellDisplay, &zen, &tooltipToggle, &rowOrder, &modifierToggle, &dc })
+            button->getProperties().set ("footerControl", true);
+        scale.getProperties().set ("footerControl", true);
         scale.onChange = [this] (int v) { controller.processor.setProjectUiScalePercent (v); if (preferredSizeChanged) preferredSizeChanged(); };
         controller.changed = [this] { sync(); };
         setupCompactControls();
@@ -467,6 +486,7 @@ namespace ksh::ui
         velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
         chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
+        layerHint.setBounds (velocityLayer.getX(), velocityLayer.getBottom() + 4, selectMode.getRight() - velocityLayer.getX(), 18);
         undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
         redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
         constexpr int gridInputHeight = 28;
@@ -474,15 +494,15 @@ namespace ksh::ui
         const int gridLabelHeight = 18 + steps.captionGap;
         rate.setBounds (rightEdge - 12 - rateControlWidth(), gridInputY, rateControlWidth(), gridInputHeight);
         steps.setBounds (rate.getX() - 92, gridInputY - gridLabelHeight, 84, gridLabelHeight + gridInputHeight);
-        clear.setBounds (steps.getX() - 112, y + 13, 48, 41);
-        right.setBounds (clear.getX() - 48, y + 13, 40, 41);
-        left.setBounds (right.getX() - 40, y + 13, 40, 41);
-        record.setBounds (left.getX() - 64, y + 13, 48, 41);
-        recordQuantize.setBounds (record.getBounds().getCentreX() + 8, record.getY() + 4, 24, 22);
+        clear.setBounds (steps.getX() - 112, gridInputY, 48, gridInputHeight);
+        right.setBounds (clear.getX() - 40, gridInputY, 32, gridInputHeight);
+        left.setBounds (right.getX() - 34, gridInputY, 32, gridInputHeight);
+        record.setBounds (left.getX() - 96, gridInputY, 48, gridInputHeight);
+        recordQuantize.setBounds (record.getRight() + 4, record.getY(), 20, juce::roundToInt (record.getHeight() * 0.75f));
         play.setBounds (rightEdge - 138, 6, 32, 32);
         stop.setBounds (play.getBounds());
         tempo.setBounds (rightEdge - 98, play.getY(), 98, play.getHeight());
-        const int randomY = juce::roundToInt (layout.toolbarY() + 68);
+        const int randomY = juce::roundToInt (layout.gridY());
         const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
         aboutViewport.setBounds (0, randomY, getWidth(), aboutHeight);
         const int scrollWidth = aboutHeight < 540 ? aboutViewport.getScrollBarThickness() : 0;
@@ -493,14 +513,21 @@ namespace ksh::ui
         const int inspectorRight = juce::roundToInt (layout.gridLeft() + layout.gridWidth() + 16.0f);
         preview.setInspectorBounds ({ inspectorLeft, 12, inspectorRight - inspectorLeft, Layout::previewHeight - 24 });
         const int footerControlY = getHeight() - Layout::footerHeight + Layout::outerGutter;
-        dc.setBounds (rightEdge - 116, footerControlY, 36, 32);
-        modifierToggle.setBounds (rightEdge - 180, footerControlY, 56, 32);
-        rowOrder.setBounds (rightEdge - 228, footerControlY, 36, 32);
-        zen.setBounds (rightEdge - 352, footerControlY, 54, 32);
-        cellDisplay.setBounds (rightEdge - (layout.standalone ? 396 : 334), footerControlY, 36, 32);
-        tooltipToggle.setBounds (rightEdge - 290, footerControlY, 50, 32);
-        scale.setBounds (rightEdge - 66, footerControlY, 66, 32);
-        footerHelp.setBounds (Layout::outerGutter, footerControlY, cellDisplay.getX() - 2 * Layout::outerGutter, 32);
+        int footerRight = rightEdge;
+        const auto placeFooter = [&] (juce::Component& control, int width)
+        {
+            control.setBounds (footerRight - width, footerControlY, width, 32);
+            footerRight -= width + 8;
+        };
+        placeFooter (scale, 66);
+        if (layout.standalone)
+            placeFooter (zen, 40);
+        placeFooter (dc, 40);
+        placeFooter (cellDisplay, 40);
+        placeFooter (rowOrder, 40);
+        placeFooter (modifierToggle, 40);
+        placeFooter (tooltipToggle, 40);
+        footerHelp.setBounds (Layout::outerGutter, footerControlY, tooltipToggle.getX() - 2 * Layout::outerGutter, 32);
     }
     void NativeEditor::paint (juce::Graphics& g)
     {
@@ -538,7 +565,10 @@ namespace ksh::ui
             }
             return;
         }
-        text (g, "Grid Division", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, steps.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
+        text (g, "Grid Division", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
+        text (g, "Record", record.getBounds().withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
+        text (g, "Nudge", left.getBounds().getUnion (right.getBounds()).withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
+        text (g, "Clear", clear.getBounds().withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
         g.setColour (Palette::border.withAlpha (0.5f));
         g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, static_cast<float> (getWidth()));
         for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
@@ -707,6 +737,9 @@ namespace ksh::ui
     }
     void NativeEditor::updateLayerHeading()
     {
+        const auto layer = grid.displayLayer();
+        layerHint.setVisible (!layout.compact && overviewLayer (layer));
+        layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle") + " / overview" : juce::String(), juce::dontSendNotification);
         const bool selecting = grid.isSelectMode() || controller.selected.any();
         const bool chance = grid.displayLayer() == Layer::chance;
         velocityLayer.setToggleState (!selecting && grid.displayLayer() == Layer::velocity, juce::dontSendNotification);

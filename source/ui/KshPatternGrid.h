@@ -102,6 +102,7 @@ namespace ksh::ui
             float width = 0.0f;
         };
         std::array<ProbabilityLabel, 101> probabilityLabels;
+        std::array<ProbabilityLabel, 201> nudgeLabels;
         float probabilityFontSize = 0.0f, probabilityBaseline = 0.0f;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         int boundary = 0, lineVelocity = 100;

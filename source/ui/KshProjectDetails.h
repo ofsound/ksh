@@ -74,17 +74,20 @@ namespace ksh::ui
         juce::TextButton cancel { "Cancel" }, discard { "Discard Changes" };
     };
 
-    class ProjectHeader : public juce::Component, public juce::SettableTooltipClient
+    class ProjectHeader : public juce::TextButton
     {
     public:
         ProjectHeader()
         {
             setWantsKeyboardFocus (false);
+            setMouseCursor (juce::MouseCursor::PointingHandCursor);
             addAndMakeVisible (info);
             info.setTitle ("Project details");
             info.setTooltip ("View project dates and edit the name, author and description");
             info.getProperties().set ("icon", "info");
-            info.onClick = [this] { if (onDetails) onDetails(); };
+            onClick = [this] { if (onDetails) onDetails(); };
+            info.onClick = onClick;
+            info.setMouseCursor (juce::MouseCursor::PointingHandCursor);
         }
         std::function<void()> onDetails;
         void setProjectName (const juce::String& value)
