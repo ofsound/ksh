@@ -1312,3 +1312,26 @@ TEST_CASE ("midi playback follows each channel playback mode inside its loop ran
 
     CHECK (velocities == modeCase.expectedVelocities);
 }
+
+TEST_CASE ("Timestamped keyboard monitoring keeps phase with a consistent block delay", "[engine][record-timing][realtime]")
+{
+    const int blockSize = GENERATE (64, 128, 256, 512, 1024);
+    const int phase = GENERATE (0, 1, 31, 63);
+    EngineFixture fixture;
+    fixture.clearAll();
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    const double eventMs = 1000.0 + phase / 48.0;
+    runner.queueAuditionNote ({ 36, 100, 1, 100, 0.0, eventMs });
+    juce::MidiBuffer midi;
+    runner.processBlock (snapshot, 0.0, 120.0, false, blockSize, midi, {}, {}, 1000.0 + blockSize / 48.0);
+    int onset = -1;
+    for (const auto event : midi)
+        if (event.getMessage().isNoteOn())
+            onset = event.samplePosition;
+    CHECK (onset == phase);
+    // In the synthetic wall clock, output begins at the current callback, exactly
+    // one block after the preceding callback. Arrival phase must not alter latency.
+    CHECK (blockSize + onset - phase == blockSize);
+}

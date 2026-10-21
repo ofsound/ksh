@@ -11,6 +11,22 @@
 class PluginProcessorTestPeer
 {
 public:
+    static void setRecordingClock (PluginProcessor& processor, double ppq, double timestampMs,
+                                   ksh::HostLoopRange loop = {}, bool playing = true)
+    {
+        PluginProcessor::PatternRecordTransport anchor { ppq, 120.0, timestampMs, playing, loop, processor.getUiBridge().getDocumentEpoch() };
+        processor.recordingClockHistory[processor.recordingClockHistoryIndex++ % processor.recordingClockHistory.size()] = anchor;
+        processor.patternRecordTransport.publish (anchor);
+    }
+    static auto uiPositionAt (const PluginProcessor& processor, int source, int channel, double timestampMs)
+    {
+        return processor.positionForUiTrigger (source, channel, timestampMs);
+    }
+    static void queueRecordingMonitor (PluginProcessor& processor, double onsetPpq)
+    {
+        [[maybe_unused]] const bool queued = processor.uiRecordingMonitors.try_enqueue ({
+            processor.recordingMonitorSession.load(), 0, 0, 1, onsetPpq, processor.recordingTransportGeneration });
+    }
     static bool messageThreadWorkPending (const PluginProcessor& processor) { return processor.messageThreadWorkPending.load(); }
     static void tick (PluginProcessor& processor) { processor.timerCallback(); }
     static bool hostTempoPending (const PluginProcessor& processor) { return processor.hostBpmChangePending.load(); }
@@ -996,4 +1012,206 @@ TEST_CASE ("armed qwerty recording quantizes late last step back to first step",
     REQUIRE (engine.sources[4][3][0].enabled);
     REQUIRE (engine.sources[4][3][0].velocity == 74);
     REQUIRE_FALSE (engine.sources[4][3][15].enabled);
+}
+
+TEST_CASE ("Unlocked recording retains played timing across audio buffer sizes", "[plugin][record][record-timing]")
+{
+    const int blockSize = GENERATE (64, 128, 256, 512, 1024);
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, blockSize);
+    plugin.setPatternRecordingQuantized (false);
+    plugin.setPatternRecordingEnabled (true, 0);
+    constexpr std::array<int, 5> inputSamples { 6337, 11619, 30323, 47521, 95523 };
+    int monitored = 0;
+    for (int sample = 0, block = 0; sample < 96000; ++block)
+    {
+        const int size = std::min (block % 2 == 0 ? blockSize : 73, 96000 - sample);
+        juce::AudioBuffer<float> buffer (2, size);
+        juce::MidiBuffer midi;
+        for (size_t hit = 0; hit < inputSamples.size(); ++hit)
+            if (inputSamples[hit] >= sample && inputSamples[hit] < sample + size)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 36 + static_cast<int> (hit), static_cast<juce::uint8> (90)), inputSamples[hit] - sample);
+        playHead.setPpqPosition (static_cast<double> (sample) / 24000.0);
+        plugin.processBlock (buffer, midi);
+        monitored += countNoteOns (midi);
+        PluginProcessorTestPeer::tick (plugin);
+        sample += size;
+    }
+    // Capture monitoring is independent of quantization and does not double-trigger
+    // a newly committed early note on the next callback.
+    CHECK (monitored == static_cast<int> (inputSamples.size()));
+    plugin.setPatternRecordingEnabled (false, 0);
+    const auto snapshot = plugin.enginePlaybackSnapshot();
+    std::array<int, 5> replaySamples {};
+    replaySamples.fill (-1);
+    ksh::MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    for (int sample = 0; sample < 96000; sample += blockSize)
+    {
+        juce::MidiBuffer midi;
+        runner.processBlock (snapshot, static_cast<double> (sample) / 24000.0, 120.0, true,
+                             std::min (blockSize, 96000 - sample), midi);
+        for (const auto event : midi)
+            if (event.getMessage().isNoteOn() && sample + event.samplePosition > 0)
+            {
+                const int channel = event.getMessage().getNoteNumber() - 36;
+                if (channel >= 0 && channel < 5)
+                    replaySamples[static_cast<size_t> (channel)] = sample + event.samplePosition;
+            }
+    }
+    for (size_t hit = 0; hit < inputSamples.size(); ++hit)
+    {
+        CAPTURE (blockSize, hit, replaySamples[hit]);
+        REQUIRE (replaySamples[hit] >= 0);
+        CHECK (std::abs (replaySamples[hit] - inputSamples[hit]) <= 31);
+    }
+    CHECK (replaySamples == std::array<int, 5> { 6360, 11640, 30300, 47520, 95520 });
+    CHECK (snapshot.sources[0][0][1].nudge == 6);
+    CHECK (snapshot.sources[0][1][2].nudge == -6);
+    CHECK (snapshot.sources[0][4][0].nudge == -8);
+}
+
+TEST_CASE ("Standalone timestamp capture agrees with the keyboard clock before block remapping", "[plugin][record][record-timing]")
+{
+    const int blockSize = GENERATE (64, 128, 256, 512, 1024);
+    const int strength = GENERATE (0, 50, 100);
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, blockSize);
+    plugin.setTimestampedStandaloneMidiInput (true);
+    plugin.setPatternRecordingQuantizeStrength (strength);
+    plugin.setPatternRecordingEnabled (true, 0);
+    PluginProcessorTestPeer::setRecordingClock (plugin, 0.2, 1000.0);
+    const auto keyboard = PluginProcessorTestPeer::uiPositionAt (plugin, 0, 0, 1015.0);
+    REQUIRE (keyboard.has_value());
+    CHECK (keyboard->step == 1);
+    CHECK (keyboard->nudge == (strength == 100 ? 0 : strength == 50 ? -4 : -8));
+    auto note = juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (93));
+    note.setTimeStamp (1.015);
+    plugin.captureStandaloneMidiInput (note);
+    // Queue decisions survive a mode/offset change before audio or UI catches up.
+    plugin.setPatternRecordingQuantized (true);
+    plugin.setPatternRecordingOffsetMs (25);
+    playHead.setPpqPosition (0.25);
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent (note, 0); // JUCE collector representation must not record it a second time.
+    plugin.processBlock (buffer, midi);
+    PluginProcessorTestPeer::tick (plugin);
+    const auto recorded = plugin.editorDocument().sources[0][0][1];
+    CHECK (recorded.enabled);
+    CHECK (recorded.velocity == 93);
+    CHECK (recorded.nudge == keyboard->nudge);
+    CHECK (countNoteOns (midi) == 1);
+}
+
+TEST_CASE ("Recording timing accounts for swing channel loops and playback direction", "[plugin][record][record-timing]")
+{
+    const auto mode = GENERATE (ksh::PlaybackMode::normal, ksh::PlaybackMode::reverse,
+                                ksh::PlaybackMode::ping_pong, ksh::PlaybackMode::reverse_ping_pong);
+    PluginProcessor plugin;
+    auto document = plugin.editorDocument();
+    document.settings.swing = 50;
+    document.settings.channels[0].playbackMode = mode;
+    document.settings.sourceSettings[0].loopRanges[0] = { 3, 4 };
+    REQUIRE (plugin.applyEditorDocument (document));
+    const auto snapshot = plugin.enginePlaybackSnapshot();
+    const auto grid = ksh::patternRecordingGrid (snapshot, 0);
+    // Occurrence 1 sounds at 0.3125 PPQ with this swing, so 0.33 is 7% late.
+    const auto position = ksh::patternRecordingPosition (grid, 0, 0.33, 0);
+    CHECK (position.nudge == 7);
+    CHECK (position.step == (mode == ksh::PlaybackMode::reverse || mode == ksh::PlaybackMode::reverse_ping_pong ? 5 : 4));
+    CHECK (std::abs (position.onsetPpq - 0.33) < 0.0013);
+    const auto half = ksh::patternRecordingPosition (grid, 0, 0.33, 50);
+    CHECK (half.nudge == 4);
+    const auto locked = ksh::patternRecordingPosition (grid, 0, 0.33, 100);
+    CHECK (locked.nudge == 0);
+
+    plugin.setPatternRecordingQuantized (false);
+    plugin.setPatternRecordingOffsetMs (-10);
+    PluginProcessorTestPeer::setRecordingClock (plugin, 0.005, 2000.0, { true, 0.0, 4.0 });
+    const auto wrapped = PluginProcessorTestPeer::uiPositionAt (plugin, 0, 0, 2000.0);
+    REQUIRE (wrapped.has_value());
+    CHECK (wrapped->nudge == -6); // Calibration advances across the loop seam.
+    PluginProcessorTestPeer::setRecordingClock (plugin, 3.99, 3000.0, { true, 0.0, 4.0 });
+    plugin.setPatternRecordingOffsetMs (0);
+    const auto nextLoop = PluginProcessorTestPeer::uiPositionAt (plugin, 0, 0, 3010.0);
+    REQUIRE (nextLoop.has_value());
+    CHECK (nextLoop->nudge == 4);
+    CHECK_FALSE (PluginProcessorTestPeer::uiPositionAt (plugin, 0, 0, 3300.0).has_value());
+    PluginProcessorTestPeer::setRecordingClock (plugin, 0.0, 4000.0, {}, false);
+    CHECK_FALSE (PluginProcessorTestPeer::uiPositionAt (plugin, 0, 0, 4010.0).has_value());
+}
+
+TEST_CASE ("Captured nudges survive deferred application overwrites undo and saving", "[plugin][record][record-timing][record-undo]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 64);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 72, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell_nudge", { 1, 1, 2, -30 }));
+    ksh::ui::EditorController controller (plugin);
+    const auto before = plugin.editorDocument();
+    plugin.setPatternRecordingQuantized (false);
+    controller.command ("pattern_record_enabled", { 1, 1 });
+    juce::AudioBuffer<float> buffer (2, 64);
+    for (const auto beat : { 0.27, 4.30 })
+    {
+        playHead.setPpqPosition (beat);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (95)), 0);
+        plugin.processBlock (buffer, midi);
+    }
+    // Deliberately do not service the message thread until both hits have been captured.
+    plugin.setPatternRecordingQuantized (true);
+    controller.command ("pattern_record_enabled", { 0, 1 });
+    (void) controller.poll();
+    const auto recorded = plugin.editorDocument();
+    CHECK (recorded.sources[0][0][1].nudge == 20);
+    CHECK (recorded.sources[0][0][1].velocity == 95);
+    controller.undo();
+    CHECK (plugin.editorDocument() == before);
+    controller.redo();
+    CHECK (plugin.editorDocument() == recorded);
+    const auto saved = plugin.enginePersistenceState().dump();
+    PluginProcessor restored;
+    REQUIRE (restored.loadStateFromData (saved.data(), static_cast<int> (saved.size())));
+    CHECK (restored.editorDocument() == recorded);
+}
+
+TEST_CASE ("Transport seeks invalidate queued and already scheduled recording monitors", "[plugin][record][record-timing]")
+{
+    const bool queuedBeforeSeek = GENERATE (true, false);
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 64);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 100, 100, 1 }));
+    plugin.setPatternRecordingEnabled (true, 0);
+    juce::AudioBuffer<float> buffer (2, 64);
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+    PluginProcessorTestPeer::queueRecordingMonitor (plugin, 0.25);
+    if (!queuedBeforeSeek)
+    {
+        playHead.setPpqPosition (64.0 / 24000.0);
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+    }
+    const int begin = queuedBeforeSeek ? 64 : 128;
+    int notes = 0;
+    for (int sample = begin; sample < 6200; sample += 64)
+    {
+        // Jump exactly one pattern ahead. Its next cell has the same monotonic
+        // sample deadline as the old monitor, but belongs to the new transport pass.
+        playHead.setPpqPosition (4.0 + static_cast<double> (sample) / 24000.0);
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+        notes += countNoteOns (midi);
+    }
+    CHECK (notes == 1);
 }

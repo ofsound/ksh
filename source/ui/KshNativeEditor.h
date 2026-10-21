@@ -54,6 +54,7 @@ namespace ksh::ui
         uint64_t discardEpoch = 0;
         GestureButton selectMode { "Select" };
         juce::TextButton stop { "Stop" };
+        SettingsButton recordQuantize;
         juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, chanceLayer { "Chance" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;
@@ -79,6 +80,7 @@ namespace ksh::ui
         void updatePatternButtons();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
+        void recordingMenu();
         void dragPattern (int source);
         static const std::array<juce::String, 8> rateNames;
         static int rateControlWidth();

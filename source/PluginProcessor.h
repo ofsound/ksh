@@ -4,6 +4,7 @@
 #include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
 #include "engine/KshMidiPlayback.h"
+#include "engine/KshPatternRecording.h"
 
 #include <atomic>
 #include <functional>
@@ -103,7 +104,7 @@ public:
     void endUiParameterGesture (const juce::String& parameterID);
 
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
-        When pattern recording is armed, also enqueues a quantized cell write. */
+        When pattern recording is armed, also enqueues a cell write with captured timing. */
     [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100);
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
@@ -121,6 +122,16 @@ public:
     void setProjectUiScalePercent (int uiScalePercent);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
+    void setPatternRecordingQuantized (bool);
+    [[nodiscard]] bool isPatternRecordingQuantized() const { return getPatternRecordingQuantizeStrength() == 100; }
+    void setPatternRecordingQuantizeStrength (int);
+    int getPatternRecordingQuantizeStrength() const { return patternRecordingQuantizeStrength.load (std::memory_order_acquire); }
+    void setPatternRecordingOffsetMs (int);
+    int getPatternRecordingOffsetMs() const { return patternRecordingOffsetMs.load (std::memory_order_acquire); }
+    /** Standalone MIDI driver callbacks: timestamp capture before JUCE's block remapping.
+        Producer calls are serialized off the audio thread. Playback still uses JUCE's collector. */
+    void setTimestampedStandaloneMidiInput (bool active) { timestampedStandaloneMidiInput.store (active, std::memory_order_release); }
+    void captureStandaloneMidiInput (const juce::MidiMessage&);
     /** Message-thread recording indicator, following the published host/standalone beat. */
     [[nodiscard]] float getRecordingPulseForUi() const;
 
@@ -147,6 +158,27 @@ private:
         int channel = 0;
         int step = 0;
         int velocity = 100;
+        int nudge = 0;
+    };
+    struct PatternRecordTransport
+    {
+        double ppq = 0.0, bpm = 120.0, updatedMs = 0.0;
+        bool playing = false;
+        ksh::HostLoopRange loop;
+        uint64_t documentEpoch = 0, transportGeneration = 0;
+    };
+    struct StandaloneRecordInput
+    {
+        double timestampMs = 0.0;
+        uint64_t session = 0;
+        int source = 0, strength = 100, offsetMs = 0, note = 0, velocity = 100;
+    };
+    struct RecordingMonitor
+    {
+        uint64_t session = 0;
+        int source = 0, channel = 0, step = 0;
+        double onsetPpq = 0.0;
+        uint64_t transportGeneration = 0;
     };
     static BusesProperties createBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -176,17 +208,19 @@ private:
                            double ppqPosition,
                            double bpm,
                            bool isPlaying,
-                           ksh::MidiPatternSelectionBlock& selections);
+                           ksh::MidiPatternSelectionBlock& selections, ksh::HostLoopRange loop);
     juce::MidiBuffer& reservedMidiOutputBuffer();
-    void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying);
+    void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying, ksh::HostLoopRange loop);
+    void consumeStandaloneRecording (const ksh::PlaybackSnapshot&);
+    void applyRecordingMonitors (double ppq, double bpm, ksh::HostLoopRange loop);
     void drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
-    void recordPatternCellLocked (int source, int channel, int step, int velocity);
+    void recordPatternCellLocked (int source, int channel, int step, int velocity, int nudge);
     [[nodiscard]] static bool enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
-                                                         int source, int channel, int step, int velocity, uint64_t session);
+                                                         int source, int channel, int step, int velocity, uint64_t session, int nudge = 0);
     [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
     [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity);
-    [[nodiscard]] int quantizedStepForUiTrigger() const;
+    [[nodiscard]] std::optional<ksh::PatternRecordingPosition> positionForUiTrigger (int source, int channel, double timestampMs = 0.0, uint64_t* generation = nullptr) const;
     void refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnapshot& snapshot);
     void applyProjectMetadataFromState (const nlohmann::json& state);
 
@@ -231,20 +265,32 @@ private:
     std::atomic<int> standaloneTransportResetRequested { 0 };
     std::atomic<int> standaloneStopAllNotesRequested { 0 };
     std::atomic<int> patternRecordingEnabled { 0 };
+    std::atomic<int> patternRecordingQuantizeStrength { 100 };
+    std::atomic<int> patternRecordingOffsetMs { 0 };
     std::atomic<uint64_t> patternRecordingSession { 0 };
+    std::atomic<uint64_t> recordingMonitorSession { 0 };
     PatternRecordingEdits patternRecordingEdits; // engineStateMutex; bounded by the document's cell count
     std::atomic<int> patternRecordingSource { 0 };
-    std::atomic<double> patternRecordTransportPpq { 0.0 };
-    std::atomic<double> patternRecordTransportBpm { 120.0 };
-    std::atomic<double> patternRecordTransportUpdatedMs { 0.0 };
-    std::atomic<int> patternRecordTransportPlaying { 0 };
+    // Audio producer -> message consumer: coherent PPQ/clock/loop anchor, never mixed fields.
+    mutable RealtimeMailbox<PatternRecordTransport> patternRecordTransport;
+    std::array<PatternRecordTransport, 256> recordingClockHistory {};
+    size_t recordingClockHistoryIndex = 0; // audio-thread only
+    uint64_t recordingTransportGeneration = 0;
+    double recordingExpectedNextPpq = 0.0;
+    bool recordingClockInitialized = false, recordingClockWasPlaying = false;
+    double recordingSampleRate = 44100.0; // set in prepareToPlay, read by the audio thread
+    std::atomic<bool> timestampedStandaloneMidiInput { false };
+    std::mutex standaloneMidiProducerMutex; // MIDI driver producers only; never acquired by audio/UI
+    moodycamel::ReaderWriterQueue<StandaloneRecordInput> standaloneRecordInput { 512 };
+    moodycamel::ReaderWriterQueue<RecordingMonitor> midiRecordingMonitors { 512 }; // audio -> audio
+    moodycamel::ReaderWriterQueue<RecordingMonitor> uiRecordingMonitors { 256 }; // message -> audio
+    // Engine-lock-serialized producers -> message consumer, independent of the audio snapshot mailbox.
+    mutable RealtimeMailbox<std::array<ksh::PatternRecordingGrid, ksh::Constants::sourceCount>> patternRecordGrids;
 
     // Message-thread-readable cache of the last published snapshot (for lock-free row triggers).
     std::array<std::atomic<int>, ksh::Constants::maxChannels> auditionChannelNotes {};
     std::atomic<int> auditionChannelCount { ksh::Constants::defaultChannelCount };
     std::atomic<int> auditionDeviceActive { 1 };
-    std::atomic<int> auditionStepCount { 16 };
-    std::atomic<double> auditionBeatsPerStep { 0.25 };
 
     // Output is assembled here and swapped into the host buffer, so the audio thread writes
     // only into storage reserved in prepareToPlay. After a swap a slot holds the host's

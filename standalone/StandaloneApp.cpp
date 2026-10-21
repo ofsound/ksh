@@ -16,7 +16,8 @@ constexpr auto virtualMidiOutputName = "KSH Output";
 }
 
 class KshStandalonePluginHolder final : public StandalonePluginHolder,
-                                        private ChangeListener
+                                        private ChangeListener,
+                                        private MidiInputCallback
 {
 public:
     KshStandalonePluginHolder (PropertySet* settingsToUse,
@@ -41,12 +42,17 @@ public:
 
         createVirtualMidiOutput();
         useVirtualMidiOutputIfAvailable();
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+            plugin->setTimestampedStandaloneMidiInput (true);
+        deviceManager.removeMidiInputDeviceCallback ({}, &player);
+        deviceManager.addMidiInputDeviceCallback ({}, this);
         deviceManager.addChangeListener (this);
     }
 
     ~KshStandalonePluginHolder() override
     {
         deviceManager.removeChangeListener (this);
+        deviceManager.removeMidiInputDeviceCallback ({}, this);
         player.setMidiOutput (nullptr);
 
         if (virtualMidiOutput != nullptr)
@@ -54,6 +60,13 @@ public:
     }
 
 private:
+    void handleIncomingMidiMessage (MidiInput* input, const MidiMessage& message) override
+    {
+        player.handleIncomingMidiMessage (input, message);
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+            plugin->captureStandaloneMidiInput (message);
+    }
+
     void changeListenerCallback (ChangeBroadcaster*) override
     {
         useVirtualMidiOutputIfAvailable();

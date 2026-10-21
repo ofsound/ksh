@@ -218,6 +218,15 @@ namespace ksh::ui
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
         record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
         record.onClick = [this] { controller.command ("pattern_record_enabled", { !controller.processor.isPatternRecordingEnabled(), controller.source() + 1 }); };
+        addAndMakeVisible (recordQuantize);
+        recordQuantize.getProperties().set ("icon", "recordLock");
+        recordQuantize.setClickingTogglesState (true);
+        recordQuantize.onClick = [this]
+        {
+            controller.processor.setPatternRecordingQuantized (recordQuantize.getToggleState());
+            sync();
+        };
+        recordQuantize.showSettings = [this] { recordingMenu(); };
         left.onClick = [this] { controller.shift (-1, -1); };
         right.onClick = [this] { controller.shift (-1, 1); };
         left.setTooltip ("Shift all rows one step left within their loops");
@@ -251,7 +260,9 @@ namespace ksh::ui
         velocityHumanize.setTooltip ("Randomly vary hit velocity by up to this percentage of the cell's velocity. 0% keeps it steady.");
         timingHumanize.setTooltip ("Add subtle random timing variation. 0% is steady; 100% uses a range of one fifth of a step.");
         velocityHumanize.suffix = timingHumanize.suffix = "%";
-        configureValue (steps, "Steps", 1, 32, "source_steps");
+        configureValue (steps, "Grid Length", 1, 32, "source_steps");
+        steps.captionFontSize = 12;
+        steps.captionGap = 2;
         steps.resetValue = 16;
         configureValue (tempo, "", 20, 300, "standalone_tempo");
         tempo.suffix = " BPM";
@@ -351,7 +362,7 @@ namespace ksh::ui
         updatePatternButtons();
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
         updateLayerHeading();
-        for (auto* b : { &clear, &record, &left, &right, &rate })
+        for (auto* b : { &clear, &record, &left, &right, &rate, static_cast<juce::TextButton*> (&recordQuantize) })
             b->setEnabled (controller.source() >= 0);
         steps.setEnabled (controller.source() >= 0);
         undoButton.setEnabled (controller.canUndo());
@@ -375,6 +386,12 @@ namespace ksh::ui
         play.setToggleState (playing, juce::dontSendNotification);
         stop.setToggleState (!playing, juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
+        const int recordStrength = controller.processor.getPatternRecordingQuantizeStrength();
+        recordQuantize.setToggleState (recordStrength == 100, juce::dontSendNotification);
+        recordQuantize.setTitle (recordStrength == 100 ? "Record quantization on" : recordStrength == 0 ? "Record quantization off" : "Record quantization partial");
+        recordQuantize.setTooltip ((recordStrength == 100 ? juce::String ("Grid locked") : recordStrength == 0 ? juce::String ("Preserve played timing") : "Record quantization " + juce::String (recordStrength) + "%")
+                                  + ". Click to toggle; right-click or Shift-F10 for strength and recording offset ("
+                                  + juce::String (controller.processor.getPatternRecordingOffsetMs()) + " ms).");
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
         cellDisplay.setToggleState (controller.graphicalCellValues, juce::dontSendNotification);
         modifierToggle.setToggleState (controller.keyboardModifiersEnabled, juce::dontSendNotification);
@@ -442,7 +459,7 @@ namespace ksh::ui
         velocityHumanize.setBounds (758, top + 25, 72, 43);
         timingHumanize.setBounds (838, top + 25, 72, 43);
         const int patternLeft = rightEdge - 400;
-        const int patternTop = static_cast<int> (layout.transportHeight()) + 30;
+        const int patternTop = static_cast<int> (layout.transportHeight()) + 18;
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 40, patternTop + (i / 8) * 30, 36, 26);
         mutePattern.setBounds (rightEdge - 64, patternTop, 52, 56);
@@ -452,12 +469,16 @@ namespace ksh::ui
         selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
         redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
-        rate.setBounds (rightEdge - 12 - rateControlWidth(), y + 36, rateControlWidth(), 22);
-        steps.setBounds (rate.getX() - 92, y + 18, 84, 40);
-        clear.setBounds (steps.getX() - 44, y + 33, 28, 28);
-        right.setBounds (clear.getX() - 32, y + 33, 28, 28);
-        left.setBounds (right.getX() - 32, y + 33, 28, 28);
-        record.setBounds (left.getX() - 38, y + 33, 28, 28);
+        constexpr int gridInputHeight = 28;
+        const int gridInputY = velocityLayer.getBottom() - gridInputHeight;
+        const int gridLabelHeight = 18 + steps.captionGap;
+        rate.setBounds (rightEdge - 12 - rateControlWidth(), gridInputY, rateControlWidth(), gridInputHeight);
+        steps.setBounds (rate.getX() - 92, gridInputY - gridLabelHeight, 84, gridLabelHeight + gridInputHeight);
+        clear.setBounds (steps.getX() - 112, y + 13, 48, 41);
+        right.setBounds (clear.getX() - 48, y + 13, 40, 41);
+        left.setBounds (right.getX() - 40, y + 13, 40, 41);
+        record.setBounds (left.getX() - 64, y + 13, 48, 41);
+        recordQuantize.setBounds (record.getBounds().getCentreX() + 8, record.getY() + 4, 24, 22);
         play.setBounds (rightEdge - 138, 6, 32, 32);
         stop.setBounds (play.getBounds());
         tempo.setBounds (rightEdge - 98, play.getY(), 98, play.getHeight());
@@ -517,20 +538,9 @@ namespace ksh::ui
             }
             return;
         }
-        const float patternLeft = static_cast<float> (patterns.front().getX() - 12);
-        const float patternTop = layout.transportHeight() + 10;
-        const juce::Rectangle<float> patternGroup { patternLeft, patternTop, 400.0f, layout.gridY() - patternTop - 4.0f };
-        g.setColour (Palette::shell);
-        g.fillRoundedRectangle (patternGroup, 5);
-        paintControlGroup (g, patternGroup, "Patterns");
+        text (g, "Grid Division", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, steps.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
         g.setColour (Palette::border.withAlpha (0.5f));
-        const juce::Rectangle<float> gridSettings { static_cast<float> (steps.getX() - 8), layout.toolbarY() + 4, static_cast<float> (rate.getRight() - steps.getX() + 16), 58 };
-        g.drawHorizontalLine (juce::roundToInt (layout.toolbarY() + 4), patternGroup.getX() + 12, gridSettings.getX() - 8);
-        paintControlGroup (g, gridSettings, "Pattern Grid");
-        text (g, "Cell Length", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, 10, Palette::text, true, juce::Justification::centredLeft);
-        g.setColour (Palette::border.withAlpha (0.5f));
-        // The pattern section spans both rows; the page-wide seam stops at it.
-        g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, patternGroup.getX() - 8);
+        g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, static_cast<float> (getWidth()));
         for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
         paintControlGroup (g, { 574, layout.transportHeight() + 10, 168, 70 }, "Swing");
@@ -719,6 +729,31 @@ namespace ksh::ui
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         updateLayerHeading();
     }
+    void NativeEditor::recordingMenu()
+    {
+        juce::PopupMenu menu, offsets;
+        menu.addSectionHeader ("Recording quantization");
+        const auto strength = controller.processor.getPatternRecordingQuantizeStrength();
+        for (const int value : { 0, 25, 50, 75, 100 })
+            menu.addItem (value + 1, value == 0 ? "Off - preserve feel" : value == 100 ? "100% - grid locked" : juce::String (value) + "%", true, strength == value);
+        offsets.addSectionHeader ("Negative advances; positive delays");
+        const auto offset = controller.processor.getPatternRecordingOffsetMs();
+        for (const int value : { -100, -50, -25, -20, -15, -10, -5, -2, -1, 0, 1, 2, 5, 10, 15, 20, 25, 50, 100 })
+            offsets.addItem (1000 + value, (value > 0 ? "+" : "") + juce::String (value) + " ms", true, offset == value);
+        menu.addSubMenu ("Recording offset: " + juce::String (offset) + " ms", offsets);
+        const juce::Component::SafePointer<NativeEditor> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&recordQuantize), [safe] (int result)
+        {
+            if (safe == nullptr || result == 0)
+                return;
+            if (result >= 900)
+                safe->controller.processor.setPatternRecordingOffsetMs (result - 1000);
+            else
+                safe->controller.processor.setPatternRecordingQuantizeStrength (result - 1);
+            safe->sync();
+        });
+    }
+
     void NativeEditor::timerCallback()
     {
         if (!isShowing())

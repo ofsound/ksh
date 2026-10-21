@@ -108,7 +108,7 @@ namespace ksh::ui
             setVisible (true);
             resized();
             toFront (false);
-            if (getPeer() != nullptr && isShowing())
+            if (getPeer() != nullptr && isShowing() && !isCurrentlyModal())
                 enterModalState (true);
         }
         void dismiss()
@@ -138,7 +138,27 @@ namespace ksh::ui
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (!panel.contains (e.getPosition()))
+            {
+                juce::Component::SafePointer<NoteInput> nextInput;
+                if (auto* parent = getParentComponent())
+                {
+                    const auto position = parent->getLocalPoint (this, e.getPosition());
+                    for (int i = parent->getNumChildComponents(); --i >= 0;)
+                    {
+                        auto* child = parent->getChildComponent (i);
+                        if (child == this || !child->isVisible())
+                            continue;
+                        if (auto* target = child->getComponentAt (child->getLocalPoint (parent, position)))
+                        {
+                            nextInput = dynamic_cast<NoteInput*> (target);
+                            break;
+                        }
+                    }
+                }
                 dismiss();
+                if (e.mods.isLeftButtonDown() && nextInput != nullptr)
+                    nextInput->keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+            }
         }
         void resized() override
         {

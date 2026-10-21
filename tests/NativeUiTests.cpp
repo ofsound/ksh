@@ -2178,6 +2178,27 @@ TEST_CASE ("Inspector hover previews cell layers without changing the chosen lay
     inspector.mouseEnter (event (*cycle, cycle->getLocalBounds().toFloat().getCentre()));
     controller.selected.reset();
     inspector.sync();
+    CHECK (grid.displayLayer() == chosen);
+    CHECK_FALSE (controller.inspectorHoverLayer.has_value());
+    for (auto* child : inspector.getChildren())
+    {
+        if (!child->isVisible())
+            continue;
+        inspector.mouseEnter (event (*child, child->getLocalBounds().toFloat().getCentre()));
+        inspector.mouseMove (event (*child, child->getLocalBounds().toFloat().getCentre()));
+        CHECK (grid.displayLayer() == chosen);
+        CHECK_FALSE (controller.inspectorHoverLayer.has_value());
+    }
+    for (auto* child : cycle->getChildren())
+    {
+        if (!child->isVisible())
+            continue;
+        inspector.mouseEnter (event (*child, child->getLocalBounds().toFloat().getCentre()));
+        CHECK (grid.displayLayer() == chosen);
+    }
+    controller.selected.set (0);
+    inspector.sync();
+    inspector.mouseEnter (event (*cycle, cycle->getLocalBounds().toFloat().getCentre()));
     CHECK (grid.displayLayer() == Layer::cycle);
     inspector.mouseExit (event (inspector, { -1, -1 }));
     CHECK (grid.displayLayer() == chosen);
@@ -2248,6 +2269,58 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
     editor.controller.refresh();
     CHECK_FALSE (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == 60);
+}
+
+TEST_CASE ("Piano note chooser switches rows with one outside click", "[native-ui][note-chooser]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.setVisible (true);
+    PatternGrid* grid = nullptr;
+    NoteChooser* chooser = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child)) grid = candidate;
+        if (auto* candidate = dynamic_cast<NoteChooser*> (child)) chooser = candidate;
+    }
+    REQUIRE (grid != nullptr);
+    REQUIRE (chooser != nullptr);
+    std::array<NoteInput*, 2> inputs {};
+    for (auto* child : grid->getChildren())
+        for (size_t i = 0; i < inputs.size(); ++i)
+            if (child->getTitle() == "MIDI note channel " + juce::String (static_cast<int> (i + 1)))
+                inputs[i] = dynamic_cast<NoteInput*> (child);
+    REQUIRE (inputs[0] != nullptr);
+    REQUIRE (inputs[1] != nullptr);
+    const int firstNote = editor.controller.state.playback.channels[0].note;
+    const int secondNote = editor.controller.state.playback.channels[1].note;
+    processor.markDocumentClean();
+    inputs[0]->onChoose();
+    juce::TextEditor* number = nullptr;
+    for (auto* child : chooser->getChildren())
+        if (auto* candidate = dynamic_cast<juce::TextEditor*> (child)) number = candidate;
+    REQUIRE (number != nullptr);
+    number->setText ("100", false);
+    for (const int row : { 1, 0, 1 })
+    {
+        const auto position = chooser->getLocalPoint (inputs[static_cast<size_t> (row)], inputs[static_cast<size_t> (row)]->getLocalBounds().getCentre()).toFloat();
+        REQUIRE (editor.getComponentAt (editor.getLocalPoint (chooser, position.toInt())) == chooser);
+        chooser->mouseDown (gridEvent (*chooser, position, position, juce::ModifierKeys::leftButtonModifier));
+        REQUIRE (chooser->isVisible());
+        CHECK (number->getText().getIntValue() == (row == 0 ? firstNote : secondNote));
+        CHECK_FALSE (processor.isDocumentModified());
+    }
+    number->setText ("61", false);
+    number->onReturnKey();
+    CHECK_FALSE (chooser->isVisible());
+    CHECK (editor.controller.state.playback.channels[0].note == firstNote);
+    CHECK (editor.controller.state.playback.channels[1].note == 61);
+    editor.controller.undo();
+    CHECK (editor.controller.state.playback.channels[1].note == secondNote);
+    inputs[0]->onChoose();
+    chooser->mouseDown (gridEvent (*chooser, { 1, 1 }, { 1, 1 }, juce::ModifierKeys::leftButtonModifier));
+    CHECK_FALSE (chooser->isVisible());
 }
 
 TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed notes", "[native-ui][note-chooser]")
@@ -2699,7 +2772,7 @@ TEST_CASE ("Nudged cell shapes and hit tests move with their timing", "[native-u
     const bool compact = GENERATE (false, true);
     grid.layout.compact = compact;
     grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
-    controller.layer = GENERATE (Layer::velocity, Layer::chance);
+    controller.layer = GENERATE (Layer::velocity, Layer::chance, Layer::nudge, Layer::roll, Layer::cycle);
     const int nudge = GENERATE (-50, 50);
     REQUIRE (processor.dispatchUiEngineCommand ("cell_nudge", { 1, 1, 3, nudge }));
     controller.refresh();
@@ -2711,8 +2784,16 @@ TEST_CASE ("Nudged cell shapes and hit tests move with their timing", "[native-u
     const int modifiers = juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier;
     grid.mouseDown (gridEvent (grid, point, point, modifiers));
     grid.mouseUp (gridEvent (grid, point, point, juce::ModifierKeys::shiftModifier));
-    CHECK (controller.selected.test (2));
-    CHECK (controller.selected.count() == 1);
+    if (overviewLayer (controller.layer))
+    {
+        CHECK (controller.selected.none());
+        CHECK_FALSE (controller.editing());
+    }
+    else
+    {
+        CHECK (controller.selected.test (2));
+        CHECK (controller.selected.count() == 1);
+    }
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     if (directory.isNotEmpty())
     {
@@ -2843,4 +2924,79 @@ TEST_CASE ("Pattern buttons distinguish clicks from MIDI drags and suppress sele
     down();
     button.mouseUp (gridEvent (button, start, start, 0));
     CHECK (clicks == 2);
+}
+
+TEST_CASE ("Record lock is an independent superscript control in desktop and compact layouts", "[native-ui][record-ui][render]")
+{
+    const bool compact = GENERATE (false, true);
+    PluginProcessor processor;
+    auto editor = std::make_unique<NativeEditor> (processor);
+    if (compact)
+    {
+        editor->setCompactViewport (true, 844, 390);
+        editor->setSize (844, 390);
+    }
+    else
+        editor->setSize (juce::roundToInt (editor->layout.width()), juce::roundToInt (editor->layout.height()));
+    editor->sync();
+    if (compact)
+    {
+        juce::TextButton* controls = nullptr;
+        for (auto* child : editor->getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Controls")
+                controls = button;
+        REQUIRE (controls != nullptr);
+        controls->onClick();
+        juce::TextButton* pattern = nullptr;
+        for (auto* child : editor->getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Pattern")
+                pattern = button;
+        REQUIRE (pattern != nullptr);
+        pattern->onClick();
+    }
+    SettingsButton* lock = nullptr;
+    juce::TextButton* record = nullptr;
+    for (auto* child : editor->getChildren())
+    {
+        if (auto* button = dynamic_cast<SettingsButton*> (child); button != nullptr && button->getProperties()["icon"].toString() == "recordLock")
+            lock = button;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getProperties()["icon"].toString() == "record")
+            record = button;
+    }
+    REQUIRE (lock != nullptr);
+    REQUIRE (record != nullptr);
+    CHECK (lock->isVisible());
+    CHECK (lock->isEnabled());
+    CHECK (lock->getToggleState());
+    CHECK (lock->getBounds().getCentreX() > record->getBounds().getCentreX());
+    CHECK (lock->getBounds().getCentreY() < record->getBounds().getCentreY());
+    CHECK (lock->getBounds().intersects (record->getBounds()));
+    CHECK_FALSE (lock->getBounds().contains (record->getBounds().getCentre()));
+    CHECK_FALSE (lock->hitTest (0, 0));
+    CHECK_FALSE (lock->hitTest (lock->getWidth() - 1, lock->getHeight() - 1));
+    CHECK (lock->hitTest (lock->getWidth() / 2, lock->getHeight() / 2 + 4));
+    CHECK (lock->getTitle() == "Record quantization on");
+    lock->setToggleState (false, juce::dontSendNotification);
+    lock->onClick();
+    CHECK_FALSE (processor.isPatternRecordingQuantized());
+    CHECK_FALSE (processor.isPatternRecordingEnabled());
+    CHECK (lock->getTitle() == "Record quantization off");
+    record->onClick();
+    CHECK (processor.isPatternRecordingEnabled());
+    CHECK_FALSE (processor.isPatternRecordingQuantized());
+    processor.setPatternRecordingQuantizeStrength (50);
+    editor->sync();
+    CHECK_FALSE (lock->getToggleState());
+    CHECK (lock->getTooltip().contains ("50%"));
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile (compact ? "record-lock-compact.png" : "record-lock-desktop.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor->createComponentSnapshot (editor->getLocalBounds()), *stream));
+    }
+    editor.reset();
+    NativeEditor reopened (processor);
+    CHECK (processor.getPatternRecordingQuantizeStrength() == 50);
+    CHECK (processor.isPatternRecordingEnabled());
 }

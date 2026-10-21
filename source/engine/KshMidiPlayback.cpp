@@ -168,6 +168,7 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
     pendingNoteOffCount = 0;
     pendingNoteOnCount = 0;
     pendingStaticSourceOverride = noStaticSourceOverride;
+    clearRecordingMonitors();
     resetCycleCounters();
     rngState = 0x12345678u;
 
@@ -189,6 +190,26 @@ void MidiPlaybackRunner::resetCycleCounters()
 void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
 {
     [[maybe_unused]] const bool queued = pendingAuditions.try_enqueue (note);
+}
+
+void MidiPlaybackRunner::suppressRecordedHit (int source, int channel, int step, int64_t sampleOffset)
+{
+    const auto index = cycleCounterIndex (source, channel, step);
+    if (index < recordedHitSamples.size())
+        recordedHitSamples[index] = nextBlockStartSample + sampleOffset;
+}
+
+void MidiPlaybackRunner::clearRecordingMonitors()
+{
+    recordedHitSamples.fill (std::numeric_limits<int64_t>::min());
+}
+
+bool MidiPlaybackRunner::wasRecordedHit (const NativeHit& hit, int64_t sample) const
+{
+    const auto index = cycleCounterIndex (hit.uiSource - 1, hit.uiChannel - 1, hit.uiSourceStep - 1);
+    if (index >= recordedHitSamples.size() || recordedHitSamples[index] == std::numeric_limits<int64_t>::min())
+        return false;
+    return std::abs (sample - recordedHitSamples[index]) <= recordingSuppressionTolerance;
 }
 
 void MidiPlaybackRunner::clearPending()
@@ -415,6 +436,8 @@ void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
                                       MidiPlaybackResult& result)
 {
     const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
+    if (wasRecordedHit (hit, blockStartSample + stepSampleOffset + delaySamples))
+        return;
     const int onSample = std::max (0, stepSampleOffset + delaySamples);
 
     if (onSample >= numSamples)
@@ -568,6 +591,8 @@ void MidiPlaybackRunner::flushPendingNoteOns (int numSamples, juce::MidiBuffer& 
     {
         const auto pending = pendingNoteOns[i];
         const auto offset = pending.samplePosition - blockStartSample;
+        if (wasRecordedHit (pending.hit, pending.samplePosition))
+            continue;
 
         if (offset < numSamples)
         {
@@ -582,14 +607,19 @@ void MidiPlaybackRunner::flushPendingNoteOns (int numSamples, juce::MidiBuffer& 
     pendingNoteOnCount = writeIndex;
 }
 
-void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi)
+void MidiPlaybackRunner::flushAuditionNotes (int numSamples, juce::MidiBuffer& midi, double callbackTimeMs)
 {
     MidiNoteEvent note;
 
     while (pendingAuditions.try_dequeue (note))
     {
         const int delaySamples = static_cast<int> (std::llround (note.delayMs * sampleRate / 1000.0));
-        const int onSample = std::clamp (delaySamples, 0, std::max (0, numSamples - 1));
+        // Match MIDI playthrough's block phasing: a stable one-block scheduling
+        // delay rather than moving every keypress to sample zero of the next callback.
+        const int phaseSamples = note.timestampMs > 0.0 && callbackTimeMs > 0.0
+                                     ? static_cast<int> (std::llround (numSamples + (note.timestampMs - callbackTimeMs) * sampleRate / 1000.0))
+                                     : 0;
+        const int onSample = std::clamp (phaseSamples + delaySamples, 0, std::max (0, numSamples - 1));
         const int durationSamples =
             std::max (1, static_cast<int> (std::llround (static_cast<double> (note.durationMs) * sampleRate / 1000.0)));
         const int offSample = onSample + durationSamples;
@@ -641,7 +671,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                                                      int numSamples,
                                                      juce::MidiBuffer& midiOut,
                                                      const MidiPatternSelectionBlock& patternSelections,
-                                                     const HostLoopRange& hostLoop)
+                                                     const HostLoopRange& hostLoop,
+                                                     double callbackTimeMs)
 {
     MidiPlaybackResult result;
 
@@ -653,6 +684,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
     blockStartSample = nextBlockStartSample;
     nextBlockStartSample += numSamples;
+    recordingSuppressionTolerance = 2 + static_cast<int> (std::ceil (timingHumanizeRangeMs (snapshot) * sampleRate / 1000.0));
 
     if (! adoptedGenerationVersion.has_value() || *adoptedGenerationVersion != snapshot.generationVersion)
         adoptGeneratedSources (snapshot);
@@ -686,7 +718,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
             flushPendingNoteOffs (numSamples, midiOut);
         }
 
-        flushAuditionNotes (numSamples, midiOut);
+        flushAuditionNotes (numSamples, midiOut, callbackTimeMs);
         wasPlaying = false;
         lastEmittedGlobalStep = std::nullopt;
         lastScheduledGlobalStep.reset();
@@ -759,7 +791,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     // emit. Otherwise its new note-off can be cleared after the note-on is sent.
     flushPendingNoteOns (numSamples, midiOut, result);
     flushPendingNoteOffs (numSamples, midiOut);
-    flushAuditionNotes (numSamples, midiOut);
+    flushAuditionNotes (numSamples, midiOut, callbackTimeMs);
 
     expectedNextPpq = ppqPosition + static_cast<double> (numSamples) * beatsPerSample;
     const int firstStep = lastScheduledGlobalStep.has_value() ? *lastScheduledGlobalStep + 1 : globalStepStart;

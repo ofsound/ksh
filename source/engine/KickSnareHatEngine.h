@@ -24,6 +24,7 @@ struct MidiNoteEvent
     int channel = Constants::defaultMidiChannel;
     int durationMs = Constants::defaultNoteDurationMs;
     double delayMs = 0.0;
+    double timestampMs = 0.0; ///< UI audition arrival time; zero for engine-generated auditions.
 };
 
 struct EngineCallbacks

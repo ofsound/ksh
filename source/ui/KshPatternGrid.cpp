@@ -125,7 +125,7 @@ namespace ksh::ui
     {
         const auto& cell = controller.cell (location);
         const auto bounds = layout.cell (location);
-        return cell.enabled && !overviewLayer (displayLayer()) ? bounds.withX (hitPosition (location).x) : bounds;
+        return cell.enabled ? bounds.withX (hitPosition (location).x) : bounds;
     }
     int PatternGrid::playbackPositionForCell (Location location) const
     {

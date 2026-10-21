@@ -527,3 +527,39 @@ TEST_CASE ("undo-style restores keep the generated pattern instead of re-rolling
     REQUIRE (engine.deserializeForPersistence (state));
     REQUIRE (engine.generationVersion() != version);
 }
+
+TEST_CASE ("Recording quantization and calibration persist with strict optional defaults", "[plugin][persistence][record-timing]")
+{
+    PluginProcessor plugin;
+    CHECK (plugin.isPatternRecordingQuantized());
+    CHECK (plugin.getPatternRecordingOffsetMs() == 0);
+    plugin.setPatternRecordingQuantizeStrength (50);
+    plugin.setPatternRecordingOffsetMs (-15);
+    const auto state = plugin.enginePersistenceState();
+    auto payload = state.dump();
+    PluginProcessor restored;
+    REQUIRE (restored.loadStateFromData (payload.data(), static_cast<int> (payload.size())));
+    CHECK (restored.getPatternRecordingQuantizeStrength() == 50);
+    CHECK (restored.getPatternRecordingOffsetMs() == -15);
+    CHECK_FALSE (restored.isPatternRecordingQuantized());
+    for (const auto& bad : { nlohmann::json ("off"), nlohmann::json (50.5), nlohmann::json (-1), nlohmann::json (101) })
+    {
+        auto invalid = state;
+        invalid["patternRecordQuantizeStrength"] = bad;
+        payload = invalid.dump();
+        CHECK_FALSE (restored.loadStateFromData (payload.data(), static_cast<int> (payload.size())));
+        CHECK (restored.getPatternRecordingQuantizeStrength() == 50);
+    }
+    auto old = state;
+    old.erase ("patternRecordQuantizeStrength");
+    old.erase ("patternRecordOffsetMs");
+    payload = old.dump();
+    REQUIRE (restored.loadStateFromData (payload.data(), static_cast<int> (payload.size())));
+    CHECK (restored.isPatternRecordingQuantized());
+    CHECK (restored.getPatternRecordingOffsetMs() == 0);
+    restored.setPatternRecordingQuantized (false);
+    restored.setPatternRecordingOffsetMs (25);
+    restored.resetProject();
+    CHECK (restored.isPatternRecordingQuantized());
+    CHECK (restored.getPatternRecordingOffsetMs() == 0);
+}

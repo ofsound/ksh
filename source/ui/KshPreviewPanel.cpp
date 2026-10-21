@@ -207,6 +207,11 @@ namespace ksh::ui
     }
     void PreviewPanel::updateHoverLayer (juce::Point<int> position)
     {
+        if (controller.selection (true).empty())
+        {
+            setHoverLayer (std::nullopt);
+            return;
+        }
         for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
                  { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::cycle }, { &cycleLength, Layer::cycle } })
         {
@@ -337,6 +342,8 @@ namespace ksh::ui
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
+        if (!active)
+            setHoverLayer (std::nullopt);
         cycleLength.setEnabled (active);
         cycleLength.setValue (active ? controller.cell (selected.front()).cycle : 1);
         cycleLength.mixed = active && std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).cycle != controller.cell (selected.front()).cycle; });
@@ -427,8 +434,8 @@ namespace ksh::ui
             surface (g, inspectorBounds.toFloat());
             const auto selectedCount = controller.selection (true).size();
             const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
-            text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).withWidth (76).toFloat(), 12, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
         }
         else
         {

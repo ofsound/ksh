@@ -4,6 +4,19 @@
 
 namespace ksh::ui
 {
+    inline juce::Path recordLockShape (bool locked)
+    {
+        juce::Path loop, shape, stroke;
+        loop.startNewSubPath (9, 11);
+        loop.lineTo (9, 8);
+        loop.cubicTo (9, 4, 15, 4, 15, 8);
+        loop.lineTo (15, locked ? 11.0f : 6.0f);
+        juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (stroke, loop);
+        shape.addRoundedRectangle (6, 11, 12, 10, 2);
+        shape.addPath (stroke);
+        return shape;
+    }
+
     struct Palette
     {
         static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfff1954a }, strong { accent }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
@@ -173,7 +186,7 @@ namespace ksh::ui
             }
             if (b.getProperties().contains ("icon"))
             {
-                if (b.getProperties()["icon"].toString() == "info")
+                if (b.getProperties()["icon"].toString() == "info" || b.getProperties()["icon"].toString() == "recordLock")
                     return;
                 if (b.isEnabled() && (hover || down) && static_cast<bool> (b.getProperties()["soloHint"]))
                 {
@@ -263,6 +276,16 @@ namespace ksh::ui
                                             ? static_cast<float> (b.getProperties()["recordPulse"]) : 1.0f;
                     g.setColour (Palette::recording.withAlpha (b.isEnabled() ? pulse : 0.3f));
                     g.fillEllipse (4, 4, 16, 16);
+                    return;
+                }
+                else if (icon == "recordLock")
+                {
+                    const bool locked = b.getToggleState();
+                    g.setColour (!b.isEnabled() ? Palette::faint : locked ? Palette::accent : Palette::text);
+                    g.fillPath (recordLockShape (locked));
+                    g.setColour (Palette::app);
+                    g.fillEllipse (11, 14, 2, 2);
+                    g.fillRect (11.5f, 15.0f, 1.0f, 3.0f);
                     return;
                 }
                 else if (icon == "previous" || icon == "next")
@@ -408,6 +431,39 @@ namespace ksh::ui
     private:
         juce::Component& owner;
         bool helpEnabled = true;
+    };
+
+    class SettingsButton : public juce::TextButton
+    {
+    public:
+        std::function<void()> showSettings;
+        bool hitTest (int x, int y) override
+        {
+            if (getProperties()["icon"].toString() != "recordLock")
+                return juce::TextButton::hitTest (x, y);
+            const auto bounds = getLocalBounds().toFloat();
+            const float size = juce::jmin (30.0f, bounds.getWidth() * 0.84f);
+            if (size <= 0)
+                return false;
+            const auto point = (juce::Point<float> (static_cast<float> (x), static_cast<float> (y)) - bounds.getCentre()) * (24.0f / size) + juce::Point<float> (12, 12);
+            return recordLockShape (getToggleState()).contains (point);
+        }
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (event.mods.isPopupMenu() && showSettings)
+                showSettings();
+            else
+                juce::TextButton::mouseDown (event);
+        }
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (key.getKeyCode() == juce::KeyPress::F10Key && key.getModifiers().isShiftDown() && showSettings)
+            {
+                showSettings();
+                return true;
+            }
+            return juce::TextButton::keyPressed (key);
+        }
     };
 
     /** Buttons with continuous gestures still use the native button accessibility handler. */

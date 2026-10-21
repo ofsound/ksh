@@ -1,6 +1,6 @@
 # Unquantized recording investigation
 
-Status: investigation and proposed behavior, 2026-10-20. No recording or UI behavior changed.
+Status: investigation followed by implementation, 2026-10-20. The original findings and proposal below are retained as design context. The implemented contract is documented in [ui-sync.md](ui-sync.md), including the lock, partial strength, calibration, shared recording clock, and monitoring behavior.
 
 User clarification: preserving human feel is the goal; literal sample accuracy is not required. The existing one-hit-per-channel/step storage limit can remain. The recommended first implementation therefore uses the existing integer nudge data, without a new precision field or multi-event model.
 

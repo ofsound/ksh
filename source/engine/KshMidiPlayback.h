@@ -85,6 +85,10 @@ public:
     void prepare (double sampleRateIn);
     void reset (bool clearAuditions = true);
     void queueAuditionNote (const MidiNoteEvent& note);
+    /** Audio thread: avoid replaying this take's cell attack after it was already monitored.
+        The deadline is relative to the beginning of the next processBlock call. */
+    void suppressRecordedHit (int source, int channel, int step, int64_t sampleOffset);
+    void clearRecordingMonitors();
 
     /** Sends note-offs for every sounding note at sample 0 and drops queued note-ons. */
     void releaseHeldNotes (juce::MidiBuffer& midiOut);
@@ -98,7 +102,8 @@ public:
                                      int numSamples,
                                      juce::MidiBuffer& midiOut,
                                      const MidiPatternSelectionBlock& patternSelections = {},
-                                     const HostLoopRange& hostLoop = {});
+                                     const HostLoopRange& hostLoop = {},
+                                     double callbackTimeMs = 0.0);
 
     /** Sources currently chosen for generative modes, tagged with the engine generation they extend. */
     [[nodiscard]] GeneratedSourcesFrame generatedSourcesFrame() const;
@@ -139,6 +144,9 @@ private:
     size_t pendingNoteOffCount = 0;
     std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};
     size_t pendingNoteOnCount = 0;
+    std::array<int64_t, cycleCounterSlots> recordedHitSamples {};
+    int recordingSuppressionTolerance = 2;
+    [[nodiscard]] bool wasRecordedHit (const NativeHit&, int64_t sample) const;
 
     struct CycleDefinition
     {
@@ -192,7 +200,7 @@ private:
                           MidiPlaybackResult& result);
     void flushPendingNoteOns (int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result);
     void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
-    void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi);
+    void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi, double callbackTimeMs);
     void addPendingNoteOff (int sampleOffset, int midiChannel, int pitch);
     void addPendingNoteOn (int sampleOffset, const NativeHit& hit);
 

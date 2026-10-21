@@ -303,7 +303,8 @@ namespace ksh::ui
             case Panel::pattern:
                 place (steps, 20, 114, 130, 60);
                 place (rate, 162, 114, rateControlWidth(), 60);
-                place (record, 354, 114, 60, 60);
+                place (record, 354, 120, 60, 60);
+                place (recordQuantize, 392, 132, 24, 24);
                 place (left, 430, 114, 60, 60);
                 place (right, 490, 114, 60, 60);
                 place (clear, 580, 114, 60, 60);
