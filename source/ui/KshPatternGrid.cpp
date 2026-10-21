@@ -70,15 +70,9 @@ namespace ksh::ui
             r.clear.setTooltip ("Double-click to clear row; right-click mute to reset row");
             r.clear.onClick = [this, ch, &r] { if (r.clear.getClickingTogglesState()) return; if (juce::Time::getMillisecondCounter() - static_cast<juce::uint32> (static_cast<int> (r.clear.getProperties()["lastClick"])) < 300) controller.clearRow (ch, false); r.clear.getProperties().set ("lastClick", static_cast<int> (juce::Time::getMillisecondCounter())); };
             r.note.setTitle ("MIDI note channel " + juce::String (ch + 1));
-            r.note.minimum = 0;
-            r.note.maximum = 127;
-            r.note.resetValue = 36 + ch;
-            r.note.setTooltip (juce::String::fromUTF8 ("Drag to change note • click to switch note names • double-click to type"));
-            r.note.format = [this] (int note) { return controller.noteNames ? juce::MidiMessage::getMidiNoteName (note, true, true, 4) : juce::String (note); };
-            r.note.onBegin = [this] { controller.begin ("Change channel note"); };
-            r.note.onChange = [this, ch] (int v) { controller.command ("channel_note", { ch + 1, v }); };
-            r.note.onEnd = [this] { controller.commit(); };
-            r.note.onClick = [this] { controller.noteNames = ! controller.noteNames; sync(); };
+            r.note.setTooltip ("Choose a MIDI note on the piano keyboard");
+            r.note.format = [] (int note) { return juce::MidiMessage::getMidiNoteName (note, true, true, 4); };
+            r.note.onChoose = [this, ch, &r] { if (noteChooserRequested) noteChooserRequested (ch, r.note); };
             r.reverse.setTooltip ("Toggle forward / reverse");
             r.ping.setTooltip ("Toggle ping-pong");
             auto direction = [this, ch] (bool flipReverse) {
@@ -131,7 +125,7 @@ namespace ksh::ui
     {
         const auto& cell = controller.cell (location);
         const auto bounds = layout.cell (location);
-        return cell.enabled ? bounds.withX (hitPosition (location).x) : bounds;
+        return cell.enabled && !overviewLayer (displayLayer()) ? bounds.withX (hitPosition (location).x) : bounds;
     }
     int PatternGrid::playbackPositionForCell (Location location) const
     {
@@ -189,7 +183,7 @@ namespace ksh::ui
     {
         if (drag != Drag::none && drag != Drag::marquee && drag != Drag::move && drag != Drag::copy)
             return dragLayer;
-        return controller.optionDown (modifiers) && controller.selected.none() ? Layer::chance : controller.inspectorHoverLayer.value_or (controller.layer);
+        return controller.inspectorHoverLayer.value_or (controller.optionDown (modifiers) && controller.selected.none() ? Layer::chance : controller.layer);
     }
     bool PatternGrid::isCopyMode() const
     {
@@ -301,6 +295,7 @@ namespace ksh::ui
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
             clearHoverMarker();
         const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
+                               || displayedGraphicalValues != controller.graphicalCellValues
                                || displayedSelection.any() != controller.selected.any()
                                || !laidOut.has_value() || laidOut->first.reverseRows != layout.reverseRows || swingChanged;
         displayedSwing = swing;
@@ -308,6 +303,7 @@ namespace ksh::ui
         displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
         displayedColors = controller.drumColors;
+        displayedGraphicalValues = controller.graphicalCellValues;
         for (int ch = 0; ch < 8; ++ch)
         {
             auto& r = rows[static_cast<size_t> (ch)];
@@ -434,9 +430,14 @@ namespace ksh::ui
         const auto loopBackdrop = gridBackdrop.overlaidWith (loopTint);
         g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
+        if (overviewLayer (layer))
+        {
+            const auto name = layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle";
+            text (g, juce::String (name) + " / overview", { 16.0f, layout.cellsY() - 32.0f, layout.gridLeft() - 24.0f, 22.0f }, 12, Palette::accent, true, juce::Justification::centredLeft);
+        }
         const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
         const float valueSize = juce::jmin (18.0f, referenceCell.getWidth() * 0.38f, referenceCell.getHeight() * 0.5f);
-        if (layer == Layer::chance)
+        if (layer == Layer::chance && !controller.graphicalCellValues)
             prepareProbabilityLabels (juce::jmax (1.0f, valueSize - 3.0f));
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const bool hasSelection = controller.selected.any();
@@ -525,7 +526,7 @@ namespace ksh::ui
                         g.setGradientFill (fill);
                         g.fillRoundedRectangle (r, 5);
                         // Divide the painted body evenly; swing affects playback timing, not these count indicators.
-                        if (c.roll > 1)
+                        if (c.roll > 1 && !overviewLayer (layer))
                         {
                             juce::Graphics::ScopedSaveState rollClip (g);
                             juce::Path clip;
@@ -552,11 +553,32 @@ namespace ksh::ui
                         g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                         if (layer == Layer::chance)
                         {
-                            // Lift the smaller probability label so its glyph top matches velocity.
-                            const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
-                            g.setColour (tone (valueColour));
-                            label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
-                                                     r.getCentreY() - 3.0f + probabilityBaseline));
+                            if (controller.graphicalCellValues)
+                            {
+                                const float diameter = juce::jmin (22.0f, r.getWidth() * 0.6f, r.getHeight() * 0.44f);
+                                const auto pie = juce::Rectangle<float> (diameter, diameter).withCentre ({ r.getCentreX(), r.getCentreY() - 3.0f });
+                                g.setColour (tone (juce::Colours::black));
+                                g.fillEllipse (pie);
+                                g.setColour (tone (light));
+                                if (c.probability >= 100)
+                                    g.fillEllipse (pie);
+                                else if (c.probability > 0)
+                                {
+                                    juce::Path segment;
+                                    segment.addPieSegment (pie, 0, juce::MathConstants<float>::twoPi * static_cast<float> (c.probability) / 100.0f, 0);
+                                    g.fillPath (segment);
+                                }
+                                g.setColour (tone (light.withAlpha (0.65f)));
+                                g.drawEllipse (pie, 1.0f);
+                            }
+                            else
+                            {
+                                // Lift the smaller probability label so its glyph top matches velocity.
+                                const auto& label = probabilityLabels[static_cast<size_t> (juce::jlimit (0, 100, c.probability))];
+                                g.setColour (tone (valueColour));
+                                label.glyphs.draw (g, juce::AffineTransform::translation (r.getCentreX() - label.width * 0.5f,
+                                                         r.getCentreY() - 3.0f + probabilityBaseline));
+                            }
                             const int bits = juce::jmin (c.cycle, 30);
                             const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
                             for (int i = 0; i < bits; ++i)
@@ -566,7 +588,47 @@ namespace ksh::ui
                                 g.fillRect (strip.getX() + 1.0f + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
                             }
                         }
-                        else
+                        else if (overviewLayer (layer))
+                        {
+                            const auto ink = tone (valueColour);
+                            const auto label = r.withHeight (r.getHeight() * 0.56f);
+                            if (layer == Layer::nudge)
+                            {
+                                text (g, (c.nudge > 0 ? "+" : "") + juce::String (c.nudge) + "%", label, valueSize * 0.78f, ink, true);
+                                const auto bar = r.reduced (6, 0).withY (r.getY() + r.getHeight() * 0.72f).withHeight (4);
+                                g.setColour (ink.withMultipliedAlpha (0.18f));
+                                g.fillRoundedRectangle (bar, 2);
+                                const float end = bar.getCentreX() + bar.getWidth() * 0.5f * static_cast<float> (c.nudge) / 100.0f;
+                                g.setColour (ink.withMultipliedAlpha (0.8f));
+                                g.fillRect (juce::jmin (bar.getCentreX(), end), bar.getY(), juce::jmax (1.0f, std::abs (end - bar.getCentreX())), bar.getHeight());
+                                g.fillRect (bar.getCentreX() - 0.5f, bar.getY() - 2, 1.0f, 8.0f);
+                            }
+                            else if (layer == Layer::roll)
+                            {
+                                text (g, juce::String (c.roll) + juce::String::fromUTF8 ("×"), label, valueSize, ink, true);
+                                const auto strip = r.reduced (5, 0).withY (r.getY() + r.getHeight() * 0.66f).withHeight (r.getHeight() * 0.2f);
+                                for (int hit = 0; hit < c.roll; ++hit)
+                                {
+                                    g.setColour (ink.withMultipliedAlpha (0.7f));
+                                    const float stride = strip.getWidth() / static_cast<float> (c.roll);
+                                    g.fillRoundedRectangle (strip.getX() + static_cast<float> (hit) * stride + 0.5f, strip.getY(), juce::jmax (1.0f, stride - 1.5f), strip.getHeight(), 1);
+                                }
+                            }
+                            else
+                            {
+                                text (g, juce::String (c.cycle) + (c.cycle == 1 ? " beat" : " beats"), label, valueSize * 0.7f, ink, true);
+                                const auto strip = r.reduced (4, 0).withY (r.getY() + r.getHeight() * 0.64f).withHeight (r.getHeight() * 0.24f);
+                                for (int beat = 0; beat < c.cycle; ++beat)
+                                {
+                                    const float stride = strip.getWidth() / static_cast<float> (c.cycle);
+                                    auto bit = juce::Rectangle<float> (strip.getX() + static_cast<float> (beat) * stride + 0.5f, strip.getY(), juce::jmax (1.0f, stride - 1.5f), strip.getHeight());
+                                    g.setColour (ink.withMultipliedAlpha ((c.cycleMask & (1 << beat)) != 0 ? 0.85f : 0.25f));
+                                    if ((c.cycleMask & (1 << beat)) != 0) g.fillRoundedRectangle (bit, 1);
+                                    else g.drawRoundedRectangle (bit.reduced (0.4f), 1, 0.8f);
+                                }
+                            }
+                        }
+                        else if (!controller.graphicalCellValues)
                             text (g, juce::String (c.velocity), r, valueSize, tone (valueColour));
                     };
                     if (inLoop || opacity >= 1.0f || !braceArea.intersects (cellArea))
@@ -683,7 +745,7 @@ namespace ksh::ui
     {
         stopTimer();
         clearHoverMarker();
-        if (controller.source() < 0 || e.mods.isPopupMenu())
+        if (controller.source() < 0 || e.mods.isPopupMenu() || overviewLayer (displayLayer()))
             return;
         if (isShowing())
             grabKeyboardFocus();

@@ -14,6 +14,9 @@ namespace ksh::ui
         Layout layout;
         std::function<void (int)> projectAction; // new, load, save, previous, next, save as
         std::function<void()> preferredSizeChanged;
+        std::function<void (bool)> zenModeChanged;
+        void setZenMode (bool);
+        void setZenScaleLimit (int);
         juce::String projectTitle() const { return controller.processor.getProjectName(); }
         juce::String projectDescription() const { return controller.processor.getProjectDescription(); }
         void sync();
@@ -33,7 +36,8 @@ namespace ksh::ui
         std::unique_ptr<juce::PropertiesFile> uiPreferences;
         FooterHelp footerHelp { *this };
         juce::TextButton tooltipToggle { "Tips" };
-        juce::TextButton rowOrder;
+        juce::TextButton rowOrder, cellDisplay, zen { "Zen" };
+        bool viewportFit = false;
         juce::TextButton modifierToggle { "Keys" };
         PatternGrid grid;
         PreviewPanel preview, randomPanel;
@@ -42,6 +46,10 @@ namespace ksh::ui
         std::array<juce::TextButton, 6> projectButtons;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
+        NoteChooser noteChooser;
+        uint64_t noteChooserEpoch = 0;
+        int noteChooserChannel = -1, noteChooserOriginal = 0;
+        void showNoteChooser (int, juce::Component&);
         DiscardChanges discardChanges;
         uint64_t discardEpoch = 0;
         GestureButton selectMode { "Select" };
@@ -58,7 +66,8 @@ namespace ksh::ui
         juce::TextButton compactPattern, controls { "Controls" }, closePanel { "Done" }, deselect { "Deselect" }, page { "1-16" }, duplicate { "Copy" };
         std::array<juce::TextButton, 6> panelTabs;
         juce::TextEditor channelName;
-        ValueControl channelNote, loopStart, loopLength;
+        ValueControl loopStart, loopLength;
+        NoteInput channelNote;
         juce::TextButton channelDirection, channelPing { "Ping-pong" }, channelSolo { "Solo" }, channelClear { "Clear row" }, channelReset { "Reset row" };
         void resizedCompact();
         void setupCompactControls();
@@ -67,6 +76,7 @@ namespace ksh::ui
         void cancelCompactGestures();
         void timerCallback() override;
         void updateLayerHeading();
+        void updatePatternButtons();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
         void dragPattern (int source);

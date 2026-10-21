@@ -104,7 +104,7 @@ namespace ksh::ui
                 controller.command ("channel_label", { selectedChannel + 1, channelName.getText().toStdString() }, "Rename channel");
         };
         channelName.onReturnKey = [this] { if (isShowing()) grabKeyboardFocus(); };
-        for (auto* value : { &channelNote, &loopStart, &loopLength })
+        for (auto* value : { &loopStart, &loopLength })
         {
             addChildComponent (*value);
             value->valueFontSize = 18;
@@ -112,13 +112,15 @@ namespace ksh::ui
             value->onEnd = [this] { controller.commit(); };
             value->onCancel = [this] { controller.cancel(); };
         }
+        addChildComponent (channelNote);
+        channelNote.valueFontSize = 18;
         channelNote.caption = "MIDI note";
         channelNote.setTitle ("Channel MIDI note");
         channelNote.setTooltip ("Set the MIDI note sent by this channel");
         channelNote.minimum = 0;
         channelNote.maximum = 127;
         channelNote.format = [] (int note) { return juce::MidiMessage::getMidiNoteName (note, true, true, 4) + " / " + juce::String (note); };
-        channelNote.onChange = [this] (int v) { controller.command ("channel_note", { selectedChannel + 1, v }); };
+        channelNote.onChoose = [this] { showNoteChooser (selectedChannel, channelNote); };
         loopStart.caption = "Loop start";
         loopStart.setTitle ("Channel loop start");
         loopStart.setTooltip ("Set the first step of this channel's loop");
@@ -186,7 +188,7 @@ namespace ksh::ui
     {
         preview.cancelGesture();
         randomPanel.cancelGesture();
-        for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize, &steps, &tempo, &channelNote, &loopStart, &loopLength })
+        for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize, &steps, &tempo, &loopStart, &loopLength })
             value->cancelGesture();
         grid.cancelGesture();
     }
@@ -232,6 +234,8 @@ namespace ksh::ui
         {
             if (projectDetails.isVisible())
                 visible.push_back (&projectDetails);
+            if (noteChooser.isVisible())
+                visible.push_back (&noteChooser);
             if (discardChanges.isVisible())
                 visible.push_back (&discardChanges);
             for (auto* child : getChildren())

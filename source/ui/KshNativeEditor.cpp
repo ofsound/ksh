@@ -75,6 +75,18 @@ namespace ksh::ui
             sync();
             grid.repaint();
         };
+        controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", false);
+        addAndMakeVisible (cellDisplay);
+        cellDisplay.getProperties().set ("icon", "cellDisplay");
+        cellDisplay.setTitle ("Graphical cell values");
+        cellDisplay.setTooltip ("Hide cell numbers: velocity uses fill height and probability uses a pie. Toggle again for numbers.");
+        cellDisplay.onClick = [this]
+        {
+            controller.graphicalCellValues = !controller.graphicalCellValues;
+            uiPreferences->setValue ("graphicalCellValues", controller.graphicalCellValues);
+            uiPreferences->saveIfNeeded();
+            sync();
+        };
         addAndMakeVisible (rowOrder);
         rowOrder.setTitle ("Reverse row order");
         rowOrder.setTooltip ("Flip the displayed rows: channel 1 at the bottom or top. MIDI and pattern data stay the same.");
@@ -105,6 +117,16 @@ namespace ksh::ui
         setWantsKeyboardFocus (true);
         addMouseListener (this, true);
         addAndMakeVisible (grid);
+        addChildComponent (noteChooser);
+        grid.noteChooserRequested = [this] (int ch, juce::Component& input) { showNoteChooser (ch, input); };
+        noteChooser.onChoose = [this] (int note)
+        {
+            controller.refresh();
+            if (noteChooserEpoch == controller.processor.getUiBridge().getDocumentEpoch()
+                && juce::isPositiveAndBelow (noteChooserChannel, controller.state.playback.channelCount)
+                && controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note == noteChooserOriginal)
+                controller.command ("channel_note", { noteChooserChannel + 1, note }, "Change channel note");
+        };
         addAndMakeVisible (preview);
         addChildComponent (aboutViewport);
         aboutViewport.setViewedComponent (&randomPanel, false);
@@ -229,13 +251,16 @@ namespace ksh::ui
         velocityHumanize.setTooltip ("Randomly vary hit velocity by up to this percentage of the cell's velocity. 0% keeps it steady.");
         timingHumanize.setTooltip ("Add subtle random timing variation. 0% is steady; 100% uses a range of one fifth of a step.");
         velocityHumanize.suffix = timingHumanize.suffix = "%";
-        configureValue (steps, "", 1, 32, "source_steps");
-        steps.suffix = " steps";
+        configureValue (steps, "Steps", 1, 32, "source_steps");
         steps.resetValue = 16;
         configureValue (tempo, "", 20, 300, "standalone_tempo");
         tempo.suffix = " BPM";
         tempo.setTitle ("Tempo BPM");
         tempo.resetValue = 120;
+        addAndMakeVisible (zen);
+        zen.setTitle ("Zen mode");
+        zen.setTooltip ("Fullscreen with a centered interface and adjustable scale. Escape exits Zen.");
+        zen.onClick = [this] { if (zenModeChanged) zenModeChanged (!zen.getToggleState()); };
         addAndMakeVisible (scale);
         scale.setTitle ("UI scale percent");
         scale.minimum = 50;
@@ -258,11 +283,38 @@ namespace ksh::ui
     }
     void NativeEditor::useViewportFit()
     {
-        scale.setEnabled (false);
-        scale.format = [] (int) { return juce::String ("Fit"); };
-        scale.setTitle ("UI scale: fit to screen");
-        scale.setTooltip ("Automatically fits the full interface to the available screen space");
-        scale.onChange = {};
+        viewportFit = true;
+        setZenMode (false);
+    }
+    void NativeEditor::setZenMode (bool enabled)
+    {
+        zen.setToggleState (enabled, juce::dontSendNotification);
+        scale.minimum = 50;
+        scale.maximum = 120;
+        scale.setEnabled (!viewportFit || enabled);
+        scale.format = viewportFit && !enabled ? std::function<juce::String (int)> ([] (int) { return juce::String ("Fit"); }) : nullptr;
+        scale.setTitle (viewportFit && !enabled ? "UI scale: fit to screen" : "UI scale percent");
+        scale.setTooltip (viewportFit && !enabled ? "Automatically fits the full interface to the available screen space" : "Adjust interface size; Zen keeps it centered within the screen");
+        scale.setValue (controller.processor.getProjectUiScalePercent());
+    }
+    void NativeEditor::setZenScaleLimit (int maximumPercent)
+    {
+        scale.maximum = juce::jlimit (1, 120, maximumPercent);
+        scale.minimum = juce::jmin (50, scale.maximum);
+        scale.setValue (juce::jmin (controller.processor.getProjectUiScalePercent(), scale.maximum));
+    }
+    void NativeEditor::showNoteChooser (int ch, juce::Component& input)
+    {
+        cancelCompactGestures();
+        controller.commit();
+        controller.refresh();
+        if (!juce::isPositiveAndBelow (ch, controller.state.playback.channelCount))
+            return;
+        const auto& channel = controller.state.playback.channels[static_cast<size_t> (ch)];
+        noteChooserChannel = ch;
+        noteChooserOriginal = channel.note;
+        noteChooserEpoch = controller.processor.getUiBridge().getDocumentEpoch();
+        noteChooser.open (getLocalArea (&input, input.getLocalBounds()), channel.label, channel.note, &input);
     }
     void NativeEditor::configureValue (ValueControl& control, const juce::String& caption, int minimum, int maximum, const std::string& command)
     {
@@ -296,8 +348,7 @@ namespace ksh::ui
         compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
-        for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setToggleState (controller.source() == i || controller.copySource == i, juce::dontSendNotification);
+        updatePatternButtons();
         mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
         updateLayerHeading();
         for (auto* b : { &clear, &record, &left, &right, &rate })
@@ -311,7 +362,7 @@ namespace ksh::ui
         timingHumanize.setValue (p.timingHumanize);
         steps.setValue (p.stepCount);
         tempo.setValue (juce::roundToInt (controller.processor.getStandaloneTempoBpm()));
-        scale.setValue (controller.processor.getProjectUiScalePercent());
+        scale.setValue (zen.getToggleState() ? juce::jmin (controller.processor.getProjectUiScalePercent(), scale.maximum) : controller.processor.getProjectUiScalePercent());
         static const std::array<std::string, 8> rates { "4n", "4nt", "8n", "8nt", "16n", "16nt", "32n", "32nt" };
         auto value = p.sourceSettings[static_cast<size_t> (juce::jmax (0, controller.source()))].rate;
         auto found = std::find (rates.begin(), rates.end(), value);
@@ -320,16 +371,27 @@ namespace ksh::ui
         play.setVisible (layout.standalone && !playing);
         stop.setVisible (layout.standalone && playing);
         tempo.setVisible (layout.standalone);
+        zen.setVisible (layout.standalone && !layout.compact);
         play.setToggleState (playing, juce::dontSendNotification);
         stop.setToggleState (!playing, juce::dontSendNotification);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
+        cellDisplay.setToggleState (controller.graphicalCellValues, juce::dontSendNotification);
         modifierToggle.setToggleState (controller.keyboardModifiersEnabled, juce::dontSendNotification);
         rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
         tooltipToggle.setToggleState (footerHelp.isHelpEnabled(), juce::dontSendNotification);
         projectHeader.setProjectName (controller.processor.getProjectName());
         if (projectDetails.isVisible())
             projectDetails.refresh();
+        if (noteChooser.isVisible())
+        {
+            if (noteChooserEpoch != controller.processor.getUiBridge().getDocumentEpoch()
+                || !juce::isPositiveAndBelow (noteChooserChannel, p.channelCount)
+                || p.channels[static_cast<size_t> (noteChooserChannel)].note != noteChooserOriginal)
+                noteChooser.dismiss();
+            else
+                noteChooser.toFront (false);
+        }
         grid.sync();
         preview.sync();
         randomPanel.sync();
@@ -358,6 +420,7 @@ namespace ksh::ui
     void NativeEditor::resized()
     {
         laidOut = { layout, getLocalBounds() };
+        noteChooser.setBounds (getLocalBounds());
         projectDetails.setBounds (getLocalBounds());
         discardChanges.setBounds (getLocalBounds());
         if (layout.compact)
@@ -378,21 +441,23 @@ namespace ksh::ui
         subdivision.setBounds (662, top + 25, 72, 43);
         velocityHumanize.setBounds (758, top + 25, 72, 43);
         timingHumanize.setBounds (838, top + 25, 72, 43);
+        const int patternLeft = rightEdge - 400;
+        const int patternTop = static_cast<int> (layout.transportHeight()) + 30;
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setBounds (rightEdge - 400 + (i % 8) * 42, top + 6 + (i / 8) * 38, 38, 32);
-        mutePattern.setBounds (rightEdge - 58, top + 6, 58, 70);
+            patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 40, patternTop + (i / 8) * 30, 36, 26);
+        mutePattern.setBounds (rightEdge - 64, patternTop, 52, 56);
         const int y = static_cast<int> (layout.toolbarY());
         velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
         chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
         redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
-        rate.setBounds (rightEdge - rateControlWidth(), y + 13, rateControlWidth(), 41);
-        steps.setBounds (rate.getX() - 128, y + 13, 120, 41);
-        clear.setBounds (steps.getX() - 100, y + 13, 40, 41);
-        right.setBounds (clear.getX() - 50, y + 13, 40, 41);
-        left.setBounds (right.getX() - 40, y + 13, 40, 41);
-        record.setBounds (left.getX() - 50, y + 13, 40, 41);
+        rate.setBounds (rightEdge - 12 - rateControlWidth(), y + 36, rateControlWidth(), 22);
+        steps.setBounds (rate.getX() - 92, y + 18, 84, 40);
+        clear.setBounds (steps.getX() - 44, y + 33, 28, 28);
+        right.setBounds (clear.getX() - 32, y + 33, 28, 28);
+        left.setBounds (right.getX() - 32, y + 33, 28, 28);
+        record.setBounds (left.getX() - 38, y + 33, 28, 28);
         play.setBounds (rightEdge - 138, 6, 32, 32);
         stop.setBounds (play.getBounds());
         tempo.setBounds (rightEdge - 98, play.getY(), 98, play.getHeight());
@@ -410,9 +475,11 @@ namespace ksh::ui
         dc.setBounds (rightEdge - 116, footerControlY, 36, 32);
         modifierToggle.setBounds (rightEdge - 180, footerControlY, 56, 32);
         rowOrder.setBounds (rightEdge - 228, footerControlY, 36, 32);
+        zen.setBounds (rightEdge - 352, footerControlY, 54, 32);
+        cellDisplay.setBounds (rightEdge - (layout.standalone ? 396 : 334), footerControlY, 36, 32);
         tooltipToggle.setBounds (rightEdge - 290, footerControlY, 50, 32);
         scale.setBounds (rightEdge - 66, footerControlY, 66, 32);
-        footerHelp.setBounds (Layout::outerGutter, footerControlY, tooltipToggle.getX() - 2 * Layout::outerGutter, 32);
+        footerHelp.setBounds (Layout::outerGutter, footerControlY, cellDisplay.getX() - 2 * Layout::outerGutter, 32);
     }
     void NativeEditor::paint (juce::Graphics& g)
     {
@@ -450,16 +517,21 @@ namespace ksh::ui
             }
             return;
         }
-        const float dividerX = std::floor (static_cast<float> (getWidth()) * 0.5f);
-        const juce::Rectangle<float> patternHeader { dividerX, layout.toolbarY(), static_cast<float> (getWidth()) - dividerX, 68.0f };
-        g.setGradientFill (juce::ColourGradient (Palette::surface, patternHeader.getTopLeft(), Palette::shell, patternHeader.getBottomLeft(), false));
-        g.fillRect (patternHeader);
-        g.setColour (Palette::border.withAlpha (0.7f));
-        g.drawVerticalLine (static_cast<int> (dividerX), patternHeader.getY(), patternHeader.getBottom());
-        const auto patternLabel = controller.source() >= 0 ? "P" + juce::String (controller.source() + 1) + ":" : juce::String ("M:");
-        text (g, patternLabel, { dividerX + 24.0f, layout.toolbarY() + 13.0f, static_cast<float> (record.getX()) - dividerX - 40.0f, 41.0f }, 18, Palette::accent, true, juce::Justification::centredLeft);
+        const float patternLeft = static_cast<float> (patterns.front().getX() - 12);
+        const float patternTop = layout.transportHeight() + 10;
+        const juce::Rectangle<float> patternGroup { patternLeft, patternTop, 400.0f, layout.gridY() - patternTop - 4.0f };
+        g.setColour (Palette::shell);
+        g.fillRoundedRectangle (patternGroup, 5);
+        paintControlGroup (g, patternGroup, "Patterns");
         g.setColour (Palette::border.withAlpha (0.5f));
-        for (auto y : { layout.transportHeight(), layout.toolbarY(), layout.gridY(), layout.height() - Layout::footerHeight })
+        const juce::Rectangle<float> gridSettings { static_cast<float> (steps.getX() - 8), layout.toolbarY() + 4, static_cast<float> (rate.getRight() - steps.getX() + 16), 58 };
+        g.drawHorizontalLine (juce::roundToInt (layout.toolbarY() + 4), patternGroup.getX() + 12, gridSettings.getX() - 8);
+        paintControlGroup (g, gridSettings, "Pattern Grid");
+        text (g, "Cell Length", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, 10, Palette::text, true, juce::Justification::centredLeft);
+        g.setColour (Palette::border.withAlpha (0.5f));
+        // The pattern section spans both rows; the page-wide seam stops at it.
+        g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, patternGroup.getX() - 8);
+        for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
         paintControlGroup (g, { 574, layout.transportHeight() + 10, 168, 70 }, "Swing");
         paintControlGroup (g, { 750, layout.transportHeight() + 10, 168, 70 }, "Humanize");
@@ -540,6 +612,8 @@ namespace ksh::ui
     }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
+        if (noteChooser.isVisible())
+            return noteChooser.keyPressed (key);
         if (discardChanges.isVisible())
             return discardChanges.keyPressed (key);
         if (projectDetails.isVisible())
@@ -556,6 +630,8 @@ namespace ksh::ui
         }
         if (key == juce::KeyPress::escapeKey)
         {
+            if (zen.getToggleState() && zenModeChanged)
+                zenModeChanged (false);
             if (layout.compact)
                 showPanel (Panel::none);
             controller.cancelSelect();
@@ -611,11 +687,19 @@ namespace ksh::ui
             grid.cancelGesture();
         }
     }
+    void NativeEditor::updatePatternButtons()
+    {
+        // A pending copy flashes its source at 5 Hz, including when that slot is
+        // also the active pattern. Other slots retain their normal selection.
+        const bool copyFlash = (juce::Time::getMillisecondCounter() / 100u) % 2u == 0;
+        for (int i = 0; i < 16; ++i)
+            patterns[static_cast<size_t> (i)].setToggleState (controller.copySource == i ? copyFlash : controller.source() == i, juce::dontSendNotification);
+    }
     void NativeEditor::updateLayerHeading()
     {
         const bool selecting = grid.isSelectMode() || controller.selected.any();
         const bool chance = grid.displayLayer() == Layer::chance;
-        velocityLayer.setToggleState (!selecting && !chance, juce::dontSendNotification);
+        velocityLayer.setToggleState (!selecting && grid.displayLayer() == Layer::velocity, juce::dontSendNotification);
         chanceLayer.setToggleState (!selecting && chance, juce::dontSendNotification);
         selectMode.setToggleState (selecting, juce::dontSendNotification);
         // Shared seams belong to the active segment; inactive neighbors must
@@ -644,6 +728,7 @@ namespace ksh::ui
         // or an additional frame of delay between the processor and editor timers.
         controller.processor.emitPendingNoteHitsForUi();
         controller.poll();
+        updatePatternButtons();
         if (record.getToggleState())
         {
             record.getProperties().set ("recordPulse", controller.processor.getRecordingPulseForUi());

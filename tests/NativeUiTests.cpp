@@ -10,6 +10,47 @@
 using namespace ksh;
 using namespace ksh::ui;
 
+TEST_CASE ("Graphical cell values preserve editing data and distinguish empty and full probability", "[native-ui][render][cell-display]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 25, 2, 4, 5 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    processor.markDocumentClean();
+    const auto original = controller.cell ({ 0, 0 });
+    const auto capture = [&] { return grid.createComponentSnapshot (grid.cellBounds ({ 0, 0 }).toNearestInt()); };
+    const auto numeric = capture();
+    controller.graphicalCellValues = true;
+    grid.sync();
+    const auto graphical = capture();
+    bool changed = false;
+    for (int y = 0; y < numeric.getHeight(); ++y)
+        for (int x = 0; x < numeric.getWidth(); ++x)
+            changed = changed || numeric.getPixelAt (x, y) != graphical.getPixelAt (x, y);
+    CHECK (changed);
+    CHECK (controller.cell ({ 0, 0 }) == original);
+    CHECK_FALSE (processor.isDocumentModified());
+    controller.layer = Layer::chance;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell_probability", { 1, 1, 1, 0 }));
+    controller.refresh();
+    grid.sync();
+    const auto empty = capture();
+    REQUIRE (processor.dispatchUiEngineCommand ("cell_probability", { 1, 1, 1, 100 }));
+    controller.refresh();
+    grid.sync();
+    const auto full = capture();
+    CHECK (empty.getPixelAt (empty.getWidth() / 2, empty.getHeight() / 2 - 3)
+           != full.getPixelAt (full.getWidth() / 2, full.getHeight() / 2 - 3));
+    CHECK (empty.getPixelAt (empty.getWidth() / 2, empty.getHeight() / 2 - 3) == juce::Colours::black);
+    CHECK (full.getPixelAt (full.getWidth() / 2, full.getHeight() / 2 - 3).getPerceivedBrightness() > 0.2f);
+    CHECK (grid.getChildComponent (0)->getDescription().contains ("probability 100"));
+    controller.graphicalCellValues = false;
+    grid.sync();
+    CHECK (controller.cell ({ 0, 0 }).probability == 100);
+}
+
 TEST_CASE ("Draggable numeric inputs keep suffix pixels fixed across value changes", "[native-ui][numeric-layout][render]")
 {
     ValueControl control;
@@ -67,6 +108,75 @@ TEST_CASE ("Numeric controls repaint their outlines when focus and hover change"
                                   &control, &control, now, {}, now, 0, false);
     expectRepaint ([&] { control.mouseEnter (event); });
     expectRepaint ([&] { control.mouseExit (event); });
+}
+
+TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered interface", "[native-ui][zen][render]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    PluginEditor editor (processor, true);
+    const juce::Rectangle<int> viewport (1920, 1080);
+    editor.setBounds (viewport);
+    auto* view = dynamic_cast<NativeEditor*> (editor.getChildComponent (0));
+    REQUIRE (view != nullptr);
+    juce::TextButton* zen = nullptr;
+    ValueControl* scaleControl = nullptr;
+    for (auto* child : view->getChildren())
+    {
+        if (child->getTitle() == "Zen mode")
+            zen = dynamic_cast<juce::TextButton*> (child);
+        if (auto* value = dynamic_cast<ValueControl*> (child); value && value->getTitle().startsWith ("UI scale"))
+            scaleControl = value;
+    }
+    REQUIRE (zen != nullptr);
+    REQUIRE (scaleControl != nullptr);
+    CHECK (zen->isVisible());
+    CHECK_FALSE (scaleControl->isEnabled());
+    zen->onClick();
+    CHECK (editor.isZenMode());
+    CHECK (scaleControl->isEnabled());
+    const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (editor.getScreenBounds());
+    REQUIRE (display != nullptr);
+    const auto safeScreen = display->safeAreaInsets.subtractedFrom (display->userBounds.toNearestInt());
+    const auto safeViewport = editor.getLocalArea (nullptr, safeScreen).getIntersection (editor.getLocalBounds()).toFloat();
+    for (int percent : { 50, 75, 120 })
+    {
+        processor.setProjectUiScalePercent (percent);
+        view->sync();
+        CHECK (editor.getBounds() == viewport);
+        CHECK (processor.getProjectUiScalePercent() == percent);
+        const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform());
+        CHECK (content.getCentreX() == Catch::Approx (safeViewport.getCentreX()));
+        CHECK (content.getCentreY() == Catch::Approx (safeViewport.getCentreY()));
+        CHECK (content.getX() >= -0.01f);
+        CHECK (content.getY() >= -0.01f);
+        CHECK (content.getRight() <= 1920.01f);
+        CHECK (content.getBottom() <= 1080.01f);
+        if (percent == 50)
+        {
+            const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
+            CHECK (image.getPixelAt (0, 0) == juce::Colours::black);
+        }
+    }
+    CHECK (view->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (editor.isZenMode());
+    CHECK_FALSE (zen->getToggleState());
+    CHECK_FALSE (scaleControl->isEnabled());
+    CHECK (editor.getBounds() == viewport);
+}
+
+TEST_CASE ("Hosted plugins do not expose or enter Zen", "[native-ui][zen]")
+{
+    PluginProcessor processor;
+    PluginEditor editor (processor);
+    editor.setZenMode (true);
+    CHECK_FALSE (editor.isZenMode());
+    auto* view = dynamic_cast<NativeEditor*> (editor.getChildComponent (0));
+    REQUIRE (view != nullptr);
+    for (auto* child : view->getChildren())
+        if (child->getTitle() == "Zen mode")
+            CHECK_FALSE (child->isVisible());
 }
 
 TEST_CASE ("Fullscreen standalone fits small viewports despite saved zoom", "[native-ui][render]")
@@ -1510,7 +1620,7 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
         view->sync();
         auto image = editor->createComponentSnapshot (editor->getLocalBounds());
         REQUIRE (image.isValid());
-        CHECK (editor->getWidth() == juce::roundToInt (1338.0f * static_cast<float> (scale) / 100));
+        CHECK (editor->getWidth() == juce::roundToInt (1338.0f * 0.85f * static_cast<float> (scale) / 100));
         if (directory.isNotEmpty())
         {
             auto stream = juce::File (directory).getChildFile ("native-32-" + juce::String (scale) + "-" + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
@@ -1617,7 +1727,7 @@ TEST_CASE ("Selected value controls temporarily switch the editing layer", "[nat
         {
             controller.layer = original;
             control->onBegin();
-            const auto expected = control->caption == "Velocity" ? Layer::velocity : control->caption == "Probability" ? Layer::chance : original;
+            const auto expected = control->caption == "Velocity" ? Layer::velocity : control->caption == "Probability" ? Layer::chance : Layer::roll;
             CHECK (controller.layer == expected);
             control->onEnd();
             CHECK (controller.layer == original);
@@ -1830,7 +1940,7 @@ TEST_CASE ("Option can switch a selection drag between moving and copying", "[na
     CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
 }
 
-TEST_CASE ("Roll is edited in the inspector while grid layers remain velocity and chance", "[native-ui]")
+TEST_CASE ("Roll is edited in the inspector while permanent grid layers remain velocity and chance", "[native-ui]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 80, 4, 5, 1 }));
@@ -2027,15 +2137,17 @@ TEST_CASE ("Inspector hover previews cell layers without changing the chosen lay
     CycleEditor* cycle = nullptr;
     for (auto* child : inspector.getChildren())
     {
-        auto expected = Layer::chance;
+        auto expected = Layer::cycle;
         if (auto* candidate = dynamic_cast<CycleEditor*> (child))
             cycle = candidate;
         else if (auto* control = dynamic_cast<ValueControl*> (child))
         {
             if (control->caption == "Velocity")
                 expected = Layer::velocity;
-            else if (control->caption != "Probability" && control->caption != "Length")
-                continue;
+            else if (control->caption == "Probability") expected = Layer::chance;
+            else if (control->caption == "Nudge") expected = Layer::nudge;
+            else if (control->caption == "Roll") expected = Layer::roll;
+            else if (control->caption != "Length") continue;
         }
         else
             continue;
@@ -2054,22 +2166,132 @@ TEST_CASE ("Inspector hover previews cell layers without changing the chosen lay
         if (!child->isVisible())
             continue;
         inspector.mouseEnter (event (*child, child->getLocalBounds().toFloat().getCentre()));
-        CHECK (grid.displayLayer() == Layer::chance);
+        CHECK (grid.displayLayer() == Layer::cycle);
     }
     auto* bit = dynamic_cast<juce::TextButton*> (cycle->getChildComponent (1));
     REQUIRE (bit != nullptr);
     bit->onClick();
-    CHECK (grid.displayLayer() == Layer::chance);
+    CHECK (grid.displayLayer() == Layer::cycle);
     CHECK (controller.layer == chosen);
     inspector.mouseExit (event (inspector, { -1, -1 }));
     CHECK (grid.displayLayer() == chosen);
     inspector.mouseEnter (event (*cycle, cycle->getLocalBounds().toFloat().getCentre()));
     controller.selected.reset();
     inspector.sync();
+    CHECK (grid.displayLayer() == Layer::cycle);
+    inspector.mouseExit (event (inspector, { -1, -1 }));
     CHECK (grid.displayLayer() == chosen);
 }
 
-TEST_CASE ("Inspector cycle edits temporarily show Chance", "[native-ui]")
+TEST_CASE ("Piano note chooser browses without editing and assigns one undoable note", "[native-ui][note-chooser]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    PatternGrid* grid = nullptr;
+    NoteChooser* chooser = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child)) grid = candidate;
+        if (auto* candidate = dynamic_cast<NoteChooser*> (child)) chooser = candidate;
+    }
+    REQUIRE (grid != nullptr);
+    REQUIRE (chooser != nullptr);
+    NoteInput* input = nullptr;
+    for (auto* child : grid->getChildren())
+        if (child->getTitle() == "MIDI note channel 1") input = dynamic_cast<NoteInput*> (child);
+    REQUIRE (input != nullptr);
+    const int initial = editor.controller.state.playback.channels[0].note;
+    processor.markDocumentClean();
+    const auto start = input->getLocalBounds().toFloat().getCentre();
+    input->mouseDown (gridEvent (*input, start, start, juce::ModifierKeys::leftButtonModifier));
+    input->mouseDrag (gridEvent (*input, start.translated (0, -100), start, juce::ModifierKeys::leftButtonModifier, true));
+    input->mouseUp (gridEvent (*input, start.translated (0, -100), start, 0, true));
+    CHECK_FALSE (chooser->isVisible());
+    CHECK_FALSE (input->keyPressed (juce::KeyPress (juce::KeyPress::upKey)));
+    CHECK (editor.controller.state.playback.channels[0].note == initial);
+    input->onChoose();
+    REQUIRE (chooser->isVisible());
+    const auto click = [&] (const juce::String& title)
+    {
+        for (auto* child : chooser->getChildren())
+            if (child->getTitle() == title)
+                if (auto* button = dynamic_cast<juce::TextButton*> (child))
+                {
+                    button->onClick();
+                    return true;
+                }
+        return false;
+    };
+    REQUIRE (click ("Octave C4"));
+    CHECK (editor.controller.state.playback.channels[0].note == initial);
+    CHECK_FALSE (processor.isDocumentModified());
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile ("note-chooser.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
+    }
+    REQUIRE (click ("G4"));
+    CHECK_FALSE (chooser->isVisible());
+    CHECK (editor.controller.state.playback.channels[0].note == 67);
+    editor.controller.undo();
+    CHECK (editor.controller.state.playback.channels[0].note == initial);
+    editor.controller.redo();
+    CHECK (editor.controller.state.playback.channels[0].note == 67);
+    input->onChoose();
+    CHECK (chooser->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK (editor.controller.state.playback.channels[0].note == 67);
+    input->onChoose();
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_note", { 1, 60 }));
+    editor.controller.refresh();
+    CHECK_FALSE (chooser->isVisible());
+    CHECK (editor.controller.state.playback.channels[0].note == 60);
+}
+
+TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed notes", "[native-ui][note-chooser]")
+{
+    NoteChooser chooser;
+    chooser.setSize (900, 600);
+    int assigned = -1;
+    chooser.onChoose = [&] (int note) { assigned = note; };
+    const auto open = [&] { chooser.open ({ 100, 100, 44, 32 }, "1", 36, nullptr); };
+    const auto button = [&] (const juce::String& title) -> juce::TextButton*
+    {
+        for (auto* child : chooser.getChildren())
+            if (child->getTitle() == title)
+                if (auto* candidate = dynamic_cast<juce::TextButton*> (child)) return candidate;
+        return nullptr;
+    };
+    open();
+    REQUIRE (button ("Octave C-1") != nullptr);
+    button ("Octave C-1")->onClick();
+    REQUIRE (button ("C-1") != nullptr);
+    button ("C-1")->onClick();
+    CHECK (assigned == 0);
+    open();
+    button ("Octave C9")->onClick();
+    REQUIRE (button ("G9") != nullptr);
+    button ("G9")->onClick();
+    CHECK (assigned == 127);
+    open();
+    juce::TextEditor* number = nullptr;
+    for (auto* child : chooser.getChildren())
+        if (auto* candidate = dynamic_cast<juce::TextEditor*> (child)) number = candidate;
+    REQUIRE (number != nullptr);
+    assigned = -1;
+    number->setText ("128", false);
+    number->onReturnKey();
+    CHECK (assigned == -1);
+    CHECK (chooser.isVisible());
+    number->setText ("61", false);
+    number->onReturnKey();
+    CHECK (assigned == 61);
+    CHECK_FALSE (chooser.isVisible());
+}
+
+TEST_CASE ("Inspector cycle edits temporarily show Cycle", "[native-ui]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
@@ -2082,21 +2304,68 @@ TEST_CASE ("Inspector cycle edits temporarily show Chance", "[native-ui]")
             cycle = editor;
     REQUIRE (cycle != nullptr);
     cycle->sync();
-    bool sawChance = false;
-    controller.changed = [&] { sawChance = sawChance || controller.layer == Layer::chance; };
+    bool sawCycle = false;
+    controller.changed = [&] { sawCycle = sawCycle || controller.layer == Layer::cycle; };
     juce::Component* handle = nullptr;
     for (auto* child : cycle->getChildren())
         if (child->getTitle() == "Cycle length")
             handle = child;
     REQUIRE (handle != nullptr);
     CHECK (handle->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
-    CHECK (sawChance);
+    CHECK (sawCycle);
     CHECK (controller.layer == Layer::velocity);
     CHECK (controller.cell ({ 0, 0 }).cycle == 5);
     CHECK (controller.cell ({ 0, 0 }).probability == 60);
     controller.undo();
     CHECK (controller.cell ({ 0, 0 }).cycle == 4);
     controller.changed = {};
+}
+
+TEST_CASE ("Inspector overview layers stay visible through value gestures and reject grid painting", "[native-ui][inspector-overview]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    controller.selected.set (0);
+    PreviewPanel inspector (controller);
+    PatternGrid grid (controller);
+    inspector.sync();
+    const auto layer = GENERATE (Layer::nudge, Layer::roll, Layer::cycle);
+    const auto title = layer == Layer::nudge ? "Selected timing nudge" : layer == Layer::roll ? "Selected roll" : "Selected cycle length";
+    ValueControl* control = nullptr;
+    for (auto* child : inspector.getChildren())
+        if (child->getTitle() == title) control = dynamic_cast<ValueControl*> (child);
+    REQUIRE (control != nullptr);
+    control->onBegin();
+    CHECK (grid.displayLayer() == layer);
+    const auto before = controller.cell ({ 0, 0 });
+    control->onChange (layer == Layer::nudge ? 20 : layer == Layer::roll ? 6 : 7);
+    CHECK (grid.displayLayer() == layer);
+    control->onEnd();
+    CHECK (controller.layer == Layer::velocity);
+    const auto after = controller.cell ({ 0, 0 });
+    CHECK (after != before);
+    controller.undo();
+    CHECK (controller.cell ({ 0, 0 }) == before);
+    controller.inspectorHoverLayer = layer;
+    grid.layout.steps = controller.state.playback.stepCount;
+    grid.layout.channels = controller.state.playback.channelCount;
+    grid.setSize (1340, 600);
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        juce::File folder (directory);
+        folder.createDirectory();
+        juce::FileOutputStream output (folder.getChildFile ("overview-" + juce::String (static_cast<int> (layer)) + ".png"));
+        juce::PNGImageFormat().writeImageToStream (grid.createComponentSnapshot (grid.getLocalBounds()), output);
+    }
+    const auto centre = grid.layout.cell ({ 0, 0 }).getCentre();
+    grid.mouseDown (gridEvent (grid, centre, centre, juce::ModifierKeys::leftButtonModifier));
+    grid.mouseUp (gridEvent (grid, centre, centre, 0));
+    CHECK_FALSE (controller.editing());
+    CHECK (controller.cell ({ 0, 0 }) == before);
+    // Overview values are observational even if generic value helpers are called.
+    CHECK (withValue (before, layer, 99) == before);
 }
 
 TEST_CASE ("Disabled cycle handles reject input and cancel active drags", "[native-ui]")
@@ -2185,8 +2454,22 @@ TEST_CASE ("Standalone restores the saved UI scale before creating its editor", 
     std::unique_ptr<juce::AudioProcessorEditor> editor (nextSession.createEditor());
     const auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
     REQUIRE (view != nullptr);
-    CHECK (editor->getWidth() == juce::roundToInt (view->layout.width() * static_cast<float> (percent) / 100.0f));
+    CHECK (editor->getWidth() == juce::roundToInt (view->layout.width() * 0.85f * static_cast<float> (percent) / 100.0f));
     CHECK (nextSession.getProjectUiScalePercent() == percent);
+}
+
+TEST_CASE ("Legacy standalone zoom migrates to the smaller 100 percent baseline once", "[native-ui]")
+{
+    PluginProcessor processor;
+    juce::PropertySet settings;
+    settings.setValue ("uiScalePercent", 85);
+    ksh::restoreStandaloneUiScale (processor, settings);
+    CHECK (processor.getProjectUiScalePercent() == 100);
+    ksh::saveStandaloneUiScale (processor, settings);
+    ksh::restoreStandaloneUiScale (processor, settings);
+    CHECK (processor.getProjectUiScalePercent() == 100);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    CHECK (editor->getWidth() == 1137);
 }
 
 TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]")

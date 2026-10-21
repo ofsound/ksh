@@ -1,6 +1,7 @@
 #pragma once
 #include "KshLayout.h"
 #include "KshStyle.h"
+#include "KshNoteChooser.h"
 namespace ksh::ui
 {
     class PatternGrid : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
@@ -10,6 +11,7 @@ namespace ksh::ui
         Layout layout;
         std::function<void (int)> channelSettings;
         std::function<void()> layerChanged;
+        std::function<void (int, juce::Component&)> noteChooserRequested;
         bool copySelection = false;
         void sync();
         void updatePlayback();
@@ -53,7 +55,7 @@ namespace ksh::ui
         {
             GestureButton clear { juce::String::fromUTF8 ("×") }, reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") }, mute { juce::String::fromUTF8 ("⏻") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") };
             AuditionLabel label;
-            ValueControl note;
+            NoteInput note;
             juce::TextButton more { "..." };
         };
         std::array<Row, 8> rows;
@@ -92,7 +94,7 @@ namespace ksh::ui
         int displayedSteps = -1;
         int displayedFirstStep = -1;
         Layer displayedLayer = Layer::velocity;
-        bool displayedColors = true, displayedNames = true;
+        bool displayedColors = true, displayedNames = true, displayedGraphicalValues = false;
         int previousStep = 0;
         struct ProbabilityLabel
         {

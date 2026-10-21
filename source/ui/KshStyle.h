@@ -6,12 +6,13 @@ namespace ksh::ui
 {
     struct Palette
     {
-        static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfffbc04e }, strong { 0xffe8ad38 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
+        static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfff1954a }, strong { accent }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
         static inline const juce::Colour play { 0xff76d99b };
         static inline const juce::Colour recording { 0xffef4444 };
         static juce::Colour channel (int ch, bool colors = true)
         {
-            static constexpr std::array<juce::uint32, 8> values { 0xffdb4047, 0xffed8c5c, 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
+            // Track 2 shares the app and wordmark accent.
+            static const std::array<juce::uint32, 8> values { 0xffdb4047, accent.getARGB(), 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
             return colors ? juce::Colour (values[static_cast<size_t> (juce::jlimit (0, 7, ch))]) : accent;
         }
     };
@@ -137,7 +138,7 @@ namespace ksh::ui
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
             if (b.getProperties().contains ("dropdown"))
             {
-                surface (g, r, b.hasKeyboardFocus (true), hover || down || b.getToggleState());
+                surface (g, r, down || b.getToggleState(), hover);
                 return;
             }
             if (b.getProperties().contains ("transport"))
@@ -146,7 +147,7 @@ namespace ksh::ui
                 const auto colour = playing ? Palette::play : Palette::muted;
                 g.setColour (Palette::surface.interpolatedWith (colour, down ? 0.35f : b.getToggleState() ? 0.22f : hover ? 0.16f : 0.07f));
                 g.fillRoundedRectangle (r, 7);
-                g.setColour (b.hasKeyboardFocus (true) || b.getToggleState() ? colour : Palette::border);
+                g.setColour (b.getToggleState() ? colour : Palette::border);
                 g.drawRoundedRectangle (r, 7, 1);
                 return;
             }
@@ -168,16 +169,6 @@ namespace ksh::ui
                 }
                 g.setColour (b.getToggleState() ? Palette::accent : Palette::border);
                 g.strokePath (outline, juce::PathStrokeType (1));
-                if (history && b.hasKeyboardFocus (true))
-                {
-                    // Segments overlap at the divider; keep focus inside the button
-                    // so its neighbour cannot paint over the focused edge.
-                    const auto focusBounds = r.reduced (1.0f);
-                    juce::Path focusOutline;
-                    focusOutline.addRoundedRectangle (focusBounds.getX(), focusBounds.getY(), focusBounds.getWidth(), focusBounds.getHeight(), 6, 6, first, last, first, last);
-                    g.setColour (Palette::accent);
-                    g.strokePath (focusOutline, juce::PathStrokeType (1));
-                }
                 return;
             }
             if (b.getProperties().contains ("icon"))
@@ -192,7 +183,7 @@ namespace ksh::ui
                     g.drawRoundedRectangle (r, 4, 1);
                     return;
                 }
-                if (hover || down || b.hasKeyboardFocus (true))
+                if (hover || down)
                 {
                     g.setColour (Palette::raised);
                     g.fillRoundedRectangle (r, 4);
@@ -208,11 +199,6 @@ namespace ksh::ui
             {
                 g.setColour (hover ? Palette::raised.brighter (0.13f) : Palette::raised);
                 g.fillRoundedRectangle (r, 4);
-            }
-            if (b.hasKeyboardFocus (true))
-            {
-                g.setColour (Palette::accent);
-                g.drawRoundedRectangle (r, 4, 1);
             }
         }
         void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool hover, bool down) override
@@ -243,7 +229,12 @@ namespace ksh::ui
                 g.setColour (!b.isEnabled() ? Palette::faint.withAlpha (0.4f) : b.getToggleState() || down ? Palette::accent
                                                                                                            : Palette::muted);
                 const auto r = b.getLocalBounds().toFloat();
-                const float size = juce::jmin (30.0f, r.getWidth() * 0.84f);
+                const bool directionIcon = icon == "forward" || icon == "reverse" || icon == "ping";
+                const bool historyIcon = icon == "undo" || icon == "redo";
+                // Match the compact power glyph without reducing the hit area.
+                const float size = historyIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.65f)
+                                     : directionIcon ? juce::jmin (20.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.84f)
+                                                 : juce::jmin (30.0f, r.getWidth() * 0.84f);
                 g.addTransform (juce::AffineTransform::scale (size / 24).translated (r.getCentreX() - size / 2, r.getCentreY() - size / 2));
                 juce::Path path;
                 if (icon == "play")
@@ -305,6 +296,13 @@ namespace ksh::ui
                         path.lineTo (11 + length, y);
                     }
                 }
+                else if (icon == "cellDisplay")
+                {
+                    path.addEllipse (4, 4, 16, 16);
+                    juce::Path segment;
+                    segment.addPieSegment (juce::Rectangle<float> (4, 4, 16, 16), 0, juce::MathConstants<float>::halfPi, 0);
+                    g.fillPath (segment);
+                }
                 else if (icon == "power")
                 {
                     path.addCentredArc (12, 12, 8, 8, 0, 0.7f, juce::MathConstants<float>::twoPi - 0.7f, true);
@@ -313,28 +311,46 @@ namespace ksh::ui
                 }
                 else if (icon == "forward" || icon == "reverse")
                 {
-                    path.startNewSubPath (3, 12);
-                    path.lineTo (21, 12);
-                    path.startNewSubPath (14, 5);
-                    path.lineTo (21, 12);
-                    path.lineTo (14, 19);
+                    path.startNewSubPath (4, 12);
+                    path.lineTo (20, 12);
+                    path.startNewSubPath (15.5f, 7.5f);
+                    path.lineTo (20, 12);
+                    path.lineTo (15.5f, 16.5f);
                     if (icon == "reverse")
                         path.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::pi, 12, 12));
                 }
+                else if (icon == "ping")
+                {
+                    path.startNewSubPath (4, 11);
+                    path.lineTo (4, 10);
+                    path.quadraticTo (4, 7, 7, 7);
+                    path.lineTo (20, 7);
+                    path.startNewSubPath (17, 4);
+                    path.lineTo (20, 7);
+                    path.lineTo (17, 10);
+                    path.startNewSubPath (20, 13);
+                    path.lineTo (20, 14);
+                    path.quadraticTo (20, 17, 17, 17);
+                    path.lineTo (4, 17);
+                    path.startNewSubPath (7, 14);
+                    path.lineTo (4, 17);
+                    path.lineTo (7, 20);
+                }
                 else
                 {
-                    path.startNewSubPath (4, 9);
-                    path.lineTo (15, 9);
-                    path.quadraticTo (21, 9, 21, 15);
-                    path.quadraticTo (21, 21, 15, 21);
-                    path.lineTo (9, 21);
-                    path.startNewSubPath (9, 3);
-                    path.lineTo (3, 9);
-                    path.lineTo (9, 15);
+                    path.startNewSubPath (6, 7);
+                    path.cubicTo (9, 3, 15, 3, 18, 7);
+                    path.cubicTo (22, 12, 18, 20, 12, 20);
+                    path.cubicTo (9, 20, 7, 19, 5.5f, 17);
+                    path.startNewSubPath (6, 2.5f);
+                    path.lineTo (6, 7);
+                    path.lineTo (10.5f, 7);
+                    const auto centre = path.getBounds().getCentre();
+                    path.applyTransform (juce::AffineTransform::translation (12 - centre.x, 12 - centre.y));
                     if (icon == "redo")
                         path.applyTransform (juce::AffineTransform::scale (-1, 1).translated (24, 0));
                 }
-                g.strokePath (path, juce::PathStrokeType (2, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.strokePath (path, juce::PathStrokeType (historyIcon ? 2.4f : 2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 return;
             }
             if (b.getProperties().contains ("selectMode") || b.getProperties().contains ("layerSegment"))
@@ -486,7 +502,7 @@ namespace ksh::ui
                 text (g, caption, r.removeFromTop (18), captionFontSize, Palette::text, true, juce::Justification::centredLeft);
                 r.removeFromTop (static_cast<float> (captionGap));
             }
-            surface (g, r.reduced (0.5f), dragging || hasKeyboardFocus (true), isMouseOver());
+            surface (g, r.reduced (0.5f), dragging || input.isVisible(), isMouseOver());
             if (horizontalAdjustment || (showAdjustmentHintAtZero && value == 0 && !mixed))
             {
                 const auto centre = r.getCentre();

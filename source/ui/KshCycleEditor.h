@@ -91,7 +91,7 @@ namespace ksh::ui
             cellStride = side + 4;
             for (int i = 0; i < 8; ++i)
             {
-                bits[static_cast<size_t> (i)].fontHeight = inlineLayout ? 20.0f : 14.0f;
+                bits[static_cast<size_t> (i)].fontHeight = inlineLayout ? 13.0f : 12.0f;
                 bits[static_cast<size_t> (i)].setBounds (10 + i * cellStride, top, side, side);
             }
             const int edge = 10 + juce::jlimit (1, 8, cycleLength) * cellStride - 4;
@@ -101,14 +101,13 @@ namespace ksh::ui
         }
         void paint (juce::Graphics& g) override
         {
-            surface (g, getLocalBounds().toFloat().reduced (0.5f));
             const auto first = bits.front().getBounds().toFloat();
             const auto last = bits[static_cast<size_t> (juce::jlimit (1, 8, cycleLength) - 1)].getBounds().toFloat();
             const auto range = first.getUnion (last).expanded (3, 3);
             const float alpha = isEnabled() ? 1.0f : 0.35f;
-            g.setColour (Palette::accent.withAlpha (0.14f * alpha));
+            g.setColour (Palette::accent.withAlpha (0.08f * alpha));
             g.fillRoundedRectangle (range, 6);
-            g.setColour (Palette::accent.withAlpha (0.55f * alpha));
+            g.setColour (Palette::accent.withAlpha (0.42f * alpha));
             g.drawRoundedRectangle (range, 6, 1);
             if (!inlineLayout)
                 text (g, "CYCLE", { 120.0f, static_cast<float> (getHeight() - 30), static_cast<float> (getWidth() - 132), 20.0f }, 10, Palette::muted, true, juce::Justification::centredRight);
@@ -120,7 +119,7 @@ namespace ksh::ui
         void beginEdit (const juce::String& label)
         {
             previousLayer = controller.layer;
-            controller.layer = Layer::chance;
+            controller.layer = Layer::cycle;
             controller.begin (label);
             controller.notify();
         }
@@ -160,14 +159,13 @@ namespace ksh::ui
             }
             void paint (juce::Graphics& g) override
             {
-                const auto r = getLocalBounds().toFloat().reduced (0.5f);
-                g.setColour (Palette::surface);
-                g.fillRoundedRectangle (r, 2);
-                g.setColour (Palette::accent.withMultipliedAlpha (isEnabled() ? 1.0f : 0.35f));
-                g.drawRoundedRectangle (r, 2, 1);
-                for (const float x : { 3.0f, 6.0f })
-                    g.drawVerticalLine (static_cast<int> (x), r.getCentreY() - 5, r.getCentreY() + 5);
+                const auto centre = getLocalBounds().toFloat().getCentre();
+                g.setColour ((dragging || isMouseOver() ? Palette::accent : Palette::muted).withMultipliedAlpha (isEnabled() ? 1.0f : 0.35f));
+                for (int dot = -2; dot <= 2; ++dot)
+                    g.fillEllipse (centre.x - 0.6f, centre.y + static_cast<float> (dot) * 4, 1.2f, 1.2f);
             }
+            void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+            void mouseExit (const juce::MouseEvent&) override { repaint(); }
             void mouseDown (const juce::MouseEvent& e) override
             {
                 if (!isEnabled() || !e.mods.isLeftButtonDown())
@@ -177,6 +175,7 @@ namespace ksh::ui
                     return;
                 grabKeyboardFocus();
                 dragging = true;
+                repaint();
                 owner.beginEdit ("Cycle length");
             }
             void mouseDrag (const juce::MouseEvent& e) override
@@ -202,6 +201,7 @@ namespace ksh::ui
                 if (dragging)
                 {
                     dragging = false;
+                    repaint();
                     owner.endEdit();
                 }
             }
@@ -240,6 +240,7 @@ namespace ksh::ui
                 if (dragging)
                 {
                     dragging = false;
+                    repaint();
                     owner.restoreLayer();
                     owner.controller.cancel();
                 }
@@ -258,20 +259,15 @@ namespace ksh::ui
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 const bool on = getToggleState();
-                auto background = on ? Palette::strong : inCycle ? Palette::raised.interpolatedWith (Palette::accent, 0.22f) : Palette::app;
+                auto background = on ? Palette::accent.withAlpha (0.18f) : inCycle ? Palette::surface : Palette::app;
                 if (flashing)
                     background = Palette::text;
                 if (isEnabled() && (hover || down))
                     background = background.brighter (0.12f);
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
-                g.fillRoundedRectangle (r, 4);
-                if (inCycle || hasKeyboardFocus (true))
-                {
-                    g.setColour (Palette::accent.withAlpha (hasKeyboardFocus (true) ? 1.0f : 0.3f));
-                    g.drawRoundedRectangle (r, 4, 1);
-                }
+                g.fillRoundedRectangle (r, 3);
                 ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getHeight() * 0.45f),
-                      (on || flashing) ? Palette::app : inCycle ? Palette::text : Palette::faint, true);
+                      flashing ? Palette::app : on ? Palette::accent : inCycle ? Palette::muted : Palette::faint, true);
             }
         };
         std::array<CycleBit, 8> bits;

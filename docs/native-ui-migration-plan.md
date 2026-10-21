@@ -44,8 +44,8 @@ Extract the actual Alternative values from `ui/src/semantic-theme.generated.css`
 | Main border | `#38535C` |
 | Text | `#F4FAFB` |
 | Muted text | `#95B4BB` |
-| Orange accent / focus | `#FBC04E` |
-| Strong accent | `#E8AD38` |
+| Orange accent / focus | `#F1954A` |
+| Strong accent | `#F1954A` |
 | Accent surface | `#2E2410` |
 | Info / generated preview | `#67E8F9` |
 

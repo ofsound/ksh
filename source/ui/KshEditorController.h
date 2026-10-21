@@ -5,7 +5,8 @@
 namespace ksh::ui
 {
     enum class Layer { velocity,
-        chance };
+        chance, nudge, roll, cycle };
+    inline bool overviewLayer (Layer layer) { return layer == Layer::nudge || layer == Layer::roll || layer == Layer::cycle; }
     struct Location
     {
         int channel = -1, step = -1;
@@ -28,6 +29,9 @@ namespace ksh::ui
         {
             case Layer::chance:
                 return c.probability;
+            case Layer::nudge: return c.nudge;
+            case Layer::roll: return c.roll;
+            case Layer::cycle: return c.cycle;
             case Layer::velocity:
                 return c.velocity;
         }
@@ -40,6 +44,10 @@ namespace ksh::ui
             case Layer::chance:
                 c.probability = juce::jlimit (0, 100, value);
                 break;
+            case Layer::nudge:
+            case Layer::roll:
+            case Layer::cycle:
+                break; // Inspector overview layers never paint values into the grid.
             case Layer::velocity:
                 c.velocity = juce::jlimit (1, 127, value);
                 break;
@@ -57,7 +65,7 @@ namespace ksh::ui
         Selection selected;
         Layer layer = Layer::velocity;
         std::optional<Layer> inspectorHoverLayer;
-        bool drumColors = true, noteNames = true;
+        bool drumColors = true, noteNames = true, graphicalCellValues = false;
         bool keyboardModifiersEnabled = true;
         bool selectLatched = false, selectHeld = false, selectUsed = false;
         bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || (keyboardModifiersEnabled && mods.isShiftDown()); }

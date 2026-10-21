@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "engine/KshPersistence.h"
+#include "ui/KshUiScale.h"
 
 PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
 {
@@ -8,6 +9,7 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
         nativeView->useViewportFit();
     addAndMakeVisible (*nativeView);
     nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
+    nativeView->zenModeChanged = [this] (bool enabled) { setZenMode (enabled); };
     nativeView->projectAction = [this] (int action) {
         const juce::Component::SafePointer<PluginEditor> safe (this);
         auto completed = [safe] (juce::var result) {
@@ -43,10 +45,110 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 }
 PluginEditor::~PluginEditor()
 {
+    stopTimer();
     nativeView.reset();
+}
+void PluginEditor::setZenMode (bool enabled)
+{
+    if (!processorRef.hasStandaloneTransport() || enabled == zenMode)
+        return;
+    if (fitViewport)
+    {
+        zenMode = enabled;
+        nativeView->setZenMode (enabled);
+        resized();
+        repaint();
+        return;
+    }
+   #if !JUCE_IOS && !JUCE_ANDROID
+    if (enabled)
+    {
+        auto* window = findParentComponentOfClass<juce::DocumentWindow>();
+        if (window == nullptr || !window->isOnDesktop() || zenWindow != nullptr)
+            return;
+        zenWindow = window;
+        windowBoundsBeforeZen = window->getBounds();
+        titleBarHeightBeforeZen = window->getTitleBarHeight();
+        nativeTitleBarBeforeZen = window->isUsingNativeTitleBar();
+        zenFullscreenSeen = zenExitRequested = false;
+        zenMode = true;
+        nativeView->setZenMode (true);
+        updateNativeSize();
+        window->setTitleBarHeight (0);
+        window->setUsingNativeTitleBar (true);
+        window->setFullScreen (true);
+        startTimerHz (20);
+    }
+    else
+    {
+        zenMode = false;
+        nativeView->setZenMode (false);
+        if (zenWindow != nullptr && zenWindow->isFullScreen())
+        {
+            zenFullscreenSeen = zenExitRequested = true;
+            zenWindow->setFullScreen (false);
+        }
+    }
+    repaint();
+   #endif
+}
+void PluginEditor::finishZenExit()
+{
+    const auto window = zenWindow;
+    zenMode = false;
+    stopTimer();
+    nativeView->setZenMode (false);
+    if (window != nullptr)
+    {
+        window->setUsingNativeTitleBar (nativeTitleBarBeforeZen);
+        window->setTitleBarHeight (titleBarHeightBeforeZen);
+    }
+    // Restoring native chrome resizes the editor. Keep the centered viewport
+    // active until that is finished so it cannot overwrite the chosen zoom.
+    zenWindow = nullptr;
+    updateNativeSize();
+    if (window != nullptr)
+        window->setTopLeftPosition (windowBoundsBeforeZen.getPosition());
+    repaint();
+}
+void PluginEditor::timerCallback()
+{
+    if (zenWindow == nullptr)
+    {
+        finishZenExit();
+        return;
+    }
+    if (zenWindow->isFullScreen())
+    {
+        zenFullscreenSeen = true;
+        if (!zenMode && !zenExitRequested)
+        {
+            zenExitRequested = true;
+            zenWindow->setFullScreen (false);
+        }
+    }
+    else if (zenFullscreenSeen || zenExitRequested)
+        finishZenExit();
+}
+bool PluginEditor::keyPressed (const juce::KeyPress& key)
+{
+    if (zenMode && key == juce::KeyPress::escapeKey)
+    {
+        setZenMode (false);
+        return true;
+    }
+    return false;
 }
 void PluginEditor::updateNativeSize()
 {
+    if (zenMode || zenWindow != nullptr)
+    {
+        setResizeLimits (1, 1, 100000, 100000);
+        if (auto* limits = getConstrainer())
+            limits->setFixedAspectRatio (0);
+        resized();
+        return;
+    }
    #if JUCE_IOS
     if (!fitViewport && juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
     {
@@ -68,14 +170,14 @@ void PluginEditor::updateNativeSize()
         return;
     }
     const auto& layout = nativeView->layout;
-    const float scale = static_cast<float> (processorRef.getProjectUiScalePercent()) / 100.0f;
-    setResizeLimits (juce::roundToInt (layout.width() * 0.5f), juce::roundToInt (layout.height() * 0.5f), juce::roundToInt (layout.width() * 1.2f), juce::roundToInt (layout.height() * 1.2f));
+    const float scale = ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent());
+    setResizeLimits (juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (50)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (50)), juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (120)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (120)));
     if (auto* limits = getConstrainer())
         limits->setFixedAspectRatio (static_cast<double> (layout.width() / layout.height()));
     setSize (juce::roundToInt (layout.width() * scale), juce::roundToInt (layout.height() * scale));
     resized();
 }
-void PluginEditor::paint (juce::Graphics& g) { g.fillAll (ksh::ui::Palette::app); }
+void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow != nullptr ? juce::Colours::black : ksh::ui::Palette::app); }
 void PluginEditor::mouseDown (const juce::MouseEvent& event)
 {
     // Include the margins around the scaled editor in standalone/mobile layouts.
@@ -103,11 +205,15 @@ void PluginEditor::resized()
     const bool compact = mobile && available.getWidth() >= available.getHeight() && available.getHeight() <= 500.0f && available.getWidth() <= 1100.0f;
     nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())));
     const auto& layout = nativeView->layout;
-    const float scale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
-    const int percent = juce::jlimit (50, 120, juce::roundToInt (scale * 100));
-    if (!fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
+    const float fitScale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
+    const bool centered = zenMode || zenWindow != nullptr;
+    const float scale = centered ? juce::jmin (fitScale, ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent())) : fitScale;
+    if (zenMode)
+        nativeView->setZenScaleLimit (static_cast<int> (std::floor (fitScale / ksh::ui::UiScale::baseline * 100.0f)));
+    const int percent = juce::jlimit (50, 120, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
+    if (!centered && !fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    const auto offset = (fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    const auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }

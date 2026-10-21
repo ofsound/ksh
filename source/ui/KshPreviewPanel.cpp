@@ -4,14 +4,20 @@ namespace ksh::ui
     namespace
     {
         const juce::Rectangle<float> wordmarkBounds { 24, 34.68f, 242.88f, 95.04f };
-        juce::AffineTransform wordmarkTransform() { return juce::AffineTransform::scale (0.8f).translated (-3.2f, 16.4f); }
-        void paintWordmark (juce::Graphics& g)
+        const juce::Rectangle<float> makerBounds { 24, 19, 170, 20 };
+        juce::AffineTransform wordmarkTransform (float inspectorCentreY)
+        {
+            constexpr float scale = 0.8f * 1.05f;
+            const auto brandingBounds = wordmarkBounds.getUnion (makerBounds);
+            return juce::AffineTransform::scale (scale).translated (16.0f - brandingBounds.getX() * scale, inspectorCentreY - brandingBounds.getCentreY() * scale);
+        }
+        void paintWordmark (juce::Graphics& g, float inspectorCentreY)
         {
             const juce::Graphics::ScopedSaveState savedState (g);
-            g.addTransform (wordmarkTransform());
+            g.addTransform (wordmarkTransform (inspectorCentreY));
             // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
             static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
-            text (g, "OFSOUND", { 24, 19, 170, 20 }, 13, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "OFSOUND", makerBounds, 13, Palette::text, true, juce::Justification::centredLeft);
             if (artwork != nullptr)
                 artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
         }
@@ -130,7 +136,7 @@ namespace ksh::ui
         velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
         probability.onChange = [this] (int v) { applyRelative (Layer::chance, v); };
         roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) { auto cell = controller.cell (p); cell.roll = juce::jlimit (1, 8, v); controller.editCell (p, cell); } controller.notify(); };
-        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance } })
+        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance }, std::pair { &nudge, Layer::nudge }, std::pair { &roll, Layer::roll }, std::pair { &cycleLength, Layer::cycle } })
         {
             const auto begin = control->onBegin;
             control->onBegin = [this, begin, layer]
@@ -141,7 +147,7 @@ namespace ksh::ui
                 controller.notify();
             };
         }
-        for (auto* control : { &velocity, &probability, &roll, &nudge })
+        for (auto* control : { &velocity, &probability, &roll, &nudge, &cycleLength })
         {
             control->onCancel = [this]
             {
@@ -202,12 +208,12 @@ namespace ksh::ui
     void PreviewPanel::updateHoverLayer (juce::Point<int> position)
     {
         for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
-                 { &probability, Layer::chance }, { &cycle, Layer::chance }, { &cycleLength, Layer::chance } })
+                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::cycle }, { &cycleLength, Layer::cycle } })
         {
             auto bounds = control->getBounds();
             if (control == &cycle && !compact)
                 bounds = bounds.withTop (32);
-            if (control->isVisible() && control->isEnabled() && bounds.contains (position))
+            if (control->isVisible() && bounds.contains (position))
             {
                 setHoverLayer (layer);
                 return;
@@ -226,7 +232,7 @@ namespace ksh::ui
     void PreviewPanel::mouseDoubleClick (const juce::MouseEvent& event)
     {
         if (!randomSection && event.mods.isLeftButtonDown()
-            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform().inverted()))
+            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform (inspectorBounds.toFloat().getCentreY()).inverted()))
             && onLogoDoubleClick)
             onLogoDoubleClick();
     }
@@ -331,8 +337,6 @@ namespace ksh::ui
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
-        if (!active)
-            setHoverLayer (std::nullopt);
         cycleLength.setEnabled (active);
         cycleLength.setValue (active ? controller.cell (selected.front()).cycle : 1);
         cycleLength.mixed = active && std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).cycle != controller.cell (selected.front()).cycle; });
@@ -460,7 +464,7 @@ namespace ksh::ui
             text (g, "Double-click KSH again or press Escape to return.", { 48, static_cast<float> (getHeight() - 62), width, 24 }, 12, Palette::muted, false, juce::Justification::centredLeft);
             return;
         }
-        paintWordmark (g);
+        paintWordmark (g, inspectorBounds.toFloat().getCentreY());
     }
     void PreviewPanel::updatePlayback()
     {

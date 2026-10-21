@@ -5,7 +5,7 @@
 #include "ui/KshNativeEditor.h"
 
 //==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor
+class PluginEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit PluginEditor (PluginProcessor&, bool fitStandaloneToViewport =
@@ -20,6 +20,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void setZenMode (bool);
+    bool isZenMode() const { return zenMode; }
+    bool keyPressed (const juce::KeyPress&) override;
 
     void showSaveProjectDialog (const juce::Array<juce::var>& args,
         std::function<void (juce::var)> complete);
@@ -36,6 +39,13 @@ private:
     friend class PluginEditorTestPeer;
     PluginProcessor& processorRef;
     const bool fitViewport;
+    bool zenMode = false, zenFullscreenSeen = false, zenExitRequested = false;
+    juce::Component::SafePointer<juce::DocumentWindow> zenWindow;
+    juce::Rectangle<int> windowBoundsBeforeZen;
+    int titleBarHeightBeforeZen = 0;
+    bool nativeTitleBarBeforeZen = false;
+    void timerCallback() override;
+    void finishZenExit();
 
     void confirmDiscardingChanges (std::function<void()> proceed);
     juce::File getDefaultProjectsDirectory() const;

@@ -8,7 +8,7 @@
     <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
       <path d="M64 0H0V64" stroke="#33373e" stroke-width="2"/>
     </pattern>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+    <filter color-interpolation-filters="sRGB" id="glow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="18" result="blur"/>
       <feColorMatrix in="blur" type="matrix"
         values="0 0 0 0 0.36
@@ -36,7 +36,7 @@
       font-size="300"
       font-weight="900"
       letter-spacing="-8">
-      <tspan fill="#f59e38">K</tspan><tspan fill="#dbdee5">S</tspan><tspan fill="#40add1">H</tspan>
+      <tspan fill="#f1954a">K</tspan><tspan fill="#dbdee5">S</tspan><tspan fill="#40add1">H</tspan>
     </text>
   </g>
 
