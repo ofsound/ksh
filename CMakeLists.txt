@@ -81,7 +81,15 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(KSH_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon-ios.png")
 endif()
 
+set(KSH_IOS_PROJECT_OPTIONS)
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.plist")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.plist" KSH_IOS_PROJECT_PLIST)
+    list(APPEND KSH_IOS_PROJECT_OPTIONS PLIST_TO_MERGE "${KSH_IOS_PROJECT_PLIST}")
+endif()
+
 juce_add_plugin("${PROJECT_NAME}"
+    ${KSH_IOS_PROJECT_OPTIONS}
     # Icons for the standalone app
     ICON_BIG "${KSH_APP_ICON}"
 
@@ -146,6 +154,18 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/source/engine/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/source/engine/*.h")
 target_sources(SharedCode INTERFACE ${SourceFiles})
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    enable_language(OBJCXX)
+    set(KSH_IOS_LIBRARY_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm")
+    set_source_files_properties("${KSH_IOS_LIBRARY_SOURCE}" PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_sources(SharedCode INTERFACE "${KSH_IOS_LIBRARY_SOURCE}")
+    # Both device families and the AUv3 use the same container, independent of
+    # the extension's bundle ID. JUCE's generated iCloud entitlements use that ID.
+    foreach (format Standalone AUv3)
+        set_target_properties("${PROJECT_NAME}_${format}" PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.entitlements")
+    endforeach()
+endif()
 
 
 # Adds a BinaryData target for embedding assets into the binary

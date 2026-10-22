@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KshUiBridge.h"
+#include "platform/KshIOSProjectLibrary.h"
 #include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
 #include "engine/KshMidiPlayback.h"
@@ -148,9 +149,20 @@ public:
     [[nodiscard]] juce::String getProjectModifiedAt() const;
     [[nodiscard]] juce::File getProjectFile() const;
     void setProjectFile (const juce::File&);
+   #if JUCE_IOS
+    std::shared_ptr<ksh::IOSProjectLibrary> getIOSProjectLibrary()
+    {
+        if (iosProjectLibrary == nullptr)
+            iosProjectLibrary = std::make_shared<ksh::IOSProjectLibrary>();
+        return iosProjectLibrary;
+    }
+   #endif
 
 private:
     friend class PluginProcessorTestPeer;
+   #if JUCE_IOS
+    std::shared_ptr<ksh::IOSProjectLibrary> iosProjectLibrary;
+   #endif
     struct PatternRecordEvent
     {
         uint64_t session = 0;

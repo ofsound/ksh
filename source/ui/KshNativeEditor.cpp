@@ -140,9 +140,17 @@ namespace ksh::ui
             uiPreferences->saveIfNeeded();
             Palette::setBlueAccent (blue);
         };
-        const std::array<juce::String, 6> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
-        const std::array<juce::String, 6> projectTips { "Create a new project", "Load a project from disk", "Save the current project", "Load the previous project in this folder", "Load the next project in this folder", "Save a copy to a new project file" };
-        for (int i = 0; i < 6; ++i)
+        const std::vector<juce::String> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS"
+           #if JUCE_IOS
+            , "SHARE"
+           #endif
+        };
+        const std::vector<juce::String> projectTips { "Create a new project", "Load a project from disk", "Save the current project", "Load the previous project in this folder", "Load the next project in this folder", "Save a copy to a new project file"
+           #if JUCE_IOS
+            , "Share a project copy with AirDrop, Messages or another app"
+           #endif
+        };
+        for (int i = 0; i < static_cast<int> (projectButtons.size()); ++i)
         {
             auto& button = projectButtons[static_cast<size_t> (i)];
             addAndMakeVisible (button);
@@ -488,6 +496,9 @@ namespace ksh::ui
         projectButtons[3].setBounds (282, top + 27, 30, 32);
         projectHeader.setBounds (320, top + 27, 194, 32);
         projectButtons[4].setBounds (522, top + 27, 30, 32);
+       #if JUCE_IOS
+        projectButtons[6].setBounds (556, top + 27, 44, 32);
+       #endif
         swing.setBounds (602, top + 25, 48, 43);
         subdivision.setBounds (666, top + 25, 40, 43);
         velocityHumanize.setBounds (774, top + 25, 48, 43);
@@ -497,18 +508,20 @@ namespace ksh::ui
         constexpr int patternHeight = 70;
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 38, patternTop + (i / 8) * 37, 34, 33);
-        mutePattern.setBounds (rightEdge - 12 - patternHeight, patternTop, patternHeight, patternHeight);
+        mutePattern.setBounds (rightEdge - patternHeight, patternTop, patternHeight, patternHeight);
         const int y = static_cast<int> (layout.toolbarY());
-        velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
+        constexpr int layerHeight = 41;
+        const int layerY = juce::roundToInt ((layout.toolbarY() + layout.gridY() - layerHeight) * 0.5f);
+        velocityLayer.setBounds (Layout::outerGutter, layerY, 90, layerHeight);
         chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         selectMode.setBounds (chanceLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
         layerHint.setBounds (velocityLayer.getX(), velocityLayer.getBottom() + 4, selectMode.getRight() - velocityLayer.getX(), 18);
-        undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
-        redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
+        undoButton.setBounds (selectMode.getRight() + 40, layerY, 48, layerHeight);
+        redoButton.setBounds (undoButton.getRight() - 1, layerY, 48, layerHeight);
         constexpr int gridInputHeight = 28;
-        const int gridInputY = velocityLayer.getBottom() - gridInputHeight + 8;
+        const int gridInputY = y + 34;
         const int gridLabelHeight = 18 + steps.captionGap;
-        rate.setBounds (rightEdge - 12 - rateControlWidth(), gridInputY, rateControlWidth(), gridInputHeight);
+        rate.setBounds (rightEdge - rateControlWidth(), gridInputY, rateControlWidth(), gridInputHeight);
         steps.setBounds (rate.getX() - 92, gridInputY - gridLabelHeight, 84, gridLabelHeight + gridInputHeight);
         clear.setBounds (steps.getX() - 112, gridInputY, 48, gridInputHeight);
         right.setBounds (clear.getX() - 40, gridInputY, 32, gridInputHeight);

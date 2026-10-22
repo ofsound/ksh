@@ -6,14 +6,32 @@ namespace ksh
 {
     inline void restoreStandaloneProjectFile (PluginProcessor& processor, const juce::PropertySet& settings)
     {
+       #if JUCE_IOS
+        auto library = processor.getIOSProjectLibrary();
+        library->restoreAccess (settings);
+        processor.setProjectFile (library->currentFile());
+       #else
         const auto path = settings.getValue ("projectFile");
         const juce::File file = juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
         processor.setProjectFile (file.existsAsFile() ? file : juce::File());
+       #endif
     }
 
-    inline void saveStandaloneProjectFile (const PluginProcessor& processor, juce::PropertySet& settings)
+    inline void saveStandaloneProjectFile (PluginProcessor& processor, juce::PropertySet& settings)
     {
+       #if JUCE_IOS
+        // Access bookmarks belong only to local app preferences, never host/project state.
+        if (processor.getProjectFile() == juce::File())
+        {
+            settings.removeValue ("projectBookmark");
+            settings.removeValue ("projectContentDigest");
+        }
+        else
+            processor.getIOSProjectLibrary()->saveAccess (settings);
+        settings.removeValue ("projectFile");
+       #else
         settings.setValue ("projectFile", processor.getProjectFile().getFullPathName());
+       #endif
     }
 
     inline void restoreStandaloneUiScale (PluginProcessor& processor, const juce::PropertySet& settings)

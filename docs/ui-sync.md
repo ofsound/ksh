@@ -77,3 +77,21 @@ Inspector hover previews include Nudge, Roll and Cycle. These temporary, read-on
 Swing targets are multiples of the current step division: `1x` delays alternating steps, `2x` delays alternating two-step groups, and `4x` delays alternating four-step groups. At 100% swing, the delay is half the target group length. Playback, grid positions, MIDI export, and recording quantization share this timing calculation.
 
 The desktop logo exposes two accent selectors: K selects orange and H selects blue. The choice is stored in local UI preferences (`blueAccent`), outside project and host state. A message-thread palette notification refreshes all open editors in the process, including cached label and LookAndFeel colors. Logo double-click still opens the auxiliary panel.
+
+### iOS cloud project access
+
+On iPhone/iPad, `IOSProjectLibrary` handles document pickers, sharing and file
+access outside the processor. Both device families and AUv3 use
+`iCloud.com.ofsound.ksh` as their default library, with local Documents/KSH as a
+fallback. A metadata query discovers cloud placeholders; a serial background
+queue downloads/coordinates reads and atomic writes. Saves compare the last
+read/written content digest and unresolved file versions before replacing a
+file. A conflict requires Save As or reopening the original.
+
+The processor retains the library across editor recreation. Standalone-only
+preferences retain the security-scoped bookmark and baseline digest. These are
+never serialized in strict v:1 projects or host state. Native file callbacks
+check the document epoch; loads additionally check the revision so intervening
+edits/recording cannot be discarded. Saves serialize a snapshot before opening
+the picker and mark the document clean only if its revision still matches.
+Share exports that snapshot without changing the current save association.

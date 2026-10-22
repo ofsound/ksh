@@ -1,0 +1,18 @@
+<plist version="1.0"><dict>
+    <key>NSUbiquitousContainers</key>
+    <dict><key>iCloud.com.ofsound.ksh</key><dict>
+        <key>NSUbiquitousContainerIsDocumentScopePublic</key><true/>
+        <key>NSUbiquitousContainerName</key><string>KSH</string>
+        <key>NSUbiquitousContainerSupportedFolderLevels</key><string>Any</string>
+    </dict></dict>
+    <key>UIFileSharingEnabled</key><true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+    <key>UTExportedTypeDeclarations</key><array><dict>
+        <key>UTTypeIdentifier</key><string>com.ofsound.ksh.project</string>
+        <key>UTTypeDescription</key><string>KSH Project</string>
+        <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        <key>UTTypeTagSpecification</key><dict>
+            <key>public.filename-extension</key><array><string>kshproject</string></array>
+        </dict>
+    </dict></array>
+</dict></plist>

@@ -44,7 +44,13 @@ namespace ksh::ui
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
         std::array<PatternButton, 16> patterns;
-        std::array<juce::TextButton, 6> projectButtons;
+        std::array<juce::TextButton,
+           #if JUCE_IOS
+            7
+           #else
+            6
+           #endif
+        > projectButtons;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
         NoteChooser noteChooser;

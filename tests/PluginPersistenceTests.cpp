@@ -8,6 +8,7 @@
 #include <juce_core/juce_core.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cmath>
 #include <exception>
@@ -20,6 +21,7 @@ class PluginEditorTestPeer
 {
 public:
     static bool load (PluginEditor& editor, const juce::File& file, juce::String& error) { return editor.loadProjectFile (file, error); }
+    static bool loadData (PluginEditor& editor, const juce::File& file, const juce::MemoryBlock& data, juce::String& error) { return editor.loadProjectData (file, data, error); }
 };
 
 namespace
@@ -562,4 +564,24 @@ TEST_CASE ("Recording quantization and calibration persist with strict optional 
     restored.resetProject();
     CHECK (restored.isPatternRecordingQuantized());
     CHECK (restored.getPatternRecordingOffsetMs() == 0);
+}
+
+TEST_CASE ("Rejected downloaded projects preserve the current save destination and edits", "[plugin][persistence]")
+{
+    PluginProcessor processor;
+    const auto original = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("original.kshproject");
+    const auto incoming = original.getSiblingFile ("downloaded.kshproject");
+    processor.setProjectFile (original);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 77 }));
+    PluginEditor editor (processor);
+    const auto before = getPluginState (processor);
+    const auto epoch = processor.getUiBridge().getDocumentEpoch();
+    const auto invalid = GENERATE (std::string ("not a project"), std::string (R"({"v":1,"channelCount":0,"channels":[]})"));
+    juce::String error;
+    CHECK_FALSE (PluginEditorTestPeer::loadData (editor, incoming, juce::MemoryBlock (invalid.data(), invalid.size()), error));
+    CHECK (error.isNotEmpty());
+    CHECK (processor.getProjectFile() == original);
+    CHECK (processor.getUiBridge().getDocumentEpoch() == epoch);
+    CHECK (processor.isDocumentModified());
+    CHECK (getPluginState (processor) == before);
 }

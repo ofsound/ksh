@@ -37,6 +37,12 @@ public:
 
 private:
     friend class PluginEditorTestPeer;
+   #if JUCE_IOS
+    std::shared_ptr<ksh::IOSProjectLibrary> iosLibrary;
+    uint64_t iosOperationEpoch = 0;
+    void iosProjectAction (int action, std::function<void (juce::var)>, juce::File target = {},
+                           juce::String name = {}, juce::String description = {});
+   #endif
     PluginProcessor& processorRef;
     const bool fitViewport;
     bool zenMode = false, zenFullscreenSeen = false, zenExitRequested = false;
@@ -50,6 +56,7 @@ private:
     void confirmDiscardingChanges (std::function<void()> proceed);
     juce::File getDefaultProjectsDirectory() const;
     juce::Array<juce::File> getSiblingProjectFiles() const;
+    bool loadProjectData (const juce::File&, const juce::MemoryBlock&, juce::String& errorMessage);
     bool loadProjectFile (const juce::File& file, juce::String& errorMessage);
     bool saveProjectFile (const juce::File& file, juce::String& errorMessage);
     juce::var projectOperationResult (bool success,

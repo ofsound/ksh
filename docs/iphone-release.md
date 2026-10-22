@@ -17,6 +17,44 @@ Compact geometry is independent of saved desktop UI/pattern zoom and is not pers
 
 Resize, page changes, auxiliary panel switches and focus loss cancel active editing gestures through the existing conflict-aware controller. External recording and document replacement retain the existing conflict rules.
 
+## Shared iCloud project library
+
+The iPhone and iPad app, including AUv3, use the fixed document container
+`iCloud.com.ofsound.ksh`. Open and first Save / Save As start in its Documents
+folder, shown as **KSH** in iCloud Drive. Devices signed into the same Apple
+account with iCloud Drive enabled see the same library. The iPhone-only preset
+uses this same container; it does not create a separate phone library.
+
+When iCloud is unavailable, the default is the local app Documents/KSH folder,
+visible through Files under On My iPhone/iPad. Existing local projects stay
+local; use Save As and choose iCloud Drive to copy them into the shared library.
+The Files picker can also open projects from other document providers.
+
+Cloud discovery uses a metadata query so the library includes files that have
+not downloaded yet. Downloads, coordinated reads and coordinated atomic writes
+run on a background queue. Save compares the last opened/saved content digest
+and checks unresolved file versions before replacing a file. If another device
+changed it, Save refuses to overwrite it: use Save As to preserve your edits,
+then reopen the original. This is file synchronization, not simultaneous editing.
+Downloaded files remain usable offline, subject to iOS's file availability.
+
+**Share** exports a self-contained `.kshproject` copy using the native share
+sheet (AirDrop, Messages, Save to Files, etc.). It does not change the current
+save destination. Save received copies in Files and open them with KSH’s Load action. AUv3 host-session state remains independent of exported files.
+File access bookmarks and the last saved content digest live only in standalone
+app preferences; they never enter project files or AUv3 host state. Replacing the
+project cancels outstanding file dialogs. Edits made during an asynchronous save
+remain marked as unsaved.
+
+Signing setup: register `iCloud.com.ofsound.ksh` in the Apple Developer account
+and enable iCloud Documents access to that container for **both** the containing
+app and AUv3 App IDs/provisioning profiles. CMake points both targets at
+`packaging/ios-projects.entitlements`; keep this fixed container when selecting
+a signing team in Xcode. Unsigned simulator/device builds cannot verify iCloud
+sync. Before release, test on signed iPhone and iPad devices using the same Apple
+account: cross-device creation/opening, offline editing/reconnection, conflicting
+saves, cancellation, standalone relaunch, AUv3 editor reopening, and sharing.
+
 ## Build
 
 The iOS app and AUv3 use the opaque, full-bleed `packaging/icon-ios.png`; the padded desktop icon remains separate. Its vector source is `packaging/icon-ios.svg`; regenerate the PNG with `rsvg-convert packaging/icon-ios.svg -o packaging/icon-ios.png`.
@@ -49,3 +87,18 @@ Verified on 2026-10-17:
 - Physical-device MIDI delivery, AUv3 hosting in an iPhone DAW, device signing and TestFlight distribution remain unverified.
 
 Reference captures: [editor](iphone-reference/editor.png), [channel settings](iphone-reference/channel.png), [generation controls](iphone-reference/generate.png). These are native component renders at the reference safe-area size, with a populated test pattern. Test outputs are retained in `iphone-reference/`.
+
+### iCloud integration verification (2026-10-21)
+
+- Desktop Debug build and installed AU/VST3/CLAP passed without compiler warnings;
+  full suite passed 245 test cases (325,870 assertions), including rejected
+  downloaded projects retaining the current document and save association.
+- Universal iPhone/iPad simulator Debug and arm64 device Release builds include
+  the AUv3 extension. Generated app/extension plists expose the same named KSH
+  container; both Xcode targets use the fixed iCloud entitlements file.
+- iPhone 14 Pro Max / iOS 17.5 simulator: first Save opened the local KSH fallback
+  folder, wrote a valid strict v:1 project (2,174 bytes), and Share opened the
+  native sheet with that project. An external edit to the disposable saved file
+  caused Save to display the conflict message and preserved the external content.
+- Real iCloud account synchronization, offline reconnection and cross-device
+  conflict propagation still require signed iPhone/iPad devices.

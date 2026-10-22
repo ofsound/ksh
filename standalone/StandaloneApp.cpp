@@ -193,6 +193,15 @@ public:
         appProperties.saveIfNeeded();
     }
 
+   #if JUCE_IOS
+    void suspended() override
+    {
+        // iOS may terminate a backgrounded app without calling shutdown().
+        saveCurrentPluginState();
+        appProperties.saveIfNeeded();
+    }
+   #endif
+
     void systemRequestedQuit() override
     {
         saveCurrentPluginState();

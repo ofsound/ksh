@@ -293,10 +293,20 @@ namespace ksh::ui
                 break;
             case Panel::project:
                 place (projectHeader, 128, 100, w - 150, 44);
-                for (int i = 0; i < 6; ++i)
+                for (int i = 0; i < static_cast<int> (projectButtons.size()); ++i)
                 {
-                    constexpr std::array<size_t, 6> order { 0, 1, 2, 5, 3, 4 };
-                    const int stride = (w - 150) / 6;
+                    constexpr std::array<size_t,
+                       #if JUCE_IOS
+                        7
+                       #else
+                        6
+                       #endif
+                    > order { 0, 1, 2, 5, 3, 4
+                       #if JUCE_IOS
+                        , 6
+                       #endif
+                    };
+                    const int stride = (w - 150) / static_cast<int> (projectButtons.size());
                     place (projectButtons[order[static_cast<size_t> (i)]], 128 + i * stride, 214, stride - 12, 48);
                 }
                 break;

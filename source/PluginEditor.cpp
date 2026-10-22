@@ -4,6 +4,10 @@
 
 PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
 {
+   #if JUCE_IOS
+    iosLibrary = p.getIOSProjectLibrary();
+    startTimerHz (10);
+   #endif
     nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
     if (fitViewport)
         nativeView->useViewportFit();
@@ -21,6 +25,13 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             safe->nativeView->controller.refresh();
             safe->updateNativeSize();
         };
+       #if JUCE_IOS
+        if (action == 6)
+        {
+            iosProjectAction (6, completed);
+            return;
+        }
+       #endif
         if (action == 2 || action == 5)
         {
             if (action == 2)
@@ -46,6 +57,9 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 PluginEditor::~PluginEditor()
 {
     stopTimer();
+   #if JUCE_IOS
+    iosLibrary->cancel();
+   #endif
     nativeView.reset();
 }
 void PluginEditor::setZenMode (bool enabled)
@@ -113,6 +127,10 @@ void PluginEditor::finishZenExit()
 }
 void PluginEditor::timerCallback()
 {
+   #if JUCE_IOS
+    if (iosLibrary->busy() && iosOperationEpoch != processorRef.getUiBridge().getDocumentEpoch())
+        iosLibrary->cancel();
+   #else
     if (zenWindow == nullptr)
     {
         finishZenExit();
@@ -129,6 +147,7 @@ void PluginEditor::timerCallback()
     }
     else if (zenFullscreenSeen || zenExitRequested)
         finishZenExit();
+   #endif
 }
 bool PluginEditor::keyPressed (const juce::KeyPress& key)
 {
@@ -231,9 +250,13 @@ void PluginEditor::confirmDiscardingChanges (std::function<void()> proceed)
 
 juce::File PluginEditor::getDefaultProjectsDirectory() const
 {
+   #if JUCE_IOS
+    return iosLibrary->directory();
+   #else
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
         .getChildFile ("ofsound")
         .getChildFile ("KSH");
+   #endif
 }
 
 juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
@@ -244,6 +267,12 @@ juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
                                : getDefaultProjectsDirectory();
     juce::Array<juce::File> files;
 
+   #if JUCE_IOS
+    // Metadata queries include iCloud placeholders which aren't local files yet.
+    if (directory == iosLibrary->directory())
+        files = iosLibrary->files();
+    else
+   #endif
     if (directory.isDirectory())
         directory.findChildFiles (files, juce::File::findFiles, false, "*.kshproject");
 
@@ -315,6 +344,11 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
         return false;
     }
 
+    return loadProjectData (file, data, errorMessage);
+}
+
+bool PluginEditor::loadProjectData (const juce::File& file, const juce::MemoryBlock& data, juce::String& errorMessage)
+{
     const auto parsed = ksh::parsePersistencePayload (
         std::string_view (static_cast<const char*> (data.getData()), data.getSize()));
     if (!parsed.has_value())
@@ -378,6 +412,9 @@ bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorM
 
 void PluginEditor::saveProject (std::function<void (juce::var)> complete)
 {
+   #if JUCE_IOS
+    iosProjectAction (2, std::move (complete));
+   #else
     const auto currentProjectFile = processorRef.getProjectFile();
     if (projectFileChooser != nullptr)
     {
@@ -395,12 +432,17 @@ void PluginEditor::saveProject (std::function<void (juce::var)> complete)
     juce::String error;
     const bool saved = saveProjectFile (currentProjectFile, error);
     complete (projectOperationResult (saved, error));
+   #endif
 }
 
 void PluginEditor::showSaveProjectDialog (
     const juce::Array<juce::var>& args,
     std::function<void (juce::var)> complete)
 {
+   #if JUCE_IOS
+    iosProjectAction (5, std::move (complete), {}, args.size() > 0 ? args[0].toString() : processorRef.getProjectName(),
+                      args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription());
+   #else
     const auto currentProjectFile = processorRef.getProjectFile();
     if (projectFileChooser != nullptr)
     {
@@ -469,11 +511,15 @@ void PluginEditor::showSaveProjectDialog (
             const auto saved = safeThis->saveProjectFile (file, error);
             completion (safeThis->projectOperationResult (saved, error));
         });
+   #endif
 }
 
 void PluginEditor::showLoadProjectDialog (
     std::function<void (juce::var)> complete)
 {
+   #if JUCE_IOS
+    iosProjectAction (1, std::move (complete));
+   #else
     const auto currentProjectFile = processorRef.getProjectFile();
     if (projectFileChooser != nullptr)
     {
@@ -504,11 +550,19 @@ void PluginEditor::showLoadProjectDialog (
             const auto loaded = safeThis->loadProjectFile (file, error);
             completion (safeThis->projectOperationResult (loaded, error));
         });
+   #endif
 }
 
 void PluginEditor::createNewProject (
     std::function<void (juce::var)> complete)
 {
+   #if JUCE_IOS
+    if (iosLibrary->busy())
+    {
+        complete (projectOperationResult (false, "Close the open project operation first."));
+        return;
+    }
+   #endif
     if (projectFileChooser != nullptr)
     {
         complete (projectOperationResult (false, "Close the open project dialog first."));
@@ -559,7 +613,87 @@ void PluginEditor::cycleProject (
         return;
     }
 
+   #if JUCE_IOS
+    iosProjectAction (1, std::move (complete), files[nextIndex]);
+   #else
     juce::String error;
     const auto loaded = loadProjectFile (files[nextIndex], error);
     complete (projectOperationResult (loaded, error));
+   #endif
 }
+
+#if JUCE_IOS
+void PluginEditor::iosProjectAction (int action, std::function<void (juce::var)> done,
+                                    juce::File target, juce::String name, juce::String description)
+{
+    if (iosLibrary->busy())
+    {
+        done (projectOperationResult (false, "A project operation is already open."));
+        return;
+    }
+    iosOperationEpoch = processorRef.getUiBridge().getDocumentEpoch();
+    const auto epoch = iosOperationEpoch;
+    const auto revision = processorRef.getUiBridge().getRevision();
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    if (action == 1)
+    {
+        auto loaded = [safe, epoch, revision, complete = std::move (done)] (ksh::IOSProjectLibrary::Result result) {
+            if (safe == nullptr) return;
+            juce::String error = result.error;
+            bool success = false;
+            if (!result.cancelled && error.isEmpty())
+            {
+                if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch()
+                    || revision != safe->processorRef.getUiBridge().getRevision())
+                    error = "The project changed while opening the file. Please open it again.";
+                else
+                    success = safe->loadProjectData (result.file, result.data, error);
+                if (success) safe->iosLibrary->acceptFile (result.file);
+            }
+            complete (safe->projectOperationResult (success, error));
+        };
+        if (target == juce::File()) iosLibrary->chooseOpen (*this, std::move (loaded));
+        else iosLibrary->read (target, std::move (loaded));
+        return;
+    }
+    if (name.isEmpty()) name = processorRef.getProjectName();
+    if (action != 5) description = processorRef.getProjectDescription();
+    const auto now = juce::Time::getCurrentTime().toISO8601 (true);
+    const auto created = processorRef.getProjectCreatedAt().isEmpty() ? now : processorRef.getProjectCreatedAt();
+    auto snapshot = processorRef.enginePersistenceState();
+    snapshot["projectName"] = name.toStdString();
+    snapshot["projectDescription"] = description.toStdString();
+    snapshot["projectCreatedAt"] = created.toStdString();
+    snapshot["projectModifiedAt"] = now.toStdString();
+    const auto text = snapshot.dump();
+    juce::MemoryBlock data (text.data(), text.size());
+    auto saved = [safe, epoch, action, name, description, created, now, revision,
+                  complete = std::move (done)] (ksh::IOSProjectLibrary::Result result) {
+        if (safe == nullptr) return;
+        if (result.cancelled || result.error.isNotEmpty())
+        {
+            complete (safe->projectOperationResult (false, result.error));
+            return;
+        }
+        if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch())
+        {
+            complete (safe->projectOperationResult (false, "The project changed while the file operation was open."));
+            return;
+        }
+        if (action != 6)
+        {
+            safe->iosLibrary->acceptFile (result.file);
+            safe->processorRef.setProjectFile (result.file);
+            // A file operation may finish after more edits or recording. Keep those edits dirty.
+            if (revision == safe->processorRef.getUiBridge().getRevision())
+            {
+                safe->processorRef.setProjectMetadata (name, description, created, now);
+                safe->processorRef.markDocumentClean();
+            }
+        }
+        complete (safe->projectOperationResult (true));
+    };
+    if (action == 6) iosLibrary->share (*this, name, std::move (data), std::move (saved));
+    else iosLibrary->save (*this, processorRef.getProjectFile(), name, std::move (data), action == 5, std::move (saved));
+}
+#endif
