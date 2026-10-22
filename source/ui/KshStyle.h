@@ -66,11 +66,13 @@ namespace ksh::ui
     template <typename Tone>
     void surface (juce::Graphics& g, juce::Rectangle<float> r, bool active, bool hover, Tone&& tone)
     {
-        g.setGradientFill (juce::ColourGradient (tone (hover ? Palette::raised.brighter (0.12f) : Palette::raised), r.getTopLeft(), tone (Palette::app), r.getBottomLeft(), false));
+        const auto top = Palette::raised.interpolatedWith (Palette::surface, 0.4f);
+        const auto bottom = Palette::app.interpolatedWith (Palette::surface, 0.3f);
+        g.setGradientFill (juce::ColourGradient (tone (hover ? top.brighter (0.08f) : top), r.getTopLeft(), tone (bottom), r.getBottomLeft(), false));
         g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (tone (active ? Palette::accent : Palette::border.withAlpha (0.65f)));
+        g.setColour (tone (active ? Palette::accent : Palette::border.withAlpha (0.42f)));
         g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
-        g.setColour (tone (Palette::text.withAlpha (0.06f)));
+        g.setColour (tone (Palette::text.withAlpha (0.025f)));
         g.drawLine (r.getX() + 5, r.getY() + 1, r.getRight() - 5, r.getY() + 1);
     }
     inline void surface (juce::Graphics& g, juce::Rectangle<float> r, bool active = false, bool hover = false)
@@ -285,7 +287,8 @@ namespace ksh::ui
                     text (g, "S", b.getLocalBounds().toFloat(), juce::jmin (20.0f, b.getHeight() * 0.6f), Palette::accent, true);
                     return;
                 }
-                g.setColour (!b.isEnabled() ? Palette::faint.withAlpha (0.4f) : b.getToggleState() || down ? Palette::accent
+                // Power indicates the current mute state even while a mute-paint gesture holds the button down.
+                g.setColour (!b.isEnabled() ? Palette::faint.withAlpha (0.4f) : b.getToggleState() || (down && icon != "power") ? Palette::accent
                                                                                                            : Palette::text);
                 if (footerControl)
                     g.setColour (footerInk (b.getToggleState(), b.isEnabled()));
@@ -295,6 +298,7 @@ namespace ksh::ui
                 // Match the compact power glyph without reducing the hit area.
                 const bool outlinedIcon = static_cast<bool> (b.getProperties()["outlinedIcon"]);
                 const float size = footerControl ? 22.0f
+                                  : icon == "info" ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.7f)
                                   : outlinedIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.8f)
                                   : historyIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.65f)
                                      : directionIcon ? juce::jmin (20.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.84f)
@@ -509,7 +513,7 @@ namespace ksh::ui
         explicit FooterHelp (juce::Component& editor) : owner (editor)
         {
             setTitle ("Control help");
-            setFont (ksh::ui::font (13));
+            setFont (ksh::ui::font (14));
             setColour (juce::Label::textColourId, juce::Colours::white);
             setJustificationType (juce::Justification::centredLeft);
             setBorderSize (juce::BorderSize<int> (0));

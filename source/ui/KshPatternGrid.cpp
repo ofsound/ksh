@@ -428,7 +428,7 @@ namespace ksh::ui
     void PatternGrid::paint (juce::Graphics& g)
     {
         const auto gridBackdrop = Palette::shell.interpolatedWith (Palette::app, 0.28f);
-        const auto loopTint = Palette::accent.withAlpha (0.08f);
+        const auto loopTint = Palette::accent.withAlpha (0.05f);
         g.fillAll (gridBackdrop);
         const auto layer = displayLayer();
         if (layout.compact && overviewLayer (layer))
@@ -475,10 +475,7 @@ namespace ksh::ui
                     auto r = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).reduced (0.8f);
                     const juce::Graphics::ScopedSaveState cellClip (g);
                     g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), r.getY() - 2, layout.gridWidth(), r.getHeight() + 4).getSmallestIntegerContainer());
-                    const bool groupStart = step % 4 == 0;
                     auto colour = Palette::channel (ch, controller.drumColors);
-                    if (groupStart)
-                        colour = colour.interpolatedWith (Palette::app, 0.12f);
                     if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                         colour = colour.interpolatedWith (Palette::surface, 0.58f);
                     if (c.enabled && hasSelection && !controller.selected.test (static_cast<size_t> (pos.key())))
@@ -486,18 +483,16 @@ namespace ksh::ui
                     const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
                     const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
                     const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
-                    const auto light = colour.brighter (0.18f);
-                    const auto fillBottom = colour.interpolatedWith (Palette::app, 0.18f);
+                    const auto light = colour.brighter (0.1f);
+                    const auto fillBottom = colour.interpolatedWith (Palette::app, 0.1f);
                     const auto paintCell = [&]
                     {
                         if (pass == 0)
                         {
-                            surface (g, r);
-                            if (groupStart && !c.enabled)
+                            surface (g, r, false, false, [gridBackdrop] (juce::Colour ink)
                             {
-                                g.setColour (juce::Colours::black.withAlpha (0.22f));
-                                g.fillRoundedRectangle (r.reduced (0.5f), 5);
-                            }
+                                return ink.interpolatedWith (gridBackdrop, 0.35f).withAlpha (ink.getFloatAlpha());
+                            });
                             return;
                         }
                         if (!c.enabled)
@@ -543,7 +538,7 @@ namespace ksh::ui
                                 }
                             }
                         }
-                        g.setColour (Palette::text.withAlpha (0.22f));
+                        g.setColour (Palette::text.withAlpha (0.14f));
                         g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                         if (layer == Layer::chance)
                         {

@@ -51,6 +51,52 @@ TEST_CASE ("Graphical cell values preserve editing data and distinguish empty an
     CHECK (controller.cell ({ 0, 0 }).probability == 100);
 }
 
+TEST_CASE ("Row power ink reflects mute immediately while pressed or hovered", "[native-ui][mute-indicator]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child)) grid = candidate;
+    REQUIRE (grid != nullptr);
+    GestureButton* power = nullptr;
+    for (auto* child : grid->getChildren())
+        if (child->getTitle() == "power channel 1") power = dynamic_cast<GestureButton*> (child);
+    REQUIRE (power != nullptr);
+    power->setSize (30, 30);
+    LookAndFeel style;
+    const auto ink = [&] (bool hover, bool down)
+    {
+        juce::Image image (juce::Image::ARGB, 30, 30, true);
+        juce::Graphics graphics (image);
+        style.drawButtonText (graphics, *power, hover, down);
+        return image;
+    };
+    const auto active = ink (false, false);
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent press (juce::Desktop::getInstance().getMainMouseSource(), { 15, 15 },
+        juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+        power, power, now, { 15, 15 }, now, 1, false);
+    power->mouseDown (press);
+    REQUIRE (editor.controller.state.playback.sourceChannelMutes[0][0]);
+    REQUIRE_FALSE (power->getToggleState());
+    const auto held = ink (true, true);
+    power->mouseUp (press);
+    const auto hovered = ink (true, false);
+    const auto away = ink (false, false);
+    bool changed = false;
+    for (int y = 0; y < 30; ++y)
+        for (int x = 0; x < 30; ++x)
+        {
+            CHECK (held.getPixelAt (x, y) == away.getPixelAt (x, y));
+            CHECK (hovered.getPixelAt (x, y) == away.getPixelAt (x, y));
+            changed = changed || active.getPixelAt (x, y) != away.getPixelAt (x, y);
+        }
+    CHECK (changed);
+    editor.controller.undo();
+    CHECK (power->getToggleState());
+}
+
 TEST_CASE ("Draggable numeric inputs keep suffix pixels fixed across value changes", "[native-ui][numeric-layout][render]")
 {
     ValueControl control;
@@ -140,7 +186,7 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
     REQUIRE (display != nullptr);
     const auto safeScreen = display->safeAreaInsets.subtractedFrom (display->userBounds.toNearestInt());
     const auto safeViewport = editor.getLocalArea (nullptr, safeScreen).getIntersection (editor.getLocalBounds()).toFloat();
-    for (int percent : { 50, 75, 120 })
+    for (int percent : { 50, 75, 120, 200, 400 })
     {
         processor.setProjectUiScalePercent (percent);
         view->sync();
@@ -2564,7 +2610,7 @@ TEST_CASE ("Standalone restores the saved UI scale before creating its editor", 
     juce::TemporaryFile temporary (".settings");
     juce::PropertiesFile::Options options;
     options.storageFormat = juce::PropertiesFile::storeAsXML;
-    const int percent = GENERATE (50, 75, 100, 120);
+    const int percent = GENERATE (50, 75, 100, 120, 200, 400);
     {
         PluginProcessor previousSession;
         previousSession.setProjectUiScalePercent (percent);
@@ -2608,7 +2654,7 @@ TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]"
     CHECK (processor.getProjectUiScalePercent() == 50);
     settings.setValue ("uiScalePercent", 500);
     ksh::restoreStandaloneUiScale (processor, settings);
-    CHECK (processor.getProjectUiScalePercent() == 120);
+    CHECK (processor.getProjectUiScalePercent() == 400);
 }
 
 namespace

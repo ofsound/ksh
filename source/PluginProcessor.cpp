@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "KshUiBridge.h"
+#include "ui/KshUiScale.h"
 
 #include "engine/KshPersistence.h"
 #include "engine/KshEngineCommands.h"
@@ -1414,7 +1415,7 @@ void PluginProcessor::syncMacroParametersFromEngineLocked (bool notifyHost)
 
 void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 {
-    const auto next = juce::jlimit (50, 120, uiScalePercent);
+    const auto next = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, uiScalePercent);
     if (projectUiScalePercent != next)
     {
         projectUiScalePercent = next;

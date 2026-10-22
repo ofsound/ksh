@@ -454,8 +454,7 @@ namespace ksh::ui
             for (int s = 0; s < state.stepCount; ++s)
             {
                 const auto colour = controller.generatedFlashes[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now ? Palette::text : state.generated[static_cast<size_t> (ch)][static_cast<size_t> (s)].enabled ? Palette::info
-                                                                                                                                       : s % 4 == 0                                                                   ? Palette::app
-                                                                                                                                                                                                                      : Palette::surface;
+                                                                                                                                                                                                        : Palette::surface;
                 g.setColour (colour);
                 g.fillRoundedRectangle (60 + static_cast<float> (s) * cw, 8 + static_cast<float> (row) * 18, cw - 3, 15, 3);
             }

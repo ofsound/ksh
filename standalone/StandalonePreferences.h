@@ -27,7 +27,7 @@ namespace ksh
         // Convert once so an existing 85% window becomes the new 100% size.
         const auto reference = juce::jlimit (1, 1000, settings.getIntValue ("uiScaleReferencePercent", 100));
         const double percent = static_cast<double> (settings.getIntValue ("uiScalePercent", 100)) * reference / ui::UiScale::referencePercent;
-        processor.setProjectUiScalePercent (juce::roundToInt (juce::jlimit (50.0, 120.0, percent)));
+        processor.setProjectUiScalePercent (juce::roundToInt (juce::jlimit (static_cast<double> (ui::UiScale::minimumPercent), static_cast<double> (ui::UiScale::maximumPercent), percent)));
     }
 
     inline void saveStandaloneUiScale (const PluginProcessor& processor, juce::PropertySet& settings)

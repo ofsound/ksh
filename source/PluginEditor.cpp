@@ -171,7 +171,7 @@ void PluginEditor::updateNativeSize()
     }
     const auto& layout = nativeView->layout;
     const float scale = ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent());
-    setResizeLimits (juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (50)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (50)), juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (120)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (120)));
+    setResizeLimits (juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)));
     if (auto* limits = getConstrainer())
         limits->setFixedAspectRatio (static_cast<double> (layout.width() / layout.height()));
     setSize (juce::roundToInt (layout.width() * scale), juce::roundToInt (layout.height() * scale));
@@ -210,7 +210,7 @@ void PluginEditor::resized()
     const float scale = centered ? juce::jmin (fitScale, ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent())) : fitScale;
     if (zenMode)
         nativeView->setZenScaleLimit (static_cast<int> (std::floor (fitScale / ksh::ui::UiScale::baseline * 100.0f)));
-    const int percent = juce::jlimit (50, 120, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
+    const int percent = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
     if (!centered && !fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
     const auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();

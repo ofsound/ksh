@@ -1,4 +1,5 @@
 #include "KshNativeEditor.h"
+#include "KshUiScale.h"
 #include "../engine/KshMidiExport.h"
 namespace ksh::ui
 {
@@ -224,7 +225,8 @@ namespace ksh::ui
         chanceLayer.setTooltip ("Show and edit cell probability and cycle");
         clear.setTooltip ("Double-click to clear pattern");
         clear.onClick = [this] { const auto now = juce::Time::getMillisecondCounter(); if (now - static_cast<juce::uint32> (static_cast<int> (clear.getProperties()["lastClick"])) < 300) controller.clearPattern(); clear.getProperties().set ("lastClick", static_cast<int> (now)); };
-        record.setTooltip ("Record MIDI or ASDFGHJK into selected pattern");
+        record.setTitle ("Arm Record");
+        record.setTooltip ("Arm recording of MIDI or ASDFGHJK into selected pattern");
         record.onClick = [this] { controller.command ("pattern_record_enabled", { !controller.processor.isPatternRecordingEnabled(), controller.source() + 1 }); };
         addAndMakeVisible (recordQuantize);
         recordQuantize.getProperties().set ("icon", "recordLock");
@@ -284,8 +286,8 @@ namespace ksh::ui
         zen.onClick = [this] { if (zenModeChanged) zenModeChanged (!zen.getToggleState()); };
         addAndMakeVisible (scale);
         scale.setTitle ("UI scale percent");
-        scale.minimum = 50;
-        scale.maximum = 120;
+        scale.minimum = UiScale::minimumPercent;
+        scale.maximum = UiScale::maximumPercent;
         scale.resetValue = 100;
         scale.suffix = "%";
         scale.valueFontSize = 12;
@@ -319,8 +321,8 @@ namespace ksh::ui
     void NativeEditor::setZenMode (bool enabled)
     {
         zen.setToggleState (enabled, juce::dontSendNotification);
-        scale.minimum = 50;
-        scale.maximum = 120;
+        scale.minimum = UiScale::minimumPercent;
+        scale.maximum = UiScale::maximumPercent;
         scale.setEnabled (!viewportFit || enabled);
         scale.format = viewportFit && !enabled ? std::function<juce::String (int)> ([] (int) { return juce::String ("Fit"); }) : nullptr;
         scale.setTitle (viewportFit && !enabled ? "UI scale: fit to screen" : "UI scale percent");
@@ -329,8 +331,8 @@ namespace ksh::ui
     }
     void NativeEditor::setZenScaleLimit (int maximumPercent)
     {
-        scale.maximum = juce::jlimit (1, 120, maximumPercent);
-        scale.minimum = juce::jmin (50, scale.maximum);
+        scale.maximum = juce::jlimit (1, UiScale::maximumPercent, maximumPercent);
+        scale.minimum = juce::jmin (UiScale::minimumPercent, scale.maximum);
         scale.setValue (juce::jmin (controller.processor.getProjectUiScalePercent(), scale.maximum));
     }
     void NativeEditor::showNoteChooser (int ch, juce::Component& input)
@@ -490,7 +492,7 @@ namespace ksh::ui
         undoButton.setBounds (selectMode.getRight() + 40, y + 13, 48, 41);
         redoButton.setBounds (undoButton.getRight() - 1, y + 13, 48, 41);
         constexpr int gridInputHeight = 28;
-        const int gridInputY = velocityLayer.getBottom() - gridInputHeight;
+        const int gridInputY = velocityLayer.getBottom() - gridInputHeight + 8;
         const int gridLabelHeight = 18 + steps.captionGap;
         rate.setBounds (rightEdge - 12 - rateControlWidth(), gridInputY, rateControlWidth(), gridInputHeight);
         steps.setBounds (rate.getX() - 92, gridInputY - gridLabelHeight, 84, gridLabelHeight + gridInputHeight);
@@ -527,7 +529,7 @@ namespace ksh::ui
         placeFooter (rowOrder, 40);
         placeFooter (modifierToggle, 40);
         placeFooter (tooltipToggle, 40);
-        footerHelp.setBounds (Layout::outerGutter, footerControlY, tooltipToggle.getX() - 2 * Layout::outerGutter, 32);
+        footerHelp.setBounds (Layout::outerGutter, footerControlY - 2, tooltipToggle.getX() - 2 * Layout::outerGutter, 36);
     }
     void NativeEditor::paint (juce::Graphics& g)
     {
@@ -566,7 +568,7 @@ namespace ksh::ui
             return;
         }
         text (g, "Grid Division", { static_cast<float> (rate.getX()), static_cast<float> (steps.getY()), static_cast<float> (rate.getWidth()), 18 }, steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
-        text (g, "Record", record.getBounds().withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
+        text (g, "Arm Record", record.getBounds().getUnion (recordQuantize.getBounds()).withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
         text (g, "Nudge", left.getBounds().getUnion (right.getBounds()).withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
         text (g, "Clear", clear.getBounds().withY (steps.getY()).withHeight (18).toFloat(), steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
         g.setColour (Palette::border.withAlpha (0.5f));
@@ -729,11 +731,15 @@ namespace ksh::ui
     }
     void NativeEditor::updatePatternButtons()
     {
-        // A pending copy flashes its source at 5 Hz, including when that slot is
-        // also the active pattern. Other slots retain their normal selection.
-        const bool copyFlash = (juce::Time::getMillisecondCounter() / 100u) % 2u == 0;
+        // Keep the armed source highlighted; pulse smoothly between 70% and full opacity.
+        const auto phase = static_cast<double> (juce::Time::getMillisecondCounter() % 200u) / 200.0;
+        const float copyAlpha = 0.85f + 0.15f * static_cast<float> (std::cos (juce::MathConstants<double>::twoPi * phase));
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setToggleState (controller.copySource == i ? copyFlash : controller.source() == i, juce::dontSendNotification);
+        {
+            auto& button = patterns[static_cast<size_t> (i)];
+            button.setToggleState (controller.copySource == i || controller.source() == i, juce::dontSendNotification);
+            button.setAlpha (controller.copySource == i ? copyAlpha : 1.0f);
+        }
     }
     void NativeEditor::updateLayerHeading()
     {
