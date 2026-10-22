@@ -104,15 +104,23 @@ namespace ksh::ui
                 generatedFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiGeneratedStep - 1)] = until;
             if (hit.uiSource == source() + 1 && hit.uiSourceStep > 0 && hit.uiSourceStep <= 32)
             {
-                sourceFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = until;
-                sourceCycleSteps[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = hit.uiCycleStep;
+                sourceFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = juce::Time::getMillisecondCounterHiRes() + sourceFlashDurationMs;
             }
+        };
+        processor.getUiBridge().onCycleVisit = [this] (const NativeCycleVisit& visit) {
+            if (visit.source != source() + 1 || visit.channel < 1 || visit.channel > 8 || visit.step < 1 || visit.step > 32)
+                return;
+            const auto row = static_cast<size_t> (visit.channel - 1);
+            const auto step = static_cast<size_t> (visit.step - 1);
+            sourceCycleFlashes[row][step] = juce::Time::getMillisecondCounterHiRes() + 200.0;
+            sourceCycleSteps[row][step] = visit.cycleStep;
         };
     }
     EditorController::~EditorController()
     {
         commit();
         processor.getUiBridge().onNoteHit = {};
+        processor.getUiBridge().onCycleVisit = {};
     }
     const Cell& EditorController::cell (Location p) const
     {

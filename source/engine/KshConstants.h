@@ -48,7 +48,7 @@ struct Constants
     };
 
     static constexpr std::array<double, swingSubdivisionCount> swingSubdivisionValues {
-        0.25, 0.5, 1.0
+        1.0, 2.0, 4.0
     };
 
     static constexpr std::string_view defaultRate = "16n";

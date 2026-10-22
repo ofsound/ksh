@@ -1115,6 +1115,7 @@ TEST_CASE ("Recording timing accounts for swing channel loops and playback direc
     PluginProcessor plugin;
     auto document = plugin.editorDocument();
     document.settings.swing = 50;
+    document.settings.swingSubdivisionIndex = 0; // 1x swings alternating grid steps.
     document.settings.channels[0].playbackMode = mode;
     document.settings.sourceSettings[0].loopRanges[0] = { 3, 4 };
     REQUIRE (plugin.applyEditorDocument (document));

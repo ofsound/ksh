@@ -237,7 +237,7 @@ TEST_CASE ("engine change notifications do not need status messages", "[engine][
     CHECK (changes > afterSwing);
 }
 
-TEST_CASE ("legacy persistence defaults swing subdivision to .5", "[engine][persistence]")
+TEST_CASE ("legacy persistence defaults swing target to 2x", "[engine][persistence]")
 {
     EngineFixture fixture;
     auto payload = fixture.engine.serializeForPersistence();

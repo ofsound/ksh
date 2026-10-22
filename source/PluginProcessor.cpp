@@ -367,6 +367,13 @@ int PluginProcessor::emitPendingNoteHitsForUi()
         ++emitted;
     }
 
+    ksh::NativeCycleVisit visit;
+    while (cycleVisitsForUi.try_dequeue (visit))
+    {
+        uiBridge.emitCycleVisit (visit);
+        ++emitted;
+    }
+
     return emitted;
 }
 
@@ -761,6 +768,9 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (size_t i = 0; i < playback.noteHitCount; ++i)
         pushedHit = noteHitsForUi.try_enqueue (playback.noteHits[i]) || pushedHit;
 
+    for (size_t i = 0; i < playback.cycleVisitCount; ++i)
+        pushedHit = cycleVisitsForUi.try_enqueue (playback.cycleVisits[i]) || pushedHit;
+
     // Drained by the message-thread timer; posting an OS message from here could block.
     if (pushedHit || notify)
         requestMessageThreadWork();
@@ -1150,6 +1160,11 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
     ksh::NativeHit drained;
 
     while (noteHitsForUi.try_dequeue (drained))
+    {
+    }
+
+    ksh::NativeCycleVisit drainedVisit;
+    while (cycleVisitsForUi.try_dequeue (drainedVisit))
     {
     }
 
@@ -1709,6 +1724,11 @@ void PluginProcessor::resetProject()
     standaloneTransportPlaying.store (0, std::memory_order_relaxed);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
+    ksh::NativeCycleVisit drainedVisit;
+    while (cycleVisitsForUi.try_dequeue (drainedVisit))
+    {
+    }
+
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
     markDocumentClean();

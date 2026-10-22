@@ -19,6 +19,8 @@ struct MidiPlaybackResult
         static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 8;
 
     std::array<NativeHit, maxNoteHitsPerBlock> noteHits {};
+    std::array<NativeCycleVisit, maxNoteHitsPerBlock> cycleVisits {};
+    size_t cycleVisitCount = 0;
     size_t noteHitCount = 0;
     bool noteHitsDropped = false;
     int currentStepOneBased = 0; ///< Playing step for the UI (0 = stopped).

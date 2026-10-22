@@ -15,6 +15,7 @@ namespace ksh::ui
         bool copySelection = false;
         void sync();
         void updatePlayback();
+        void refreshAccent();
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;

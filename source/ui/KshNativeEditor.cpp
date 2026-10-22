@@ -5,11 +5,11 @@ namespace ksh::ui
 {
     namespace
     {
-        void paintControlGroup (juce::Graphics& g, juce::Rectangle<float> bounds, const juce::String& title)
+        void paintControlGroup (juce::Graphics& g, juce::Rectangle<float> bounds, const juce::String& title, float horizontalPadding = 8.0f)
         {
             g.setColour (Palette::border.withAlpha (0.65f));
             g.drawRoundedRectangle (bounds, 5, 1);
-            text (g, title, bounds.reduced (8, 3).withHeight (15), 10, Palette::muted, true, juce::Justification::centredLeft);
+            text (g, title, bounds.reduced (horizontalPadding, 3).withHeight (15), 10, Palette::muted, true, juce::Justification::centredLeft);
         }
     }
     const std::array<juce::String, 8> NativeEditor::rateNames { "Quarter", "Quarter triplet", "Eighth", "Eighth triplet", "16th", "16th triplet", "32nd", "32nd triplet" };
@@ -60,6 +60,7 @@ namespace ksh::ui
         options.osxLibrarySubFolder = "Application Support";
         options.millisecondsBeforeSaving = -1;
         uiPreferences = std::make_unique<juce::PropertiesFile> (options);
+        Palette::setBlueAccent (uiPreferences->getBoolValue ("blueAccent", Palette::blueAccentSelected()));
         footerHelp.setHelpEnabled (uiPreferences->getBoolValue ("footerTooltips", true));
         layout.reverseRows = uiPreferences->getBoolValue ("reverseRows", false);
         controller.keyboardModifiersEnabled = uiPreferences->getBoolValue ("keyboardModifiersEnabled", true);
@@ -133,6 +134,12 @@ namespace ksh::ui
         aboutViewport.setViewedComponent (&randomPanel, false);
         aboutViewport.setScrollBarsShown (true, false);
         preview.onLogoDoubleClick = [this] { toggleAboutPanel(); };
+        preview.onAccentSelected = [this] (bool blue)
+        {
+            uiPreferences->setValue ("blueAccent", blue);
+            uiPreferences->saveIfNeeded();
+            Palette::setBlueAccent (blue);
+        };
         const std::array<juce::String, 6> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
         const std::array<juce::String, 6> projectTips { "Create a new project", "Load a project from disk", "Save the current project", "Load the previous project in this folder", "Load the next project in this folder", "Save a copy to a new project file" };
         for (int i = 0; i < 6; ++i)
@@ -210,6 +217,8 @@ namespace ksh::ui
         for (auto* button : { &velocityLayer, &chanceLayer })
             button->onClick = [this, button]
             {
+                controller.commit();
+                controller.selected.reset();
                 controller.layer = button == &velocityLayer ? Layer::velocity : Layer::chance;
                 controller.selectLatched = false;
                 sync();
@@ -261,7 +270,7 @@ namespace ksh::ui
         swing.suffix = "%";
         swing.setTooltip ("Delay the swung subdivisions. 0% is straight timing; the grid shows the resulting positions.");
         subdivision.setTitle ("Swing target");
-        subdivision.setTooltip ("Choose the target used to group the swing timing");
+        subdivision.setTooltip ("1x swings every other step at the current grid division; 2x alternates two-step groups; 4x alternates four-step groups");
         subdivision.format = [] (int v) { return juce::String (1 << v) + "x"; };
         subdivision.resetValue = 1;
         configureValue (velocityHumanize, "Velocity", 0, 100, "velocity_humanize");
@@ -302,12 +311,15 @@ namespace ksh::ui
         scale.onChange = [this] (int v) { controller.processor.setProjectUiScalePercent (v); if (preferredSizeChanged) preferredSizeChanged(); };
         controller.changed = [this] { sync(); };
         setupCompactControls();
+        Palette::accentChanges().addChangeListener (this);
+        changeListenerCallback (&Palette::accentChanges());
         sync();
         startTimerHz (60);
     }
     NativeEditor::~NativeEditor()
     {
         stopTimer();
+        Palette::accentChanges().removeChangeListener (this);
         removeMouseListener (this);
         juce::PopupMenu::dismissAllActiveMenus();
         controller.changed = {};
@@ -461,6 +473,7 @@ namespace ksh::ui
         noteChooser.setBounds (getLocalBounds());
         projectDetails.setBounds (getLocalBounds());
         discardChanges.setBounds (getLocalBounds());
+        steps.valueWidth = layout.compact ? 0 : 44;
         if (layout.compact)
         {
             resizedCompact();
@@ -475,15 +488,16 @@ namespace ksh::ui
         projectButtons[3].setBounds (282, top + 27, 30, 32);
         projectHeader.setBounds (320, top + 27, 194, 32);
         projectButtons[4].setBounds (522, top + 27, 30, 32);
-        swing.setBounds (582, top + 25, 72, 43);
-        subdivision.setBounds (662, top + 25, 72, 43);
-        velocityHumanize.setBounds (758, top + 25, 72, 43);
-        timingHumanize.setBounds (838, top + 25, 72, 43);
+        swing.setBounds (602, top + 25, 48, 43);
+        subdivision.setBounds (666, top + 25, 40, 43);
+        velocityHumanize.setBounds (774, top + 25, 48, 43);
+        timingHumanize.setBounds (838, top + 25, 48, 43);
         const int patternLeft = rightEdge - 400;
-        const int patternTop = static_cast<int> (layout.transportHeight()) + 18;
+        const int patternTop = static_cast<int> (layout.transportHeight()) + 10;
+        constexpr int patternHeight = 70;
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 40, patternTop + (i / 8) * 30, 36, 26);
-        mutePattern.setBounds (rightEdge - 64, patternTop, 52, 56);
+            patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 38, patternTop + (i / 8) * 37, 34, 33);
+        mutePattern.setBounds (rightEdge - 12 - patternHeight, patternTop, patternHeight, patternHeight);
         const int y = static_cast<int> (layout.toolbarY());
         velocityLayer.setBounds (Layout::outerGutter, y + 13, 90, 41);
         chanceLayer.setBounds (velocityLayer.getRight() - 1, velocityLayer.getY(), 90, velocityLayer.getHeight());
@@ -575,8 +589,8 @@ namespace ksh::ui
         g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, static_cast<float> (getWidth()));
         for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        paintControlGroup (g, { 574, layout.transportHeight() + 10, 168, 70 }, "Swing");
-        paintControlGroup (g, { 750, layout.transportHeight() + 10, 168, 70 }, "Humanize");
+        paintControlGroup (g, { 582, layout.transportHeight() + 10, 144, 70 }, "Swing", 20);
+        paintControlGroup (g, { 754, layout.transportHeight() + 10, 152, 70 }, "Humanize", 20);
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
@@ -793,6 +807,14 @@ namespace ksh::ui
         });
     }
 
+    void NativeEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+    {
+        look.refreshAccent();
+        layerHint.setColour (juce::Label::textColourId, Palette::accent);
+        grid.refreshAccent();
+        sendLookAndFeelChange();
+        repaint();
+    }
     void NativeEditor::timerCallback()
     {
         if (!isShowing())

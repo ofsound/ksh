@@ -98,7 +98,8 @@ namespace ksh::ui
         }
         int copySource = -1;
         std::function<void()> changed;
-        std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {};
+        static constexpr double sourceFlashDurationMs = 80.0;
+        std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {}, sourceCycleFlashes {};
         std::array<std::array<int, 32>, 8> sourceCycleSteps {};
         int playingStep = 0;
         int playingGlobalStep = 0;

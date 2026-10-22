@@ -8,6 +8,7 @@ namespace ksh::ui
         explicit PreviewPanel (EditorController&, bool randomSection = false);
         ~PreviewPanel() override;
         std::function<void()> onLogoDoubleClick;
+        std::function<void (bool)> onAccentSelected;
         void mouseEnter (const juce::MouseEvent&) override;
         void mouseMove (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override;
@@ -29,8 +30,19 @@ namespace ksh::ui
             void mouseEnter (const juce::MouseEvent& event) override { owner.mouseEnter (event); }
             void mouseMove (const juce::MouseEvent& event) override { owner.mouseMove (event); }
             void mouseExit (const juce::MouseEvent& event) override { owner.mouseExit (event); }
+            void mouseDoubleClick (const juce::MouseEvent& event) override
+            {
+                if (event.originalComponent == &owner.orangeLogo || event.originalComponent == &owner.blueLogo)
+                    owner.mouseDoubleClick (event.getEventRelativeTo (&owner));
+            }
             PreviewPanel& owner;
         };
+        class LogoAccentButton : public juce::TextButton
+        {
+        public:
+            void paintButton (juce::Graphics&, bool, bool) override {}
+        };
+        LogoAccentButton orangeLogo, blueLogo;
         ChildHoverListener childHoverListener { *this };
         EditorController& controller;
         const bool randomSection;

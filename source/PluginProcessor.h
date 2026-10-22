@@ -239,6 +239,7 @@ private:
 
     // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
+    moodycamel::ReaderWriterQueue<ksh::NativeCycleVisit> cycleVisitsForUi { 1024 };
     moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
     // Each queue has exactly one producer; only the message thread drains them.
     moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingMidiPatternRecordEvents { 256 }; // audio -> message

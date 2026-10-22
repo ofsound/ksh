@@ -334,6 +334,32 @@ TEST_CASE ("midi playback applies an inspector cycle pattern independently to mu
     REQUIRE (hitSteps == std::vector<int> { 18, 19, 20, 21 });
 }
 
+TEST_CASE ("cycle feedback reports inactive turns without emitting notes", "[engine][transport]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (1);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setCell (0, 0, 0, true, 100, 100, 3, 0b101);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (44100.0);
+
+    for (int turn = 0; turn < 6; ++turn)
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, turn * snapshot.beatsPerStep, 120.0, true, 512);
+        REQUIRE (result.cycleVisitCount == 1);
+        const auto& visit = result.cycleVisits[0];
+        CHECK (visit.source == 1);
+        CHECK (visit.channel == 1);
+        CHECK (visit.step == 1);
+        CHECK (visit.cycleStep == turn % 3 + 1);
+        CHECK (countNoteOns (result.midi) == (turn % 3 == 1 ? 0 : 1));
+        CHECK (result.noteHitCount == (turn % 3 == 1 ? 0 : 1));
+    }
+}
+
 TEST_CASE ("midi playback resets cycle phases when the playback definition changes", "[engine][transport]")
 {
     EngineFixture fixture;
@@ -944,6 +970,7 @@ TEST_CASE ("midi playback applies swing delay within block", "[engine][transport
     fixture.engine.setRate ("16n");
     fixture.engine.setTempo (120.0);
     fixture.engine.setSwing (100);
+    fixture.engine.setSwingSubdivisionIndex (0);
     fixture.engine.setCell (0, 0, 0, true, 100, 100, 1);
     fixture.engine.setCell (0, 0, 1, true, 80, 100, 1);
     fixture.engine.generateWindow (0, 2, true);
@@ -996,7 +1023,7 @@ TEST_CASE ("midi playback uses the selected swing subdivision phase", "[engine][
                                                 4096);
 
     REQUIRE (defaultStep1.noteHitCount > 0);
-    REQUIRE (defaultStep1.noteHits[0].delayMs == 62.5);
+    REQUIRE (defaultStep1.noteHits[0].delayMs == 0.0);
 
     fixture.engine.setSwingSubdivisionIndex (0);
     ksh::MidiPlaybackRunner fineRunner;
@@ -1016,7 +1043,7 @@ TEST_CASE ("midi playback uses the selected swing subdivision phase", "[engine][
                                              4096);
 
     REQUIRE (fineStep1.noteHitCount > 0);
-    REQUIRE (fineStep1.noteHits[0].delayMs == 0.0);
+    REQUIRE (fineStep1.noteHits[0].delayMs == 62.5);
 }
 
 TEST_CASE ("midi playback does not fire while transport is stopped", "[engine][transport]")
@@ -1334,4 +1361,42 @@ TEST_CASE ("Timestamped keyboard monitoring keeps phase with a consistent block 
     // In the synthetic wall clock, output begins at the current callback, exactly
     // one block after the preceding callback. Arrival phase must not alter latency.
     CHECK (blockSize + onset - phase == blockSize);
+}
+
+TEST_CASE ("Swing targets follow the displayed multiples of the current grid division", "[engine][transport][swing]")
+{
+    const int target = GENERATE (0, 1, 2);
+    const auto rate = GENERATE ("4n", "8n", "16n", "16nt");
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate (rate);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setSwing (100);
+    fixture.engine.setSwingSubdivisionIndex (target);
+    for (int step = 0; step < 16; ++step)
+        fixture.engine.setCell (0, 0, step, true, 100, 100, 1);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const double samplesPerStep = snapshot.beatsPerStep * 24000.0;
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    const auto result = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true,
+                                          static_cast<int> (samplesPerStep * 16));
+    std::vector<int> actual;
+    for (const auto event : result.midi)
+        if (event.getMessage().isNoteOn())
+            actual.push_back (event.samplePosition);
+    std::vector<int> expected;
+    const int group = 1 << target;
+    for (int step = 0; step < 16; ++step)
+    {
+        const double delay = (step / group) % 2 == 1 ? group * 0.5 : 0.0;
+        const int sample = static_cast<int> (std::lround ((step + delay) * samplesPerStep));
+        if (sample < static_cast<int> (samplesPerStep * 16))
+            expected.push_back (sample);
+    }
+    std::sort (expected.begin(), expected.end());
+    CHECK (actual == expected);
 }

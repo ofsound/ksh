@@ -17,7 +17,7 @@ namespace ksh
     return Constants::swingSubdivisionValues[static_cast<size_t> (clampSwingSubdivisionIndex (subdivisionIndex))];
 }
 
-/** Swing delay in step units using midi-phrases' absolute-phase subdivision algorithm. */
+/** Swing delay in step units: 1x alternates steps, 2x alternates pairs, and 4x alternates four-step groups. */
 [[nodiscard]] inline double swingDelayStepsForPosition (double stepPosition,
                                                         int swingPercent,
                                                         int subdivisionIndex)
@@ -27,7 +27,7 @@ namespace ksh
     if (swing <= 0)
         return 0.0;
 
-    const auto subdivision = 2.0 * swingSubdivisionValueForIndex (subdivisionIndex);
+    const auto subdivision = swingSubdivisionValueForIndex (subdivisionIndex);
 
     if (subdivision <= 0.0)
         return 0.0;

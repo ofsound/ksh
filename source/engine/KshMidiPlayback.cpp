@@ -501,9 +501,13 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
 
             const int count = static_cast<int> (cycleCounters[cycleIndex]++);
             cycleStep = count % cycle + 1;
-            if (! cycleGateMatches (count, cycle, cell.cycleMask))
-                continue;
         }
+
+        if (result.cycleVisitCount < result.cycleVisits.size())
+            result.cycleVisits[result.cycleVisitCount++] = { cell.source + 1, channel + 1, cell.sourceStep + 1, cycleStep };
+
+        if (! cycleGateMatches (cycleStep - 1, cycle, cell.cycleMask))
+            continue;
 
         const int probability = clampInt (cell.probability, 0, 100);
 

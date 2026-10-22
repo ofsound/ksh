@@ -26,6 +26,15 @@ struct NativeHit
     [[nodiscard]] bool operator== (const NativeHit&) const = default;
 };
 
+/** A source cell reached this cycle position, including turns with its gate switched off. */
+struct NativeCycleVisit
+{
+    int source = 0;
+    int channel = 0;
+    int step = 0;
+    int cycleStep = 0;
+};
+
 /** Source chosen for each generated cell (-1 = none), as picked by the audio thread. */
 using GeneratedSources = std::array<std::array<int8_t, Constants::maxSteps>, Constants::maxChannels>;
 

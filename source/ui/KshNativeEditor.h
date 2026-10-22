@@ -5,7 +5,7 @@
 #include "KshProjectDetails.h"
 namespace ksh::ui
 {
-    class NativeEditor : public juce::Component, private juce::Timer
+    class NativeEditor : public juce::Component, private juce::Timer, private juce::ChangeListener
     {
     public:
         explicit NativeEditor (PluginProcessor&);
@@ -77,6 +77,7 @@ namespace ksh::ui
         void syncChannel();
         void cancelCompactGestures();
         void timerCallback() override;
+        void changeListenerCallback (juce::ChangeBroadcaster*) override;
         void updateLayerHeading();
         void updatePatternButtons();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);

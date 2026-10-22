@@ -27,6 +27,20 @@ namespace ksh::ui
         // Observe child hover without delivering our own double-click handler
         // a second time through Component's mouse-listener dispatch.
         addMouseListener (&childHoverListener, true);
+        if (!randomSection)
+        {
+            for (auto* button : { &orangeLogo, &blueLogo })
+            {
+                addAndMakeVisible (*button);
+                button->setMouseCursor (juce::MouseCursor::PointingHandCursor);
+            }
+            orangeLogo.setTitle ("Orange accent");
+            blueLogo.setTitle ("Blue accent");
+            orangeLogo.setTooltip ("K: use the orange accent throughout the app. Double-click the logo to open controls.");
+            blueLogo.setTooltip ("H: use the blue accent throughout the app. Double-click the logo to open controls.");
+            orangeLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (false); };
+            blueLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (true); };
+        }
         addAndMakeVisible (mode);
         addAndMakeVisible (refresh);
         addAndMakeVisible (velocity);
@@ -213,7 +227,7 @@ namespace ksh::ui
             return;
         }
         for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
-                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::cycle }, { &cycleLength, Layer::cycle } })
+                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::chance }, { &cycleLength, Layer::chance } })
         {
             auto bounds = control->getBounds();
             if (control == &cycle && !compact)
@@ -287,6 +301,15 @@ namespace ksh::ui
     }
     void PreviewPanel::resized()
     {
+        orangeLogo.setVisible (!compact && !randomSection);
+        blueLogo.setVisible (!compact && !randomSection);
+        if (!compact && !randomSection)
+        {
+            const auto transform = wordmarkTransform (inspectorBounds.toFloat().getCentreY());
+            const float unit = wordmarkBounds.getWidth() / 556.632813f;
+            orangeLogo.setBounds (wordmarkBounds.withWidth (197.021484f * unit).transformedBy (transform).getSmallestIntegerContainer());
+            blueLogo.setBounds (wordmarkBounds.withTrimmedLeft (358.0f * unit).transformedBy (transform).getSmallestIntegerContainer());
+        }
         if (compact)
         {
             if (randomSection)

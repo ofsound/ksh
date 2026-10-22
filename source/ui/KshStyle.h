@@ -34,14 +34,30 @@ namespace ksh::ui
 
     struct Palette
     {
-        static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, accent { 0xfff1954a }, strong { accent }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
+        static inline const juce::Colour app { 0xff0b0d0e }, shell { 0xff121719 }, surface { 0xff192124 }, raised { 0xff223036 }, border { 0xff38535c }, text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
+        static inline const juce::Colour orangeAccent { 0xfff1954a }, blueAccent { 0xff40add1 };
+        static inline juce::Colour accent { orangeAccent };
+        static juce::ChangeBroadcaster& accentChanges()
+        {
+            static juce::ChangeBroadcaster changes;
+            return changes;
+        }
+        static bool blueAccentSelected() { return accent == blueAccent; }
+        static void setBlueAccent (bool blue)
+        {
+            const auto next = blue ? blueAccent : orangeAccent;
+            if (accent == next)
+                return;
+            accent = next;
+            accentChanges().sendSynchronousChangeMessage();
+        }
         static inline const juce::Colour play { 0xff76d99b };
         static inline const juce::Colour recording { 0xffef4444 };
         static juce::Colour channel (int ch, bool colors = true)
         {
             // Track 2 shares the app and wordmark accent.
-            static const std::array<juce::uint32, 8> values { 0xffdb4047, accent.getARGB(), 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
-            return colors ? juce::Colour (values[static_cast<size_t> (juce::jlimit (0, 7, ch))]) : accent;
+            static const std::array<juce::uint32, 8> values { 0xffdb4047, 0xfff1954a, 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
+            return !colors || ch == 1 ? accent : juce::Colour (values[static_cast<size_t> (juce::jlimit (0, 7, ch))]);
         }
     };
     inline juce::Font font (float height, bool bold = false)
@@ -106,6 +122,12 @@ namespace ksh::ui
             setColour (juce::PopupMenu::backgroundColourId, Palette::shell);
             setColour (juce::PopupMenu::textColourId, Palette::text);
             setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::raised);
+            setColour (juce::PopupMenu::highlightedTextColourId, Palette::accent);
+        }
+        void refreshAccent()
+        {
+            setColour (juce::TextEditor::focusedOutlineColourId, Palette::accent);
+            setColour (juce::TextEditor::highlightColourId, Palette::accent.withAlpha (0.3f));
             setColour (juce::PopupMenu::highlightedTextColourId, Palette::accent);
         }
         void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
@@ -252,7 +274,7 @@ namespace ksh::ui
             }
             if (b.getToggleState() || down)
             {
-                g.setColour (Palette::strong);
+                g.setColour (Palette::accent);
                 g.fillRoundedRectangle (r, 4);
             }
             else
@@ -297,7 +319,9 @@ namespace ksh::ui
                 const bool historyIcon = icon == "undo" || icon == "redo";
                 // Match the compact power glyph without reducing the hit area.
                 const bool outlinedIcon = static_cast<bool> (b.getProperties()["outlinedIcon"]);
+                const bool patternEditIcon = outlinedIcon && (icon == "clear" || icon == "previous" || icon == "next");
                 const float size = footerControl ? 22.0f
+                                  : patternEditIcon ? juce::jmin (18.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.6f)
                                   : icon == "info" ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.7f)
                                   : outlinedIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.8f)
                                   : historyIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.65f)
@@ -384,21 +408,10 @@ namespace ksh::ui
                 }
                 else if (icon == "tips")
                 {
-                    path.startNewSubPath (7, 4);
-                    path.lineTo (17, 4);
-                    path.quadraticTo (20, 4, 20, 7);
-                    path.lineTo (20, 14);
-                    path.quadraticTo (20, 17, 17, 17);
-                    path.lineTo (10, 17);
-                    path.lineTo (6, 20);
-                    path.lineTo (6, 16.8f);
-                    path.quadraticTo (4, 16, 4, 14);
-                    path.lineTo (4, 7);
-                    path.quadraticTo (4, 4, 7, 4);
-                    path.closeSubPath();
-                    g.fillEllipse (11.1f, 7, 1.8f, 1.8f);
-                    path.startNewSubPath (12, 11);
-                    path.lineTo (12, 14);
+                    path.startNewSubPath (7, 8);
+                    path.cubicTo (7, 2, 18, 2, 18, 8);
+                    path.cubicTo (18, 12, 12, 11, 12, 15);
+                    g.fillEllipse (10.8f, 18, 2.4f, 2.4f);
                 }
                 else if (icon == "palette")
                 {
@@ -634,6 +647,7 @@ namespace ksh::ui
         float valueFontSize = 14, captionFontSize = 10;
         juce::Colour captionColour { Palette::text };
         int captionGap = 0;
+        int valueWidth = 0;
         juce::String suffix, caption;
         bool mixed = false, showAdjustmentHintAtZero = false, horizontalAdjustment = false;
         std::function<juce::String (int)> format;
@@ -668,6 +682,8 @@ namespace ksh::ui
                 text (g, caption, r.removeFromTop (18), captionFontSize, captionColour, true, juce::Justification::centredLeft);
                 r.removeFromTop (static_cast<float> (captionGap));
             }
+            if (valueWidth > 0)
+                r.setWidth (static_cast<float> (juce::jmin (valueWidth, getWidth())));
             const bool footerControl = static_cast<bool> (getProperties()["footerControl"]);
             if (footerControl)
                 footerSurface (g, r.reduced (0.5f), false, isMouseOver() || hasKeyboardFocus (true), dragging || input.isVisible(), isEnabled());
@@ -741,7 +757,10 @@ namespace ksh::ui
         }
         void resized() override
         {
-            input.setBounds (getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 + captionGap : 0));
+            auto bounds = getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 + captionGap : 0);
+            if (valueWidth > 0)
+                bounds.setWidth (juce::jmin (valueWidth, getWidth()));
+            input.setBounds (bounds);
             input.setFont (font (valueFontSize));
         }
         void focusGained (FocusChangeType) override { repaint(); }

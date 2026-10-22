@@ -17,7 +17,7 @@ namespace ksh::ui
         setWantsKeyboardFocus (true);
         setTitle ("Pattern grid");
         setDescription ("Select cells with Shift-click or a long press, drag to paint or change values; Option copies selected cells.");
-        setTooltip ("Click to toggle cells; drag across cells to paint or vertically to change values. Shift/Select or a long press selects cells; Option-drag copies selected cells. Drag an enabled cell's left edge to draw a velocity line.");
+        setTooltip ("Click to toggle cells; click a selection to fill its blank cells, or clear it when all are active. Drag across cells to paint or vertically to change values. Shift/Select or a long press selects cells; Option-drag copies selected cells. Drag an enabled cell's left edge to draw a velocity line.");
         for (int ch = 0; ch < 8; ++ch)
             for (int step = 0; step < 32; ++step)
             {
@@ -480,8 +480,9 @@ namespace ksh::ui
                         colour = colour.interpolatedWith (Palette::surface, 0.58f);
                     if (c.enabled && hasSelection && !controller.selected.test (static_cast<size_t> (pos.key())))
                         colour = colour.withMultipliedSaturation (0.8f).interpolatedWith (Palette::app, 0.28f);
-                    const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] > now;
-                    const auto valueColour = flash ? Palette::app.interpolatedWith (Palette::text, 0.78f) : Palette::app;
+                    const auto remaining = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] - now;
+                    const auto pulse = static_cast<float> (juce::jlimit (0.0, 1.0, remaining / EditorController::sourceFlashDurationMs));
+                    const auto valueColour = Palette::app;
                     const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
                     const auto light = colour.brighter (0.1f);
                     const auto fillBottom = colour.interpolatedWith (Palette::app, 0.1f);
@@ -489,9 +490,11 @@ namespace ksh::ui
                     {
                         if (pass == 0)
                         {
-                            surface (g, r, false, false, [gridBackdrop] (juce::Colour ink)
+                            const bool darkBeat = !c.enabled && step % 4 == 0;
+                            surface (g, r, false, false, [gridBackdrop, darkBeat] (juce::Colour ink)
                             {
-                                return ink.interpolatedWith (gridBackdrop, 0.35f).withAlpha (ink.getFloatAlpha());
+                                const auto base = ink.interpolatedWith (gridBackdrop, 0.35f);
+                                return (darkBeat ? base.darker (0.30f) : base).withAlpha (ink.getFloatAlpha());
                             });
                             return;
                         }
@@ -537,6 +540,12 @@ namespace ksh::ui
                                     g.fillRect (x - 0.375f, r.getY(), 0.75f, r.getHeight());
                                 }
                             }
+                        }
+                        // Each emitted hit retriggers a fast, colour-preserving pulse over the entire body.
+                        if (pulse > 0.0f)
+                        {
+                            g.setColour (colour.brighter (0.5f).withAlpha (0.85f * pulse * pulse));
+                            g.fillRoundedRectangle (r, 5);
                         }
                         g.setColour (Palette::text.withAlpha (0.14f));
                         g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
@@ -640,11 +649,26 @@ namespace ksh::ui
             if (!layout.compact)
             {
                 for (const float x : { brace.getX() + 8, brace.getRight() - 8 })
+                {
+                    const auto grip = juce::Rectangle<float> (12, brace.getHeight() - 8).withCentre ({ x, brace.getCentreY() });
+                    g.setColour (juce::Colours::black.withAlpha (0.45f));
+                    g.fillRoundedRectangle (grip.translated (0, 1.0f).expanded (0.5f), 4);
+                    juce::ColourGradient finish (juce::Colour (0xff293034), grip.getTopLeft(), juce::Colour (0xff192024), grip.getTopRight(), false);
+                    finish.addColour (0.18, juce::Colour (0xff111719));
+                    finish.addColour (0.48, juce::Colour (0xff050708));
+                    finish.addColour (0.82, juce::Colour (0xff0a0e10));
+                    g.setGradientFill (finish);
+                    g.fillRoundedRectangle (grip, 4);
+                    g.setColour (Palette::border.withAlpha (0.55f));
+                    g.drawRoundedRectangle (grip.reduced (0.5f), 3.5f, 1);
+                    g.setColour (Palette::text.withAlpha (0.16f));
+                    g.drawHorizontalLine (juce::roundToInt (grip.getY() + 1.5f), grip.getX() + 4, grip.getRight() - 4);
                     for (int dot = -2; dot <= 2; ++dot)
                     {
                         g.setColour (Palette::text);
                         g.fillEllipse (x - 0.6f, brace.getCentreY() + static_cast<float> (dot) * 4, 1.2f, 1.2f);
                     }
+                }
             }
         }
         const auto paintMarker = [&g] (juce::Point<float> point)
@@ -688,6 +712,12 @@ namespace ksh::ui
                 g.fillRoundedRectangle (layout.cell (d).translated (offset * layout.cellWidth(), 0).reduced (2), 4);
             }
     }
+    void PatternGrid::refreshAccent()
+    {
+        for (auto& row : rows)
+            row.label.setColour (juce::Label::textColourId, Palette::accent);
+        repaint();
+    }
     void PatternGrid::updatePlayback()
     {
         const auto now = juce::Time::getMillisecondCounterHiRes();
@@ -696,11 +726,9 @@ namespace ksh::ui
             {
                 const bool flash = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now;
                 auto& last = lastFlash[static_cast<size_t> (ch)][static_cast<size_t> (s)];
-                if (last != flash)
-                {
-                    last = flash;
+                if (flash || last)
                     repaint (cellPaintBounds ({ ch, s }).getSmallestIntegerContainer());
-                }
+                last = flash;
             }
         if (previousStep != controller.playingStep)
         {
@@ -948,10 +976,17 @@ namespace ksh::ui
             }
             else
             {
-                controller.begin ("Toggle cell");
-                auto c = controller.cell (anchor);
-                c.enabled = !c.enabled;
-                controller.editCell (anchor, c);
+                controller.begin (selectedAtStart ? "Fill or clear selection" : "Toggle cell");
+                const auto cells = selectedAtStart ? controller.selection() : std::vector<Location> { anchor };
+                const bool enable = std::any_of (cells.begin(), cells.end(), [this] (Location p) { return !controller.cell (p).enabled; });
+                for (auto p : cells)
+                {
+                    auto c = controller.cell (p);
+                    if (c.enabled == enable)
+                        continue;
+                    c.enabled = enable;
+                    controller.editCell (p, c);
+                }
             }
         }
         if ((drag == Drag::move || drag == Drag::copy) && target.valid())

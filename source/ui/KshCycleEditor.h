@@ -72,7 +72,7 @@ namespace ksh::ui
             {
                 const bool flashing = controller.playingStep > 0 && std::any_of (list.begin(), list.end(), [&] (Location p)
                 {
-                    return controller.sourceFlashes[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] > now
+                    return controller.sourceCycleFlashes[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] > now
                         && controller.sourceCycleSteps[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] == i + 1;
                 });
                 auto& bit = bits[static_cast<size_t> (i)];
@@ -259,7 +259,7 @@ namespace ksh::ui
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 const bool on = getToggleState();
-                auto background = on ? Palette::accent.withAlpha (0.18f) : inCycle ? Palette::surface : Palette::app;
+                auto background = on ? Palette::accent : inCycle ? Palette::surface : Palette::app;
                 if (flashing)
                     background = Palette::text;
                 if (isEnabled() && (hover || down))
@@ -267,7 +267,7 @@ namespace ksh::ui
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
                 g.fillRoundedRectangle (r, 3);
                 ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getHeight() * 0.45f),
-                      flashing ? Palette::app : on ? Palette::accent : inCycle ? Palette::muted : Palette::faint, true);
+                      flashing || on ? Palette::app : inCycle ? Palette::muted : Palette::faint, true);
             }
         };
         std::array<CycleBit, 8> bits;
