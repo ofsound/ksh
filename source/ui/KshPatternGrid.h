@@ -16,6 +16,7 @@ namespace ksh::ui
         void sync();
         void updatePlayback();
         void refreshAccent();
+        juce::Component* rowTitle (int channel) { return juce::isPositiveAndBelow (channel, static_cast<int> (rows.size())) ? &rows[static_cast<size_t> (channel)].label : nullptr; }
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;

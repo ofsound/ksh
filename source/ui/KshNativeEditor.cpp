@@ -382,7 +382,7 @@ namespace ksh::ui
         noteChooserChannel = ch;
         noteChooserOriginal = channel.note;
         noteChooserEpoch = controller.processor.getUiBridge().getDocumentEpoch();
-        noteChooser.open (getLocalArea (&input, input.getLocalBounds()), channel.label, channel.note, &input);
+        noteChooser.open (getLocalArea (&input, input.getLocalBounds()), juce::String (ch + 1), channel.note, &input, grid.rowTitle (ch));
     }
     void NativeEditor::configureValue (ValueControl& control, const juce::String& caption, int minimum, int maximum, const std::string& command)
     {

@@ -46,6 +46,7 @@ namespace ksh::ui
         NoteChooser()
         {
             setTitle ("Choose MIDI note");
+            setAlwaysOnTop (true);
             setWantsKeyboardFocus (true);
             setFocusContainerType (FocusContainerType::keyboardFocusContainer);
             addAndMakeVisible (close);
@@ -58,7 +59,7 @@ namespace ksh::ui
             next.setTitle ("Scroll keyboard right");
             previous.onClick = [this] { scroll (-12); };
             next.onClick = [this] { scroll (12); };
-            for (int index = 0; index < 60; ++index)
+            for (int index = 0; index < keyCount; ++index)
             {
                 auto& key = keys[static_cast<size_t> (index)];
                 addAndMakeVisible (key);
@@ -74,35 +75,16 @@ namespace ksh::ui
             for (auto& key : keys)
                 if (key.black)
                     key.toFront (false);
-            addAndMakeVisible (number);
-            number.setTitle ("MIDI note number");
-            number.setInputRestrictions (3, "0123456789");
-            number.setJustification (juce::Justification::centred);
-            number.setFont (font (14));
-            number.onTextChange = [this]
-            {
-                const bool valid = validNumber();
-                apply.setEnabled (valid);
-                if (valid)
-                {
-                    candidate = number.getText().getIntValue();
-                    refresh (false);
-                }
-            };
-            number.onReturnKey = [this] { if (validNumber()) choose (number.getText().getIntValue()); };
-            number.onEscapeKey = [this] { dismiss(); };
-            addAndMakeVisible (apply);
-            apply.setTitle ("Assign MIDI note");
-            apply.onClick = [this] { if (validNumber()) choose (number.getText().getIntValue()); };
         }
         std::function<void (int)> onChoose;
-        void open (juce::Rectangle<int> target, const juce::String& channelName, int note, juce::Component* input)
+        void open (juce::Rectangle<int> target, const juce::String& rowName, int note, juce::Component* input, juce::Component* rowTitle = nullptr)
         {
             anchor = target;
             returnFocus = input;
-            channel = channelName;
+            activeRowTitle = rowTitle;
+            setDescription ("Editing row " + rowName);
             candidate = juce::jlimit (0, 127, note);
-            firstNote = 24; // C1: the initial five-octave window.
+            firstNote = juce::jlimit (0, lastFirstNote, (candidate / 12 - 1) * 12);
             refresh();
             setVisible (true);
             resized();
@@ -161,54 +143,117 @@ namespace ksh::ui
         }
         void resized() override
         {
-            const int width = juce::jmin (900, juce::jmax (0, getWidth() - 24));
-            panel = { (getWidth() - width) / 2,
-                      juce::jlimit (12, juce::jmax (12, getHeight() - 286 - 12), anchor.getCentreY() - 143), width, 286 };
+            constexpr int height = 244;
+            constexpr int anchorGap = 24;
+            const int rightSpace = getWidth() - anchor.getRight() - anchorGap - 12;
+            const int leftSpace = anchor.getX() - anchorGap - 12;
+            const bool beside = juce::jmax (rightSpace, leftSpace) >= 800;
+            const bool right = rightSpace >= leftSpace;
+            const int width = juce::jmin (1000, beside ? (right ? rightSpace : leftSpace) : juce::jmax (0, getWidth() - 24));
+            const int xPosition = beside ? (right ? anchor.getRight() + anchorGap : anchor.getX() - width - anchorGap)
+                                         : juce::jlimit (12, juce::jmax (12, getWidth() - width - 12), anchor.getX());
+            const bool below = getHeight() - anchor.getBottom() >= height + anchorGap + 12;
+            const int yPosition = beside ? anchor.getCentreY() - height / 2
+                                         : (below ? anchor.getBottom() + anchorGap : anchor.getY() - height - anchorGap);
+            panel = { xPosition, juce::jlimit (12, juce::jmax (12, getHeight() - height - 12), yPosition), width, height };
             const int x = panel.getX(), y = panel.getY();
             close.setBounds (panel.getRight() - 44, y + 12, 28, 28);
-            previous.setBounds (x + 20, y + 60, 36, 30);
-            next.setBounds (panel.getRight() - 56, y + 60, 36, 30);
-            const float whiteWidth = static_cast<float> (width - 40) / 35.0f;
+            previous.setBounds (x + 20, y + 64, 36, 30);
+            next.setBounds (panel.getRight() - 56, y + 64, 36, 30);
+            const float whiteWidth = static_cast<float> (width - 40) / 28.0f;
             int white = 0;
-            for (int index = 0; index < 60; ++index)
+            for (int index = 0; index < keyCount; ++index)
             {
                 auto& key = keys[static_cast<size_t> (index)];
                 const float left = static_cast<float> (x + 20) + static_cast<float> (white) * whiteWidth;
                 if (key.black)
-                    key.setBounds (juce::roundToInt (left - whiteWidth * 0.3f), y + 108, juce::roundToInt (whiteWidth * 0.6f), 66);
+                    key.setBounds (juce::roundToInt (left - whiteWidth * 0.3f), y + 108, juce::roundToInt (whiteWidth * 0.6f), 74);
                 else
                 {
-                    key.setBounds (juce::roundToInt (left), y + 108, juce::roundToInt (whiteWidth) - 1, 104);
+                    key.setBounds (juce::roundToInt (left), y + 108, juce::roundToInt (whiteWidth) - 1, 116);
                     ++white;
                 }
             }
-            number.setBounds (x + 60, y + 232, 64, 30);
-            apply.setBounds (x + 132, y + 232, 52, 30);
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colours::black.withAlpha (0.18f));
+            g.fillAll (juce::Colours::black.withAlpha (0.58f));
+            if (auto* input = dynamic_cast<NoteInput*> (returnFocus.getComponent()); input != nullptr && input->isVisible())
+            {
+                auto button = anchor.toFloat();
+                if (input->caption.isNotEmpty())
+                {
+                    if (input->captionWidth > 0)
+                        button.removeFromLeft (static_cast<float> (input->captionWidth));
+                    else
+                        button.removeFromTop (18.0f + static_cast<float> (input->captionGap));
+                }
+                if (input->valueWidth > 0)
+                    button.setWidth (static_cast<float> (juce::jmin (input->valueWidth, input->getWidth())));
+                for (int spread = 8; spread > 0; --spread)
+                {
+                    g.setColour (Palette::accent.withAlpha (0.018f * static_cast<float> (9 - spread)));
+                    g.drawRoundedRectangle (button.expanded (static_cast<float> (spread)), 5.0f + static_cast<float> (spread), 2);
+                }
+                surface (g, button.reduced (0.5f), true, false);
+                const auto label = input->format ? input->format (input->value) : juce::String (input->value) + input->suffix;
+                text (g, label, button, input->valueFontSize, juce::Colours::white, true);
+            }
+            if (activeRowTitle != nullptr && activeRowTitle->isVisible())
+            {
+                const auto origin = getLocalPoint (activeRowTitle.getComponent(), juce::Point<int>());
+                const juce::Graphics::ScopedSaveState saved (g);
+                g.addTransform (juce::AffineTransform::translation (static_cast<float> (origin.x), static_cast<float> (origin.y)));
+                activeRowTitle->paintEntireComponent (g, false);
+            }
             const auto r = panel.toFloat();
             g.setColour (Palette::shell);
             g.fillRoundedRectangle (r, 9);
             g.setColour (Palette::border);
             g.drawRoundedRectangle (r.reduced (0.5f), 9, 1);
-            if (panel.getX() > anchor.getRight())
+            // A short pointer joins the card directly to the originating note button.
+            juce::Path pointer;
+            if (panel.getX() >= anchor.getRight() || panel.getRight() <= anchor.getX())
             {
-                const float tipY = juce::jlimit (r.getY() + 18, r.getBottom() - 18, static_cast<float> (anchor.getCentreY()));
-                juce::Path pointer;
-                pointer.addTriangle (r.getX(), tipY - 7, r.getX() - 8, tipY, r.getX(), tipY + 7);
-                g.setColour (Palette::shell);
-                g.fillPath (pointer);
+                const float edge = panel.getX() >= anchor.getRight() ? r.getX() : r.getRight();
+                const float tip = static_cast<float> (panel.getX() >= anchor.getRight() ? anchor.getRight() : anchor.getX());
+                const float y = juce::jlimit (r.getY() + 18, r.getBottom() - 18, static_cast<float> (anchor.getCentreY()));
+                pointer.addTriangle (edge, y - 7, tip, static_cast<float> (anchor.getCentreY()), edge, y + 7);
             }
-            text (g, "Channel " + channel + " / Note", r.reduced (20, 14).withWidth (220).withHeight (22), 14, Palette::text, true, juce::Justification::centredLeft);
-            text (g, juce::MidiMessage::getMidiNoteName (candidate, true, true, 4) + " / " + juce::String (candidate), { r.getRight() - 164, r.getY() + 16, 112, 20 }, 13, Palette::accent, true, juce::Justification::centredRight);
-            text (g, juce::MidiMessage::getMidiNoteName (firstNote, true, true, 4) + " – "
-                      + juce::MidiMessage::getMidiNoteName (juce::jmin (127, firstNote + 59), true, true, 4),
-                  { r.getX() + 64, r.getY() + 60, r.getWidth() - 128, 30 }, 12, Palette::muted, true);
-            text (g, "MIDI", { r.getX() + 20, r.getY() + 232, 36, 30 }, 10, Palette::muted, true, juce::Justification::centredLeft);
-            text (g, "Press or drag keys to assign and audition.", { r.getX() + 204, r.getY() + 230, r.getWidth() - 224, 18 }, 12, Palette::muted, false, juce::Justification::centredLeft);
-            text (g, "Esc or click outside to close.", { r.getX() + 204, r.getY() + 248, r.getWidth() - 224, 18 }, 12, Palette::muted, false, juce::Justification::centredLeft);
+            else
+            {
+                const bool below = panel.getY() >= anchor.getBottom();
+                const float edge = below ? r.getY() : r.getBottom();
+                const float x = juce::jlimit (r.getX() + 18, r.getRight() - 18, static_cast<float> (anchor.getCentreX()));
+                pointer.addTriangle (x - 7, edge, static_cast<float> (anchor.getCentreX()), static_cast<float> (below ? anchor.getBottom() : anchor.getY()), x + 7, edge);
+            }
+            g.setColour (Palette::border);
+            g.strokePath (pointer, juce::PathStrokeType (1));
+            g.setColour (Palette::shell);
+            g.fillPath (pointer);
+            const auto noteName = juce::MidiMessage::getMidiNoteName (candidate, true, true, 4);
+            const auto midiNumber = juce::String (candidate);
+            const auto labelFont = font (36, true);
+            constexpr float noteWidth = 88, numberWidth = 78, gap = 12;
+            const float groupX = r.getCentreX() - (noteWidth + gap + numberWidth) / 2;
+            text (g, noteName, { groupX, r.getY() + 44, noteWidth, 48 }, 36, Palette::accent, true, juce::Justification::centredRight);
+
+            // Reserve three equal-width digit slots, keeping units in the same place
+            // across both proportional glyphs and changes between 1/2/3 digits.
+            float digitWidth = 0;
+            for (const auto digit : juce::String ("0123456789"))
+                digitWidth = juce::jmax (digitWidth, juce::GlyphArrangement::getStringWidth (labelFont, juce::String::charToString (digit)));
+            const float numberX = groupX + noteWidth + gap;
+            const float baseline = r.getY() + 68 + (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
+            g.setColour (Palette::text);
+            for (int index = 0; index < midiNumber.length(); ++index)
+            {
+                juce::GlyphArrangement digit;
+                digit.addLineOfText (labelFont, midiNumber.substring (index, index + 1), 0, 0);
+                const auto bounds = digit.getBoundingBox (0, -1, true);
+                const float slotX = numberX + static_cast<float> (3 - midiNumber.length() + index) * digitWidth;
+                digit.draw (g, juce::AffineTransform::translation (slotX + (digitWidth - bounds.getWidth()) * 0.5f - bounds.getX(), baseline));
+            }
         }
     private:
         class PianoKey : public juce::TextButton
@@ -238,23 +283,23 @@ namespace ksh::ui
                 g.fillRoundedRectangle (r, 4);
                 g.setColour (Palette::border.withAlpha (0.65f));
                 g.drawRoundedRectangle (r, 4, 1);
-                ksh::ui::text (g, getButtonText(), r.withTrimmedTop (r.getHeight() - 28), 10, !isEnabled() ? Palette::faint : getToggleState() || !black ? Palette::app : Palette::text, true);
+                ksh::ui::text (g, getButtonText(), r.withTrimmedTop (r.getHeight() - 28), 13, !isEnabled() ? Palette::faint : getToggleState() || !black ? Palette::app : Palette::text, true);
             }
         };
-        std::array<PianoKey, 60> keys;
+        static constexpr int keyCount = 48;
+        static constexpr int lastFirstNote = 84;
+        std::array<PianoKey, keyCount> keys;
         juce::TextButton previous { "<" }, next { ">" };
-        juce::TextButton close { juce::String::fromUTF8 ("×") }, apply { "Set" };
-        juce::TextEditor number;
+        juce::TextButton close { juce::String::fromUTF8 ("×") };
         juce::Rectangle<int> anchor, panel;
         juce::Component::SafePointer<juce::Component> returnFocus;
-        juce::String channel;
+        juce::Component::SafePointer<juce::Component> activeRowTitle;
         int candidate = 36, firstNote = 24, lastScrubNote = -1;
-        bool validNumber() const { return number.getText().isNotEmpty() && number.getText().getIntValue() <= 127; }
-        void refresh (bool updateInput = true)
+        void refresh()
         {
             previous.setEnabled (firstNote > 0);
-            next.setEnabled (firstNote < 72);
-            for (int index = 0; index < 60; ++index)
+            next.setEnabled (firstNote < lastFirstNote);
+            for (int index = 0; index < keyCount; ++index)
             {
                 auto& key = keys[static_cast<size_t> (index)];
                 const int midi = firstNote + index;
@@ -265,16 +310,11 @@ namespace ksh::ui
                 key.setTitle (midi <= 127 ? name : "Unavailable note");
                 key.setTooltip (midi <= 127 ? name + " / MIDI " + juce::String (midi) : "Outside MIDI range");
             }
-            if (updateInput)
-            {
-                number.setText (juce::String (candidate), false);
-                apply.setEnabled (true);
-            }
             repaint();
         }
         void scroll (int offset)
         {
-            firstNote = juce::jlimit (0, 72, firstNote + offset);
+            firstNote = juce::jlimit (0, lastFirstNote, firstNote + offset);
             refresh();
         }
         void scrub (juce::Point<int> position)

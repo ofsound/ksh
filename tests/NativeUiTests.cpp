@@ -2472,23 +2472,21 @@ TEST_CASE ("Piano note chooser switches rows with one outside click", "[native-u
     const int secondNote = editor.controller.state.playback.channels[1].note;
     processor.markDocumentClean();
     inputs[0]->onChoose();
-    juce::TextEditor* number = nullptr;
-    for (auto* child : chooser->getChildren())
-        if (auto* candidate = dynamic_cast<juce::TextEditor*> (child)) number = candidate;
-    REQUIRE (number != nullptr);
-    number->setText ("100", false);
     for (const int row : { 1, 0, 1 })
     {
         const auto position = chooser->getLocalPoint (inputs[static_cast<size_t> (row)], inputs[static_cast<size_t> (row)]->getLocalBounds().getCentre()).toFloat();
         REQUIRE (editor.getComponentAt (editor.getLocalPoint (chooser, position.toInt())) == chooser);
         chooser->mouseDown (gridEvent (*chooser, position, position, juce::ModifierKeys::leftButtonModifier));
         REQUIRE (chooser->isVisible());
-        CHECK (number->getText().getIntValue() == (row == 0 ? firstNote : secondNote));
+        for (auto* child : chooser->getChildren())
+            if (auto* key = dynamic_cast<juce::TextButton*> (child); key != nullptr && key->getToggleState())
+                CHECK (key->getTitle() == juce::MidiMessage::getMidiNoteName (row == 0 ? firstNote : secondNote, true, true, 4));
         CHECK_FALSE (processor.isDocumentModified());
     }
-    number->setText ("61", false);
-    number->onReturnKey();
-    CHECK_FALSE (chooser->isVisible());
+    for (auto* child : chooser->getChildren())
+        if (child->getTitle() == "C#4")
+            if (auto* key = dynamic_cast<juce::TextButton*> (child)) key->onClick();
+    CHECK (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == firstNote);
     CHECK (editor.controller.state.playback.channels[1].note == 61);
     editor.controller.undo();
@@ -2498,7 +2496,7 @@ TEST_CASE ("Piano note chooser switches rows with one outside click", "[native-u
     CHECK_FALSE (chooser->isVisible());
 }
 
-TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed notes", "[native-ui][note-chooser]")
+TEST_CASE ("Piano note chooser covers MIDI endpoints without duplicate entry controls", "[native-ui][note-chooser]")
 {
     NoteChooser chooser;
     chooser.setSize (900, 600);
@@ -2514,7 +2512,7 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed n
     };
     open();
     REQUIRE (button ("C1") != nullptr);
-    REQUIRE (button ("B5") != nullptr);
+    REQUIRE (button ("B4") != nullptr);
     REQUIRE (button ("Scroll keyboard left") != nullptr);
     for (int i = 0; i < 2; ++i)
         button ("Scroll keyboard left")->onClick();
@@ -2523,26 +2521,20 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed n
     button ("C-1")->onClick();
     CHECK (assigned == 0);
     open();
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
         button ("Scroll keyboard right")->onClick();
     CHECK_FALSE (button ("Scroll keyboard right")->isEnabled());
     REQUIRE (button ("G9") != nullptr);
     button ("G9")->onClick();
     CHECK (assigned == 127);
     open();
-    juce::TextEditor* number = nullptr;
     for (auto* child : chooser.getChildren())
-        if (auto* candidate = dynamic_cast<juce::TextEditor*> (child)) number = candidate;
-    REQUIRE (number != nullptr);
-    assigned = -1;
-    number->setText ("128", false);
-    number->onReturnKey();
-    CHECK (assigned == -1);
-    CHECK (chooser.isVisible());
-    number->setText ("61", false);
-    number->onReturnKey();
-    CHECK (assigned == 61);
-    CHECK_FALSE (chooser.isVisible());
+    {
+        CHECK (dynamic_cast<juce::TextEditor*> (child) == nullptr);
+        CHECK (child->getTitle() != "Assign MIDI note");
+    }
+    CHECK (chooser.isAlwaysOnTop());
+
 }
 
 TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[native-ui][note-chooser]")
@@ -2570,7 +2562,7 @@ TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     if (directory.isNotEmpty())
     {
-        auto stream = juce::File (directory).getChildFile (compact ? "note-chooser-five-octaves-mobile.png" : "note-chooser-five-octaves.png").createOutputStream();
+        auto stream = juce::File (directory).getChildFile (compact ? "note-chooser-four-octaves-mobile.png" : "note-chooser-four-octaves.png").createOutputStream();
         REQUIRE (stream != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
     }
@@ -2586,7 +2578,7 @@ TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[
     startKey->mouseDown (gridEvent (*startKey, start, start, juce::ModifierKeys::leftButtonModifier));
     CHECK (editor.controller.state.playback.channels[0].note == 24);
     REQUIRE (chooser->isVisible());
-    for (const auto& name : { "F#2", "F#2", "B5" })
+    for (const auto& name : { "F#2", "F#2", "B4" })
     {
         auto* target = key (name);
         REQUIRE (target != nullptr);
@@ -2594,16 +2586,16 @@ TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[
         startKey->mouseDrag (gridEvent (*startKey, point, start, juce::ModifierKeys::leftButtonModifier, true));
         CHECK (chooser->isVisible());
     }
-    CHECK (editor.controller.state.playback.channels[0].note == 83);
+    CHECK (editor.controller.state.playback.channels[0].note == 71);
     juce::AudioBuffer<float> audio (2, 512);
     juce::MidiBuffer midi;
     processor.processBlock (audio, midi);
     std::vector<int> heard;
     for (const auto event : midi)
         if (event.getMessage().isNoteOn()) heard.push_back (event.getMessage().getNoteNumber());
-    CHECK (heard == std::vector<int> { 24, 42, 83 });
+    CHECK (heard == std::vector<int> { 24, 42, 71 });
     chooser->dismiss();
-    CHECK (processor.engineStateSnapshot().channels[0].note == 83);
+    CHECK (processor.engineStateSnapshot().channels[0].note == 71);
 }
 
 TEST_CASE ("Inspector cycle edits temporarily show Cycle", "[native-ui]")
