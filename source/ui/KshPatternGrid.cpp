@@ -135,19 +135,16 @@ namespace ksh::ui
             return location.step;
         const auto mode = controller.state.playback.channels[static_cast<size_t> (location.channel)].playbackMode;
         const int length = juce::jmax (1, loop.loopLength);
-        const int referenceStep = controller.playingStep > 0 ? controller.playingGlobalStep : 0;
-        const auto next = [referenceStep] (int phase, int period)
-        {
-            return referenceStep + wrap (phase - referenceStep, period);
-        };
+        // Keep the editing geometry fixed to the first pass through this channel.
+        // Later visits can have a different swing phase for odd loops or ping-pong.
         switch (mode)
         {
-            case PlaybackMode::normal: return next (offset, length);
-            case PlaybackMode::reverse: return next (length - 1 - offset, length);
+            case PlaybackMode::normal: return offset;
+            case PlaybackMode::reverse: return length - 1 - offset;
             case PlaybackMode::ping_pong:
-                return juce::jmin (next (offset, length * 2), next (length * 2 - 1 - offset, length * 2));
+                return offset;
             case PlaybackMode::reverse_ping_pong:
-                return juce::jmin (next (wrap (offset - length, length * 2), length * 2), next (length - 1 - offset, length * 2));
+                return length - 1 - offset;
         }
         return location.step;
     }
@@ -287,9 +284,7 @@ namespace ksh::ui
         setMouseCursor (isCopyMode() ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::NormalCursor);
         const auto& p = controller.state.playback;
         const std::pair swing { p.swing, p.swingSubdivisionIndex };
-        const int swingPhase = p.swing > 0 && controller.playingStep > 0 ? controller.playingGlobalStep : 0;
-        const bool swingChanged = displayedSwing != swing || displayedSwingPhase != swingPhase;
-        displayedSwingPhase = swingPhase;
+        const bool swingChanged = displayedSwing != swing;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
         if (hoverCell.valid() && velocityHintAt (hoverPosition) != hoverCell)
@@ -345,7 +340,7 @@ namespace ksh::ui
                 const auto& value = controller.cell (location);
                 const auto index = static_cast<size_t> (location.key());
                 const auto paintBounds = cellPaintBounds (location);
-                if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index] || swingChanged)
+                if (displayedCells[index] != value || displayedSelection[index] != controller.selected[index] || swingChanged || displayedPaintBounds[index] != paintBounds)
                 {
                     repaint (layout.cell (location).getUnion (displayedPaintBounds[index]).getUnion (paintBounds).getSmallestIntegerContainer());
                     accessible.setBounds (cellBounds (location).toNearestInt());
@@ -544,7 +539,7 @@ namespace ksh::ui
                         // Each emitted hit retriggers a fast, colour-preserving pulse over the entire body.
                         if (pulse > 0.0f)
                         {
-                            g.setColour (colour.brighter (0.5f).withAlpha (0.85f * pulse * pulse));
+                            g.setColour (colour.brighter (0.5f).withAlpha (0.9775f * pulse * pulse));
                             g.fillRoundedRectangle (r, 5);
                         }
                         g.setColour (Palette::text.withAlpha (0.14f));

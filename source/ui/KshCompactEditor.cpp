@@ -4,9 +4,13 @@ namespace ksh::ui
 {
     void NativeEditor::setupCompactControls()
     {
-        for (auto* button : { &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
+        for (auto* button : { static_cast<juce::TextButton*> (&compactLogo), &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                  &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
             addChildComponent (*button);
+        compactLogo.setTitle ("Switch accent");
+        compactLogo.setTooltip ("Tap KSH to switch between orange and blue accents");
+        compactLogo.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        compactLogo.onClick = [this] { preview.onAccentSelected (!Palette::blueAccentSelected()); };
         compactPattern.setTitle ("Pattern bank");
         controls.setTitle ("Open controls");
         deselect.setTitle ("Deselect cells");
@@ -172,7 +176,7 @@ namespace ksh::ui
             for (auto* child : getChildren())
                 child->setVisible (true);
             projectDetails.setVisible (detailsVisible);
-            for (auto* button : { &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
+            for (auto* button : { static_cast<juce::TextButton*> (&compactLogo), &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                      &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
                 button->setVisible (false);
             for (auto& tab : panelTabs)
@@ -255,8 +259,9 @@ namespace ksh::ui
         place (duplicate, 316, 3, 46, 40);
         place (undoButton, 366, 3, 36, 40);
         place (redoButton, 401, 3, 36, 40);
+        place (compactLogo, 446, 3, 60, 40);
         if (layout.steps > 16)
-            place (page, 446, 3, 84, 40);
+            place (page, 510, 3, 84, 40);
         if (layout.standalone)
         {
             play.setBounds (w - 200, 3, 36, 40);

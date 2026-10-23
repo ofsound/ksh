@@ -106,6 +106,7 @@ public:
 
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
         When pattern recording is armed, also enqueues a cell write with captured timing. */
+    [[nodiscard]] bool auditionRowFromUi (int channelZeroBased, int velocity = 100) { return queueRowAudition (channelZeroBased, velocity); }
     [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100);
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */

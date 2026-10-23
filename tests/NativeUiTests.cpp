@@ -2419,7 +2419,7 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
                 }
         return false;
     };
-    REQUIRE (click ("Octave C4"));
+    REQUIRE (click ("Scroll keyboard right"));
     CHECK (editor.controller.state.playback.channels[0].note == initial);
     CHECK_FALSE (processor.isDocumentModified());
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
@@ -2430,7 +2430,7 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
         REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
     }
     REQUIRE (click ("G4"));
-    CHECK_FALSE (chooser->isVisible());
+    CHECK (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == 67);
     editor.controller.undo();
     CHECK (editor.controller.state.playback.channels[0].note == initial);
@@ -2513,13 +2513,19 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed n
         return nullptr;
     };
     open();
-    REQUIRE (button ("Octave C-1") != nullptr);
-    button ("Octave C-1")->onClick();
+    REQUIRE (button ("C1") != nullptr);
+    REQUIRE (button ("B5") != nullptr);
+    REQUIRE (button ("Scroll keyboard left") != nullptr);
+    for (int i = 0; i < 2; ++i)
+        button ("Scroll keyboard left")->onClick();
+    CHECK_FALSE (button ("Scroll keyboard left")->isEnabled());
     REQUIRE (button ("C-1") != nullptr);
     button ("C-1")->onClick();
     CHECK (assigned == 0);
     open();
-    button ("Octave C9")->onClick();
+    for (int i = 0; i < 6; ++i)
+        button ("Scroll keyboard right")->onClick();
+    CHECK_FALSE (button ("Scroll keyboard right")->isEnabled());
     REQUIRE (button ("G9") != nullptr);
     button ("G9")->onClick();
     CHECK (assigned == 127);
@@ -2537,6 +2543,67 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints and rejects invalid typed n
     number->onReturnKey();
     CHECK (assigned == 61);
     CHECK_FALSE (chooser.isVisible());
+}
+
+TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[native-ui][note-chooser]")
+{
+    const bool compact = GENERATE (false, true);
+    PluginProcessor processor;
+    processor.prepareToPlay (44100.0, 512);
+    NativeEditor editor (processor);
+    if (compact)
+        editor.setCompactViewport (true, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    NoteChooser* chooser = nullptr;
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<NoteChooser*> (child)) chooser = candidate;
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child)) grid = candidate;
+    }
+    REQUIRE (chooser != nullptr);
+    REQUIRE (grid != nullptr);
+    for (auto* child : grid->getChildren())
+        if (child->getTitle() == "MIDI note channel 1")
+            dynamic_cast<NoteInput*> (child)->onChoose();
+    REQUIRE (chooser->isVisible());
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        auto stream = juce::File (directory).getChildFile (compact ? "note-chooser-five-octaves-mobile.png" : "note-chooser-five-octaves.png").createOutputStream();
+        REQUIRE (stream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
+    }
+    const auto key = [&] (const juce::String& name) -> juce::Component*
+    {
+        for (auto* child : chooser->getChildren())
+            if (child->getTitle() == name) return child;
+        return nullptr;
+    };
+    auto* startKey = key ("C1");
+    REQUIRE (startKey != nullptr);
+    const auto start = startKey->getLocalBounds().toFloat().getCentre().withY (90);
+    startKey->mouseDown (gridEvent (*startKey, start, start, juce::ModifierKeys::leftButtonModifier));
+    CHECK (editor.controller.state.playback.channels[0].note == 24);
+    REQUIRE (chooser->isVisible());
+    for (const auto& name : { "F#2", "F#2", "B5" })
+    {
+        auto* target = key (name);
+        REQUIRE (target != nullptr);
+        const auto point = startKey->getLocalPoint (target, target->getLocalBounds().getCentre()).toFloat();
+        startKey->mouseDrag (gridEvent (*startKey, point, start, juce::ModifierKeys::leftButtonModifier, true));
+        CHECK (chooser->isVisible());
+    }
+    CHECK (editor.controller.state.playback.channels[0].note == 83);
+    juce::AudioBuffer<float> audio (2, 512);
+    juce::MidiBuffer midi;
+    processor.processBlock (audio, midi);
+    std::vector<int> heard;
+    for (const auto event : midi)
+        if (event.getMessage().isNoteOn()) heard.push_back (event.getMessage().getNoteNumber());
+    CHECK (heard == std::vector<int> { 24, 42, 83 });
+    chooser->dismiss();
+    CHECK (processor.engineStateSnapshot().channels[0].note == 83);
 }
 
 TEST_CASE ("Inspector cycle edits temporarily show Cycle", "[native-ui]")
@@ -2829,11 +2896,12 @@ TEST_CASE ("Grid swing and nudge positions match MIDI timing for each roll hit",
     }
 }
 
-TEST_CASE ("Swing display follows the next visit through channel loops and directions", "[native-ui][swing-display]")
+TEST_CASE ("Swing display stays fixed through channel loops and directions", "[native-ui][swing-display]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 90 }));
-    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 4, 2 }));
+    const int length = GENERATE (3, 4, 5);
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, length, 2 }));
     REQUIRE (processor.dispatchUiEngineCommand ("swing", { 73 }));
     REQUIRE (processor.dispatchUiEngineCommand ("swing_subdivision", { 2 }));
     const int mode = GENERATE (0, 1, 2, 3);
@@ -2842,14 +2910,16 @@ TEST_CASE ("Swing display follows the next visit through channel loops and direc
     EditorController controller (processor);
     PatternGrid grid (controller);
     grid.sync();
-    const std::array<int, 3> reference { 0, 5, 8 };
-    const std::array<std::array<int, 3>, 4> expected {{ { 1, 5, 9 }, { 2, 6, 10 }, { 1, 6, 9 }, { 2, 5, 10 } }};
+    const std::array<int, 6> reference { 0, 5, 8, 15, 32, 0 };
+    const std::array<int, 4> expected { 1, length - 2, 1, length - 2 };
+    const auto initialBounds = grid.getChildComponent (2)->getBounds();
     for (size_t visit = 0; visit < reference.size(); ++visit)
     {
         controller.playingStep = reference[visit] + 1;
         controller.playingGlobalStep = reference[visit];
         grid.sync();
-        const double offset = swingDelayStepsForPosition (expected[static_cast<size_t> (mode)][visit], 73, 2);
+        CHECK (grid.getChildComponent (2)->getBounds() == initialBounds);
+        const double offset = swingDelayStepsForPosition (expected[static_cast<size_t> (mode)], 73, 2);
         CHECK (grid.hitPosition ({ 0, 2 }).x == Catch::Approx (grid.layout.cell ({ 0, 2 }).getX() + offset * grid.layout.cellWidth()));
     }
 }
@@ -3213,6 +3283,34 @@ TEST_CASE ("Inactive cycle turns flash without a grid note hit", "[native-ui]")
            == before.getPixelAt (4, inactive->getHeight() / 2));
 }
 
+TEST_CASE ("Transport leaves cells unchanged without note hits", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.layout.compact = GENERATE (false, true);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto before = grid.createComponentSnapshot (grid.getLocalBounds());
+    controller.playingStep = 1;
+    controller.playingGlobalStep = 0;
+    grid.updatePlayback();
+    const auto pulsing = grid.createComponentSnapshot (grid.getLocalBounds());
+    for (int ch = 0; ch < grid.layout.channels; ++ch)
+    {
+        const auto active = grid.layout.cell ({ ch, 0 }).getSmallestIntegerContainer().getCentre();
+        const auto neighbor = grid.layout.cell ({ ch, 1 }).getSmallestIntegerContainer().getCentre();
+        CHECK (pulsing.getPixelAt (active.x, active.y) == before.getPixelAt (active.x, active.y));
+        CHECK (pulsing.getPixelAt (neighbor.x, neighbor.y) == before.getPixelAt (neighbor.x, neighbor.y));
+        CHECK (controller.sourceFlashes[static_cast<size_t> (ch)][0] == 0.0);
+    }
+    controller.playingStep = 0;
+    grid.updatePlayback();
+    const auto stopped = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto active = grid.layout.cell ({ 0, 0 }).getSmallestIntegerContainer().getCentre();
+    CHECK (stopped.getPixelAt (active.x, active.y) == before.getPixelAt (active.x, active.y));
+}
+
 TEST_CASE ("Grid hits brighten the whole cell with values shown or hidden", "[native-ui][render]")
 {
     PluginProcessor processor;
@@ -3279,7 +3377,7 @@ TEST_CASE ("Logo letters select a shared accent without changing the project", "
         button->onClick();
         const auto expected = button == blue ? Palette::blueAccent : Palette::orangeAccent;
         CHECK (Palette::accent == expected);
-        CHECK (Palette::channel (1) == expected);
+        CHECK (Palette::channel (1) == Palette::orangeAccent);
         CHECK (Palette::channel (0, false) == expected);
         for (auto* editor : { &first, &second })
         {
@@ -3301,4 +3399,39 @@ TEST_CASE ("Logo letters select a shared accent without changing the project", "
         REQUIRE (output != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (first.createComponentSnapshot (first.getLocalBounds()), *output));
     }
+}
+
+TEST_CASE ("Compact logo switches accents with both step pages available", "[native-ui][accent][compact]")
+{
+    PluginProcessor processor;
+    const int steps = GENERATE (16, 32);
+    REQUIRE (processor.dispatchUiEngineCommand ("steps", { steps }));
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 409);
+    editor.setSize (814, 409);
+    juce::TextButton* logo = nullptr;
+    juce::Component* page = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (child->getTitle() == "Switch accent")
+            logo = dynamic_cast<juce::TextButton*> (child);
+        if (child->getTitle() == "Switch step page")
+            page = child;
+    }
+    REQUIRE (logo != nullptr);
+    REQUIRE (page != nullptr);
+    REQUIRE (logo->isVisible());
+    if (steps == 32)
+    {
+        CHECK (page->isVisible());
+        CHECK_FALSE (logo->getBounds().intersects (page->getBounds()));
+    }
+    const bool initialBlue = Palette::blueAccentSelected();
+    const auto document = processor.editorDocument();
+    logo->onClick();
+    CHECK (Palette::blueAccentSelected() == !initialBlue);
+    CHECK (Palette::channel (1) == Palette::orangeAccent);
+    CHECK (processor.editorDocument() == document);
+    logo->onClick();
+    CHECK (Palette::blueAccentSelected() == initialBlue);
 }

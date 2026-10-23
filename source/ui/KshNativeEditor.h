@@ -54,6 +54,7 @@ namespace ksh::ui
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
         NoteChooser noteChooser;
+        bool noteChooserEditing = false;
         uint64_t noteChooserEpoch = 0;
         int noteChooserChannel = -1, noteChooserOriginal = 0;
         void showNoteChooser (int, juce::Component&);
@@ -71,6 +72,16 @@ namespace ksh::ui
         enum class Panel { none, patterns, project, pattern, feel, generate, channel, help };
         Panel panel = Panel::none;
         int selectedChannel = 0;
+        class CompactLogo : public juce::TextButton
+        {
+        public:
+            void paintButton (juce::Graphics& g, bool, bool) override
+            {
+                static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
+                if (artwork != nullptr)
+                    artwork->drawWithin (g, getLocalBounds().toFloat().reduced (4, 6), juce::RectanglePlacement::centred, 1.0f);
+            }
+        } compactLogo;
         juce::TextButton compactPattern, controls { "Controls" }, closePanel { "Done" }, deselect { "Deselect" }, page { "1-16" }, duplicate { "Copy" };
         std::array<juce::TextButton, 6> panelTabs;
         juce::TextEditor channelName;

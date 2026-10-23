@@ -127,7 +127,13 @@ namespace ksh::ui
             if (noteChooserEpoch == controller.processor.getUiBridge().getDocumentEpoch()
                 && juce::isPositiveAndBelow (noteChooserChannel, controller.state.playback.channelCount)
                 && controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note == noteChooserOriginal)
+            {
+                // Accept subsequent scrub notes, while still rejecting external edits.
+                const juce::ScopedValueSetter<bool> editing (noteChooserEditing, true);
                 controller.command ("channel_note", { noteChooserChannel + 1, note }, "Change channel note");
+                noteChooserOriginal = note;
+                (void) controller.processor.auditionRowFromUi (noteChooserChannel);
+            }
         };
         addAndMakeVisible (preview);
         addChildComponent (aboutViewport);
@@ -441,7 +447,7 @@ namespace ksh::ui
         projectHeader.setProjectName (controller.processor.getProjectName());
         if (projectDetails.isVisible())
             projectDetails.refresh();
-        if (noteChooser.isVisible())
+        if (noteChooser.isVisible() && !noteChooserEditing)
         {
             if (noteChooserEpoch != controller.processor.getUiBridge().getDocumentEpoch()
                 || !juce::isPositiveAndBelow (noteChooserChannel, p.channelCount)
@@ -487,7 +493,8 @@ namespace ksh::ui
             resizedCompact();
             return;
         }
-        const int top = static_cast<int> (layout.transportHeight()) + 4;
+        const int headerOffset = juce::roundToInt ((layout.toolbarY() - layout.transportHeight() - 90.0f) * 0.5f);
+        const int top = static_cast<int> (layout.transportHeight()) + 4 + headerOffset;
         const int rightEdge = getWidth() - Layout::outerGutter;
         projectButtons[0].setBounds (Layout::outerGutter, top + 27, 54, 32);
         projectButtons[1].setBounds (74, top + 27, 54, 32);
@@ -503,12 +510,12 @@ namespace ksh::ui
         subdivision.setBounds (666, top + 25, 40, 43);
         velocityHumanize.setBounds (774, top + 25, 48, 43);
         timingHumanize.setBounds (838, top + 25, 48, 43);
-        const int patternLeft = rightEdge - 400;
+        const int patternLeft = rightEdge - 414;
         const int patternTop = static_cast<int> (layout.transportHeight()) + 10;
         constexpr int patternHeight = 70;
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setBounds (patternLeft + 12 + (i % 8) * 38, patternTop + (i / 8) * 37, 34, 33);
-        mutePattern.setBounds (rightEdge - patternHeight, patternTop, patternHeight, patternHeight);
+            patterns[static_cast<size_t> (i)].setBounds (patternLeft + (i % 8) * 42, patternTop + (i / 8) * 50, 38, 46);
+        mutePattern.setBounds (rightEdge - patternHeight, patternTop + headerOffset, patternHeight, patternHeight);
         const int y = static_cast<int> (layout.toolbarY());
         constexpr int layerHeight = 41;
         const int layerY = juce::roundToInt ((layout.toolbarY() + layout.gridY() - layerHeight) * 0.5f);
@@ -563,8 +570,6 @@ namespace ksh::ui
         g.fillAll (Palette::app);
         if (layout.compact)
         {
-            if (layout.steps <= 16)
-                text (g, "KSH", { 450, 3, 108, 40 }, 21, Palette::accent, true);
             if (panel != Panel::none)
             {
                 surface (g, { 4, 48, static_cast<float> (getWidth() - 8), layout.gridHeight() - 4 });
@@ -602,8 +607,9 @@ namespace ksh::ui
         g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, static_cast<float> (getWidth()));
         for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
-        paintControlGroup (g, { 582, layout.transportHeight() + 10, 144, 70 }, "Swing", 20);
-        paintControlGroup (g, { 754, layout.transportHeight() + 10, 152, 70 }, "Humanize", 20);
+        const float groupY = (layout.transportHeight() + layout.toolbarY() - 70.0f) * 0.5f;
+        paintControlGroup (g, { 582, groupY, 144, 70 }, "Swing", 20);
+        paintControlGroup (g, { 754, groupY, 152, 70 }, "Humanize", 20);
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {

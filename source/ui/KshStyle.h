@@ -55,9 +55,8 @@ namespace ksh::ui
         static inline const juce::Colour recording { 0xffef4444 };
         static juce::Colour channel (int ch, bool colors = true)
         {
-            // Track 2 shares the app and wordmark accent.
             static const std::array<juce::uint32, 8> values { 0xffdb4047, 0xfff1954a, 0xffd1a866, 0xff40add1, 0xff52b89c, 0xff8cb852, 0xffebad24, 0xffa66e3b };
-            return !colors || ch == 1 ? accent : juce::Colour (values[static_cast<size_t> (juce::jlimit (0, 7, ch))]);
+            return !colors ? accent : juce::Colour (values[static_cast<size_t> (juce::jlimit (0, 7, ch))]);
         }
     };
     inline juce::Font font (float height, bool bold = false)
@@ -320,7 +319,8 @@ namespace ksh::ui
                 // Match the compact power glyph without reducing the hit area.
                 const bool outlinedIcon = static_cast<bool> (b.getProperties()["outlinedIcon"]);
                 const bool patternEditIcon = outlinedIcon && (icon == "clear" || icon == "previous" || icon == "next");
-                const float size = footerControl ? 22.0f
+                const float size = footerControl && icon == "tips" ? 17.0f
+                                  : footerControl ? 22.0f
                                   : patternEditIcon ? juce::jmin (18.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.6f)
                                   : icon == "info" ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.7f)
                                   : outlinedIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.8f)
@@ -408,9 +408,9 @@ namespace ksh::ui
                 }
                 else if (icon == "tips")
                 {
-                    path.startNewSubPath (7, 8);
-                    path.cubicTo (7, 2, 18, 2, 18, 8);
-                    path.cubicTo (18, 12, 12, 11, 12, 15);
+                    path.startNewSubPath (6.5f, 8.5f);
+                    path.cubicTo (6.5f, 2.5f, 17.5f, 2.5f, 17.5f, 8.5f);
+                    path.cubicTo (17.5f, 12.5f, 12, 11.5f, 12, 15.5f);
                     g.fillEllipse (10.8f, 18, 2.4f, 2.4f);
                 }
                 else if (icon == "palette")

@@ -88,7 +88,6 @@ namespace ksh::ui
         std::array<Cell, 256> displayedCells {};
         std::array<juce::Rectangle<float>, 256> displayedPaintBounds {};
         std::pair<int, int> displayedSwing { -1, -1 };
-        int displayedSwingPhase = 0;
         Selection displayedSelection;
         std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
         std::array<bool, 8> displayedMutes {};
