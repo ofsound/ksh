@@ -71,8 +71,8 @@ if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_subdirectory(modules/clap-juce-extensions EXCLUDE_FROM_ALL)
 endif()
 
-# Add any other modules you want modules here, before the juce_add_plugin call
-# juce_add_module(modules/my_module)
+# Cached UI blurs and selection glows.
+add_subdirectory(modules/melatonin_blur EXCLUDE_FROM_ALL)
 
 # See `docs/CMake API.md` in the JUCE repo for all config options
 set(KSH_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png")
@@ -238,6 +238,7 @@ CPMAddPackage(NAME readerwriterqueue
 target_link_libraries(SharedCode
     INTERFACE
     Assets
+    melatonin_blur
     nlohmann_json::nlohmann_json
     readerwriterqueue
     juce_audio_utils

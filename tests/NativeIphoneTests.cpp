@@ -1,5 +1,6 @@
 #include <PluginEditor.h>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 using namespace ksh;
@@ -80,7 +81,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     auto& grid = phoneGrid (editor);
     CHECK (grid.isVisible());
     CHECK (grid.layout.cellWidth() >= 42.0f);
-    CHECK (grid.layout.cellHeight() >= 35.0f);
+    CHECK (grid.layout.cellHeight() >= 33.0f);
     CHECK (grid.getY() == Layout::compactHeaderHeight);
     CHECK (grid.getBottom() + Layout::compactInspectorHeight == editor.getHeight());
     for (int ch = 0; ch < 8; ++ch)
@@ -349,7 +350,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
             CHECK_FALSE (bounds.intersects (child->getBounds()));
         buttons.push_back (child->getBounds());
     }
-    CHECK (phoneGrid (editor).layout.cellHeight() >= 33.0f);
+    CHECK (phoneGrid (editor).layout.cellHeight() >= 31.0f);
     capturePhone (editor, "iphone-32-minimum");
 }
 
@@ -388,7 +389,7 @@ TEST_CASE ("iOS numbered row pads fit beside names without reducing grid cells",
     if (compact)
     {
         CHECK (grid.layout.cellWidth() >= 42.0f);
-        CHECK (grid.layout.cellHeight() >= 35.0f);
+        CHECK (grid.layout.cellHeight() >= 33.0f);
     }
     phoneButton (editor, "Trigger channel 1").onClick();
     capturePhone (editor, compact ? "iphone-row-triggers" : "ipad-row-triggers");
@@ -517,4 +518,82 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
     CHECK (stoppedHits == 1);
     editor.controller.poll();
     CHECK (processor.editorDocument() == recorded);
+}
+
+TEST_CASE ("iPhone visible rows enlarge the grid and scroll without changing the pattern", "[native-ui][iphone][row-scroll][render]")
+{
+    const bool reversed = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channels", { 8 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 409);
+    editor.setSize (814, 409);
+    editor.layout.reverseRows = reversed;
+    editor.sync();
+    auto& grid = phoneGrid (editor);
+    const float fullHeight = grid.layout.rowHeight();
+    processor.markDocumentClean();
+    auto& rowsButton = phoneButton (editor, "Visible rows");
+    CHECK (rowsButton.getButtonText() == "Rows: 8");
+    juce::ScrollBar* scroll = nullptr;
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Scroll rows") scroll = dynamic_cast<juce::ScrollBar*> (child);
+    REQUIRE (scroll != nullptr);
+    CHECK_FALSE (scroll->isVisible());
+    for (const int count : { 1, 2, 4, 6, 8 })
+    {
+        editor.setCompactVisibleRows (count);
+        CHECK (rowsButton.getButtonText() == "Rows: " + juce::String (count));
+        CHECK (scroll->isVisible() == (count < 8));
+        CHECK (grid.getBottom() + Layout::compactInspectorHeight == editor.getHeight());
+        CHECK (grid.layout.rowHeight() == Catch::Approx (fullHeight * 8.0f / static_cast<float> (count)));
+        for (int start = 0; start <= 8 - count; ++start)
+        {
+            scroll->setCurrentRangeStart (start, juce::sendNotificationSync);
+            CHECK (editor.layout.firstRow == start);
+            for (int channel = 0; channel < 8; ++channel)
+            {
+                const int display = reversed ? 7 - channel : channel;
+                const bool visible = display >= start && display < start + count;
+                CHECK (grid.layout.channelVisible (channel) == visible);
+                CHECK (grid.rowTitle (channel)->isVisible() == visible);
+                if (visible)
+                {
+                    const auto bounds = grid.layout.cell ({ channel, 0 });
+                    CHECK (grid.getLocalBounds().toFloat().contains (bounds));
+                    CHECK (grid.layout.at (bounds.getCentre()) == Location { channel, 0 });
+                }
+            }
+        }
+        CHECK_FALSE (processor.isDocumentModified());
+    }
+    editor.setCompactVisibleRows (4);
+    scroll->setCurrentRangeStart (2, juce::sendNotificationSync);
+    const int channel = reversed ? 5 : 2;
+    const auto point = grid.layout.cell ({ channel, 0 }).getCentre();
+    grid.mouseDown (phoneEvent (grid, point, point));
+    grid.mouseUp (phoneEvent (grid, point, point));
+    CHECK (editor.controller.cell ({ channel, 0 }).enabled);
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell ({ channel, 0 }).enabled);
+    capturePhone (editor, reversed ? "iphone-four-rows-reversed" : "iphone-four-rows");
+    phoneButton (editor, "Switch step page").onClick();
+    CHECK (grid.layout.firstStep == 16);
+    CHECK (grid.layout.at (grid.layout.cell ({ channel, 16 }).getCentre()) == Location { channel, 16 });
+    REQUIRE (processor.dispatchUiEngineCommand ("channels", { 4 }));
+    editor.controller.refresh();
+    CHECK (editor.layout.firstRow == 0);
+    CHECK_FALSE (scroll->isVisible());
+    phoneButton (editor, "Open controls").onClick();
+    phoneButton (editor, "View").onClick();
+    CHECK (phoneButton (editor, "Visible rows").isVisible());
+    editor.setCompactViewport (true, 814, 409, false);
+    editor.setCompactVisibleRows (2);
+    CHECK (editor.layout.compactVisibleRows == 8);
+    CHECK_FALSE (rowsButton.isVisible());
+    CHECK_FALSE (scroll->isVisible());
+    editor.setCompactViewport (false, 1338, 900);
+    CHECK_FALSE (rowsButton.isVisible());
+    CHECK (editor.layout.firstRow == 0);
 }

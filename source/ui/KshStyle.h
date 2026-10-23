@@ -284,6 +284,14 @@ namespace ksh::ui
         }
         void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool hover, bool down) override
         {
+            if (static_cast<bool> (b.getProperties()["patternNumber"]))
+            {
+                static const auto typeface = juce::Typeface::createSystemTypefaceFor (BinaryData::GantariExtrabold_ttf, BinaryData::GantariExtrabold_ttfSize);
+                g.setColour (juce::Colours::white);
+                g.setFont (juce::Font (juce::FontOptions (typeface).withHeight (15.0f * 1.18f)));
+                g.drawText (b.getButtonText(), b.getLocalBounds().toFloat(), juce::Justification::centred, true);
+                return;
+            }
             if (b.getProperties().contains ("dropdown"))
             {
                 const auto bounds = b.getLocalBounds().toFloat();

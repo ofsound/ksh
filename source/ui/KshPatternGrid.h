@@ -2,6 +2,7 @@
 #include "KshLayout.h"
 #include "KshStyle.h"
 #include "KshNoteChooser.h"
+#include <melatonin_blur/melatonin_blur.h>
 namespace ksh::ui
 {
     class PatternGrid : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
@@ -12,6 +13,8 @@ namespace ksh::ui
         std::function<void (int)> channelSettings;
         std::function<void()> layerChanged;
         std::function<void (int, juce::Component&)> noteChooserRequested;
+        std::function<void (int)> scrollRows;
+        void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
         bool copySelection = false;
         void sync();
         void updatePlayback();
@@ -34,6 +37,12 @@ namespace ksh::ui
 
     private:
         EditorController& controller;
+        static constexpr float selectionGlowExtent = 20.0f;
+        // Share the cached, position-independent blur across equal-sized cells.
+        melatonin::DropShadow selectionGlow {
+            { Palette::text.withAlpha (0.8f), 18 },
+            { Palette::text.withAlpha (0.45f), 5 }
+        };
         Location cellAt (juce::Point<float>) const;
         juce::Rectangle<float> cellPaintBounds (Location) const;
         int playbackPositionForCell (Location) const;

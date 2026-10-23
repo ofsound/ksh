@@ -211,26 +211,6 @@ namespace ksh::ui
             g.fillRoundedRectangle (r, 9);
             g.setColour (Palette::border);
             g.drawRoundedRectangle (r.reduced (0.5f), 9, 1);
-            // A short pointer joins the card directly to the originating note button.
-            juce::Path pointer;
-            if (panel.getX() >= anchor.getRight() || panel.getRight() <= anchor.getX())
-            {
-                const float edge = panel.getX() >= anchor.getRight() ? r.getX() : r.getRight();
-                const float tip = static_cast<float> (panel.getX() >= anchor.getRight() ? anchor.getRight() : anchor.getX());
-                const float y = juce::jlimit (r.getY() + 18, r.getBottom() - 18, static_cast<float> (anchor.getCentreY()));
-                pointer.addTriangle (edge, y - 7, tip, static_cast<float> (anchor.getCentreY()), edge, y + 7);
-            }
-            else
-            {
-                const bool below = panel.getY() >= anchor.getBottom();
-                const float edge = below ? r.getY() : r.getBottom();
-                const float x = juce::jlimit (r.getX() + 18, r.getRight() - 18, static_cast<float> (anchor.getCentreX()));
-                pointer.addTriangle (x - 7, edge, static_cast<float> (anchor.getCentreX()), static_cast<float> (below ? anchor.getBottom() : anchor.getY()), x + 7, edge);
-            }
-            g.setColour (Palette::border);
-            g.strokePath (pointer, juce::PathStrokeType (1));
-            g.setColour (Palette::shell);
-            g.fillPath (pointer);
             const auto noteName = juce::MidiMessage::getMidiNoteName (candidate, true, true, 4);
             const auto midiNumber = juce::String (candidate);
             const auto labelFont = font (36, true);

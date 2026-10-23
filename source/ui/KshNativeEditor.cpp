@@ -217,6 +217,7 @@ namespace ksh::ui
             auto& b = patterns[static_cast<size_t> (i)];
             addAndMakeVisible (b);
             b.setButtonText (juce::String (i + 1));
+            b.getProperties().set ("patternNumber", true);
             b.setTooltip (juce::String::fromUTF8 ("Select pattern • Shift-click chooses copy source, then click destination"));
             b.onClick = [this, i] { controller.selectSource (i, controller.useSelectionModifier (juce::ModifierKeys::getCurrentModifiersRealtime())); };
            #if !JUCE_IOS && !JUCE_ANDROID
@@ -413,7 +414,13 @@ namespace ksh::ui
         layout.standalone = controller.processor.hasStandaloneTransport();
         syncMidiOutput();
         midiOutput.setVisible (layout.standalone && controller.processor.showStandaloneMidiOutputMenu && !layout.compact);
+        layout.firstRow = layout.compact ? juce::jlimit (0, juce::jmax (0, layout.channels - layout.compactVisibleRows), layout.firstRow) : 0;
         grid.layout = layout;
+        if (layout.compact && layout.compactVisibleRows < layout.channels)
+            grid.layout.compactWidth -= 24;
+        visibleRows.setButtonText ("Rows: " + juce::String (layout.compactVisibleRows));
+        rowScroll.setRangeLimits (0, layout.channels, juce::dontSendNotification);
+        rowScroll.setCurrentRange (layout.firstRow, juce::jmin (layout.channels, layout.compactVisibleRows), juce::dontSendNotification);
         preview.reverseRows = randomPanel.reverseRows = layout.reverseRows;
         compactPattern.setButtonText (controller.source() < 0 ? "Muted  v" : "Pattern " + juce::String (controller.source() + 1) + "  v");
         compactPattern.setToggleState (patternPicker.isVisible(), juce::dontSendNotification);
@@ -655,6 +662,20 @@ namespace ksh::ui
         const float groupY = (layout.transportHeight() + layout.toolbarY() - 70.0f) * 0.5f;
         paintControlGroup (g, { static_cast<float> (swing.getX() - 8), groupY, static_cast<float> (subdivision.getRight() - swing.getX() + 16), 70 }, "Swing");
         paintControlGroup (g, { static_cast<float> (velocityHumanize.getX() - 8), groupY, static_cast<float> (timingHumanize.getRight() - velocityHumanize.getX() + 16), 70 }, "Humanize");
+        // Paint in the parent so the halo can extend beyond the button's clip bounds.
+        for (const auto& button : patterns)
+        {
+            if (!button.isVisible() || !button.getToggleState())
+                continue;
+            const auto bounds = button.getBounds().toFloat().reduced (0.5f);
+            if (!g.clipRegionIntersects (bounds.expanded (static_cast<float> (patternGlowExtent)).getSmallestIntegerContainer()))
+                continue;
+            patternGlow.setColor (Palette::accent.withAlpha (0.8f * button.getAlpha()), 0);
+            patternGlow.setColor (Palette::accent.withAlpha (0.55f * button.getAlpha()), 1);
+            juce::Path silhouette;
+            silhouette.addRoundedRectangle (bounds, 4);
+            patternGlow.render (g, silhouette);
+        }
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
@@ -817,8 +838,12 @@ namespace ksh::ui
         for (int i = 0; i < 16; ++i)
         {
             auto& button = patterns[static_cast<size_t> (i)];
-            button.setToggleState (controller.copySource == i || controller.source() == i, juce::dontSendNotification);
-            button.setAlpha (controller.copySource == i ? copyAlpha : 1.0f);
+            const bool active = controller.copySource == i || controller.source() == i;
+            const float alpha = controller.copySource == i ? copyAlpha : 1.0f;
+            if (button.getToggleState() != active || !juce::approximatelyEqual (button.getAlpha(), alpha))
+                repaint (button.getBounds().expanded (patternGlowExtent));
+            button.setToggleState (active, juce::dontSendNotification);
+            button.setAlpha (alpha);
         }
     }
     void NativeEditor::updateLayerHeading()

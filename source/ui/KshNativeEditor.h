@@ -6,7 +6,7 @@
 #include "KshCompactPatternPicker.h"
 namespace ksh::ui
 {
-    class NativeEditor : public juce::Component, private juce::Timer, private juce::ChangeListener
+    class NativeEditor : public juce::Component, private juce::Timer, private juce::ChangeListener, private juce::ScrollBar::Listener
     {
     public:
         explicit NativeEditor (PluginProcessor&);
@@ -23,7 +23,8 @@ namespace ksh::ui
         void sync();
         void confirmDiscardingChanges (std::function<void()>);
         void useViewportFit();
-        void setCompactViewport (bool, int width, int height);
+        void setCompactViewport (bool, int width, int height, bool phone = true);
+        void setCompactVisibleRows (int);
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
@@ -42,10 +43,18 @@ namespace ksh::ui
         juce::TextButton modifierToggle { "Keys" };
         juce::TextButton midiOutput { "MIDI Output" };
         PatternGrid grid;
+        juce::TextButton visibleRows { "Rows: 8" };
+        juce::ScrollBar rowScroll { true };
+        int preferredPhoneRows = 8;
+        void scrollBarMoved (juce::ScrollBar*, double) override;
+        void scrollCompactRows (int);
+        void visibleRowsMenu();
         juce::Label layerHint;
         PreviewPanel preview, randomPanel;
         juce::Viewport aboutViewport;
         std::array<PatternButton, 16> patterns;
+        static constexpr int patternGlowExtent = 20;
+        melatonin::DropShadow patternGlow { { Palette::accent.withAlpha (0.8f), 18 }, { Palette::accent.withAlpha (0.55f), 5 } };
         std::array<juce::TextButton,
            #if JUCE_IOS
             7

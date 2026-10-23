@@ -129,6 +129,11 @@ namespace ksh::ui
             r.right.setTooltip ("Shift row right within loop");
         }
     }
+    void PatternGrid::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
+    {
+        if (layout.compact && layout.compactVisibleRows < layout.channels && scrollRows && std::abs (wheel.deltaY) > 0.0001f)
+            scrollRows (wheel.deltaY < 0 ? 1 : -1);
+    }
     juce::Rectangle<float> PatternGrid::cellBounds (Location location) const
     {
         const auto& cell = controller.cell (location);
@@ -169,7 +174,7 @@ namespace ksh::ui
     }
     juce::Rectangle<float> PatternGrid::cellPaintBounds (Location location) const
     {
-        return cellBounds (location).expanded (3);
+        return cellBounds (location).expanded (selectionGlowExtent);
     }
     Location PatternGrid::cellAt (juce::Point<float> point) const
     {
@@ -300,7 +305,7 @@ namespace ksh::ui
         const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
                                || displayedGraphicalValues != controller.graphicalCellValues
                                || displayedSelection.any() != controller.selected.any()
-                               || !laidOut.has_value() || laidOut->first.reverseRows != layout.reverseRows || swingChanged;
+                               || !laidOut.has_value() || laidOut->first != layout || swingChanged;
         displayedSwing = swing;
         displayedSteps = layout.steps;
         displayedFirstStep = layout.firstStep;
@@ -313,16 +318,16 @@ namespace ksh::ui
             const auto& channel = p.channels[static_cast<size_t> (ch)];
             for (auto* b : { &r.clear, &r.reverse, &r.ping, &r.mute, &r.left, &r.right })
             {
-                b->setVisible (ch < p.channelCount && (!layout.compact || b == &r.mute));
+                b->setVisible (layout.channelVisible (ch) && (!layout.compact || b == &r.mute));
                 b->setEnabled (controller.source() >= 0);
             }
-            r.label.setVisible (ch < p.channelCount);
-            r.trigger.setVisible (ch < p.channelCount && layout.hasRowTriggers());
-            r.trigger.setEnabled (ch < p.channelCount && p.deviceActive);
+            r.label.setVisible (layout.channelVisible (ch));
+            r.trigger.setVisible (layout.channelVisible (ch) && layout.hasRowTriggers());
+            r.trigger.setEnabled (layout.channelVisible (ch) && p.deviceActive);
             r.trigger.colour = Palette::channel (ch, controller.drumColors);
             r.trigger.setTooltip ("Play " + juce::String (channel.label) + " on press; record into the armed pattern while transport is running");
-            r.note.setVisible (ch < p.channelCount && !layout.compact);
-            r.more.setVisible (ch < p.channelCount && layout.compact);
+            r.note.setVisible (layout.channelVisible (ch) && !layout.compact);
+            r.more.setVisible (layout.channelVisible (ch) && layout.compact);
             r.label.setFont (font (layout.compact ? 12.0f : layout.touchRows ? 18.0f : 22.0f, true));
             if (!r.label.isBeingEdited())
                 r.label.setText (channel.label, juce::dontSendNotification);
@@ -361,7 +366,7 @@ namespace ksh::ui
                 if (displayedCells[index] != value)
                     accessible.setDescription (accessibleDescription (value));
                 displayedCells[index] = value;
-                accessible.setVisible (ch < layout.channels && layout.stepVisible (step));
+                accessible.setVisible (layout.channelVisible (ch) && layout.stepVisible (step));
                 accessible.setEnabled (controller.source() >= 0);
                 accessible.setToggleState (value.enabled, juce::dontSendNotification);
             }
@@ -449,7 +454,8 @@ namespace ksh::ui
             const auto name = layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle";
             text (g, juce::String (name) + " / overview", { 16.0f, layout.cellsY() - 32.0f, layout.gridLeft() - 24.0f, 22.0f }, 12, Palette::accent, true, juce::Justification::centredLeft);
         }
-        const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (0.8f);
+        const float horizontalInset = layout.compact ? 0.8f : 1.8f;
+        const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (horizontalInset, 0.8f);
         const float valueSize = juce::jmin (18.0f, referenceCell.getWidth() * 0.38f, referenceCell.getHeight() * 0.5f);
         if ((layer == Layer::chance && !controller.graphicalCellValues) || layer == Layer::nudge)
             prepareProbabilityLabels (valueSize * 0.78f);
@@ -465,6 +471,8 @@ namespace ksh::ui
         for (int ch = 0; ch < layout.channels; ++ch)
         {
             const auto range = controller.loop (ch);
+            if (!layout.channelVisible (ch))
+                continue;
             auto first = layout.cell ({ ch, range.loopStart });
             auto brace = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth()).expanded (layout.compact ? 0.0f : 16.0f, 1);
             if (layout.compact)
@@ -485,7 +493,7 @@ namespace ksh::ui
                     if (!g.clipRegionIntersects (cellArea))
                         continue;
                     const auto& c = controller.cell (pos);
-                    auto r = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).reduced (0.8f);
+                    auto r = (pass == 0 ? layout.cell (pos) : cellBounds (pos)).reduced (horizontalInset, 0.8f);
                     const juce::Graphics::ScopedSaveState cellClip (g);
                     g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), r.getY() - 2, layout.gridWidth(), r.getHeight() + 4).getSmallestIntegerContainer());
                     auto colour = Palette::channel (ch, controller.drumColors);
@@ -636,22 +644,29 @@ namespace ksh::ui
                     paintCell();
                 }
             }
-            // Keep the white selection outline crisp, with a soft glow just outside it.
+            // Use the filled silhouette for a full outer halo, keeping the cell interior clear.
+            selectionGlow.setColor (Palette::channel (ch, controller.drumColors).brighter (0.3f).withAlpha (0.8f), 0);
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 if (step < range.loopStart || step >= range.loopStart + range.loopLength)
                     continue;
                 const Location pos { ch, step };
                 if (!controller.selected.test (static_cast<size_t> (pos.key()))
-                    || !g.clipRegionIntersects (cellBounds (pos).expanded (3).getSmallestIntegerContainer()))
+                    || !g.clipRegionIntersects (cellPaintBounds (pos).getSmallestIntegerContainer()))
                     continue;
-                const auto frame = cellBounds (pos).reduced (0.15f);
+                const auto frame = cellBounds (pos).reduced (horizontalInset - 0.65f, 0.15f);
                 const juce::Graphics::ScopedSaveState selectionClip (g);
-                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), frame.getY() - 3, layout.gridWidth(), frame.getHeight() + 6).getSmallestIntegerContainer());
-                for (const auto [spread, alpha] : { std::pair { 2.0f, 0.035f }, std::pair { 1.3f, 0.065f }, std::pair { 0.7f, 0.12f } })
+                g.reduceClipRegion (juce::Rectangle<float> (layout.gridLeft(), frame.getY() - selectionGlowExtent, layout.gridWidth(), frame.getHeight() + selectionGlowExtent * 2).getSmallestIntegerContainer());
+                juce::Path outline;
+                outline.addRoundedRectangle (frame, 5.65f);
                 {
-                    g.setColour (Palette::text.withAlpha (alpha));
-                    g.drawRoundedRectangle (frame.expanded (spread), 5.65f + spread, 1.0f);
+                    const juce::Graphics::ScopedSaveState glowClip (g);
+                    juce::Path exterior;
+                    exterior.setUsingNonZeroWinding (false);
+                    exterior.addRectangle (frame.expanded (selectionGlowExtent));
+                    exterior.addRoundedRectangle (frame.reduced (0.6f), 5.05f);
+                    g.reduceClipRegion (exterior);
+                    selectionGlow.render (g, outline);
                 }
                 g.setColour (Palette::text.withAlpha (0.9f));
                 g.drawRoundedRectangle (frame, 5.65f, 1.0f);

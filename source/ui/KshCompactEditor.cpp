@@ -7,6 +7,18 @@ namespace ksh::ui
         for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                  &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
             addChildComponent (*button);
+        addChildComponent (visibleRows);
+        visibleRows.setTitle ("Visible rows");
+        visibleRows.setTooltip ("Choose how many rows fill the grid; scroll to reach the other rows");
+        visibleRows.onClick = [this] { visibleRowsMenu(); };
+        addChildComponent (rowScroll);
+        rowScroll.setTitle ("Scroll rows");
+        rowScroll.setSingleStepSize (1);
+        rowScroll.addListener (this);
+        grid.scrollRows = [this] (int delta) { scrollCompactRows (delta); };
+       #if JUCE_IOS
+        preferredPhoneRows = juce::jlimit (1, 8, uiPreferences->getIntValue ("iphoneVisibleRows", 8));
+       #endif
         addChildComponent (patternPicker);
         patternPicker.onDismiss = [this]
         {
@@ -155,14 +167,17 @@ namespace ksh::ui
         channelReset.onClick = [this] { controller.clearRow (selectedChannel, true); };
     }
 
-    void NativeEditor::setCompactViewport (bool compact, int width, int height)
+    void NativeEditor::setCompactViewport (bool compact, int width, int height, bool phone)
     {
-        if (layout.compact == compact && (!compact || (juce::roundToInt (layout.compactWidth) == width && juce::roundToInt (layout.compactHeight) == height)))
+        if (layout.compact == compact && layout.phoneRowControls == (compact && phone) && (!compact || (juce::roundToInt (layout.compactWidth) == width && juce::roundToInt (layout.compactHeight) == height)))
             return;
         cancelCompactGestures();
         if (patternPicker.isVisible())
             patternPicker.dismiss();
         layout.compact = compact;
+        layout.phoneRowControls = compact && phone;
+        layout.compactVisibleRows = layout.phoneRowControls ? preferredPhoneRows : 8;
+        layout.firstRow = 0;
         layout.compactWidth = static_cast<float> (width);
         layout.compactHeight = static_cast<float> (height);
         layout.firstStep = 0;
@@ -195,6 +210,8 @@ namespace ksh::ui
                 child->setVisible (true);
             projectDetails.setVisible (detailsVisible);
             patternPicker.setVisible (false);
+            visibleRows.setVisible (false);
+            rowScroll.setVisible (false);
             for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                      &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
                 button->setVisible (false);
@@ -205,6 +222,53 @@ namespace ksh::ui
             layout.randomVisible = false;
         }
         sync();
+    }
+
+    void NativeEditor::setCompactVisibleRows (int count)
+    {
+        if (!layout.compact || !layout.phoneRowControls)
+            return;
+        cancelCompactGestures();
+        noteChooser.dismiss();
+        preferredPhoneRows = juce::jlimit (1, 8, count);
+        layout.compactVisibleRows = preferredPhoneRows;
+       #if JUCE_IOS
+        uiPreferences->setValue ("iphoneVisibleRows", preferredPhoneRows);
+        uiPreferences->saveIfNeeded();
+       #endif
+        sync();
+    }
+
+    void NativeEditor::visibleRowsMenu()
+    {
+        juce::PopupMenu menu;
+        for (int count = 1; count <= 8; ++count)
+            menu.addItem (count, juce::String (count) + (count == 1 ? " row" : " rows"), true, layout.compactVisibleRows == count);
+        juce::Component::SafePointer<NativeEditor> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&visibleRows), [safe] (int count)
+        {
+            if (safe != nullptr && count > 0)
+                safe->setCompactVisibleRows (count);
+        });
+    }
+
+    void NativeEditor::scrollCompactRows (int delta)
+    {
+        if (!layout.compact || !layout.phoneRowControls)
+            return;
+        const int next = juce::jlimit (0, juce::jmax (0, layout.channels - layout.compactVisibleRows), layout.firstRow + delta);
+        if (next == layout.firstRow)
+            return;
+        cancelCompactGestures();
+        noteChooser.dismiss();
+        layout.firstRow = next;
+        sync();
+    }
+
+    void NativeEditor::scrollBarMoved (juce::ScrollBar* bar, double start)
+    {
+        if (bar == &rowScroll)
+            scrollCompactRows (juce::roundToInt (start) - layout.firstRow);
     }
 
     void NativeEditor::cancelCompactGestures()
@@ -309,7 +373,12 @@ namespace ksh::ui
             place (controls, w - 74, toolbarY, 68, toolbarHeight);
             place (preview, 0, juce::roundToInt (layout.previewY()), w, Layout::compactInspectorHeight);
             preview.setInspectorBounds (preview.getLocalBounds());
-            place (grid, 0, juce::roundToInt (layout.gridY()), w, juce::roundToInt (layout.gridHeight()));
+            const bool scrolling = layout.phoneRowControls && layout.compactVisibleRows < layout.channels;
+            place (grid, 0, juce::roundToInt (layout.gridY()), w - (scrolling ? 24 : 0), juce::roundToInt (layout.gridHeight()));
+            if (layout.phoneRowControls)
+                place (visibleRows, 4, juce::roundToInt (layout.gridY()) + 2, 120, 30);
+            if (scrolling)
+                place (rowScroll, w - 24, juce::roundToInt (layout.gridY() + layout.cellsY()), 24, juce::roundToInt (layout.gridHeight() - layout.cellsY()));
             finish();
             return;
         }
@@ -372,6 +441,8 @@ namespace ksh::ui
                 place (rowOrder, 396, 130, 168, 48);
                 place (compactAccent, 580, 130, 206, 48);
                 place (modifierToggle, 28, 224, 208, 44);
+                if (layout.phoneRowControls)
+                    place (visibleRows, 260, 224, 180, 44);
                 if (layout.standalone && controller.processor.showStandaloneMidiOutputMenu)
                     place (midiOutput, 28, 292, w - 56, 44);
                 break;

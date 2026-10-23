@@ -1787,7 +1787,7 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
         view->sync();
         auto image = editor->createComponentSnapshot (editor->getLocalBounds());
         REQUIRE (image.isValid());
-        CHECK (editor->getWidth() == juce::roundToInt (1338.0f * 0.85f * static_cast<float> (scale) / 100));
+        CHECK (editor->getWidth() == juce::roundToInt (view->layout.width() * 0.85f * static_cast<float> (scale) / 100));
         if (directory.isNotEmpty())
         {
             auto stream = juce::File (directory).getChildFile ("native-32-" + juce::String (scale) + "-" + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
@@ -2776,7 +2776,7 @@ TEST_CASE ("Legacy standalone zoom migrates to the smaller 100 percent baseline 
     ksh::restoreStandaloneUiScale (processor, settings);
     CHECK (processor.getProjectUiScalePercent() == 100);
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
-    CHECK (editor->getWidth() == 1137);
+    CHECK (editor->getWidth() == juce::roundToInt (Layout {}.width() * UiScale::factor (100)));
 }
 
 TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]")

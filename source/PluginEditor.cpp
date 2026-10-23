@@ -222,7 +222,8 @@ void PluginEditor::resized()
     const bool mobile = fitViewport;
    #endif
     const bool compact = mobile && available.getWidth() >= available.getHeight() && available.getHeight() <= 500.0f && available.getWidth() <= 1100.0f;
-    nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())));
+    nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())),
+                                   juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"));
     const auto& layout = nativeView->layout;
     const float fitScale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
     const bool centered = zenMode || zenWindow != nullptr;
