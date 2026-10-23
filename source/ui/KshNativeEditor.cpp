@@ -53,6 +53,9 @@ namespace ksh::ui
 
     NativeEditor::NativeEditor (PluginProcessor& processor) : controller (processor), grid (controller), preview (controller), randomPanel (controller, true), projectDetails (processor)
     {
+       #if JUCE_IOS
+        layout.touchRows = true;
+       #endif
         juce::PropertiesFile::Options options;
         options.applicationName = "KSH";
         options.filenameSuffix = ".ui.settings";
@@ -292,7 +295,7 @@ namespace ksh::ui
         velocityHumanize.setTitle ("Velocity humanization");
         timingHumanize.setTitle ("Timing humanization");
         velocityHumanize.setTooltip ("Randomly vary hit velocity by up to this percentage of the cell's velocity. 0% keeps it steady.");
-        timingHumanize.setTooltip ("Add subtle random timing variation. 0% is steady; 100% uses a range of one fifth of a step.");
+        timingHumanize.setTooltip ("Randomly move each hit before or after its swung position. 0% is steady; 100% varies by up to one fifth of a step in either direction.");
         velocityHumanize.suffix = timingHumanize.suffix = "%";
         configureValue (steps, "Grid Length", 1, 32, "source_steps");
         steps.captionFontSize = 12;
@@ -403,7 +406,16 @@ namespace ksh::ui
         layout.standalone = controller.processor.hasStandaloneTransport();
         grid.layout = layout;
         preview.reverseRows = randomPanel.reverseRows = layout.reverseRows;
-        compactPattern.setButtonText (controller.copySource >= 0 ? "Copy P" + juce::String (controller.copySource + 1) : "P" + juce::String (controller.source() + 1) + "  v");
+        compactPattern.setButtonText (controller.source() < 0 ? "Muted  v" : "Pattern " + juce::String (controller.source() + 1) + "  v");
+        compactPattern.setToggleState (patternPicker.isVisible(), juce::dontSendNotification);
+        compactAccent.setButtonText (Palette::blueAccentSelected() ? "Accent: Blue" : "Accent: Orange");
+        if (confirmPatternClear && (clearSource != controller.source() || clearEpoch != controller.processor.getUiBridge().getDocumentEpoch()))
+            confirmPatternClear = false;
+        compactClear.setButtonText (confirmPatternClear ? "Confirm clear P" + juce::String (controller.source() + 1) : "Clear pattern...");
+        compactClear.setEnabled (controller.source() >= 0);
+        recordOptions.setEnabled (controller.source() >= 0);
+        if (patternPicker.isVisible())
+            patternPicker.sync();
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         updatePatternButtons();
@@ -572,26 +584,45 @@ namespace ksh::ui
         {
             if (panel != Panel::none)
             {
-                surface (g, { 4, 48, static_cast<float> (getWidth() - 8), layout.gridHeight() - 4 });
-                if (panel == Panel::patterns)
-                    text (g, controller.copySource >= 0 ? "Choose a destination to copy into. Tap P again to cancel." : "Choose a pattern. Select + pattern copies it to another slot.", { 18, 96, static_cast<float> (getWidth() - 36), 26 }, 13, Palette::muted, false, juce::Justification::centredLeft);
-                else if (panel == Panel::project)
-                    text (g, "PROJECT", { 18, 100, 110, 28 }, 12, Palette::accent, true, juce::Justification::centredLeft);
+                const auto heading = panel == Panel::channel ? "Channel / " + juce::String (controller.state.playback.channels[static_cast<size_t> (selectedChannel)].label)
+                                     : panel == Panel::pattern ? controller.source() < 0 ? juce::String ("Settings / Muted pattern") : "Settings / Pattern " + juce::String (controller.source() + 1)
+                                                               : juce::String ("Settings");
+                text (g, heading, { 16, 2, static_cast<float> (getWidth() - 328), 30 }, 15, Palette::text, true, juce::Justification::centredLeft);
+                surface (g, { 6, layout.gridY() + 4, static_cast<float> (getWidth() - 12), static_cast<float> (getHeight()) - layout.gridY() - 10 });
+                if (panel == Panel::pattern)
+                {
+                    paintControlGroup (g, { 16, 108, 324, 98 }, "Pattern grid");
+                    paintControlGroup (g, { 356, 108, static_cast<float> (getWidth() - 372), 98 }, "Recording");
+                    text (g, "Division", { 164, 126, 160, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                    text (g, "Record", { 372, 126, 64, 18 }, 12, Palette::muted, true);
+                    text (g, "Quantize", { 438, 126, 72, 18 }, 12, Palette::muted, true);
+                    text (g, "Shift steps", { 28, 224, 140, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                    text (g, "Pattern changes can be undone with the arrows above.", { 28, 310, static_cast<float> (getWidth() - 56), 24 }, 12, Palette::muted, false, juce::Justification::centredLeft);
+                }
                 else if (panel == Panel::feel)
                 {
                     paintControlGroup (g, { 12, 104, 336, 110 }, "Swing");
                     paintControlGroup (g, { 356, 104, 392, 110 }, "Humanize");
                     text (g, "Drag a value vertically, or double-tap to enter it. Changes are shared with the host.", { 22, 218, static_cast<float> (getWidth() - 44), 36 }, 13, Palette::muted, false, juce::Justification::centredLeft);
                 }
+                else if (panel == Panel::view)
+                {
+                    text (g, "Appearance", { 28, 104, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                    text (g, "Hardware keyboard", { 28, 198, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                }
                 else if (panel == Panel::channel)
-                    text (g, "CHANNEL " + juce::String (selectedChannel + 1) + "  /  tap its name in the grid to audition", { 20, 96, static_cast<float> (getWidth() - 40), 24 }, 12, Palette::accent, true, juce::Justification::centredLeft);
+                {
+                    text (g, "Name", { 28, 64, 180, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                    text (g, "Playback direction", { 412, 64, 340, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                    text (g, "Channel actions", { 28, 278, 350, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                }
                 else if (panel == Panel::help)
                 {
                     const std::array<juce::String, 5> lines {
                         "Tap cells to toggle. Drag across a row to paint; drag up/down to change its value.",
                         "Hold a cell, or tap Select, to select cells. Drag a rectangle to select several.",
                         "Turn Select off to move selected cells. Enable Copy to duplicate while dragging.",
-                        "Deselect returns to drawing. Inspector values adjust all selected enabled cells.",
+                        "Done clears the selection. Inspector values adjust selected enabled cells together.",
                         "Tap a channel name to audition. The ... button opens note, loop, direction and solo." };
                     for (int i = 0; i < static_cast<int> (lines.size()); ++i)
                         text (g, lines[static_cast<size_t> (i)], { 20, 100.0f + static_cast<float> (i) * 38, static_cast<float> (getWidth() - 40), 34 }, 13, Palette::text, false, juce::Justification::centredLeft);
@@ -687,6 +718,8 @@ namespace ksh::ui
     }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
+        if (patternPicker.isVisible())
+            return patternPicker.keyPressed (key);
         if (noteChooser.isVisible())
             return noteChooser.keyPressed (key);
         if (discardChanges.isVisible())

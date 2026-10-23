@@ -55,6 +55,14 @@ namespace ksh::ui
                 button->setTitle (juce::String (icon) + " channel " + juce::String (ch + 1));
             }
             addAndMakeVisible (r.label);
+            addChildComponent (r.trigger);
+            r.trigger.setButtonText (juce::String (ch + 1));
+            r.trigger.setTitle ("Trigger channel " + juce::String (ch + 1));
+            r.trigger.onClick = [this, ch]
+            {
+                if (controller.processor.triggerRowFromUi (ch))
+                    rows[static_cast<size_t> (ch)].trigger.flash();
+            };
             addAndMakeVisible (r.note);
             addChildComponent (r.more);
             r.more.setTitle ("Settings channel " + juce::String (ch + 1));
@@ -309,9 +317,13 @@ namespace ksh::ui
                 b->setEnabled (controller.source() >= 0);
             }
             r.label.setVisible (ch < p.channelCount);
+            r.trigger.setVisible (ch < p.channelCount && layout.hasRowTriggers());
+            r.trigger.setEnabled (ch < p.channelCount && p.deviceActive);
+            r.trigger.colour = Palette::channel (ch, controller.drumColors);
+            r.trigger.setTooltip ("Play " + juce::String (channel.label) + " on press; record into the armed pattern while transport is running");
             r.note.setVisible (ch < p.channelCount && !layout.compact);
             r.more.setVisible (ch < p.channelCount && layout.compact);
-            r.label.setFont (font (layout.compact ? 13.0f : 22.0f, true));
+            r.label.setFont (font (layout.compact ? 12.0f : layout.touchRows ? 18.0f : 22.0f, true));
             if (!r.label.isBeingEdited())
                 r.label.setText (channel.label, juce::dontSendNotification);
             r.note.setValue (channel.note);
@@ -376,9 +388,10 @@ namespace ksh::ui
             {
                 const int rowY = juce::roundToInt (layout.cell ({ ch, 0 }).getY());
                 const int height = juce::roundToInt (layout.cellHeight());
-                r.label.setBounds (2, rowY, 62, height);
-                r.mute.setBounds (65, rowY, 31, height);
-                r.more.setBounds (98, rowY, 30, height);
+                r.trigger.setBounds (2, rowY, 32, height);
+                r.label.setBounds (36, rowY, 44, height);
+                r.mute.setBounds (82, rowY, 22, height);
+                r.more.setBounds (106, rowY, 22, height);
                 continue;
             }
             r.clear.setBounds (arrowsX + 60, y + 4, 20, 24);
@@ -387,6 +400,11 @@ namespace ksh::ui
             r.reverse.setBounds (r.ping.getX() - 52, y, 34, 32);
             r.note.setBounds (r.reverse.getX() - 62, y, 44, 32);
             r.label.setBounds (Layout::outerGutter, y - 2, r.note.getX() - Layout::outerGutter - 13, 36);
+            if (layout.touchRows)
+            {
+                r.trigger.setBounds (Layout::outerGutter, y - 6, 38, 44);
+                r.label.setBounds (r.trigger.getRight() + 6, y - 2, r.note.getX() - r.trigger.getRight() - 19, 36);
+            }
             r.left.setBounds (arrowsX, y, 26, 32);
             r.right.setBounds (arrowsX + 26, y, 26, 32);
         }
@@ -709,13 +727,20 @@ namespace ksh::ui
     }
     void PatternGrid::refreshAccent()
     {
-        for (auto& row : rows)
+        for (size_t ch = 0; ch < rows.size(); ++ch)
+        {
+            auto& row = rows[ch];
             row.label.setColour (juce::Label::textColourId, Palette::accent);
+            row.trigger.colour = Palette::channel (static_cast<int> (ch), controller.drumColors);
+            row.trigger.repaint();
+        }
         repaint();
     }
     void PatternGrid::updatePlayback()
     {
         const auto now = juce::Time::getMillisecondCounterHiRes();
+        for (auto& row : rows)
+            row.trigger.updateFlash (now);
         for (int ch = 0; ch < layout.channels; ++ch)
             for (int s = 0; s < layout.steps; ++s)
             {

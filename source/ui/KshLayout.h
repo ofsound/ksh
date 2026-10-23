@@ -7,9 +7,12 @@ namespace ksh::ui
         static constexpr int outerGutter = 12;
         static constexpr int footerHeight = 56;
         static constexpr int previewHeight = 134;
+        static constexpr int compactHeaderHeight = 34;
+        static constexpr int compactInspectorHeight = 48;
         int channels = 8, steps = 16;
         bool standalone = false, randomVisible = false;
         bool compact = false;
+        bool touchRows = false;
         bool reverseRows = false;
         float compactWidth = 814.0f, compactHeight = 409.0f;
         int firstStep = 0;
@@ -18,17 +21,18 @@ namespace ksh::ui
         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
         int visibleSteps() const { return compact ? juce::jmin (16, steps - firstStep) : steps; }
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
+        bool hasRowTriggers() const { return compact || touchRows; }
         float transportHeight() const { return standalone ? 44.0f : 0.0f; }
         float toolbarY() const { return compact ? 0.0f : transportHeight() + 116; }
-        float gridY() const { return compact ? 46.0f : toolbarY() + 80; }
+        float gridY() const { return compact ? static_cast<float> (compactHeaderHeight) : toolbarY() + 80; }
         float cellWidth() const { return compact ? gridWidth() / 16.0f : 54.375f * (steps > 16 ? 16.0f / static_cast<float> (steps) : 1.0f); }
         float cellHeight() const { return compact ? rowHeight() - 3.0f : 54.0f; }
-        float rowHeight() const { return compact ? (compactHeight - gridY() - cellsY() - 84.0f) / 8.0f : cellHeight() + 4.0f; }
+        float rowHeight() const { return compact ? (compactHeight - gridY() - cellsY() - compactInspectorHeight) / 8.0f : cellHeight() + 4.0f; }
         float gridLeft() const { return compact ? 132.0f : 346.0f; }
         float gridWidth() const { return compact ? compactWidth - gridLeft() - 6.0f : 870.0f; }
         float width() const { return compact ? compactWidth : juce::jmax (1338.0f, 436.0f + gridWidth()); }
         float cellsY() const { return compact ? 18.0f : 46.0f; }
-        float gridHeight() const { return compact ? compactHeight - gridY() - 84.0f : cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
+        float gridHeight() const { return compact ? compactHeight - gridY() - compactInspectorHeight : cellsY() + static_cast<float> (channels) * rowHeight() + 18.0f; }
         float previewY() const { return gridY() + gridHeight(); }
         float height() const { return compact ? compactHeight : previewY() + previewHeight + footerHeight; }
         int displayRow (int channel) const { return reverseRows ? channels - 1 - channel : channel; }

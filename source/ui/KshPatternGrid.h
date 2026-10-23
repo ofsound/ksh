@@ -54,6 +54,7 @@ namespace ksh::ui
         std::array<AccessibleCell, 256> accessibleCells;
         struct Row
         {
+            RowTriggerButton trigger;
             GestureButton clear { juce::String::fromUTF8 ("×") }, reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") }, mute { juce::String::fromUTF8 ("⏻") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") };
             AuditionLabel label;
             NoteInput note;

@@ -287,6 +287,13 @@ namespace ksh::ui
             control->captionFontSize = 10.0f;
             control->captionGap = compact ? 2 : 6;
         }
+        probability.caption = compact ? "Chance" : "Probability";
+        cycleLength.caption = compact ? "Cycle" : "Length";
+        velocity.captionWidth = compact ? 44 : 0;
+        probability.captionWidth = compact ? 44 : 0;
+        nudge.captionWidth = compact ? 40 : 0;
+        roll.captionWidth = compact ? 28 : 0;
+        cycleLength.captionWidth = compact ? 36 : 0;
         resized();
         repaint();
     }
@@ -321,15 +328,15 @@ namespace ksh::ui
                     locks[static_cast<size_t> (ch)].setBounds (18 + ch * stride, 98, stride - 6, 66);
                 return;
             }
-            constexpr int inputWidth = 56;
             int inputX = 6;
             for (auto* control : { &velocity, &probability, &nudge, &roll, &cycleLength })
             {
-                control->setBounds (inputX, 8, inputWidth, 64);
-                inputX += inputWidth + 8;
+                const int width = control->captionWidth + 44;
+                control->setBounds (inputX, 4, width, 40);
+                inputX += width + 10;
             }
-            remove.setBounds (getWidth() - 48, 29, 35, 42);
-            cycle.setBounds (326, 26, juce::jlimit (0, cycle.preferredWidth (48), remove.getX() - 334), 48);
+            remove.setBounds (getWidth() - 42, 4, 36, 40);
+            cycle.setBounds (inputX - 4, 2, juce::jlimit (0, cycle.preferredWidth (44), remove.getX() - inputX), 44);
             return;
         }
         mode.setBounds (378, 44, 164, 28);
@@ -440,10 +447,6 @@ namespace ksh::ui
                         g.fillRoundedRectangle (92.0f + static_cast<float> (step) * cw, y, cw - 3.0f, 22, 3);
                     }
                 }
-            }
-            else
-            {
-                text (g, "Cycle beats", { 336, 8, 160, 18 }, 11, Palette::text, true, juce::Justification::centredLeft);
             }
             return;
         }

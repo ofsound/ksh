@@ -532,7 +532,6 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
         const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
         const int noteDurationMs = rollNoteDurationMs (snapshot, roll);
         const double timingRange = timingHumanizeRangeMs (snapshot);
-        const double timingOffsetMs = timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : 0.0;
         const int pitch = snapshot.channels[static_cast<size_t> (channel)].note;
 
         for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
@@ -544,8 +543,9 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                                                                      snapshot.swing,
                                                                      snapshot.swingSubdivisionIndex)
                                       * snapshot.stepIntervalMs;
-            const double timingDelayMs = rollIndex == 0 ? timingOffsetMs : 0.0;
-            const double delayMs = std::max (0.0, rollDelayMs + swingDelayMs + timingDelayMs)
+            // Humanize each hit around its swung position, preserving early offsets.
+            const double timingDelayMs = timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : 0.0;
+            const double delayMs = rollDelayMs + swingDelayMs + timingDelayMs
                                    + static_cast<double> (cell.nudge) * stepDurationMs / 100.0;
 
             scheduleHit (stepSampleOffset,
@@ -676,7 +676,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                                                      juce::MidiBuffer& midiOut,
                                                      const MidiPatternSelectionBlock& patternSelections,
                                                      const HostLoopRange& hostLoop,
-                                                     double callbackTimeMs)
+                                                     double callbackTimeMs,
+                                                     std::optional<int> endGlobalStepExclusive)
 {
     MidiPlaybackResult result;
 
@@ -689,6 +690,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     blockStartSample = nextBlockStartSample;
     nextBlockStartSample += numSamples;
     recordingSuppressionTolerance = 2 + static_cast<int> (std::ceil (timingHumanizeRangeMs (snapshot) * sampleRate / 1000.0));
+    const bool hasEarlyHits = snapshot.hasEarlyCells || snapshot.timingHumanize > 0;
 
     if (! adoptedGenerationVersion.has_value() || *adoptedGenerationVersion != snapshot.generationVersion)
         adoptGeneratedSources (snapshot);
@@ -700,7 +702,7 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                                                 Constants::mutedStaticSource,
                                                 Constants::sourceCount - 1);
         dropPendingNoteOnsAtOrAfter (patternSelections.events[0].samplePosition);
-        if (snapshot.hasEarlyCells && bpm > 0.0)
+        if (hasEarlyHits && bpm > 0.0)
         {
             const double selectionBeat = ppqPosition + static_cast<double> (patternSelections.events[0].samplePosition) * bpm / (60.0 * sampleRate);
             const double stepBeats = snapshot.beatsPerStep > 0.0 ? snapshot.beatsPerStep : 0.25;
@@ -799,16 +801,22 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
     expectedNextPpq = ppqPosition + static_cast<double> (numSamples) * beatsPerSample;
     const int firstStep = lastScheduledGlobalStep.has_value() ? *lastScheduledGlobalStep + 1 : globalStepStart;
-    int scheduledStepEnd = globalStepEnd + (snapshot.hasEarlyCells ? 1 : 0);
+    const double stepDurationMs = beatsPerStep * 60000.0 / bpm;
+    // A full-step negative nudge plus negative humanize can cross two steps.
+    const int lookaheadSteps = (snapshot.hasEarlyCells ? 1 : 0)
+                               + static_cast<int> (std::ceil (timingHumanizeRangeMs (snapshot) / stepDurationMs));
+    int scheduledStepEnd = globalStepEnd + lookaheadSteps;
+    if (endGlobalStepExclusive.has_value())
+        scheduledStepEnd = std::min (scheduledStepEnd, *endGlobalStepExclusive - 1);
     if (hostLoopValid && ppqPosition < hostLoop.endPpq)
         scheduledStepEnd = std::min (scheduledStepEnd, firstGlobalStepAtOrAfter (hostLoop.endPpq - edgeTolerance, beatsPerStep) - 1);
-    const double stepDurationMs = beatsPerStep * 60000.0 / bpm;
 
     for (int globalStep = firstStep; globalStep <= scheduledStepEnd; ++globalStep)
     {
-        if (anticipatedLoopStep == globalStep)
+        if (anticipatedLoopStep.has_value() && globalStep <= *anticipatedLoopStep)
         {
-            anticipatedLoopStep.reset();
+            if (globalStep == *anticipatedLoopStep)
+                anticipatedLoopStep.reset();
             lastScheduledGlobalStep = globalStep;
             continue;
         }
@@ -826,17 +834,24 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     lastEmittedGlobalStep = std::max (lastEmittedGlobalStep.value_or (globalStepStart - 1), globalStepEnd);
     result.latestGlobalStep = std::max (globalStepStart, globalStepEnd);
 
-    if (snapshot.hasEarlyCells && hostLoopValid && ppqPosition < hostLoop.endPpq
-        && blockLastSamplePpq + beatsPerStep >= hostLoop.endPpq && !anticipatedLoopStep.has_value())
+    if (hasEarlyHits && hostLoopValid && ppqPosition < hostLoop.endPpq
+        && blockLastSamplePpq + lookaheadSteps * beatsPerStep >= hostLoop.endPpq)
     {
-        const int loopStep = firstGlobalStepAtOrAfter (hostLoop.startPpq - edgeTolerance, beatsPerStep);
-        const double loopBeat = hostLoop.endPpq + static_cast<double> (loopStep) * beatsPerStep - hostLoop.startPpq;
-        const int stepSample = std::max (0, static_cast<int> (std::llround ((loopBeat - ppqPosition) / beatsPerSample)));
-        if (regenerateWindowIfDue (snapshot, loopStep))
-            result.generatedSourcesChanged = true;
-        const int source = staticSourceForStep (snapshot, patternSelections, stepSample);
-        evaluateGlobalStep (snapshot, loopStep, stepSample, numSamples, midiOut, result, source, stepDurationMs);
-        anticipatedLoopStep = loopStep;
+        const int firstLoopStep = anticipatedLoopStep.has_value() ? *anticipatedLoopStep + 1
+                                                                 : firstGlobalStepAtOrAfter (hostLoop.startPpq - edgeTolerance, beatsPerStep);
+        const double lookaheadPpq = hostLoop.startPpq + blockLastSamplePpq + lookaheadSteps * beatsPerStep - hostLoop.endPpq;
+        const int lastLoopStep = std::min (globalStepForBeats (lookaheadPpq, snapshot),
+                                           firstGlobalStepAtOrAfter (hostLoop.endPpq - edgeTolerance, beatsPerStep) - 1);
+        for (int loopStep = firstLoopStep; loopStep <= lastLoopStep; ++loopStep)
+        {
+            const double loopBeat = hostLoop.endPpq + static_cast<double> (loopStep) * beatsPerStep - hostLoop.startPpq;
+            const int stepSample = std::max (0, static_cast<int> (std::llround ((loopBeat - ppqPosition) / beatsPerSample)));
+            if (regenerateWindowIfDue (snapshot, loopStep))
+                result.generatedSourcesChanged = true;
+            const int source = staticSourceForStep (snapshot, patternSelections, stepSample);
+            evaluateGlobalStep (snapshot, loopStep, stepSample, numSamples, midiOut, result, source, stepDurationMs);
+            anticipatedLoopStep = loopStep;
+        }
     }
 
     return result;

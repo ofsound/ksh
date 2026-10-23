@@ -92,7 +92,7 @@ namespace ksh::ui
             for (int i = 0; i < 8; ++i)
             {
                 bits[static_cast<size_t> (i)].fontHeight = inlineLayout ? 13.0f : 12.0f;
-                bits[static_cast<size_t> (i)].setBounds (10 + i * cellStride, top, side, side);
+                bits[static_cast<size_t> (i)].setBounds (10 + i * cellStride, top, side, compact ? availableHeight : side);
             }
             const int edge = 10 + juce::jlimit (1, 8, cycleLength) * cellStride - 4;
             handle.setBounds (edge - 4, top, 9, side);

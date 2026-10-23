@@ -2,6 +2,7 @@
 
 #include <PluginProcessor.h>
 #include <engine/KshMidiPlayback.h>
+#include <engine/KshMath.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -222,6 +223,114 @@ TEST_CASE ("deferred swing and humanize timing matches a single block", "[engine
     REQUIRE (timestamps (64) == expected);
     REQUIRE (timestamps (512) == expected);
     REQUIRE (timestamps (3000) == expected);
+}
+
+TEST_CASE ("timing humanize is centered on every swung or straight hit including rolls", "[engine][transport][realtime][humanize]")
+{
+    const int swing = GENERATE (0, 30);
+    const int roll = GENERATE (1, 2);
+    const int nudge = GENERATE (0, -100);
+    CAPTURE (swing, roll, nudge);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (16);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (swing);
+    fixture.engine.setTimingHumanize (40);
+    for (int step = 0; step < 16; ++step)
+    {
+        fixture.engine.setCell (0, 0, step, true, 100, 100, 1, 1, roll);
+        fixture.engine.setCellNudge (0, 0, step, nudge);
+    }
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    constexpr int stepSamples = 6000;
+    constexpr int stepCount = 128;
+    const auto render = [&] (int blockSize)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<int> hits;
+        for (int sample = 0; sample < (stepCount + 2) * stepSamples; sample += blockSize)
+        {
+            juce::MidiBuffer midi;
+            runner.processBlock (snapshot, static_cast<double> (sample) / 24000.0,
+                                 120.0, true, blockSize, midi, {}, {}, 0.0, stepCount);
+            for (const auto event : midi)
+                if (event.getMessage().isNoteOn())
+                    hits.push_back (sample + event.samplePosition);
+        }
+        return hits;
+    };
+    const auto hits = render (64);
+    REQUIRE (hits.size() == static_cast<size_t> (stepCount * roll));
+    CHECK (render (8189) == hits);
+    for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
+    {
+        int early = 0, late = 0;
+        double sum = 0.0;
+        for (int step = 2; step < stepCount; ++step)
+        {
+            const double position = step + static_cast<double> (rollIndex) / roll;
+            const double center = (position + swingDelayStepsForPosition (position, swing, snapshot.swingSubdivisionIndex)
+                                   + static_cast<double> (nudge) / 100.0) * stepSamples;
+            const double offset = hits[static_cast<size_t> (step * roll + rollIndex)] - center;
+            CHECK (std::abs (offset) <= 480.5);
+            early += offset < -0.5 ? 1 : 0;
+            late += offset > 0.5 ? 1 : 0;
+            sum += offset;
+        }
+        // A fixed random phase exercises both halves without requiring exact equal counts.
+        CHECK (early > 40);
+        CHECK (late > 40);
+        CHECK (std::abs (sum / (stepCount - 2)) < 75.0);
+    }
+}
+
+TEST_CASE ("humanized early hits cross host loop boundaries once regardless of buffer size", "[engine][transport][humanize]")
+{
+    const int nudge = GENERATE (0, -100);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTimingHumanize (100);
+    for (int step = 0; step < 4; ++step)
+    {
+        fixture.engine.setCell (0, 0, step, true, 100);
+        fixture.engine.setCellNudge (0, 0, step, nudge);
+    }
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto render = [&] (int blockSize, bool looping)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<int> hits;
+        constexpr int loopSamples = 24000;
+        for (int sample = 0; sample < loopSamples * 8;)
+        {
+            const int count = std::min (blockSize, loopSamples - sample % loopSamples);
+            juce::MidiBuffer midi;
+            auto state = snapshot;
+            if (! looping)
+                state.stepCount = 4;
+            runner.processBlock (state, static_cast<double> (looping ? sample % loopSamples : sample) / 24000.0,
+                                 120.0, true, count, midi, {}, { looping, 0.0, 1.0 });
+            for (const auto event : midi)
+                if (event.getMessage().isNoteOn())
+                    hits.push_back (sample + event.samplePosition);
+            sample += count;
+        }
+        return hits;
+    };
+    const auto expected = render (64, false);
+    REQUIRE (expected.size() >= 31);
+    CHECK (render (64, true) == expected);
+    CHECK (render (3000, true) == expected);
 }
 
 TEST_CASE ("audition note gate expires at its exact sample deadline", "[engine][transport][realtime]")

@@ -27,7 +27,6 @@ juce::Result writePatternMidiFile (const PlaybackSnapshot& state, int source,
     const double lengthBeats = snapshot->stepCount * snapshot->beatsPerStep;
     const double lengthTicks = std::round (lengthBeats * ticksPerQuarter);
     const auto lengthSamples = static_cast<int64_t> (std::llround (lengthBeats * samplesPerBeat));
-    const bool hasEarlyCells = snapshot->hasEarlyCells;
     auto runner = std::make_unique<MidiPlaybackRunner>();
     runner->prepare (sampleRate);
     juce::MidiMessageSequence track;
@@ -38,11 +37,9 @@ juce::Result writePatternMidiFile (const PlaybackSnapshot& state, int source,
     {
         buffer.clear();
         const int count = static_cast<int> (std::min<int64_t> (blockSize, lengthSamples - start));
-        // Once the last step is reached, stop looking ahead into a second pattern pass.
-        snapshot->hasEarlyCells = hasEarlyCells
-                                 && static_cast<double> (start + count) / samplesPerBeat < lengthBeats - snapshot->beatsPerStep;
+        // Keep early-hit lookahead within this single pattern pass.
         runner->processBlock (*snapshot, static_cast<double> (start) / samplesPerBeat,
-                              snapshot->tempo, true, count, buffer);
+                              snapshot->tempo, true, count, buffer, {}, {}, 0.0, snapshot->stepCount);
         for (const auto event : buffer)
         {
             auto message = event.getMessage();

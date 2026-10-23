@@ -4,21 +4,45 @@ namespace ksh::ui
 {
     void NativeEditor::setupCompactControls()
     {
-        for (auto* button : { static_cast<juce::TextButton*> (&compactLogo), &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
+        for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                  &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
             addChildComponent (*button);
-        compactLogo.setTitle ("Switch accent");
-        compactLogo.setTooltip ("Tap KSH to switch between orange and blue accents");
-        compactLogo.setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        compactLogo.onClick = [this] { preview.onAccentSelected (!Palette::blueAccentSelected()); };
+        addChildComponent (patternPicker);
+        patternPicker.onDismiss = [this]
+        {
+            sync();
+            if (isShowing())
+                compactPattern.grabKeyboardFocus();
+        };
+        compactAccent.setTitle ("Switch accent");
+        compactAccent.onClick = [this] { preview.onAccentSelected (!Palette::blueAccentSelected()); };
+        compactClear.setTitle ("Clear pattern");
+        recordOptions.setTitle ("Recording timing options");
+        recordOptions.onClick = [this] { recordingMenu(); };
+        compactClear.onClick = [this]
+        {
+            const auto epoch = controller.processor.getUiBridge().getDocumentEpoch();
+            if (confirmPatternClear && clearSource == controller.source() && clearEpoch == epoch)
+            {
+                controller.clearPattern();
+                confirmPatternClear = false;
+            }
+            else
+            {
+                confirmPatternClear = true;
+                clearSource = controller.source();
+                clearEpoch = epoch;
+            }
+            sync();
+        };
         compactPattern.setTitle ("Pattern bank");
         controls.setTitle ("Open controls");
         deselect.setTitle ("Deselect cells");
-        deselect.setButtonText ("Deselect");
+        deselect.setButtonText ("Done");
         duplicate.setTitle ("Copy selected cells when dragging");
         page.setTitle ("Switch step page");
         compactPattern.setTooltip ("Open or close the pattern bank");
-        controls.setTooltip ("Open or close the control panels");
+        controls.setTooltip ("Open settings; your last settings page is remembered");
         closePanel.setTooltip ("Close the current panel and return to the grid");
         deselect.setTooltip ("Clear the cell selection and return to drawing");
         duplicate.setTooltip ("Toggle copying selected cells when dragging");
@@ -30,12 +54,17 @@ namespace ksh::ui
         channelReset.setTooltip ("Clear this channel's cells, restore its full loop, and unmute it in the current pattern");
         compactPattern.onClick = [this]
         {
-            if (panel == Panel::patterns)
-                controller.copySource = -1;
-            showPanel (panel == Panel::patterns ? Panel::none : Panel::patterns);
+            if (patternPicker.isVisible())
+                patternPicker.dismiss();
+            else
+            {
+                cancelCompactGestures();
+                patternPicker.open();
+                sync();
+            }
         };
-        controls.onClick = [this] { showPanel (panel == Panel::none ? Panel::feel : Panel::none); };
-        closePanel.onClick = [this] { controller.copySource = -1; showPanel (Panel::none); };
+        controls.onClick = [this] { showPanel (lastSettingsPanel); };
+        closePanel.onClick = [this] { showPanel (Panel::none); };
         deselect.onClick = [this]
         {
             grid.cancelGesture();
@@ -51,7 +80,7 @@ namespace ksh::ui
             layout.firstStep = layout.firstStep == 0 ? 16 : 0;
             sync();
         };
-        const std::array<juce::String, 6> names { "Project", "Pattern", "Feel", "Generate", "Channel", "Help" };
+        const std::array<juce::String, 6> names { "Project", "Pattern", "Feel", "Generate", "View", "Help" };
         for (int i = 0; i < 6; ++i)
         {
             auto& tab = panelTabs[static_cast<size_t> (i)];
@@ -60,38 +89,6 @@ namespace ksh::ui
             tab.setTooltip ("Open " + names[static_cast<size_t> (i)].toLowerCase() + (i == 5 ? " and gesture tips" : " settings"));
             tab.onClick = [this, i] { showPanel (static_cast<Panel> (i + static_cast<int> (Panel::project))); };
         }
-        // Retain desktop Shift-copy behaviour, and dismiss the phone bank once a destination is chosen.
-        for (int i = 0; i < 16; ++i)
-        {
-            const auto action = patterns[static_cast<size_t> (i)].onClick;
-            patterns[static_cast<size_t> (i)].onClick = [this, action, i]
-            {
-                if (!layout.compact)
-                {
-                    action();
-                    return;
-                }
-                const bool copy = controller.copySource < 0 && controller.useSelectionModifier (juce::ModifierKeys::getCurrentModifiersRealtime());
-                controller.selectSource (i, copy);
-                if (copy)
-                {
-                    controller.cancelSelect();
-                    sync();
-                }
-                else
-                    showPanel (Panel::none);
-            };
-        }
-        const auto muteAction = mutePattern.onClick;
-        mutePattern.onClick = [this, muteAction]
-        {
-            muteAction();
-            if (layout.compact)
-            {
-                controller.copySource = -1;
-                showPanel (Panel::none);
-            }
-        };
         grid.channelSettings = [this] (int channel)
         {
             selectedChannel = channel;
@@ -163,6 +160,8 @@ namespace ksh::ui
         if (layout.compact == compact && (!compact || (juce::roundToInt (layout.compactWidth) == width && juce::roundToInt (layout.compactHeight) == height)))
             return;
         cancelCompactGestures();
+        if (patternPicker.isVisible())
+            patternPicker.dismiss();
         layout.compact = compact;
         layout.compactWidth = static_cast<float> (width);
         layout.compactHeight = static_cast<float> (height);
@@ -170,13 +169,33 @@ namespace ksh::ui
         panel = Panel::none;
         preview.setCompact (compact);
         randomPanel.setCompact (compact);
+        tempo.suffix = compact ? "" : " BPM";
+        velocityLayer.setButtonText (compact ? "Vel" : "Velocity");
+        dc.setButtonText (compact ? "Channel colors" : "DC");
+        dc.getProperties().set ("icon", compact ? "" : "palette");
+        cellDisplay.setButtonText (compact ? "Graphical values" : "");
+        rowOrder.setButtonText (compact ? "Reverse rows" : "");
+        cellDisplay.getProperties().set ("icon", compact ? "" : "cellDisplay");
+        rowOrder.getProperties().set ("icon", compact ? "" : "rowOrder");
+        modifierToggle.setButtonText (compact ? "Keyboard shortcuts" : "Keys");
+        modifierToggle.getProperties().set ("icon", compact ? "" : "modifiers");
+        const std::array<juce::String, 6> compactLabels { "New", "Open", "Save", "Previous project", "Next project", "Save as" };
+        const std::array<juce::String, 6> desktopLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
+        for (size_t i = 0; i < compactLabels.size(); ++i)
+            projectButtons[i].setButtonText (compact ? compactLabels[i] : desktopLabels[i]);
+        projectButtons[3].getProperties().set ("icon", compact ? "" : "previous");
+        projectButtons[4].getProperties().set ("icon", compact ? "" : "next");
+       #if JUCE_IOS
+        projectButtons[6].setButtonText (compact ? "Share" : "SHARE");
+       #endif
         if (!compact)
         {
             const bool detailsVisible = projectDetails.isVisible();
             for (auto* child : getChildren())
                 child->setVisible (true);
             projectDetails.setVisible (detailsVisible);
-            for (auto* button : { static_cast<juce::TextButton*> (&compactLogo), &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
+            patternPicker.setVisible (false);
+            for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
                      &channelDirection, &channelPing, &channelSolo, &channelClear, &channelReset })
                 button->setVisible (false);
             for (auto& tab : panelTabs)
@@ -203,7 +222,12 @@ namespace ksh::ui
         controller.commit();
         if (channelName.hasKeyboardFocus (true))
             channelName.onFocusLost();
+        if (patternPicker.isVisible())
+            patternPicker.dismiss();
+        confirmPatternClear = false;
         panel = next;
+        if (next >= Panel::project && next <= Panel::help)
+            lastSettingsPanel = next;
         if (isShowing())
             grabKeyboardFocus();
         sync();
@@ -232,7 +256,7 @@ namespace ksh::ui
 
     void NativeEditor::resizedCompact()
     {
-        // The bottom inspector stays visible while auxiliary pages replace the grid.
+        // Grid tools belong to editing; settings and channel pages have their own navigation.
         std::vector<juce::Component*> visible;
         auto finish = [this, &visible]
         {
@@ -242,8 +266,12 @@ namespace ksh::ui
                 visible.push_back (&noteChooser);
             if (discardChanges.isVisible())
                 visible.push_back (&discardChanges);
+            if (patternPicker.isVisible())
+                visible.push_back (&patternPicker);
             for (auto* child : getChildren())
                 child->setVisible (std::find (visible.begin(), visible.end(), child) != visible.end());
+            if (patternPicker.isVisible())
+                patternPicker.toFront (false);
         };
         auto place = [&visible] (juce::Component& component, int x, int y, int w, int h)
         {
@@ -251,80 +279,82 @@ namespace ksh::ui
             visible.push_back (&component);
         };
         const int w = getWidth();
-        place (compactPattern, 4, 3, 68, 40);
-        place (velocityLayer, 76, 3, 57, 40);
-        place (chanceLayer, 132, 3, 57, 40);
-        place (selectMode, 188, 3, 60, 40);
-        place (deselect, 252, 3, 60, 40);
-        place (duplicate, 316, 3, 46, 40);
-        place (undoButton, 366, 3, 36, 40);
-        place (redoButton, 401, 3, 36, 40);
-        place (compactLogo, 446, 3, 60, 40);
-        if (layout.steps > 16)
-            place (page, 510, 3, 84, 40);
-        if (layout.standalone)
-        {
-            play.setBounds (w - 200, 3, 36, 40);
-            stop.setBounds (play.getBounds());
-            visible.push_back (controller.processor.isStandaloneTransportPlaying() ? &stop : &play);
-            place (tempo, w - 160, 3, 78, 40);
-        }
-        place (controls, w - 78, 3, 74, 40);
-        controls.setToggleState (panel != Panel::none, juce::dontSendNotification);
-        deselect.setEnabled (controller.selected.any() || controller.shiftDown ({}));
-        duplicate.setEnabled (controller.selected.any());
-        place (preview, 0, juce::roundToInt (layout.previewY()), w, 84);
-        preview.setInspectorBounds (preview.getLocalBounds());
+        constexpr int toolbarY = 2;
+        constexpr int toolbarHeight = Layout::compactHeaderHeight - 4;
+        patternPicker.setBounds (0, Layout::compactHeaderHeight, w, getHeight() - Layout::compactHeaderHeight);
         if (panel == Panel::none)
         {
+            place (compactPattern, 6, toolbarY, 108, toolbarHeight);
+            place (velocityLayer, 130, toolbarY, 54, toolbarHeight);
+            place (chanceLayer, 184, toolbarY, 54, toolbarHeight);
+            place (selectMode, 244, toolbarY, 54, toolbarHeight);
+            if (controller.selected.any() || controller.shiftDown ({}))
+            {
+                place (deselect, 304, toolbarY, 50, toolbarHeight);
+                if (controller.selected.any())
+                    place (duplicate, 358, toolbarY, 50, toolbarHeight);
+            }
+            place (undoButton, 418, toolbarY, 34, toolbarHeight);
+            place (redoButton, 452, toolbarY, 34, toolbarHeight);
+            if (layout.steps > 16)
+                place (page, 498, toolbarY, 90, toolbarHeight);
+            if (layout.standalone)
+            {
+                play.setBounds (w - 216, toolbarY, 36, toolbarHeight);
+                stop.setBounds (play.getBounds());
+                visible.push_back (controller.processor.isStandaloneTransportPlaying() ? &stop : &play);
+                place (tempo, w - 136, toolbarY, 56, toolbarHeight);
+            }
+            place (record, w - 176, toolbarY, 36, toolbarHeight);
+            place (controls, w - 74, toolbarY, 68, toolbarHeight);
+            place (preview, 0, juce::roundToInt (layout.previewY()), w, Layout::compactInspectorHeight);
+            preview.setInspectorBounds (preview.getLocalBounds());
             place (grid, 0, juce::roundToInt (layout.gridY()), w, juce::roundToInt (layout.gridHeight()));
             finish();
             return;
         }
-        const int tabWidth = (w - 96) / 6;
-        for (int i = 0; i < 6; ++i)
+        place (undoButton, w - 300, toolbarY, 34, toolbarHeight);
+        place (redoButton, w - 264, toolbarY, 34, toolbarHeight);
+        if (layout.standalone)
         {
-            auto& tab = panelTabs[static_cast<size_t> (i)];
-            place (tab, 10 + i * tabWidth, 52, tabWidth - 4, 40);
-            tab.setToggleState (panel == static_cast<Panel> (i + static_cast<int> (Panel::project)), juce::dontSendNotification);
+            play.setBounds (w - 220, toolbarY, 36, toolbarHeight);
+            stop.setBounds (play.getBounds());
+            visible.push_back (controller.processor.isStandaloneTransportPlaying() ? &stop : &play);
+            place (tempo, w - 180, toolbarY, 86, toolbarHeight);
         }
-        place (closePanel, w - 80, 52, 70, 40);
+        place (closePanel, w - 84, toolbarY, 78, toolbarHeight);
+        if (panel != Panel::channel)
+        {
+            const int tabWidth = (w - 24) / 6;
+            for (int i = 0; i < 6; ++i)
+            {
+                auto& tab = panelTabs[static_cast<size_t> (i)];
+                place (tab, 12 + i * tabWidth, 46, tabWidth - 6, 40);
+                tab.setToggleState (panel == static_cast<Panel> (i + static_cast<int> (Panel::project)), juce::dontSendNotification);
+            }
+        }
         switch (panel)
         {
-            case Panel::patterns:
-                for (int i = 0; i < 16; ++i)
-                    place (patterns[static_cast<size_t> (i)], 18 + (i % 8) * ((w - 108) / 8), 132 + (i / 8) * 70, (w - 108) / 8 - 6, 60);
-                place (mutePattern, w - 82, 132, 64, 130);
-                break;
             case Panel::project:
-                place (projectHeader, 128, 100, w - 150, 44);
-                for (int i = 0; i < static_cast<int> (projectButtons.size()); ++i)
-                {
-                    constexpr std::array<size_t,
-                       #if JUCE_IOS
-                        7
-                       #else
-                        6
-                       #endif
-                    > order { 0, 1, 2, 5, 3, 4
-                       #if JUCE_IOS
-                        , 6
-                       #endif
-                    };
-                    const int stride = (w - 150) / static_cast<int> (projectButtons.size());
-                    place (projectButtons[order[static_cast<size_t> (i)]], 128 + i * stride, 214, stride - 12, 48);
-                }
+                place (projectHeader, 24, 108, w - 48, 44);
+                for (int i = 0; i < 3; ++i)
+                    place (projectButtons[static_cast<size_t> (i)], 24 + i * 134, 180, 124, 48);
+                place (projectButtons[5], 426, 180, 124, 48);
+               #if JUCE_IOS
+                place (projectButtons[6], 560, 180, 124, 48);
+               #endif
+                place (projectButtons[3], 24, 256, 172, 44);
+                place (projectButtons[4], 206, 256, 172, 44);
                 break;
             case Panel::pattern:
-                place (steps, 20, 114, 130, 60);
-                place (rate, 162, 114, rateControlWidth(), 60);
-                place (record, 354, 120, 60, 60);
-                place (recordQuantize, 418, 120, 27, 45);
-                place (left, 454, 114, 60, 60);
-                place (right, 514, 114, 60, 60);
-                place (clear, 580, 114, 60, 60);
-                place (dc, 660, 114, 80, 60);
-                place (modifierToggle, 748, 114, 56, 60);
+                place (steps, 28, 126, 120, 66);
+                place (rate, 164, 146, 160, 46);
+                place (record, 372, 146, 64, 46);
+                place (recordQuantize, 448, 146, 48, 46);
+                place (recordOptions, 512, 146, w - 540, 46);
+                place (left, 28, 248, 60, 44);
+                place (right, 94, 248, 60, 44);
+                place (compactClear, w - 224, 248, 196, 44);
                 break;
             case Panel::feel:
                 place (swing, 22, 128, 152, 76);
@@ -333,19 +363,26 @@ namespace ksh::ui
                 place (timingHumanize, 562, 128, 176, 76);
                 break;
             case Panel::generate:
-                place (aboutViewport, 10, 100, w - 20, juce::roundToInt (layout.previewY()) - 104);
+                place (aboutViewport, 12, 100, w - 24, getHeight() - 112);
                 randomPanel.setSize (w - 36, 440);
                 break;
+            case Panel::view:
+                place (dc, 28, 130, 168, 48);
+                place (cellDisplay, 212, 130, 168, 48);
+                place (rowOrder, 396, 130, 168, 48);
+                place (compactAccent, 580, 130, 206, 48);
+                place (modifierToggle, 28, 224, 208, 44);
+                break;
             case Panel::channel:
-                place (channelName, 20, 128, 180, 44);
-                place (channelNote, 214, 110, 144, 62);
-                place (loopStart, 372, 110, 94, 62);
-                place (loopLength, 480, 110, 94, 62);
-                place (channelDirection, 590, 128, 100, 44);
-                place (channelPing, 702, 128, 92, 44);
-                place (channelSolo, 20, 200, 100, 48);
-                place (channelClear, 136, 200, 120, 48);
-                place (channelReset, 272, 200, 120, 48);
+                place (channelName, 28, 86, 180, 48);
+                place (channelNote, 228, 66, 152, 68);
+                place (channelDirection, 412, 86, 156, 48);
+                place (channelPing, 580, 86, 174, 48);
+                place (loopStart, 28, 176, 156, 68);
+                place (loopLength, 200, 176, 156, 68);
+                place (channelSolo, 412, 196, 156, 48);
+                place (channelClear, 28, 302, 156, 44);
+                place (channelReset, 200, 302, 156, 44);
                 break;
             case Panel::none:
             case Panel::help: break;

@@ -385,7 +385,7 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
     if (compact)
     {
-        for (const auto& caption : { juce::String ("Controls"), juce::String ("Project") })
+        for (const auto& caption : { juce::String ("Settings"), juce::String ("Project") })
             for (auto* child : editor.getChildren())
                 if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == caption)
                     button->onClick();
@@ -431,8 +431,8 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     for (auto* child : editor.getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
-            if (button->getButtonText() == "SAVE AS") saveAs = button;
-            if (button->getButtonText() == "SAVE") save = button;
+            if (button->getButtonText() == (compact ? "Save as" : "SAVE AS")) saveAs = button;
+            if (button->getButtonText() == (compact ? "Save" : "SAVE")) save = button;
         }
     int dates = 0;
     for (auto* child : details->getChildren())
@@ -3171,7 +3171,7 @@ TEST_CASE ("Pattern buttons distinguish clicks from MIDI drags and suppress sele
     CHECK (clicks == 2);
 }
 
-TEST_CASE ("Record lock is an independent small button beside Record in desktop and compact layouts", "[native-ui][record-ui][render]")
+TEST_CASE ("Record lock stays independent beside Record with a full touch target on iPhone", "[native-ui][record-ui][render]")
 {
     const bool compact = GENERATE (false, true);
     PluginProcessor processor;
@@ -3188,7 +3188,7 @@ TEST_CASE ("Record lock is an independent small button beside Record in desktop 
     {
         juce::TextButton* controls = nullptr;
         for (auto* child : editor->getChildren())
-            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Controls")
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Settings")
                 controls = button;
         REQUIRE (controls != nullptr);
         controls->onClick();
@@ -3214,11 +3214,17 @@ TEST_CASE ("Record lock is an independent small button beside Record in desktop 
     CHECK (lock->isEnabled());
     CHECK (lock->getToggleState());
     CHECK (lock->getBounds().getCentreX() > record->getBounds().getCentreX());
-    CHECK (lock->getBounds().getCentreY() < record->getBounds().getCentreY());
+    if (!compact)
+        CHECK (lock->getBounds().getCentreY() < record->getBounds().getCentreY());
     CHECK_FALSE (lock->getBounds().intersects (record->getBounds()));
     CHECK (lock->getX() > record->getRight());
     CHECK (lock->getY() == record->getY());
-    CHECK (lock->getHeight() == juce::roundToInt (record->getHeight() * 0.75f));
+    CHECK (lock->getHeight() == (compact ? record->getHeight() : juce::roundToInt (record->getHeight() * 0.75f)));
+    if (compact)
+    {
+        CHECK (lock->getWidth() >= 44);
+        CHECK (lock->getHeight() >= 44);
+    }
     CHECK (static_cast<bool> (lock->getProperties()["outlinedIcon"]));
     CHECK_FALSE (lock->getBounds().contains (record->getBounds().getCentre()));
     CHECK (lock->hitTest (0, 0));
@@ -3401,7 +3407,7 @@ TEST_CASE ("Logo letters select a shared accent without changing the project", "
     }
 }
 
-TEST_CASE ("Compact logo switches accents with both step pages available", "[native-ui][accent][compact]")
+TEST_CASE ("Compact accent belongs to View settings and leaves both step pages available", "[native-ui][accent][compact]")
 {
     PluginProcessor processor;
     const int steps = GENERATE (16, 32);
@@ -3420,12 +3426,15 @@ TEST_CASE ("Compact logo switches accents with both step pages available", "[nat
     }
     REQUIRE (logo != nullptr);
     REQUIRE (page != nullptr);
-    REQUIRE (logo->isVisible());
+    CHECK_FALSE (logo->isVisible());
     if (steps == 32)
-    {
         CHECK (page->isVisible());
-        CHECK_FALSE (logo->getBounds().intersects (page->getBounds()));
-    }
+    for (const auto& caption : { juce::String ("Settings"), juce::String ("View") })
+        for (auto* child : editor.getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == caption)
+                button->onClick();
+    REQUIRE (logo->isVisible());
+    CHECK_FALSE (page->isVisible());
     const bool initialBlue = Palette::blueAccentSelected();
     const auto document = processor.editorDocument();
     logo->onClick();

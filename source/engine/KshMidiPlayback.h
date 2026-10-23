@@ -97,6 +97,7 @@ public:
     /** Releases held notes and treats the next block as a fresh transport start (bypass). */
     void suspend (juce::MidiBuffer& midiOut);
 
+    /** endGlobalStepExclusive bounds lookahead when rendering a finite MIDI export. */
     MidiPlaybackResult processBlock (const PlaybackSnapshot& snapshot,
                                      double ppqPosition,
                                      double bpm,
@@ -105,7 +106,8 @@ public:
                                      juce::MidiBuffer& midiOut,
                                      const MidiPatternSelectionBlock& patternSelections = {},
                                      const HostLoopRange& hostLoop = {},
-                                     double callbackTimeMs = 0.0);
+                                     double callbackTimeMs = 0.0,
+                                     std::optional<int> endGlobalStepExclusive = std::nullopt);
 
     /** Sources currently chosen for generative modes, tagged with the engine generation they extend. */
     [[nodiscard]] GeneratedSourcesFrame generatedSourcesFrame() const;

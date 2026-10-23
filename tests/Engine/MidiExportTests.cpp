@@ -88,6 +88,35 @@ TEST_CASE ("MIDI export renders early notes and rolls without leaking another pa
     CHECK (notes == expected);
 }
 
+TEST_CASE ("MIDI export humanizes both sides of the beat within a single pass", "[engine][midi-export][humanize]")
+{
+    const int nudge = GENERATE (0, -100);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setTimingHumanize (40);
+    for (int step = 0; step < 16; ++step)
+    {
+        fixture.engine.setCell (0, 0, step, true, 100);
+        fixture.engine.setCellNudge (0, 0, step, nudge);
+    }
+    const auto midi = exportedPattern (fixture.engine.makePlaybackSnapshot());
+    const auto notes = noteOns (midi);
+    REQUIRE (notes.size() == 16);
+    int early = 0, late = 0;
+    for (int step = 2; step < 16; ++step)
+    {
+        const double center = (step + static_cast<double> (nudge) / 100.0) * 240.0;
+        const double offset = std::get<2> (notes[static_cast<size_t> (step)]) - center;
+        CHECK (std::abs (offset) <= 20.0);
+        early += offset < 0.0 ? 1 : 0;
+        late += offset > 0.0 ? 1 : 0;
+    }
+    CHECK (early > 0);
+    CHECK (late > 0);
+    CHECK (midi.getLastTimestamp() == Catch::Approx (3840));
+}
+
 TEST_CASE ("MIDI export respects channel loops direction mutes and cycle gates", "[engine][midi-export]")
 {
     EngineFixture fixture;

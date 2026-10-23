@@ -616,6 +616,46 @@ namespace ksh::ui
                 juce::TextButton::mouseUp (e);
         }
     };
+    /** A one-shot performance pad: press immediately; release and drag never retrigger it. */
+    class RowTriggerButton : public juce::TextButton
+    {
+    public:
+        RowTriggerButton()
+        {
+            setTriggeredOnMouseDown (true);
+            setMouseClickGrabsKeyboardFocus (false);
+        }
+        juce::Colour colour { Palette::accent };
+        void flash()
+        {
+            flashUntilMs = juce::Time::getMillisecondCounterHiRes() + 100.0;
+            flashing = true;
+            repaint();
+        }
+        void updateFlash (double now)
+        {
+            if (flashing && now >= flashUntilMs)
+            {
+                flashing = false;
+                repaint();
+            }
+        }
+        void paintButton (juce::Graphics& g, bool hover, bool down) override
+        {
+            const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+            const bool hit = isEnabled() && (down || flashing);
+            const float alpha = isEnabled() ? 1.0f : 0.3f;
+            g.setColour ((hit ? colour : hover ? Palette::raised : Palette::surface).withMultipliedAlpha (alpha));
+            g.fillRoundedRectangle (bounds, 5);
+            g.setColour (colour.withAlpha (alpha * (hit ? 1.0f : 0.6f)));
+            g.drawRoundedRectangle (bounds, 5, hasKeyboardFocus (true) ? 2.0f : 1.0f);
+            ksh::ui::text (g, getButtonText(), bounds, juce::jmin (17.0f, bounds.getHeight() * 0.46f), hit ? Palette::app : colour.withMultipliedAlpha (alpha), true);
+        }
+
+    private:
+        double flashUntilMs = 0.0;
+        bool flashing = false;
+    };
     class AuditionLabel : public juce::Label
     {
     public:
@@ -647,6 +687,7 @@ namespace ksh::ui
         float valueFontSize = 14, captionFontSize = 10;
         juce::Colour captionColour { Palette::text };
         int captionGap = 0;
+        int captionWidth = 0;
         int valueWidth = 0;
         juce::String suffix, caption;
         bool mixed = false, showAdjustmentHintAtZero = false, horizontalAdjustment = false;
@@ -679,8 +720,13 @@ namespace ksh::ui
             auto r = getLocalBounds().toFloat();
             if (caption.isNotEmpty())
             {
-                text (g, caption, r.removeFromTop (18), captionFontSize, captionColour, true, juce::Justification::centredLeft);
-                r.removeFromTop (static_cast<float> (captionGap));
+                if (captionWidth > 0)
+                    text (g, caption, r.removeFromLeft (static_cast<float> (captionWidth)), captionFontSize, captionColour, true, juce::Justification::centredLeft);
+                else
+                {
+                    text (g, caption, r.removeFromTop (18), captionFontSize, captionColour, true, juce::Justification::centredLeft);
+                    r.removeFromTop (static_cast<float> (captionGap));
+                }
             }
             if (valueWidth > 0)
                 r.setWidth (static_cast<float> (juce::jmin (valueWidth, getWidth())));
@@ -757,7 +803,9 @@ namespace ksh::ui
         }
         void resized() override
         {
-            auto bounds = getLocalBounds().withTrimmedTop (caption.isNotEmpty() ? 18 + captionGap : 0);
+            auto bounds = getLocalBounds();
+            if (caption.isNotEmpty())
+                bounds = captionWidth > 0 ? bounds.withTrimmedLeft (captionWidth) : bounds.withTrimmedTop (18 + captionGap);
             if (valueWidth > 0)
                 bounds.setWidth (juce::jmin (valueWidth, getWidth()));
             input.setBounds (bounds);

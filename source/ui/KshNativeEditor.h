@@ -3,6 +3,7 @@
 #include "KshPatternButton.h"
 #include "KshPreviewPanel.h"
 #include "KshProjectDetails.h"
+#include "KshCompactPatternPicker.h"
 namespace ksh::ui
 {
     class NativeEditor : public juce::Component, private juce::Timer, private juce::ChangeListener
@@ -69,20 +70,17 @@ namespace ksh::ui
         int previousScale = 100;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         bool syncing = false;
-        enum class Panel { none, patterns, project, pattern, feel, generate, channel, help };
+        enum class Panel { none, project, pattern, feel, generate, view, help, channel };
         Panel panel = Panel::none;
+        Panel lastSettingsPanel = Panel::pattern;
+        bool confirmPatternClear = false;
+        int clearSource = -1;
+        uint64_t clearEpoch = 0;
+        CompactPatternPicker patternPicker { controller };
         int selectedChannel = 0;
-        class CompactLogo : public juce::TextButton
-        {
-        public:
-            void paintButton (juce::Graphics& g, bool, bool) override
-            {
-                static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
-                if (artwork != nullptr)
-                    artwork->drawWithin (g, getLocalBounds().toFloat().reduced (4, 6), juce::RectanglePlacement::centred, 1.0f);
-            }
-        } compactLogo;
-        juce::TextButton compactPattern, controls { "Controls" }, closePanel { "Done" }, deselect { "Deselect" }, page { "1-16" }, duplicate { "Copy" };
+        juce::TextButton compactPattern, controls { "Settings" }, closePanel { "Done" }, deselect { "Done" }, page { "1-16" }, duplicate { "Copy" };
+        juce::TextButton compactAccent, compactClear { "Clear pattern..." };
+        juce::TextButton recordOptions { "Timing options..." };
         std::array<juce::TextButton, 6> panelTabs;
         juce::TextEditor channelName;
         ValueControl loopStart, loopLength;
