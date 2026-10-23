@@ -2,6 +2,7 @@
 @KSH_IOS_ICLOUD_PLIST_ENTRIES@
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send MIDI notes to music apps and devices on your local network.</string>
+    <key>NSBonjourServices</key><array><string>_apple-midi._udp</string></array>
     <key>UIFileSharingEnabled</key><true/>
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <key>UTExportedTypeDeclarations</key><array><dict>

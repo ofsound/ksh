@@ -14,6 +14,9 @@ namespace juce
 namespace
 {
 constexpr auto virtualMidiOutputName = "KSH Output";
+constexpr auto networkMidiOutputName = "Network Session";
+constexpr auto networkMidiOutputSetting = "kshNetworkMidiOutput";
+constexpr auto networkMidiOutputMenuId = 10000;
 }
 
 class KshStandalonePluginHolder final : public StandalonePluginHolder,
@@ -46,12 +49,19 @@ public:
         // as an input and echo every emitted note back into the processor.
         deviceManager.removeMidiInputDeviceCallback ({}, &player);
         createVirtualMidiOutput();
+       #if JUCE_IOS
+        networkOutputSelected = settingsToUse != nullptr && settingsToUse->getBoolValue (networkMidiOutputSetting);
+       #endif
         updateMidiOutput();
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
             plugin->setTimestampedStandaloneMidiInput (true);
         deviceManager.addMidiInputDeviceCallback ({}, this);
         deviceManager.addChangeListener (this);
-        midiDeviceChanges = MidiDeviceListConnection::make ([this] { refreshMidiInputs(); });
+        midiDeviceChanges = MidiDeviceListConnection::make ([this]
+        {
+            refreshMidiInputs();
+            updateNetworkForwarding();
+        });
         refreshMidiInputs();
         installMidiOutputServices();
     }
@@ -64,6 +74,9 @@ public:
         deviceManager.removeChangeListener (this);
         deviceManager.removeMidiInputDeviceCallback ({}, this);
         player.setMidiOutput (nullptr);
+       #if JUCE_IOS
+        networkForwarder.stop();
+       #endif
 
         if (virtualMidiOutput != nullptr)
             virtualMidiOutput->stopBackgroundThread();
@@ -90,6 +103,10 @@ private:
             plugin->showStandaloneMidiOutputMenu = [this] (Component& target) { showMidiOutputMenu (target); };
             plugin->standaloneMidiOutputName = [this]
             {
+               #if JUCE_IOS
+                if (networkOutputSelected)
+                    return String (networkMidiOutputName);
+               #endif
                 if (auto* selected = deviceManager.getDefaultMidiOutput())
                     return selected->getName();
                 return virtualMidiOutput != nullptr ? String (virtualMidiOutputName) : String ("Unavailable");
@@ -108,16 +125,23 @@ private:
 
     void showMidiOutputMenu (Component& target)
     {
+        auto destinations = MidiOutput::getAvailableDevices();
+        auto localSelected = true;
        #if JUCE_IOS
-        ksh::enableStandaloneNetworkMidi();
+        const auto network = ksh::enableStandaloneNetworkMidi();
+        destinations = ksh::withoutStandaloneNetworkDestination (std::move (destinations), network.identifier);
+        localSelected = !networkOutputSelected;
        #endif
-        const auto destinations = MidiOutput::getAvailableDevices();
         const auto selected = deviceManager.getDefaultMidiOutputIdentifier();
         PopupMenu menu;
         menu.setLookAndFeel (&target.getLookAndFeel());
         menu.addSectionHeader ("MIDI output destination");
-        menu.addItem (1, virtualMidiOutputName, virtualMidiOutput != nullptr, selected.isEmpty());
+        menu.addItem (1, virtualMidiOutputName, virtualMidiOutput != nullptr, localSelected && selected.isEmpty());
         menu.addSeparator();
+       #if JUCE_IOS
+        menu.addItem (networkMidiOutputMenuId, network.identifier.isNotEmpty() ? networkMidiOutputName : "Network Session unavailable",
+                      network.identifier.isNotEmpty() && virtualMidiOutput != nullptr, networkOutputSelected);
+       #endif
         for (int i = 0; i < destinations.size(); ++i)
             menu.addItem (i + 2, destinations[i].name, true, destinations[i].identifier == selected);
         if (destinations.isEmpty())
@@ -131,25 +155,43 @@ private:
         {
             if (weak == nullptr || result == 0)
                 return;
-            const auto identifier = result == 1 ? String() : destinations[result - 2].identifier;
-            // Detach and flush the old route before the manager closes it.
-            weak->player.setMidiOutput (nullptr);
-            auto* oldOutput = weak->deviceManager.getDefaultMidiOutput();
-            if (oldOutput == nullptr)
-                oldOutput = weak->virtualMidiOutput.get();
-            if (oldOutput != nullptr)
-            {
-                oldOutput->clearAllPendingMessages();
-                for (int channel = 1; channel <= 16; ++channel)
-                    oldOutput->sendMessageNow (MidiMessage::allNotesOff (channel));
-            }
-            weak->deviceManager.setDefaultMidiOutputDevice (identifier);
-            weak->updateMidiOutput();
-            weak->saveAudioDeviceState();
-            if (result > 1 && weak->deviceManager.getDefaultMidiOutput() == nullptr)
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output",
-                                                  "Could not open that MIDI destination. Using KSH Output instead.");
+            const auto network = result == networkMidiOutputMenuId;
+            const auto identifier = result == 1 || network ? String() : destinations[result - 2].identifier;
+            weak->selectMidiOutput (identifier, network);
         });
+    }
+
+    void selectMidiOutput (const String& identifier, [[maybe_unused]] bool network)
+    {
+        // Detach and flush the old route before the manager closes it.
+        player.setMidiOutput (nullptr);
+        auto* oldOutput = deviceManager.getDefaultMidiOutput();
+        if (oldOutput == nullptr)
+            oldOutput = virtualMidiOutput.get();
+        if (oldOutput != nullptr)
+        {
+            oldOutput->clearAllPendingMessages();
+            for (int channel = 1; channel <= 16; ++channel)
+                oldOutput->sendMessageNow (MidiMessage::allNotesOff (channel));
+        }
+       #if JUCE_IOS
+        networkForwarder.stop();
+        networkOutputSelected = network;
+        if (settings != nullptr)
+            settings->setValue (networkMidiOutputSetting, network);
+       #endif
+        deviceManager.setDefaultMidiOutputDevice (identifier);
+        updateMidiOutput();
+        saveAudioDeviceState();
+        if (identifier.isNotEmpty() && deviceManager.getDefaultMidiOutput() == nullptr)
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output",
+                                              "Could not open that MIDI destination. Using KSH Output instead.");
+       #if JUCE_IOS
+        if (network && !networkForwarder.isActive())
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output",
+                                              "Could not connect to the Network Session. KSH will keep trying while it is selected, and KSH Output stays available.\n\n"
+                                                  + networkForwardingError);
+       #endif
     }
 
     void handleIncomingMidiMessage (MidiInput* input, const MidiMessage& message) override
@@ -200,12 +242,33 @@ private:
         if (output != nullptr && !output->isBackgroundThreadRunning())
             output->startBackgroundThread();
         player.setMidiOutput (output);
+        updateNetworkForwarding();
+    }
+
+    void updateNetworkForwarding()
+    {
+       #if JUCE_IOS
+        // The network route plays into KSH Output, which the forwarder relays.
+        if (!networkOutputSelected || networkForwarder.isActive())
+            return;
+        if (virtualMidiOutput == nullptr)
+            networkForwardingError = "KSH Output is unavailable";
+        else if (deviceManager.getDefaultMidiOutput() != nullptr)
+            networkForwardingError = "Another MIDI output is open";
+        else
+            networkForwardingError = networkForwarder.start (virtualOutputInfo);
+       #endif
     }
 
     std::unique_ptr<MidiOutput> virtualMidiOutput;
     MidiDeviceInfo virtualOutputInfo { virtualMidiOutputName, {} };
     MidiDeviceListConnection midiDeviceChanges;
     const bool autoOpenExternalMidiDevices;
+   #if JUCE_IOS
+    ksh::StandaloneNetworkMidiForwarder networkForwarder;
+    bool networkOutputSelected = false;
+    String networkForwardingError;
+   #endif
     JUCE_DECLARE_WEAK_REFERENCEABLE (KshStandalonePluginHolder)
 };
 
@@ -286,6 +349,8 @@ public:
     void initialise (const String&) override
     {
        #if JUCE_IOS
+        // Start Network MIDI before the holder initializes JUCE's cached endpoints.
+        (void) ksh::enableStandaloneNetworkMidi();
         if (SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
             Desktop::getInstance().setOrientationsEnabled (Desktop::rotatedClockwise | Desktop::rotatedAntiClockwise);
        #endif

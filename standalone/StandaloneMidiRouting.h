@@ -4,8 +4,32 @@
 namespace ksh
 {
    #if JUCE_IOS
-    void enableStandaloneNetworkMidi();
+    juce::MidiDeviceInfo enableStandaloneNetworkMidi();
+
+    // Sends everything published on a local CoreMIDI source to the network session.
+    class StandaloneNetworkMidiForwarder
+    {
+    public:
+        StandaloneNetworkMidiForwarder();
+        ~StandaloneNetworkMidiForwarder();
+        // Returns an empty string on success, otherwise the failing step.
+        juce::String start (const juce::MidiDeviceInfo& source);
+        void stop();
+        bool isActive() const;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl;
+    };
    #endif
+    // The network session is offered as its own route, so hide any JUCE-listed copy.
+    inline juce::Array<juce::MidiDeviceInfo> withoutStandaloneNetworkDestination (juce::Array<juce::MidiDeviceInfo> available,
+                                                                               const juce::String& networkIdentifier)
+    {
+        if (networkIdentifier.isNotEmpty())
+            available.removeIf ([&] (const juce::MidiDeviceInfo& device) { return device.identifier == networkIdentifier; });
+        return available;
+    }
     inline bool isStandaloneMidiOutputSource (const juce::MidiDeviceInfo& input, const juce::MidiDeviceInfo& output)
     {
         // CoreMIDI publishes a virtual output as an input source. Never open it

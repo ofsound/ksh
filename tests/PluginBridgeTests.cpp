@@ -1284,3 +1284,14 @@ TEST_CASE ("Standalone MIDI input guard breaks note and controller feedback with
     plugin.processBlock (audio, incoming);
     CHECK (incoming.isEmpty());
 }
+
+TEST_CASE ("Network MIDI destination listed by JUCE is not duplicated beside the native route", "[plugin][standalone-midi]")
+{
+    const juce::MidiDeviceInfo usb { "USB MIDI", "usb" };
+    const auto listed = ksh::withoutStandaloneNetworkDestination ({ usb, { "Network Session 1", "1 2" } }, "1 2");
+    REQUIRE (listed.size() == 1);
+    CHECK (listed[0] == usb);
+    const auto missing = ksh::withoutStandaloneNetworkDestination ({ usb }, {});
+    REQUIRE (missing.size() == 1);
+    CHECK (missing[0] == usb);
+}
