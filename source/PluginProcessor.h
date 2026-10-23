@@ -115,6 +115,9 @@ public:
     /** Drain queued note-hit flashes to the native editor (safe on the message thread). */
     int emitPendingNoteHitsForUi();
     bool hasStandaloneTransport() const;
+    // Message-thread services supplied by the standalone wrapper, never used by processBlock.
+    std::function<void (juce::Component&)> showStandaloneMidiOutputMenu;
+    std::function<juce::String()> standaloneMidiOutputName;
     void setStandaloneTransportPlaying (bool shouldPlay);
     bool isStandaloneTransportPlaying() const;
     void setStandaloneTempoBpm (double bpm);

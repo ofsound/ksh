@@ -40,6 +40,7 @@ namespace ksh::ui
         juce::TextButton rowOrder, cellDisplay, zen { "Zen" };
         bool viewportFit = false;
         juce::TextButton modifierToggle { "Keys" };
+        juce::TextButton midiOutput { "MIDI Output" };
         PatternGrid grid;
         juce::Label layerHint;
         PreviewPanel preview, randomPanel;
@@ -90,6 +91,7 @@ namespace ksh::ui
         void setupCompactControls();
         void showPanel (Panel);
         void syncChannel();
+        void syncMidiOutput();
         void cancelCompactGestures();
         void timerCallback() override;
         void changeListenerCallback (juce::ChangeBroadcaster*) override;

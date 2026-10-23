@@ -372,6 +372,8 @@ namespace ksh::ui
                 place (rowOrder, 396, 130, 168, 48);
                 place (compactAccent, 580, 130, 206, 48);
                 place (modifierToggle, 28, 224, 208, 44);
+                if (layout.standalone && controller.processor.showStandaloneMidiOutputMenu)
+                    place (midiOutput, 28, 292, w - 56, 44);
                 break;
             case Panel::channel:
                 place (channelName, 28, 86, 180, 48);

@@ -35,6 +35,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(FORMATS Standalone AUv3)
     set(KSH_COPY_PLUGIN_AFTER_BUILD FALSE)
     set(KSH_BACKGROUND_AUDIO_ENABLED TRUE)
+    option(KSH_IOS_ICLOUD_ENABLED "Enable the shared iCloud project library (requires a paid Apple Developer team)" OFF)
     option(KSH_IOS_IPHONE_ONLY "Build the landscape iPhone release without iPad support" OFF)
     if (KSH_IOS_IPHONE_ONLY)
         set(KSH_TARGETED_DEVICE_FAMILY "1")
@@ -83,9 +84,20 @@ endif()
 
 set(KSH_IOS_PROJECT_OPTIONS)
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.plist")
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.plist" KSH_IOS_PROJECT_PLIST)
+    set(KSH_IOS_ICLOUD_PLIST_ENTRIES "")
+    if (KSH_IOS_ICLOUD_ENABLED)
+        set(KSH_IOS_ICLOUD_PLIST_ENTRIES [=[
+    <key>NSUbiquitousContainers</key>
+    <dict><key>iCloud.com.ofsound.ksh</key><dict>
+        <key>NSUbiquitousContainerIsDocumentScopePublic</key><true/>
+        <key>NSUbiquitousContainerName</key><string>KSH</string>
+        <key>NSUbiquitousContainerSupportedFolderLevels</key><string>Any</string>
+    </dict></dict>]=])
+    endif()
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.plist.in" "${CMAKE_CURRENT_BINARY_DIR}/ios-projects.plist" @ONLY)
+    file(READ "${CMAKE_CURRENT_BINARY_DIR}/ios-projects.plist" KSH_IOS_PROJECT_PLIST)
     list(APPEND KSH_IOS_PROJECT_OPTIONS PLIST_TO_MERGE "${KSH_IOS_PROJECT_PLIST}")
+    list(APPEND KSH_IOS_PROJECT_OPTIONS ICLOUD_PERMISSIONS_ENABLED ${KSH_IOS_ICLOUD_ENABLED})
 endif()
 
 juce_add_plugin("${PROJECT_NAME}"
@@ -159,12 +171,15 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(KSH_IOS_LIBRARY_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm")
     set_source_files_properties("${KSH_IOS_LIBRARY_SOURCE}" PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_sources(SharedCode INTERFACE "${KSH_IOS_LIBRARY_SOURCE}")
+    target_compile_definitions(SharedCode INTERFACE KSH_IOS_ICLOUD_ENABLED=$<BOOL:${KSH_IOS_ICLOUD_ENABLED}>)
     # Both device families and the AUv3 use the same container, independent of
     # the extension's bundle ID. JUCE's generated iCloud entitlements use that ID.
-    foreach (format Standalone AUv3)
-        set_target_properties("${PROJECT_NAME}_${format}" PROPERTIES
-            XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.entitlements")
-    endforeach()
+    if (KSH_IOS_ICLOUD_ENABLED)
+        foreach (format Standalone AUv3)
+            set_target_properties("${PROJECT_NAME}_${format}" PROPERTIES
+                XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.entitlements")
+        endforeach()
+    endif()
 endif()
 
 
@@ -245,6 +260,10 @@ if (TARGET "${PROJECT_NAME}_Standalone")
     target_sources("${PROJECT_NAME}_Standalone"
         PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneApp.cpp")
+    if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_sources("${PROJECT_NAME}_Standalone" PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneIOSMidi.mm")
+    endif()
 endif()
 
 # IPP support (SIMD DSP) — not needed for KSH

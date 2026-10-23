@@ -12,15 +12,24 @@ KSH has a dedicated compact native editor optimized for the iPhone 14 Pro Max in
 - Tap a channel name to audition, power to mute, or its `...` button for note, name, loop start/length, direction, ping-pong, solo, clear and reset.
 - Pattern 1/2/etc. opens a dedicated four-by-four picker over the grid. Each slot shows its note count or Empty, and the current pattern has a colored marker. A pattern tap always selects, regardless of cell-selection mode. Duplicate Pn explicitly starts a copy: choose a destination and confirm Copy to Pn. Cancel copy returns to navigation; the close button, an outside tap or Escape dismisses without copying. Mute patterns is a separate labeled action. Replacing the document or resizing dismisses a pending copy.
 - Settings opens Project, Pattern, Feel, Generate, View and Help pages and remembers the last tab. These pages replace the grid and selection inspector, leaving transport and undo/redo accessible. Channel settings opens contextually from a row and has no unrelated tabs. Generate scrolls to its output preview; View groups channel colors, graphical values, row order, accent and hardware-keyboard preferences. Done returns to the grid. Pattern settings separates grid length/division, recording/quantization and shift/clear actions. Timing options opens recording strength/offset choices without requiring a secondary click. Clearing a pattern requires a second, explicitly labeled confirmation; changing the pattern or document cancels that confirmation.
-- Project files use the native Files picker. The standalone publishes `KSH Output`; choose that MIDI source in the receiving music app. AUv3 uses its host's transport and MIDI routing.
+- Project files use the native Files picker. The standalone defaults to `KSH Output`; choose that MIDI source in a receiving app on the same device. For Network MIDI, USB or another destination, use **Settings → View → MIDI Output** on iPhone, or **MIDI Out** in the full layout's footer on iPad/desktop. Choose the network session on iOS to send to a connected Mac; the Mac's receiving app listens to its Network Session. Output selection is saved with standalone device settings. KSH excludes its own output from input discovery and forwarding to prevent a MIDI feedback loop; external controller inputs remain available. AUv3 uses its host's transport and MIDI routing.
 
 Compact geometry is independent of saved desktop UI/pattern zoom and is not persisted in the musical project. Wide desktop/iPad geometry is retained. On iOS a landscape editor viewport up to 1100 × 500 points chooses the compact layout; smaller landscape views scale down from its minimum 814 × 390 design area. The standalone respects the safe area in both landscape orientations. AUv3 follows the bounds supplied by its host.
 
 Resize, page changes, auxiliary panel switches and focus loss cancel active editing gestures through the existing conflict-aware controller. External recording and document replacement retain the existing conflict rules.
 
-## Shared iCloud project library
+## Project storage and optional iCloud
 
-The iPhone and iPad app, including AUv3, use the fixed document container
+iCloud is disabled by default (`KSH_IOS_ICLOUD_ENABLED=OFF`) so both the app
+and AUv3 can use a free Personal Team. Default project storage is the app's
+local Documents/KSH folder, visible in Files under On My iPhone/iPad. The app
+does not request an iCloud container, observe account changes or run cloud
+library discovery in this mode. Native Files open/save and Share remain
+available, including document providers selected manually through Files.
+
+To restore the shared library later, configure the relevant preset with
+`-DKSH_IOS_ICLOUD_ENABLED=ON` and use a paid Apple Developer Program team.
+With that option enabled, the iPhone and iPad app, including AUv3, use the fixed document container
 `iCloud.com.ofsound.ksh`. Open and first Save / Save As start in its Documents
 folder, shown as **KSH** in iCloud Drive. Devices signed into the same Apple
 account with iCloud Drive enabled see the same library. The iPhone-only preset
@@ -47,9 +56,9 @@ app preferences; they never enter project files or AUv3 host state. Replacing th
 project cancels outstanding file dialogs. Edits made during an asynchronous save
 remain marked as unsaved.
 
-Signing setup: register `iCloud.com.ofsound.ksh` in the Apple Developer account
+Signing setup when iCloud is enabled: register `iCloud.com.ofsound.ksh` in the Apple Developer account
 and enable iCloud Documents access to that container for **both** the containing
-app and AUv3 App IDs/provisioning profiles. CMake points both targets at
+app and AUv3 App IDs/provisioning profiles. CMake then points both targets at
 `packaging/ios-projects.entitlements`; keep this fixed container when selecting
 a signing team in Xcode. Unsigned simulator/device builds cannot verify iCloud
 sync. Before release, test on signed iPhone and iPad devices using the same Apple

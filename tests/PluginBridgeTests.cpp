@@ -2,6 +2,7 @@
 
 #include <KshUiBridge.h>
 #include <ui/KshEditorController.h>
+#include "../standalone/StandaloneMidiRouting.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -1215,4 +1216,71 @@ TEST_CASE ("Transport seeks invalidate queued and already scheduled recording mo
         notes += countNoteOns (midi);
     }
     CHECK (notes == 1);
+}
+
+TEST_CASE ("Standalone MIDI discovery excludes its virtual output and preserves external input choices", "[plugin][standalone-midi][realtime]")
+{
+    const juce::MidiDeviceInfo output { "KSH Output", "ksh-source" };
+    const juce::MidiDeviceInfo keyboard { "USB keyboard", "keyboard" };
+    const juce::MidiDeviceInfo app { "External controller", "controller" };
+    juce::Array<juce::MidiDeviceInfo> previous;
+    std::map<juce::String, bool> enabled;
+    enabled[output.identifier] = true; // Simulate a restored setting that would feed back.
+    const auto reconcile = [&] (const juce::Array<juce::MidiDeviceInfo>& available, bool autoOpen = true)
+    {
+        ksh::updateStandaloneMidiInputs (available, previous, output, autoOpen,
+                                         [&] (const juce::String& id, bool value) { enabled[id] = value; });
+    };
+    reconcile ({ keyboard, output });
+    CHECK (enabled[keyboard.identifier]);
+    CHECK_FALSE (enabled[output.identifier]);
+    enabled[keyboard.identifier] = false; // The user disables this controller.
+    enabled[output.identifier] = true;    // Even a manual enable cannot persist for KSH Output.
+    reconcile ({ keyboard, output, app });
+    CHECK_FALSE (enabled[keyboard.identifier]);
+    CHECK_FALSE (enabled[output.identifier]);
+    CHECK (enabled[app.identifier]);
+    reconcile ({ output, app });
+    CHECK_FALSE (enabled[keyboard.identifier]);
+    reconcile ({ keyboard, output, app });
+    CHECK (enabled[keyboard.identifier]); // Reconnected hardware follows auto-open policy.
+    previous.clear();
+    enabled.clear();
+    enabled[output.identifier] = true;
+    reconcile ({ keyboard, output }, false);
+    CHECK_FALSE (enabled[output.identifier]);
+    CHECK (enabled.count (keyboard.identifier) == 0); // Desktop/manual input mode stays manual.
+}
+
+TEST_CASE ("Standalone MIDI input guard breaks note and controller feedback without filtering external performances", "[plugin][standalone-midi][realtime]")
+{
+    const juce::MidiDeviceInfo output { "KSH Output", "ksh-source" };
+    CHECK (ksh::isStandaloneMidiOutputSource ({ "Renamed source", "ksh-source" }, output));
+    CHECK (ksh::isStandaloneMidiOutputSource ({ "KSH Output", "another-ksh-instance" }, output));
+    CHECK_FALSE (ksh::isStandaloneMidiOutputSource ({ "Keyboard", "keyboard" }, output));
+    CHECK_FALSE (ksh::isStandaloneMidiOutputSource ({ "KSH Output controller", "keyboard" }, output));
+    CHECK_FALSE (ksh::isStandaloneMidiOutputSource ({ "Keyboard", "keyboard" }, {}));
+    PluginProcessor plugin;
+    plugin.prepareToPlay (48000.0, 64);
+    juce::MidiBuffer incoming;
+    const auto receive = [&] (const juce::MidiDeviceInfo& source, const juce::MidiMessage& message)
+    {
+        // The holder applies the same guard before both player forwarding and recording capture.
+        if (!ksh::isStandaloneMidiOutputSource (source, output))
+            incoming.addEvent (message, 0);
+    };
+    const juce::MidiDeviceInfo keyboard { "Keyboard", "keyboard" };
+    receive (keyboard, juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (100)));
+    receive (keyboard, juce::MidiMessage::controllerEvent (1, 7, 96));
+    receive (keyboard, juce::MidiMessage::noteOff (1, 60));
+    juce::AudioBuffer<float> audio (2, 64);
+    plugin.processBlock (audio, incoming);
+    REQUIRE (incoming.getNumEvents() == 3);
+    for (const auto event : incoming)
+        receive (output, event.getMessage());
+    // Self-generated events add nothing to the input stream, including note-offs/CC.
+    CHECK (incoming.getNumEvents() == 3);
+    incoming.clear();
+    plugin.processBlock (audio, incoming);
+    CHECK (incoming.isEmpty());
 }

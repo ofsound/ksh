@@ -68,6 +68,13 @@ namespace ksh::ui
         layout.reverseRows = uiPreferences->getBoolValue ("reverseRows", false);
         controller.keyboardModifiersEnabled = uiPreferences->getBoolValue ("keyboardModifiersEnabled", true);
         addAndMakeVisible (modifierToggle);
+        addChildComponent (midiOutput);
+        midiOutput.setTitle ("MIDI output destination");
+        midiOutput.onClick = [this]
+        {
+            if (controller.processor.showStandaloneMidiOutputMenu)
+                controller.processor.showStandaloneMidiOutputMenu (midiOutput);
+        };
         modifierToggle.setTitle ("Shift/Option shortcuts");
         modifierToggle.setTooltip ("Enable Shift for selection and solo, and Option for Chance preview and copying. The Select and Copy buttons remain available.");
         modifierToggle.onClick = [this]
@@ -404,6 +411,8 @@ namespace ksh::ui
         if (layout.firstStep >= layout.steps)
             layout.firstStep = 0;
         layout.standalone = controller.processor.hasStandaloneTransport();
+        syncMidiOutput();
+        midiOutput.setVisible (layout.standalone && controller.processor.showStandaloneMidiOutputMenu && !layout.compact);
         grid.layout = layout;
         preview.reverseRows = randomPanel.reverseRows = layout.reverseRows;
         compactPattern.setButtonText (controller.source() < 0 ? "Muted  v" : "Pattern " + juce::String (controller.source() + 1) + "  v");
@@ -508,25 +517,28 @@ namespace ksh::ui
         const int headerOffset = juce::roundToInt ((layout.toolbarY() - layout.transportHeight() - 90.0f) * 0.5f);
         const int top = static_cast<int> (layout.transportHeight()) + 4 + headerOffset;
         const int rightEdge = getWidth() - Layout::outerGutter;
-        projectButtons[0].setBounds (Layout::outerGutter, top + 27, 54, 32);
-        projectButtons[1].setBounds (74, top + 27, 54, 32);
-        projectButtons[2].setBounds (136, top + 27, 54, 32);
-        projectButtons[5].setBounds (198, top + 27, 76, 32);
-        projectButtons[3].setBounds (282, top + 27, 30, 32);
-        projectHeader.setBounds (320, top + 27, 194, 32);
-        projectButtons[4].setBounds (522, top + 27, 30, 32);
+        projectButtons[0].setBounds (Layout::outerGutter, top + 27, 50, 32);
+        projectButtons[1].setBounds (68, top + 27, 50, 32);
+        projectButtons[2].setBounds (124, top + 27, 50, 32);
+        projectButtons[5].setBounds (180, top + 27, 68, 32);
+        projectButtons[3].setBounds (254, top + 27, 26, 32);
+        projectHeader.setBounds (286, top + 27, 194, 32);
+        projectButtons[4].setBounds (486, top + 27, 26, 32);
        #if JUCE_IOS
-        projectButtons[6].setBounds (556, top + 27, 44, 32);
+        projectButtons[6].setBounds (518, top + 27, 44, 32);
        #endif
-        swing.setBounds (602, top + 25, 48, 43);
-        subdivision.setBounds (666, top + 25, 40, 43);
-        velocityHumanize.setBounds (774, top + 25, 48, 43);
-        timingHumanize.setBounds (838, top + 25, 48, 43);
-        const int patternLeft = rightEdge - 414;
-        const int patternTop = static_cast<int> (layout.transportHeight()) + 10;
+        swing.setBounds (582, top + 25, 48, 43);
+        subdivision.setBounds (638, top + 25, 40, 43);
+        velocityHumanize.setBounds (706, top + 25, 48, 43);
+        timingHumanize.setBounds (762, top + 25, 48, 43);
+        constexpr int patternSize = 46;
+        constexpr int patternGap = 4;
         constexpr int patternHeight = 70;
+        constexpr int patternBankWidth = 8 * patternSize + 7 * patternGap;
+        const int patternLeft = rightEdge - patternHeight - 12 - patternBankWidth;
+        const int patternTop = static_cast<int> (layout.transportHeight()) + 10;
         for (int i = 0; i < 16; ++i)
-            patterns[static_cast<size_t> (i)].setBounds (patternLeft + (i % 8) * 42, patternTop + (i / 8) * 50, 38, 46);
+            patterns[static_cast<size_t> (i)].setBounds (patternLeft + (i % 8) * (patternSize + patternGap), patternTop + (i / 8) * (patternSize + patternGap), patternSize, patternSize);
         mutePattern.setBounds (rightEdge - patternHeight, patternTop + headerOffset, patternHeight, patternHeight);
         const int y = static_cast<int> (layout.toolbarY());
         constexpr int layerHeight = 41;
@@ -568,6 +580,8 @@ namespace ksh::ui
             footerRight -= width + 8;
         };
         placeFooter (scale, 66);
+        if (layout.standalone && controller.processor.showStandaloneMidiOutputMenu)
+            placeFooter (midiOutput, 76);
         if (layout.standalone)
             placeFooter (zen, 40);
         placeFooter (dc, 40);
@@ -639,8 +653,8 @@ namespace ksh::ui
         for (auto y : { layout.transportHeight(), layout.gridY(), layout.height() - Layout::footerHeight })
             g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
         const float groupY = (layout.transportHeight() + layout.toolbarY() - 70.0f) * 0.5f;
-        paintControlGroup (g, { 582, groupY, 144, 70 }, "Swing", 20);
-        paintControlGroup (g, { 754, groupY, 152, 70 }, "Humanize", 20);
+        paintControlGroup (g, { static_cast<float> (swing.getX() - 8), groupY, static_cast<float> (subdivision.getRight() - swing.getX() + 16), 70 }, "Swing");
+        paintControlGroup (g, { static_cast<float> (velocityHumanize.getX() - 8), groupY, static_cast<float> (timingHumanize.getRight() - velocityHumanize.getX() + 16), 70 }, "Humanize");
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
@@ -867,11 +881,19 @@ namespace ksh::ui
         sendLookAndFeelChange();
         repaint();
     }
+    void NativeEditor::syncMidiOutput()
+    {
+        const auto outputName = controller.processor.standaloneMidiOutputName ? controller.processor.standaloneMidiOutputName() : juce::String();
+        midiOutput.setButtonText (layout.compact ? "MIDI Output: " + outputName : "MIDI Out");
+        midiOutput.setTooltip ("Send MIDI to " + outputName + ". Choose a local app, network session, or connected MIDI device.");
+    }
+
     void NativeEditor::timerCallback()
     {
         if (!isShowing())
             return;
         footerHelp.refresh();
+        syncMidiOutput();
         // Drain hits immediately before repainting, without an audio-thread wakeup
         // or an additional frame of delay between the processor and editor timers.
         controller.processor.emitPendingNoteHitsForUi();

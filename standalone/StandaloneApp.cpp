@@ -1,6 +1,7 @@
 #include <juce_audio_plugin_client/detail/juce_CheckSettingMacros.h>
 #include <juce_audio_plugin_client/detail/juce_IncludeSystemHeaders.h>
 #include "StandalonePreferences.h"
+#include "StandaloneMidiRouting.h"
 #include <juce_audio_plugin_client/detail/juce_IncludeModuleHeaders.h>
 #include <juce_audio_plugin_client/detail/juce_PluginUtilities.h>
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -31,7 +32,8 @@ public:
                                   preferredDefaultDeviceName,
                                   preferredSetupOptions,
                                   channels,
-                                  shouldAutoOpenMidiDevices)
+                                  false),
+          autoOpenExternalMidiDevices (shouldAutoOpenMidiDevices)
     {
         if (settingsToUse != nullptr)
             if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
@@ -40,17 +42,25 @@ public:
                 ksh::restoreStandaloneProjectFile (*plugin, *settingsToUse);
             }
 
+        // Replace JUCE's auto-open-all timer: it would open our own virtual output
+        // as an input and echo every emitted note back into the processor.
+        deviceManager.removeMidiInputDeviceCallback ({}, &player);
         createVirtualMidiOutput();
-        useVirtualMidiOutputIfAvailable();
+        updateMidiOutput();
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
             plugin->setTimestampedStandaloneMidiInput (true);
-        deviceManager.removeMidiInputDeviceCallback ({}, &player);
         deviceManager.addMidiInputDeviceCallback ({}, this);
         deviceManager.addChangeListener (this);
+        midiDeviceChanges = MidiDeviceListConnection::make ([this] { refreshMidiInputs(); });
+        refreshMidiInputs();
+        installMidiOutputServices();
     }
 
     ~KshStandalonePluginHolder() override
     {
+        clearMidiOutputServices();
+        masterReference.clear();
+        midiDeviceChanges.reset();
         deviceManager.removeChangeListener (this);
         deviceManager.removeMidiInputDeviceCallback ({}, this);
         player.setMidiOutput (nullptr);
@@ -59,9 +69,95 @@ public:
             virtualMidiOutput->stopBackgroundThread();
     }
 
+    void createPlugin() override
+    {
+        StandalonePluginHolder::createPlugin();
+        installMidiOutputServices();
+    }
+
+    void deletePlugin() override
+    {
+        clearMidiOutputServices();
+        StandalonePluginHolder::deletePlugin();
+    }
+
 private:
+    void installMidiOutputServices()
+    {
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+        {
+            plugin->setTimestampedStandaloneMidiInput (true);
+            plugin->showStandaloneMidiOutputMenu = [this] (Component& target) { showMidiOutputMenu (target); };
+            plugin->standaloneMidiOutputName = [this]
+            {
+                if (auto* selected = deviceManager.getDefaultMidiOutput())
+                    return selected->getName();
+                return virtualMidiOutput != nullptr ? String (virtualMidiOutputName) : String ("Unavailable");
+            };
+        }
+    }
+
+    void clearMidiOutputServices()
+    {
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+        {
+            plugin->showStandaloneMidiOutputMenu = {};
+            plugin->standaloneMidiOutputName = {};
+        }
+    }
+
+    void showMidiOutputMenu (Component& target)
+    {
+       #if JUCE_IOS
+        ksh::enableStandaloneNetworkMidi();
+       #endif
+        const auto destinations = MidiOutput::getAvailableDevices();
+        const auto selected = deviceManager.getDefaultMidiOutputIdentifier();
+        PopupMenu menu;
+        menu.setLookAndFeel (&target.getLookAndFeel());
+        menu.addSectionHeader ("MIDI output destination");
+        menu.addItem (1, virtualMidiOutputName, virtualMidiOutput != nullptr, selected.isEmpty());
+        menu.addSeparator();
+        for (int i = 0; i < destinations.size(); ++i)
+            menu.addItem (i + 2, destinations[i].name, true, destinations[i].identifier == selected);
+        if (destinations.isEmpty())
+            menu.addItem (destinations.size() + 2, "No connected MIDI destinations", false);
+        const WeakReference<KshStandalonePluginHolder> weak (this);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&target)
+                               .withParentComponent (target.getTopLevelComponent())
+                               .withStandardItemHeight (44)
+                               .withMinimumWidth (260)
+                               .withMaximumNumColumns (1), [weak, destinations] (int result)
+        {
+            if (weak == nullptr || result == 0)
+                return;
+            const auto identifier = result == 1 ? String() : destinations[result - 2].identifier;
+            // Detach and flush the old route before the manager closes it.
+            weak->player.setMidiOutput (nullptr);
+            auto* oldOutput = weak->deviceManager.getDefaultMidiOutput();
+            if (oldOutput == nullptr)
+                oldOutput = weak->virtualMidiOutput.get();
+            if (oldOutput != nullptr)
+            {
+                oldOutput->clearAllPendingMessages();
+                for (int channel = 1; channel <= 16; ++channel)
+                    oldOutput->sendMessageNow (MidiMessage::allNotesOff (channel));
+            }
+            weak->deviceManager.setDefaultMidiOutputDevice (identifier);
+            weak->updateMidiOutput();
+            weak->saveAudioDeviceState();
+            if (result > 1 && weak->deviceManager.getDefaultMidiOutput() == nullptr)
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output",
+                                                  "Could not open that MIDI destination. Using KSH Output instead.");
+        });
+    }
+
     void handleIncomingMidiMessage (MidiInput* input, const MidiMessage& message) override
     {
+        // A settings change can enable a source before its message-thread device
+        // notification arrives. Block self-feedback here as well as in discovery.
+        if (input == nullptr || ksh::isStandaloneMidiOutputSource (input->getDeviceInfo(), virtualOutputInfo))
+            return;
         player.handleIncomingMidiMessage (input, message);
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
             plugin->captureStandaloneMidiInput (message);
@@ -69,7 +165,19 @@ private:
 
     void changeListenerCallback (ChangeBroadcaster*) override
     {
-        useVirtualMidiOutputIfAvailable();
+        refreshMidiInputs();
+        updateMidiOutput();
+    }
+
+    void refreshMidiInputs()
+    {
+        ksh::updateStandaloneMidiInputs (MidiInput::getAvailableDevices(), lastMidiDevices,
+                                         virtualOutputInfo, autoOpenExternalMidiDevices,
+                                         [this] (const String& identifier, bool enabled)
+                                         {
+                                             if (deviceManager.isMidiInputDeviceEnabled (identifier) != enabled)
+                                                 deviceManager.setMidiInputDeviceEnabled (identifier, enabled);
+                                         });
     }
 
     void createVirtualMidiOutput()
@@ -77,16 +185,28 @@ private:
         virtualMidiOutput = MidiOutput::createNewDevice (virtualMidiOutputName);
 
         if (virtualMidiOutput != nullptr)
+        {
+            virtualOutputInfo = virtualMidiOutput->getDeviceInfo();
             virtualMidiOutput->startBackgroundThread();
+        }
     }
 
-    void useVirtualMidiOutputIfAvailable()
+    void updateMidiOutput()
     {
-        if (virtualMidiOutput != nullptr)
-            player.setMidiOutput (virtualMidiOutput.get());
+        // An explicit destination (including the iOS network session) takes
+        // priority over the local virtual source. JUCE persists this selection.
+        auto* selected = deviceManager.getDefaultMidiOutput();
+        auto* output = selected != nullptr ? selected : virtualMidiOutput.get();
+        if (output != nullptr && !output->isBackgroundThreadRunning())
+            output->startBackgroundThread();
+        player.setMidiOutput (output);
     }
 
     std::unique_ptr<MidiOutput> virtualMidiOutput;
+    MidiDeviceInfo virtualOutputInfo { virtualMidiOutputName, {} };
+    MidiDeviceListConnection midiDeviceChanges;
+    const bool autoOpenExternalMidiDevices;
+    JUCE_DECLARE_WEAK_REFERENCEABLE (KshStandalonePluginHolder)
 };
 
 class KshStandaloneApp final : public JUCEApplication

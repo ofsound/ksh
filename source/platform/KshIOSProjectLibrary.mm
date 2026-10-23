@@ -24,7 +24,9 @@ namespace ksh
 {
 namespace
 {
+   #if KSH_IOS_ICLOUD_ENABLED
     NSString* const containerID = @"iCloud.com.ofsound.ksh";
+   #endif
     constexpr NSUInteger maximumProjectBytes = 16 * 1024 * 1024;
     NSString* ns (const juce::String& s) { return [NSString stringWithUTF8String:s.toRawUTF8()]; }
     juce::String string (NSString* s) { return s == nil ? juce::String() : juce::String::fromUTF8 (s.UTF8String); }
@@ -125,19 +127,23 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
         auto self = shared_from_this();
         const auto discovery = ++discoveryGeneration;
         dispatch_async (queue, ^{
+            auto directory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KSH");
+           #if KSH_IOS_ICLOUD_ENABLED
             auto* manager = [NSFileManager defaultManager];
             NSURL* root = [manager URLForUbiquityContainerIdentifier:containerID];
             NSURL* documents = [root URLByAppendingPathComponent:@"Documents" isDirectory:YES];
             NSError* error = nil;
             const bool cloud = documents != nil && [manager createDirectoryAtURL:documents withIntermediateDirectories:YES attributes:nil error:&error];
-            auto directory = cloud ? file (documents)
-                                   : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KSH");
+            if (cloud) directory = file (documents);
+           #endif
             directory.createDirectory();
             dispatch_async (dispatch_get_main_queue(), ^{
                 if (self->discoveryGeneration != discovery) return;
                 self->library = directory;
                 self->ready = true;
+               #if KSH_IOS_ICLOUD_ENABLED
                 if (cloud) self->startQuery();
+               #endif
                 if (auto pending = std::exchange (self->whenReady, {})) pending();
             });
         });
@@ -279,7 +285,9 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
 
 IOSProjectLibrary::IOSProjectLibrary() : state (std::make_shared<State>())
 {
+   #if KSH_IOS_ICLOUD_ENABLED
     state->observeAccount();
+   #endif
     state->initialise();
 }
 IOSProjectLibrary::~IOSProjectLibrary() = default;
@@ -363,7 +371,7 @@ void IOSProjectLibrary::save (juce::Component& component, const juce::File& f, c
         }];
         Result result;
         result.file = f;
-        if (!saved || error != nil) result.error = failure.isNotEmpty() ? failure : "The project could not be saved. Check iCloud access or use Save As.";
+        if (!saved || error != nil) result.error = failure.isNotEmpty() ? failure : "The project could not be saved. Check file access or use Save As.";
         dispatch_async (dispatch_get_main_queue(), ^{
             if (self->generation != operation) return;
             if (result.error.isEmpty())

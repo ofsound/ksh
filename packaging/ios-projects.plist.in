@@ -1,10 +1,7 @@
 <plist version="1.0"><dict>
-    <key>NSUbiquitousContainers</key>
-    <dict><key>iCloud.com.ofsound.ksh</key><dict>
-        <key>NSUbiquitousContainerIsDocumentScopePublic</key><true/>
-        <key>NSUbiquitousContainerName</key><string>KSH</string>
-        <key>NSUbiquitousContainerSupportedFolderLevels</key><string>Any</string>
-    </dict></dict>
+@KSH_IOS_ICLOUD_PLIST_ENTRIES@
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Send MIDI notes to music apps and devices on your local network.</string>
     <key>UIFileSharingEnabled</key><true/>
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <key>UTExportedTypeDeclarations</key><array><dict>

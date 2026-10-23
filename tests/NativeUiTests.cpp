@@ -3444,3 +3444,50 @@ TEST_CASE ("Compact accent belongs to View settings and leaves both step pages a
     logo->onClick();
     CHECK (Palette::blueAccentSelected() == initialBlue);
 }
+
+TEST_CASE ("Standalone MIDI destination is reachable in full and compact layouts without changing the project", "[native-ui][standalone-midi]")
+{
+    const bool compact = GENERATE (false, true);
+    const bool standalone = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (standalone ? juce::AudioProcessor::wrapperType_Standalone : juce::AudioProcessor::wrapperType_AudioUnitv3);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    juce::Component* menuTarget = nullptr;
+    juce::String destination = "Network Session 1";
+    if (standalone)
+    {
+        processor.showStandaloneMidiOutputMenu = [&] (juce::Component& target) { menuTarget = &target; };
+        processor.standaloneMidiOutputName = [&] { return destination; };
+    }
+    NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    if (compact)
+    {
+        editor.setCompactViewport (true, 814, 409);
+        editor.setSize (814, 409);
+        for (const auto& caption : { juce::String ("Settings"), juce::String ("View") })
+            for (auto* child : editor.getChildren())
+                if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == caption)
+                    button->onClick();
+    }
+    editor.sync();
+    juce::TextButton* output = nullptr;
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "MIDI output destination")
+            output = dynamic_cast<juce::TextButton*> (child);
+    REQUIRE (output != nullptr);
+    CHECK (output->isVisible() == standalone);
+    if (standalone)
+    {
+        CHECK (editor.getLocalBounds().contains (output->getBounds()));
+        CHECK (output->getHeight() >= 32);
+        CHECK (output->getTooltip().contains (destination));
+        const auto document = processor.editorDocument();
+        output->onClick();
+        CHECK (menuTarget == output);
+        destination = "USB MIDI";
+        editor.sync();
+        CHECK (output->getTooltip().contains (destination));
+        CHECK (processor.editorDocument() == document);
+    }
+}
