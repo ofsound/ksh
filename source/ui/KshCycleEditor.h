@@ -16,9 +16,11 @@ namespace ksh::ui
             for (int i = 0; i < 8; ++i)
             {
                 auto& b = bits[static_cast<size_t> (i)];
+                b.owner = this;
+                b.index = i;
                 addAndMakeVisible (b);
                 b.setButtonText (juce::String (i + 1));
-                b.setTooltip ("Toggle cycle beat; click beyond length to extend");
+                b.setTooltip ("Toggle cycle beat; drag an active beat to move it on release; click beyond length to extend");
                 b.onClick = [this, i] {
                     const auto list = locations();
                     if (list.empty())
@@ -42,7 +44,11 @@ namespace ksh::ui
             const int side = juce::jmax (0, height - (inlineLayout ? 8 : 56));
             return 20 + 8 * side + 7 * 4;
         }
-        void cancelGesture() { handle.cancel(); }
+        void cancelGesture()
+        {
+            handle.cancel();
+            cancelBitDrag();
+        }
         void sync()
         {
             const auto list = locations();
@@ -115,6 +121,69 @@ namespace ksh::ui
 
     private:
         EditorController& controller;
+        int dragFrom = -1, dragTo = -1, dragSource = -1;
+        bool bitDragging = false;
+        uint64_t dragEpoch = 0;
+        std::vector<Location> dragLocations;
+        std::vector<Cell> dragCells;
+        void cancelBitDrag()
+        {
+            dragFrom = dragTo = -1;
+            bitDragging = false;
+            dragLocations.clear();
+            dragCells.clear();
+            for (auto& bit : bits)
+                bit.repaint();
+        }
+        void startBitDrag (int index)
+        {
+            cancelBitDrag();
+            const auto list = locations();
+            if (!isEnabled() || list.empty())
+                return;
+            const auto first = controller.cell (list.front());
+            if (index >= first.cycle || (first.cycleMask & (1 << index)) == 0)
+                return;
+            dragFrom = dragTo = index;
+            dragSource = controller.source();
+            dragEpoch = controller.state.documentEpoch;
+            dragLocations = list;
+            for (auto p : list)
+                dragCells.push_back (controller.cell (p));
+        }
+        void updateBitDrag (const juce::MouseEvent& e)
+        {
+            if (dragFrom < 0 || e.getDistanceFromDragStart() < 4)
+                return;
+            bitDragging = true;
+            const auto point = e.getEventRelativeTo (this).position;
+            dragTo = -1;
+            for (int i = 0; i < juce::jmin (8, cycleLength); ++i)
+                if (bits[static_cast<size_t> (i)].getBounds().toFloat().contains (point))
+                    dragTo = i;
+            for (auto& bit : bits)
+                bit.repaint();
+        }
+        void finishBitDrag()
+        {
+            bool valid = isEnabled() && dragFrom >= 0 && dragTo >= 0 && dragFrom != dragTo
+                         && controller.source() == dragSource && controller.state.documentEpoch == dragEpoch && locations() == dragLocations;
+            for (size_t i = 0; valid && i < dragLocations.size(); ++i)
+                valid = controller.cell (dragLocations[i]) == dragCells[i];
+            if (valid)
+            {
+                beginEdit ("Move cycle beat");
+                for (size_t i = 0; i < dragLocations.size(); ++i)
+                {
+                    const auto& cell = dragCells[i];
+                    if (dragTo < cell.cycle && (cell.cycleMask & (1 << dragFrom)) != 0)
+                        controller.setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), { dragLocations[i] });
+                }
+                endEdit();
+            }
+            cancelBitDrag();
+            sync();
+        }
         std::optional<Layer> previousLayer;
         void beginEdit (const juce::String& label)
         {
@@ -253,12 +322,61 @@ namespace ksh::ui
         class CycleBit : public juce::TextButton
         {
         public:
+            CycleEditor* owner = nullptr;
+            int index = 0;
             bool inCycle = false, flashing = false;
             float fontHeight = 14;
+            void mouseDown (const juce::MouseEvent& e) override
+            {
+                suppressClick = false;
+                armedMove = false;
+                juce::TextButton::mouseDown (e);
+                if (isEnabled() && e.mods.isLeftButtonDown())
+                {
+                    owner->startBitDrag (index);
+                    armedMove = owner->dragFrom >= 0;
+                }
+            }
+            void mouseDrag (const juce::MouseEvent& e) override
+            {
+                juce::TextButton::mouseDrag (e);
+                owner->updateBitDrag (e);
+                suppressClick = suppressClick || owner->bitDragging;
+            }
+            void mouseUp (const juce::MouseEvent& e) override
+            {
+                if (suppressClick || (armedMove && owner->dragFrom < 0))
+                {
+                    if (owner->bitDragging)
+                        owner->updateBitDrag (e);
+                    setState (juce::Button::buttonNormal);
+                    owner->finishBitDrag();
+                }
+                else
+                {
+                    owner->cancelBitDrag();
+                    juce::TextButton::mouseUp (e);
+                }
+            }
+            bool keyPressed (const juce::KeyPress& key) override
+            {
+                if (key == juce::KeyPress::escapeKey && owner->dragFrom >= 0)
+                {
+                    suppressClick = true;
+                    owner->cancelBitDrag();
+                    setState (juce::Button::buttonNormal);
+                    return true;
+                }
+                return juce::TextButton::keyPressed (key);
+            }
+        private:
+            bool suppressClick = false, armedMove = false;
+        public:
             void paintButton (juce::Graphics& g, bool hover, bool down) override
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
-                const bool on = getToggleState();
+                const bool preview = owner != nullptr && owner->bitDragging && owner->dragTo >= 0;
+                const bool on = preview && index == owner->dragTo ? true : preview && index == owner->dragFrom ? false : getToggleState();
                 auto background = on ? Palette::accent : inCycle ? Palette::surface : Palette::app;
                 if (flashing)
                     background = Palette::text;

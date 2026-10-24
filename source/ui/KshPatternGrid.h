@@ -40,8 +40,8 @@ namespace ksh::ui
         static constexpr float selectionGlowExtent = 20.0f;
         // Share the cached, position-independent blur across equal-sized cells.
         melatonin::DropShadow selectionGlow {
-            { Palette::text.withAlpha (0.8f), 18 },
-            { Palette::text.withAlpha (0.45f), 5 }
+            { Palette::text.withAlpha (0.92f), 18 },
+            { Palette::text.withAlpha (0.55f), 5 }
         };
         Location cellAt (juce::Point<float>) const;
         juce::Rectangle<float> cellPaintBounds (Location) const;

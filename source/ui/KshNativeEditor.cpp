@@ -87,11 +87,11 @@ namespace ksh::ui
             sync();
             grid.repaint();
         };
-        controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", false);
+        controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", true);
         addAndMakeVisible (cellDisplay);
         cellDisplay.getProperties().set ("icon", "cellDisplay");
-        cellDisplay.setTitle ("Graphical cell values");
-        cellDisplay.setTooltip ("Hide cell numbers: velocity uses fill height and probability uses a pie. Toggle again for numbers.");
+        cellDisplay.setTitle ("Show cell numbers");
+        cellDisplay.setTooltip ("Show cell numbers. When off, velocity uses fill height and probability uses a vertical fader above the cycle strip. Numbers always appear while inspecting a selection.");
         cellDisplay.onClick = [this]
         {
             controller.graphicalCellValues = !controller.graphicalCellValues;
@@ -435,7 +435,6 @@ namespace ksh::ui
         page.setButtonText (layout.firstStep == 0 ? "1-16  >" : "<  17-" + juce::String (layout.steps));
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         updatePatternButtons();
-        mutePattern.setToggleState (controller.source() < 0, juce::dontSendNotification);
         updateLayerHeading();
         for (auto* b : { &clear, &record, &left, &right, &rate, static_cast<juce::TextButton*> (&recordQuantize) })
             b->setEnabled (controller.source() >= 0);
@@ -468,7 +467,7 @@ namespace ksh::ui
                                   + ". Click to toggle; right-click or Shift-F10 for strength and recording offset ("
                                   + juce::String (controller.processor.getPatternRecordingOffsetMs()) + " ms).");
         dc.setToggleState (controller.drumColors, juce::dontSendNotification);
-        cellDisplay.setToggleState (controller.graphicalCellValues, juce::dontSendNotification);
+        cellDisplay.setToggleState (!controller.graphicalCellValues, juce::dontSendNotification);
         modifierToggle.setToggleState (controller.keyboardModifiersEnabled, juce::dontSendNotification);
         rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
         tooltipToggle.setToggleState (footerHelp.isHelpEnabled(), juce::dontSendNotification);
@@ -663,19 +662,22 @@ namespace ksh::ui
         paintControlGroup (g, { static_cast<float> (swing.getX() - 8), groupY, static_cast<float> (subdivision.getRight() - swing.getX() + 16), 70 }, "Swing");
         paintControlGroup (g, { static_cast<float> (velocityHumanize.getX() - 8), groupY, static_cast<float> (timingHumanize.getRight() - velocityHumanize.getX() + 16), 70 }, "Humanize");
         // Paint in the parent so the halo can extend beyond the button's clip bounds.
-        for (const auto& button : patterns)
+        const auto paintPatternGlow = [this, &g] (const juce::TextButton& button)
         {
             if (!button.isVisible() || !button.getToggleState())
-                continue;
+                return;
             const auto bounds = button.getBounds().toFloat().reduced (0.5f);
             if (!g.clipRegionIntersects (bounds.expanded (static_cast<float> (patternGlowExtent)).getSmallestIntegerContainer()))
-                continue;
+                return;
             patternGlow.setColor (Palette::accent.withAlpha (0.8f * button.getAlpha()), 0);
             patternGlow.setColor (Palette::accent.withAlpha (0.55f * button.getAlpha()), 1);
             juce::Path silhouette;
             silhouette.addRoundedRectangle (bounds, 4);
             patternGlow.render (g, silhouette);
-        }
+        };
+        for (const auto& button : patterns)
+            paintPatternGlow (button);
+        paintPatternGlow (mutePattern);
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
@@ -832,6 +834,10 @@ namespace ksh::ui
     }
     void NativeEditor::updatePatternButtons()
     {
+        const bool muted = controller.source() < 0;
+        if (mutePattern.getToggleState() != muted)
+            repaint (mutePattern.getBounds().expanded (patternGlowExtent));
+        mutePattern.setToggleState (muted, juce::dontSendNotification);
         // Keep the armed source highlighted; pulse smoothly between 70% and full opacity.
         const auto phase = static_cast<double> (juce::Time::getMillisecondCounter() % 200u) / 200.0;
         const float copyAlpha = 0.85f + 0.15f * static_cast<float> (std::cos (juce::MathConstants<double>::twoPi * phase));

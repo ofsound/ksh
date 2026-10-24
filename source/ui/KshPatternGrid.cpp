@@ -454,13 +454,14 @@ namespace ksh::ui
             const auto name = layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle";
             text (g, juce::String (name) + " / overview", { 16.0f, layout.cellsY() - 32.0f, layout.gridLeft() - 24.0f, 22.0f }, 12, Palette::accent, true, juce::Justification::centredLeft);
         }
-        const float horizontalInset = layout.compact ? 0.8f : 1.8f;
+        const float horizontalInset = layout.compact ? 0.8f : 2.3f;
         const auto referenceCell = layout.cell ({ 0, layout.firstStep }).reduced (horizontalInset, 0.8f);
         const float valueSize = juce::jmin (18.0f, referenceCell.getWidth() * 0.38f, referenceCell.getHeight() * 0.5f);
-        if ((layer == Layer::chance && !controller.graphicalCellValues) || layer == Layer::nudge)
+        const bool hasSelection = controller.selected.any();
+        const bool graphicalValues = controller.graphicalCellValues && !hasSelection;
+        if ((layer == Layer::chance && !graphicalValues) || layer == Layer::nudge)
             prepareProbabilityLabels (valueSize * 0.78f);
         const auto now = juce::Time::getMillisecondCounterHiRes();
-        const bool hasSelection = controller.selected.any();
         for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
         {
             auto r = layout.cell ({ 0, step });
@@ -500,7 +501,7 @@ namespace ksh::ui
                     if (controller.source() >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (controller.source())][static_cast<size_t> (ch)])
                         colour = colour.interpolatedWith (Palette::surface, 0.58f);
                     if (c.enabled && hasSelection && !controller.selected.test (static_cast<size_t> (pos.key())))
-                        colour = colour.withMultipliedSaturation (0.8f).interpolatedWith (Palette::app, 0.28f);
+                        colour = colour.withMultipliedSaturation (0.65f).interpolatedWith (Palette::app, 0.6f);
                     const auto remaining = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] - now;
                     const auto pulse = static_cast<float> (juce::jlimit (0.0, 1.0, remaining / EditorController::sourceFlashDurationMs));
                     const auto valueColour = Palette::app;
@@ -572,23 +573,32 @@ namespace ksh::ui
                         g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
                         if (layer == Layer::chance)
                         {
-                            if (controller.graphicalCellValues)
+                            const auto paintInsetEdge = [&g] (juce::Rectangle<float> bounds)
                             {
-                                const float diameter = juce::jmin (22.0f, r.getWidth() * 0.6f, r.getHeight() * 0.44f);
-                                const auto pie = juce::Rectangle<float> (diameter, diameter).withCentre ({ r.getCentreX(), r.getCentreY() - 3.0f });
-                                g.setColour (juce::Colours::black);
-                                g.fillEllipse (pie);
+                                g.setColour (Palette::app.withAlpha (0.22f));
+                                g.drawRoundedRectangle (bounds.reduced (0.3f), 1.5f, 0.6f);
+                                g.setColour (Palette::text.withAlpha (0.12f));
+                                g.drawHorizontalLine (juce::roundToInt (bounds.getBottom() - 1.0f), bounds.getX() + 1.5f, bounds.getRight() - 1.5f);
+                            };
+                            const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
+                            if (graphicalValues)
+                            {
+                                const auto track = r.reduced (4, 3).withBottom (strip.getY() - 3.0f);
+                                const float level = static_cast<float> (juce::jlimit (0, 100, c.probability)) / 100.0f;
+                                const float fillY = track.getBottom() - track.getHeight() * level;
+                                g.setColour (juce::Colour (0xff101212));
+                                g.fillRoundedRectangle (track, 2);
+                                const juce::Graphics::ScopedSaveState faderClip (g);
+                                juce::Path clip;
+                                clip.addRoundedRectangle (track, 2);
+                                g.reduceClipRegion (clip);
                                 g.setColour (light);
-                                if (c.probability >= 100)
-                                    g.fillEllipse (pie);
-                                else if (c.probability > 0)
-                                {
-                                    juce::Path segment;
-                                    segment.addPieSegment (pie, 0, juce::MathConstants<float>::twoPi * static_cast<float> (c.probability) / 100.0f, 0);
-                                    g.fillPath (segment);
-                                }
-                                g.setColour (light.withAlpha (0.65f));
-                                g.drawEllipse (pie, 1.0f);
+                                if (level > 0.0f)
+                                    g.fillRect (track.withTop (fillY));
+                                g.setColour (Palette::text.withAlpha (0.3f));
+                                const float handleY = juce::jlimit (track.getY(), track.getBottom() - 1.0f, fillY - 0.5f);
+                                g.fillRect (track.getX(), handleY, track.getWidth(), 1.0f);
+                                paintInsetEdge (track);
                             }
                             else
                             {
@@ -599,12 +609,19 @@ namespace ksh::ui
                                                          r.getCentreY() - 3.0f + probabilityBaseline));
                             }
                             const int bits = juce::jmin (c.cycle, 30);
-                            const auto strip = r.withY (r.getY() + r.getHeight() * 0.8f - 3.0f).withHeight (r.getHeight() * 0.14f + 3.0f).reduced (3, 0);
                             for (int i = 0; i < bits; ++i)
                             {
-                                g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
                                 // Split the two-pixel gap between both sides to centre the cycle strip.
-                                g.fillRect (strip.getX() + 1.0f + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
+                                const auto bit = juce::Rectangle<float> (strip.getX() + 1.0f + static_cast<float> (i) * strip.getWidth() / static_cast<float> (bits), strip.getY(), juce::jmax (1.0f, strip.getWidth() / static_cast<float> (bits) - 2.0f), strip.getHeight());
+                                g.setColour (juce::Colour (0xff101212));
+                                g.fillRoundedRectangle (bit, 2);
+                                const juce::Graphics::ScopedSaveState cycleClip (g);
+                                juce::Path clip;
+                                clip.addRoundedRectangle (bit, 2);
+                                g.reduceClipRegion (clip);
+                                g.setColour ((c.cycleMask & (1 << i)) != 0 ? light : Palette::app);
+                                g.fillRect (bit);
+                                paintInsetEdge (bit);
                             }
                         }
                         else if (layer == Layer::roll)
@@ -638,14 +655,14 @@ namespace ksh::ui
                                 }
                             }
                         }
-                        else if (!controller.graphicalCellValues)
+                        else if (!graphicalValues)
                             text (g, juce::String (c.velocity), r.translated (0, 2), valueSize * 0.9f, valueColour, true);
                     };
                     paintCell();
                 }
             }
             // Use the filled silhouette for a full outer halo, keeping the cell interior clear.
-            selectionGlow.setColor (Palette::channel (ch, controller.drumColors).brighter (0.3f).withAlpha (0.8f), 0);
+            selectionGlow.setColor (Palette::channel (ch, controller.drumColors).brighter (0.3f).withAlpha (0.92f), 0);
             for (int step = layout.firstStep; step < layout.firstStep + layout.visibleSteps(); ++step)
             {
                 if (step < range.loopStart || step >= range.loopStart + range.loopLength)
@@ -810,6 +827,22 @@ namespace ksh::ui
         if (rightBoundary && dragLayer == Layer::velocity)
             anchor = { row, layout.steps - 1 };
         selectedAtStart = anchor.valid() && controller.selected.test (static_cast<size_t> (anchor.key()));
+        if (anchor.valid() && dragLayer == Layer::chance && controller.cell (anchor).enabled && e.mods.isLeftButtonDown())
+        {
+            const auto loop = controller.loop (anchor.channel);
+            const auto body = cellBounds (anchor).reduced (layout.compact ? 0.8f : 2.3f, 0.8f);
+            const float sliderBottom = body.getY() + body.getHeight() * 0.8f - 6.0f;
+            if (anchor.step >= loop.loopStart && anchor.step < loop.loopStart + loop.loopLength && e.position.y >= sliderBottom)
+            {
+                drag = Drag::none;
+                if (!additive && !selectedAtStart)
+                    controller.selected.reset();
+                controller.selected.set (static_cast<size_t> (anchor.key()));
+                controller.notify();
+                repaint();
+                return;
+            }
+        }
         if (initialSelection.any() && !additive && !selectedAtStart)
         {
             drag = Drag::none;

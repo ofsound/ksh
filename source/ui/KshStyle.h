@@ -457,10 +457,9 @@ namespace ksh::ui
                 }
                 else if (icon == "cellDisplay")
                 {
-                    path.addEllipse (4, 4, 16, 16);
-                    juce::Path segment;
-                    segment.addPieSegment (juce::Rectangle<float> (4, 4, 16, 16), 0, juce::MathConstants<float>::halfPi, 0);
-                    g.fillPath (segment);
+                    path.addRoundedRectangle (3, 3, 18, 18, 2);
+                    g.setFont (font (7.5f, true));
+                    g.drawText ("99", juce::Rectangle<float> (3, 4, 18, 18), juce::Justification::centred, false);
                 }
                 else if (icon == "power")
                 {

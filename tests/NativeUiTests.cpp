@@ -15,6 +15,8 @@ TEST_CASE ("Graphical cell values preserve editing data and distinguish empty an
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 25, 2, 4, 5 }));
     EditorController controller (processor);
+    REQUIRE (controller.graphicalCellValues);
+    controller.graphicalCellValues = false;
     PatternGrid grid (controller);
     grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
     grid.sync();
@@ -43,7 +45,8 @@ TEST_CASE ("Graphical cell values preserve editing data and distinguish empty an
     const auto full = capture();
     CHECK (empty.getPixelAt (empty.getWidth() / 2, empty.getHeight() / 2 - 3)
            != full.getPixelAt (full.getWidth() / 2, full.getHeight() / 2 - 3));
-    CHECK (empty.getPixelAt (empty.getWidth() / 2, empty.getHeight() / 2 - 3) == juce::Colours::black);
+    CHECK (empty.getPixelAt (empty.getWidth() / 2, empty.getHeight() / 2 - 3).getPerceivedBrightness()
+           < full.getPixelAt (full.getWidth() / 2, full.getHeight() / 2 - 3).getPerceivedBrightness());
     CHECK (full.getPixelAt (full.getWidth() / 2, full.getHeight() / 2 - 3).getPerceivedBrightness() > 0.2f);
     CHECK (grid.getChildComponent (0)->getDescription().contains ("probability 100"));
     controller.graphicalCellValues = false;
@@ -1135,6 +1138,25 @@ namespace
     }
 }
 
+TEST_CASE ("Clicking below the probability slider selects without changing the cell", "[native-ui][cycle-selection]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 50, 1, 4, 5 }));
+    EditorController controller (processor);
+    controller.layer = Layer::chance;
+    controller.graphicalCellValues = GENERATE (false, true);
+    PatternGrid grid (controller);
+    grid.sync();
+    const auto original = controller.cell ({ 0, 0 });
+    const auto body = grid.cellBounds ({ 0, 0 });
+    const auto point = juce::Point<float> (body.getCentreX(), body.getY() + body.getHeight() * GENERATE (0.75f, 0.9f, 0.98f));
+    grid.mouseDown (gridEvent (grid, point, point, juce::ModifierKeys::leftButtonModifier));
+    CHECK (controller.selected.test (0));
+    grid.mouseUp (gridEvent (grid, point, point, 0));
+    CHECK (controller.cell ({ 0, 0 }) == original);
+    CHECK_FALSE (controller.canUndo());
+}
+
 TEST_CASE ("Select stays highlighted while cells remain selected after releasing modifiers", "[native-ui][selection-heading]")
 {
     PluginProcessor processor;
@@ -1507,6 +1529,7 @@ TEST_CASE ("Selection mutes only unselected active cell colors and leaves empty 
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 70, 80, 3, 2, 4 }));
     EditorController controller (processor);
+    controller.graphicalCellValues = false;
     controller.layer = GENERATE (Layer::velocity, Layer::chance);
     PatternGrid grid (controller);
     grid.setSize (1338, 554);
@@ -2269,7 +2292,7 @@ TEST_CASE ("Chance grid vertical drags adjust probability and preserve cycle and
         controller.selected.set (1);
     }
     const auto bounds = grid.layout.cell ({ 0, 0 });
-    const auto start = juce::Point<float> (bounds.getX() + GENERATE (2.0f, 27.0f, 52.0f), bounds.getY() + GENERATE (2.0f, 27.0f, 52.0f));
+    const auto start = juce::Point<float> (bounds.getX() + GENERATE (2.0f, 27.0f, 52.0f), bounds.getY() + GENERATE (2.0f, 27.0f, 33.0f));
     const int modifiers = juce::ModifierKeys::leftButtonModifier;
     const float horizontalDrag = GENERATE (0.0f, 12.0f);
     const auto down = gridEvent (grid, start, start, modifiers);
@@ -2673,6 +2696,63 @@ TEST_CASE ("Inspector overview layers stay visible through value gestures and re
     CHECK (controller.cell ({ 0, 0 }) == before);
     // Overview values are observational even if generic value helpers are called.
     CHECK (withValue (before, layer, 99) == before);
+}
+
+TEST_CASE ("Cycle beat drags preview and commit only on a valid release", "[native-ui][cycle-drag]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 1, 2 }));
+    EditorController controller (processor);
+    CycleEditor cycle (controller);
+    cycle.locations = [] { return std::vector<Location> { { 0, 0 } }; };
+    cycle.setSize (400, 120);
+    cycle.sync();
+    juce::Button* from = nullptr;
+    juce::Button* to = nullptr;
+    for (auto* child : cycle.getChildren())
+        if (auto* button = dynamic_cast<juce::Button*> (child))
+        {
+            if (button->getButtonText() == "1") from = button;
+            if (button->getButtonText() == "4") to = button;
+        }
+    REQUIRE (from != nullptr);
+    REQUIRE (to != nullptr);
+    const auto before = controller.cell ({ 0, 0 });
+    const auto start = from->getLocalBounds().toFloat().getCentre();
+    auto destination = from->getLocalPoint (to, to->getLocalBounds().toFloat().getCentre());
+    const int mode = GENERATE (0, 1, 2, 3);
+    if (mode == 2)
+        destination.y = -20;
+    auto& dragComponent = static_cast<juce::Component&> (*from);
+    dragComponent.mouseDown (gridEvent (*from, start, start, juce::ModifierKeys::leftButtonModifier));
+    dragComponent.mouseDrag (gridEvent (*from, destination, start, juce::ModifierKeys::leftButtonModifier, true));
+    CHECK (controller.cell ({ 0, 0 }) == before);
+    CHECK_FALSE (controller.canUndo());
+    if (mode == 1)
+        cycle.cancelGesture();
+    if (mode == 3)
+    {
+        REQUIRE (processor.dispatchUiEngineCommand ("cell_probability", { 1, 1, 1, 30 }));
+        controller.refresh();
+    }
+    dragComponent.mouseUp (gridEvent (*from, destination, start, 0, true));
+    auto expected = before;
+    if (mode == 0)
+        expected.cycleMask = 8;
+    if (mode == 3)
+        expected.probability = 30;
+    CHECK (controller.cell ({ 0, 0 }) == expected);
+    if (mode == 0)
+    {
+        REQUIRE (controller.canUndo());
+        controller.undo();
+        CHECK (controller.cell ({ 0, 0 }) == before);
+        CHECK_FALSE (controller.canUndo());
+        controller.redo();
+        CHECK (controller.cell ({ 0, 0 }) == expected);
+    }
+    else
+        CHECK_FALSE (controller.canUndo());
 }
 
 TEST_CASE ("Disabled cycle handles reject input and cancel active drags", "[native-ui]")
