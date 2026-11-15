@@ -1,5 +1,7 @@
 <plist version="1.0"><dict>
 @KSH_IOS_ICLOUD_PLIST_ENTRIES@
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Connect to nearby Bluetooth MIDI devices to send and receive MIDI.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send MIDI notes to music apps and devices on your local network.</string>
     <key>NSBonjourServices</key><array><string>_apple-midi._udp</string></array>

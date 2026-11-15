@@ -191,12 +191,14 @@ private:
                              juce::MidiBuffer& midiOut,
                              MidiPlaybackResult& result,
                              int staticSourceOverride,
-                             double stepDurationMs);
+                             double stepDurationMs,
+                             int earliestHitSample = 0);
     void scheduleHit (int stepSampleOffset,
                       int numSamples,
                       const NativeHit& hit,
                       juce::MidiBuffer& midiOut,
-                      MidiPlaybackResult& result);
+                      MidiPlaybackResult& result,
+                      int earliestHitSample);
     void emitHitAtSample (int onSample,
                           int numSamples,
                           const NativeHit& hit,

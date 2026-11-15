@@ -53,8 +53,9 @@ namespace ksh::ui
         void resized() override
         {
             card = getLocalBounds().withSizeKeepingCentre (juce::jmin (560, getWidth() - 24), juce::jmin (224, getHeight() - 24));
-            discard.setBounds (card.getRight() - 184, card.getBottom() - 56, 160, 32);
-            cancel.setBounds (discard.getX() - 96, discard.getY(), 80, 32);
+            const int buttonHeight = getHeight() > 500 ? 64 : 44;
+            discard.setBounds (card.getRight() - 208, card.getBottom() - buttonHeight - 16, 184, buttonHeight);
+            cancel.setBounds (discard.getX() - 120, discard.getY(), 104, buttonHeight);
         }
         void paint (juce::Graphics& g) override
         {
@@ -63,8 +64,8 @@ namespace ksh::ui
             const auto content = card.toFloat().reduced (24, 0);
             text (g, "Unsaved changes", content.withY (content.getY() + 20).withHeight (26), 20, Palette::text, true, juce::Justification::centredLeft);
             g.setColour (Palette::text);
-            g.setFont (font (14));
-            g.drawFittedText (message, content.withY (content.getY() + 66).withHeight (card.getHeight() - 138).toNearestInt(), juce::Justification::topLeft, 3);
+            g.setFont (font (labelFontSize));
+            g.drawFittedText (message, content.withY (content.getY() + 60).withHeight (static_cast<float> (discard.getY() - card.getY() - 72)).toNearestInt(), juce::Justification::topLeft, 3, 1.0f);
         }
 
     private:
@@ -81,13 +82,7 @@ namespace ksh::ui
         {
             setWantsKeyboardFocus (false);
             setMouseCursor (juce::MouseCursor::PointingHandCursor);
-            addAndMakeVisible (info);
-            info.setTitle ("Project details");
-            info.setTooltip ("View project dates and edit the name, author and description");
-            info.getProperties().set ("icon", "info");
             onClick = [this] { if (onDetails) onDetails(); };
-            info.onClick = onClick;
-            info.setMouseCursor (juce::MouseCursor::PointingHandCursor);
         }
         std::function<void()> onDetails;
         void setProjectName (const juce::String& value)
@@ -99,18 +94,16 @@ namespace ksh::ui
             setTooltip (name);
             repaint();
         }
-        void resized() override { info.setBounds (getWidth() - getHeight(), 0, getHeight(), getHeight()); }
         void paint (juce::Graphics& g) override
         {
             surface (g, getLocalBounds().toFloat().reduced (0.5f));
             g.setColour (Palette::text);
-            g.setFont (font (13, true));
-            g.drawText (name, getLocalBounds().withTrimmedRight (getHeight() + 8).reduced (12, 0), juce::Justification::centredLeft, true);
+            g.setFont (font (getHeight() >= 60 ? 18.0f : 13.0f, true));
+            g.drawText (name, getLocalBounds().reduced (12, 0), juce::Justification::centredLeft, true);
         }
 
     private:
         juce::String name;
-        juce::TextButton info;
     };
 
     class ProjectDetails : public juce::Component
@@ -124,7 +117,7 @@ namespace ksh::ui
             for (auto* field : { &name, &author, &description })
             {
                 addAndMakeVisible (*field);
-                field->setFont (font (14));
+                field->setFont (font (labelFontSize));
                 field->setIndents (10, 8);
                 field->getProperties().set ("projectMetadata", true);
                 field->onEscapeKey = [this] { dismiss(); };
@@ -143,7 +136,7 @@ namespace ksh::ui
             for (auto* date : { &created, &modified })
             {
                 addAndMakeVisible (*date);
-                date->setFont (font (13));
+                date->setFont (font (labelFontSize));
                 date->setColour (juce::Label::textColourId, Palette::text);
                 date->setBorderSize ({});
                 date->setEditable (false, false, false);
@@ -152,6 +145,18 @@ namespace ksh::ui
             modified.setTitle ("Last modified date, read only");
             addAndMakeVisible (cancel);
             addAndMakeVisible (apply);
+           #if JUCE_IOS
+            addAndMakeVisible (share);
+            share.setTooltip ("Share a project copy");
+            share.onClick = [this]
+            {
+                if (onShare && epoch == processor.getUiBridge().getDocumentEpoch())
+                {
+                    dismiss();
+                    onShare();
+                }
+            };
+           #endif
             cancel.onClick = [this] { dismiss(); };
             apply.onClick = [this]
             {
@@ -160,6 +165,9 @@ namespace ksh::ui
             };
         }
         std::function<void()> onClose;
+       #if JUCE_IOS
+        std::function<void()> onShare;
+       #endif
         void open()
         {
             epoch = processor.getUiBridge().getDocumentEpoch();
@@ -201,17 +209,21 @@ namespace ksh::ui
         }
         void resized() override
         {
-            card = getLocalBounds().withSizeKeepingCentre (juce::jmin (640, getWidth() - 24), juce::jmin (400, getHeight() - 24));
+            card = getLocalBounds().withSizeKeepingCentre (juce::jmin (760, getWidth() - 24), juce::jmin (480, getHeight() - 24));
             const int x = card.getX() + 24, y = card.getY(), width = card.getWidth() - 48;
             const int nameWidth = (width - 16) * 3 / 5;
-            name.setBounds (x, y + 80, nameWidth, 32);
-            author.setBounds (x + nameWidth + 16, y + 80, width - nameWidth - 16, 32);
-            description.setBounds (x, y + 148, width, card.getHeight() - 300);
+            const int controlHeight = getHeight() > 500 ? 64 : 44;
+            name.setBounds (x, y + 80, nameWidth, controlHeight);
+            author.setBounds (x + nameWidth + 16, y + 80, width - nameWidth - 16, controlHeight);
+            description.setBounds (x, name.getBottom() + 36, width, card.getHeight() - controlHeight - 278);
             const int datesY = description.getBottom() + 36;
             created.setBounds (x, datesY, (width - 16) / 2, 22);
             modified.setBounds (x + (width + 16) / 2, datesY, (width - 16) / 2, 22);
-            apply.setBounds (card.getRight() - 144, card.getBottom() - 52, 120, 32);
-            cancel.setBounds (apply.getX() - 96, apply.getY(), 80, 32);
+            apply.setBounds (card.getRight() - 144, card.getBottom() - controlHeight - 16, 120, controlHeight);
+            cancel.setBounds (apply.getX() - 120, apply.getY(), 104, controlHeight);
+           #if JUCE_IOS
+            share.setBounds (x, apply.getY(), 120, controlHeight);
+           #endif
         }
         void paint (juce::Graphics& g) override
         {
@@ -250,5 +262,8 @@ namespace ksh::ui
         juce::TextEditor name, author, description;
         juce::Label created, modified;
         juce::TextButton cancel { "Cancel" }, apply { "Apply" };
+       #if JUCE_IOS
+        juce::TextButton share { "Share" };
+       #endif
     };
 }

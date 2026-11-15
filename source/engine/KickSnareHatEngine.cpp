@@ -1271,8 +1271,8 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
     rate = Constants::normalizeRate (state["rate"].get<std::string>());
     tempo = std::clamp (state.value ("tempo", tempo), 20.0, 300.0);
     swing = clampInt (state["swing"].get<int>(), 0, 100);
-    swingSubdivisionIndex = clampSwingSubdivisionIndex (
-        state.value ("swingSubdivisionIndex", Constants::defaultSwingSubdivisionIndex));
+    // Older projects without a stored target used 2x.
+    swingSubdivisionIndex = clampSwingSubdivisionIndex (state.value ("swingSubdivisionIndex", 1));
     velocityHumanize = clampInt (state["velocityHumanize"].get<int>(), 0, 100);
     timingHumanize = clampInt (state["timingHumanize"].get<int>(), 0, 100);
 

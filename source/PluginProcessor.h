@@ -2,6 +2,7 @@
 
 #include "KshUiBridge.h"
 #include "platform/KshIOSProjectLibrary.h"
+#include "platform/StandaloneMidiOutput.h"
 #include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
 #include "engine/KshMidiPlayback.h"
@@ -117,11 +118,24 @@ public:
     bool hasStandaloneTransport() const;
     // Message-thread services supplied by the standalone wrapper, never used by processBlock.
     std::function<void (juce::Component&)> showStandaloneMidiOutputMenu;
+    std::function<void()> showStandaloneAudioSettings;
     std::function<juce::String()> standaloneMidiOutputName;
+    // Call only from the standalone holder, off the audio thread.
+    void setStandaloneMidiOutput (ksh::StandaloneMidiOutput*);
     void setStandaloneTransportPlaying (bool shouldPlay);
     bool isStandaloneTransportPlaying() const;
     void setStandaloneTempoBpm (double bpm);
     double getStandaloneTempoBpm();
+    void setStandaloneMetronomeEnabled (bool enabled) { standaloneMetronomeEnabled.store (enabled, std::memory_order_relaxed); }
+    bool isStandaloneMetronomeEnabled() const { return standaloneMetronomeEnabled.load (std::memory_order_relaxed); }
+    enum class MetronomeSound { classic, wood, claves };
+    void setMetronomeSound (MetronomeSound sound) { metronomeSound.store (sound, std::memory_order_relaxed); }
+    MetronomeSound getMetronomeSound() const { return metronomeSound.load (std::memory_order_relaxed); }
+    void setMetronomeVolume (int percent) { metronomeVolume.store (juce::jlimit (0, 100, percent), std::memory_order_relaxed); }
+    int getMetronomeVolume() const { return metronomeVolume.load (std::memory_order_relaxed); }
+    void setMetronomePitch (int pitch) { metronomePitch.store (juce::jlimit (-1, 1, pitch), std::memory_order_relaxed); }
+    int getMetronomePitch() const { return metronomePitch.load (std::memory_order_relaxed); }
+    uint32_t getStandaloneMidiActivity() const { return standaloneMidiActivity.load (std::memory_order_relaxed); }
 
     int getProjectUiScalePercent() const noexcept { return projectUiScalePercent; }
     void setProjectUiScalePercent (int uiScalePercent);
@@ -163,6 +177,9 @@ public:
    #endif
 
 private:
+    ksh::StandaloneMidiOutput* standaloneMidiOutput = nullptr;
+    void sendStandaloneMidiOutput (const juce::MidiBuffer&, int numSamples);
+    void renderStandaloneMetronome (juce::AudioBuffer<float>&, double ppq, double bpm, bool playing, bool reset);
     friend class PluginProcessorTestPeer;
    #if JUCE_IOS
     std::shared_ptr<ksh::IOSProjectLibrary> iosProjectLibrary;
@@ -281,6 +298,14 @@ private:
     std::atomic<double> standaloneTransportPpqPosition { 0.0 };
     std::atomic<int> standaloneTransportResetRequested { 0 };
     std::atomic<int> standaloneStopAllNotesRequested { 0 };
+    std::atomic<bool> standaloneMetronomeEnabled { false };
+    std::atomic<MetronomeSound> metronomeSound { MetronomeSound::classic };
+    std::atomic<int> metronomeVolume { 100 }, metronomePitch { 0 };
+    std::atomic<uint32_t> standaloneMidiActivity { 0 };
+    int metronomeClickSample = 0; // Audio thread only.
+    bool metronomeDownbeat = false;
+    MetronomeSound clickSound = MetronomeSound::classic;
+    int clickPitch = 0;
     std::atomic<int> patternRecordingEnabled { 0 };
     std::atomic<int> patternRecordingQuantizeStrength { 100 };
     std::atomic<int> patternRecordingOffsetMs { 0 };

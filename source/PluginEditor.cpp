@@ -9,8 +9,6 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
     startTimerHz (10);
    #endif
     nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
-    if (fitViewport)
-        nativeView->useViewportFit();
     addAndMakeVisible (*nativeView);
     nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
     nativeView->zenModeChanged = [this] (bool enabled) { setZenMode (enabled); };

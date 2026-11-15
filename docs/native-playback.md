@@ -47,6 +47,8 @@ For each emitted global step, playback resolves:
 
 The runner uses a small realtime-safe RNG for probability and humanize decisions. There is no precomputed playback table; every step is evaluated live from the snapshot.
 
+When the host reports an active loop, attacks belonging to a loop pass are clamped to that pass's start. Negative timing humanization and cell nudges still apply within the pass, but cannot move its first attacks ahead of the host wrap (or ahead of the initial loop start during a lead-in). Lookahead retains those attacks as pending note-ons until the boundary, so they are emitted once without relying on a downstream instrument to sustain a note across a transport wrap.
+
 ## Tests
 
 ```sh

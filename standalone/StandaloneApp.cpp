@@ -9,6 +9,13 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 
+#if JUCE_IOS
+void kshDeferIPhoneEdgeGestures (void* nativeView);
+#endif
+#if defined (KSH_IPAD_SYSTEM_OVERLAYS)
+extern "C" void kshHideIPadSystemOverlays (const void* nativeView);
+#endif
+
 namespace juce
 {
 namespace
@@ -17,6 +24,10 @@ constexpr auto virtualMidiOutputName = "KSH Output";
 constexpr auto networkMidiOutputName = "Network Session";
 constexpr auto networkMidiOutputSetting = "kshNetworkMidiOutput";
 constexpr auto networkMidiOutputMenuId = 10000;
+#if JUCE_IOS
+constexpr auto bluetoothMidiMenuId = 10001;
+#endif
+
 }
 
 class KshStandalonePluginHolder final : public StandalonePluginHolder,
@@ -60,15 +71,15 @@ public:
         midiDeviceChanges = MidiDeviceListConnection::make ([this]
         {
             refreshMidiInputs();
-            updateNetworkForwarding();
+            updateMidiOutput();
         });
         refreshMidiInputs();
-        installMidiOutputServices();
+        installStandaloneServices();
     }
 
     ~KshStandalonePluginHolder() override
     {
-        clearMidiOutputServices();
+        clearStandaloneServices();
         masterReference.clear();
         midiDeviceChanges.reset();
         deviceManager.removeChangeListener (this);
@@ -85,21 +96,37 @@ public:
     void createPlugin() override
     {
         StandalonePluginHolder::createPlugin();
-        installMidiOutputServices();
+        installStandaloneServices();
     }
 
     void deletePlugin() override
     {
-        clearMidiOutputServices();
+        clearStandaloneServices();
         StandalonePluginHolder::deletePlugin();
     }
 
 private:
-    void installMidiOutputServices()
+   #if JUCE_IOS
+    void audioDeviceAboutToStart (AudioIODevice* device) override
+    {
+        emptyBuffer.setSize (device->getActiveInputChannels().countNumberOfSetBits(), device->getCurrentBufferSizeSamples());
+        emptyBuffer.clear();
+        player.audioDeviceAboutToStart (device);
+        player.setMidiOutput (nullptr);
+    }
+   #endif
+
+    void installStandaloneServices()
     {
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
         {
+           #if JUCE_MAC
+            plugin->showStandaloneAudioSettings = [this] { showAudioSettingsDialog(); };
+           #endif
             plugin->setTimestampedStandaloneMidiInput (true);
+           #if JUCE_IOS
+            updateMidiOutput();
+           #endif
             plugin->showStandaloneMidiOutputMenu = [this] (Component& target) { showMidiOutputMenu (target); };
             plugin->standaloneMidiOutputName = [this]
             {
@@ -114,11 +141,13 @@ private:
         }
     }
 
-    void clearMidiOutputServices()
+    void clearStandaloneServices()
     {
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
         {
+            plugin->setStandaloneMidiOutput (nullptr);
             plugin->showStandaloneMidiOutputMenu = {};
+            plugin->showStandaloneAudioSettings = {};
             plugin->standaloneMidiOutputName = {};
         }
     }
@@ -146,18 +175,44 @@ private:
             menu.addItem (i + 2, destinations[i].name, true, destinations[i].identifier == selected);
         if (destinations.isEmpty())
             menu.addItem (destinations.size() + 2, "No connected MIDI destinations", false);
+       #if JUCE_IOS
+        menu.addSeparator();
+        menu.addItem (bluetoothMidiMenuId, String::fromUTF8 ("Connect Bluetooth MIDI…"),
+                      BluetoothMidiDevicePairingDialogue::isAvailable());
+        const Component::SafePointer<Component> menuTarget (&target);
+       #endif
         const WeakReference<KshStandalonePluginHolder> weak (this);
         menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&target)
                                .withParentComponent (target.getTopLevelComponent())
                                .withStandardItemHeight (44)
                                .withMinimumWidth (260)
-                               .withMaximumNumColumns (1), [weak, destinations] (int result)
+                               .withMaximumNumColumns (1), [weak, destinations
+                              #if JUCE_IOS
+                               , menuTarget
+                              #endif
+                               ] (int result)
         {
             if (weak == nullptr || result == 0)
                 return;
-            const auto network = result == networkMidiOutputMenuId;
-            const auto identifier = result == 1 || network ? String() : destinations[result - 2].identifier;
-            weak->selectMidiOutput (identifier, network);
+           #if JUCE_IOS
+            if (result == bluetoothMidiMenuId)
+            {
+                const bool opened = BluetoothMidiDevicePairingDialogue::open (ModalCallbackFunction::create ([weak, menuTarget] (int)
+                {
+                    if (weak != nullptr && menuTarget != nullptr && menuTarget->isShowing())
+                        weak->showMidiOutputMenu (*menuTarget);
+                }));
+                if (!opened)
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Bluetooth MIDI",
+                                                      "Could not open the Bluetooth MIDI device picker.");
+                return;
+            }
+           #endif
+            const auto useNetwork = result == networkMidiOutputMenuId;
+            if (result != 1 && !useNetwork && !isPositiveAndBelow (result - 2, destinations.size()))
+                return;
+            const auto identifier = result == 1 || useNetwork ? String() : destinations[result - 2].identifier;
+            weak->selectMidiOutput (identifier, useNetwork);
         });
     }
 
@@ -165,6 +220,10 @@ private:
     {
         // Detach and flush the old route before the manager closes it.
         player.setMidiOutput (nullptr);
+       #if JUCE_IOS
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+            plugin->setStandaloneMidiOutput (nullptr);
+       #endif
         auto* oldOutput = deviceManager.getDefaultMidiOutput();
         if (oldOutput == nullptr)
             oldOutput = virtualMidiOutput.get();
@@ -229,7 +288,9 @@ private:
         if (virtualMidiOutput != nullptr)
         {
             virtualOutputInfo = virtualMidiOutput->getDeviceInfo();
+           #if ! JUCE_IOS
             virtualMidiOutput->startBackgroundThread();
+           #endif
         }
     }
 
@@ -239,9 +300,30 @@ private:
         // priority over the local virtual source. JUCE persists this selection.
         auto* selected = deviceManager.getDefaultMidiOutput();
         auto* output = selected != nullptr ? selected : virtualMidiOutput.get();
+       #if JUCE_IOS
+        // CoreMIDI receives audio-clock timestamps directly. Never let the
+        // AudioProcessorPlayer also send the same block via its timer queue.
+        player.setMidiOutput (nullptr);
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+        {
+            const auto info = output != nullptr ? output->getDeviceInfo() : MidiDeviceInfo();
+            if (output != nullptr && !nativeMidiOutput.matches (info, selected == nullptr))
+            {
+                plugin->setStandaloneMidiOutput (nullptr);
+                const auto error = nativeMidiOutput.open (info, selected == nullptr);
+                if (error.isNotEmpty())
+                {
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output", error);
+                    return;
+                }
+            }
+            plugin->setStandaloneMidiOutput (output != nullptr ? &nativeMidiOutput : nullptr);
+        }
+       #else
         if (output != nullptr && !output->isBackgroundThreadRunning())
             output->startBackgroundThread();
         player.setMidiOutput (output);
+       #endif
         updateNetworkForwarding();
     }
 
@@ -265,6 +347,7 @@ private:
     MidiDeviceListConnection midiDeviceChanges;
     const bool autoOpenExternalMidiDevices;
    #if JUCE_IOS
+    ksh::StandaloneIOSMidiOutput nativeMidiOutput;
     ksh::StandaloneNetworkMidiForwarder networkForwarder;
     bool networkOutputSelected = false;
     String networkForwardingError;
@@ -316,10 +399,20 @@ public:
             return nullptr;
         }
 
-        return new StandaloneFilterWindow (
+        auto* window = new StandaloneFilterWindow (
             getApplicationName(),
             LookAndFeel::getDefaultLookAndFeel().findColour (ResizableWindow::backgroundColourId),
             createPluginHolder());
+       #if JUCE_MAC
+        // JUCE keeps Options as a child even with native window chrome.
+        for (auto* child : window->getChildren())
+            if (auto* button = dynamic_cast<TextButton*> (child); button != nullptr && button->getButtonText() == "Options")
+                button->setVisible (false);
+        const auto contentSize = window->getContentComponent()->getLocalBounds();
+        window->setUsingNativeTitleBar (true);
+        window->setContentComponentSize (contentSize.getWidth(), contentSize.getHeight());
+       #endif
+        return window;
     }
 
     std::unique_ptr<StandalonePluginHolder> createPluginHolder()
@@ -363,6 +456,9 @@ public:
            #endif
 
             mainWindow->setVisible (true);
+           #if JUCE_IOS
+            updateFullscreenSystemGestures();
+           #endif
         }
         else
         {
@@ -379,6 +475,11 @@ public:
     }
 
    #if JUCE_IOS
+    void resumed() override
+    {
+        updateFullscreenSystemGestures();
+    }
+
     void suspended() override
     {
         // iOS may terminate a backgrounded app without calling shutdown().
@@ -409,6 +510,22 @@ protected:
     std::unique_ptr<StandaloneFilterWindow> mainWindow;
 
 private:
+   #if JUCE_IOS
+    void updateFullscreenSystemGestures()
+    {
+        auto* peer = mainWindow != nullptr ? mainWindow->getPeer() : nullptr;
+        auto* nativeView = peer != nullptr ? peer->getNativeHandle() : nullptr;
+        if (nativeView == nullptr)
+            return;
+
+        if (mainWindow->isFullScreen())
+            kshDeferIPhoneEdgeGestures (nativeView);
+       #if defined (KSH_IPAD_SYSTEM_OVERLAYS)
+        kshHideIPadSystemOverlays (nativeView);
+       #endif
+    }
+   #endif
+
     void saveCurrentPluginState()
     {
         const auto saveHolder = [] (StandalonePluginHolder& holder)

@@ -17,9 +17,11 @@ namespace ksh::ui
         void sync();
         void updatePlayback();
         void paint (juce::Graphics&) override;
+        static void paintBranding (juce::Graphics&, juce::Rectangle<float>);
         void resized() override;
         void setInspectorBounds (juce::Rectangle<int>);
         void setCompact (bool);
+        void setDisplayedLayer (Layer);
         void cancelGesture();
         bool reverseRows = false;
 
@@ -52,7 +54,6 @@ namespace ksh::ui
         ValueControl refresh, velocity, probability, roll, nudge;
         std::array<ValueControl, 8> locks;
         CycleEditor cycle;
-        ValueControl cycleLength;
         std::vector<std::pair<Location, Cell>> valueStarts;
         std::optional<Layer> previousLayer;
         std::array<std::array<bool, 32>, 8> flashes {};
@@ -69,6 +70,7 @@ namespace ksh::ui
         std::optional<Painted> painted;
         void beginRelative (const juce::String&);
         void applyRelative (Layer, int);
+        void resetSelectedValue (const juce::String&, int Cell::*, int);
         void updateHoverLayer (juce::Point<int>);
         void setHoverLayer (std::optional<Layer>);
     };

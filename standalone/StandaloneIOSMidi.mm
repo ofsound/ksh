@@ -1,5 +1,7 @@
 #import <CoreMIDI/CoreMIDI.h>
 #include "StandaloneMidiRouting.h"
+#include "StandaloneMidiClock.h"
+#include <mach/mach_time.h>
 
 namespace ksh
 {
@@ -22,7 +24,7 @@ namespace ksh
 
         // Must match JUCE's CoreMIDI identifier for an unconnected, non-external
         // endpoint so a JUCE-listed duplicate of the session can be hidden.
-        juce::MidiDeviceInfo getJuceEndpointInfo (MIDIEndpointRef endpoint)
+        juce::MidiDeviceInfo getJuceEndpointInfo (MIDIEndpointRef endpoint, bool external = false)
         {
             MIDIEntityRef entity = 0;
             MIDIEndpointGetEntity (endpoint, &entity);
@@ -36,9 +38,53 @@ namespace ksh
             if (device == 0)
                 return result;
             const auto info = getObjectInfo (device);
+            if (external && device != 0 && MIDIDeviceGetNumberOfEntities (device) < 2)
+            {
+                result.name = info.name;
+                return result;
+            }
             if (info == juce::MidiDeviceInfo() || result.name.startsWithIgnoreCase (info.name))
                 return result;
             return { (info.name + " " + result.name).trimEnd(), info.identifier + " " + result.identifier };
+        }
+
+        juce::MidiDeviceInfo getConnectedEndpointInfo (MIDIEndpointRef endpoint)
+        {
+            juce::MidiDeviceInfo result;
+            CFDataRef connections = nullptr;
+            MIDIObjectGetDataProperty (endpoint, kMIDIPropertyConnectionUniqueID, &connections);
+            if (connections != nullptr)
+            {
+                const auto count = CFDataGetLength (connections) / static_cast<CFIndex> (sizeof (MIDIUniqueID));
+                const auto* ids = reinterpret_cast<const UInt32*> (CFDataGetBytePtr (connections));
+                for (CFIndex i = 0; i < count; ++i)
+                {
+                    MIDIObjectRef object = 0;
+                    MIDIObjectType type {};
+                    if (MIDIObjectFindByUniqueID (static_cast<MIDIUniqueID> (CFSwapInt32BigToHost (ids[i])), &object, &type) != noErr)
+                        continue;
+                    const auto info = type == kMIDIObjectType_ExternalSource || type == kMIDIObjectType_ExternalDestination
+                                          ? getJuceEndpointInfo (object, true) : getObjectInfo (object);
+                    if (info == juce::MidiDeviceInfo())
+                        continue;
+                    result.name += (result.name.isEmpty() ? "" : ", ") + info.name;
+                    result.identifier += (result.identifier.isEmpty() ? "" : ", ") + info.identifier;
+                }
+                CFRelease (connections);
+            }
+            return result == juce::MidiDeviceInfo() ? getJuceEndpointInfo (endpoint) : result;
+        }
+
+        MIDIEndpointRef findDestination (const juce::MidiDeviceInfo& info)
+        {
+            if (info.identifier.isEmpty())
+                return 0;
+            // Match JUCE's full identifier, including external-device connections;
+            // never guess from a display name (two keyboards can share a name).
+            for (ItemCount i = 0; i < MIDIGetNumberOfDestinations(); ++i)
+                if (const auto endpoint = MIDIGetDestination (i); getConnectedEndpointInfo (endpoint).identifier == info.identifier)
+                    return endpoint;
+            return 0;
         }
 
         MIDINetworkSession* enableSession()
@@ -92,6 +138,146 @@ namespace ksh
             return {};
         info.name = "Network Session";
         return info;
+    }
+
+    struct StandaloneIOSMidiOutput::Impl
+    {
+        juce::MidiDeviceInfo info;
+        bool virtualSource = false;
+        MIDIClientRef client = 0;
+        MIDIPortRef port = 0;
+        MIDIEndpointRef endpoint = 0;
+        uint8_t group = 0;
+        mach_timebase_info_data_t timebase {};
+        StandaloneMidiClock clock;
+        MIDITimeStamp lastScheduledTime = 0;
+
+        ~Impl()
+        {
+            if (port != 0)
+                MIDIPortDispose (port);
+            if (client != 0)
+                MIDIClientDispose (client);
+        }
+
+        void submit (const MIDIEventList* events) const
+        {
+            if (virtualSource)
+                MIDIReceivedEventList (endpoint, events);
+            else
+                MIDISendEventList (port, endpoint, events);
+        }
+
+        void silence (MIDITimeStamp time) const
+        {
+            alignas (MIDIEventList) std::byte storage[1024] {};
+            auto* events = reinterpret_cast<MIDIEventList*> (storage);
+            auto* packet = MIDIEventListInit (events, kMIDIProtocol_1_0);
+            for (UInt32 channel = 0; channel < 16; ++channel)
+            {
+                // Sustain off before all-notes-off, including MIDI thru notes.
+                const UInt32 words[] { 0x20b04000u | (UInt32 (group) << 24) | (channel << 16),
+                                       0x20b07b00u | (UInt32 (group) << 24) | (channel << 16) };
+                packet = MIDIEventListAdd (events, sizeof (storage), packet, time, 2, words);
+            }
+            submit (events);
+        }
+    };
+
+    StandaloneIOSMidiOutput::StandaloneIOSMidiOutput() = default;
+    StandaloneIOSMidiOutput::~StandaloneIOSMidiOutput() { stop(); }
+
+    bool StandaloneIOSMidiOutput::matches (const juce::MidiDeviceInfo& info, bool virtualSource) const
+    {
+        return impl != nullptr && impl->info == info && impl->virtualSource == virtualSource
+               && impl->endpoint == (virtualSource ? findSource (info) : findDestination (info));
+    }
+
+    juce::String StandaloneIOSMidiOutput::open (const juce::MidiDeviceInfo& info, bool virtualSource)
+    {
+        stop();
+        impl.reset();
+        auto next = std::make_unique<Impl>();
+        next->info = info;
+        next->virtualSource = virtualSource;
+        next->endpoint = virtualSource ? findSource (info) : findDestination (info);
+        if (next->endpoint == 0)
+            return "MIDI endpoint not found: " + info.name;
+        if (mach_timebase_info (&next->timebase) != KERN_SUCCESS || next->timebase.numer == 0 || next->timebase.denom == 0)
+            return "Host clock unavailable";
+        if (!virtualSource)
+        {
+            if (MIDIClientCreateWithBlock (CFSTR ("KSH Timestamped MIDI"), &next->client, nil) != noErr
+                || MIDIOutputPortCreate (next->client, CFSTR ("KSH Timestamped Out"), &next->port) != noErr)
+                return "Could not create MIDI output port";
+            if (@available (iOS 18.0, *))
+            {
+                SInt32 bitmap = 0;
+                if (MIDIObjectGetIntegerProperty (next->endpoint, kMIDIPropertyUMPActiveGroupBitmap, &bitmap) == noErr && bitmap != 0)
+                    for (uint8_t group = 0; group < 16; ++group)
+                        if ((bitmap & (1 << group)) != 0)
+                        {
+                            next->group = group;
+                            break;
+                        }
+            }
+        }
+        impl = std::move (next);
+        return {};
+    }
+
+    void StandaloneIOSMidiOutput::prepare (double sampleRate, int maximumBlockSize)
+    {
+        if (impl != nullptr)
+        {
+            stop();
+            impl->clock.prepare (sampleRate, maximumBlockSize);
+        }
+    }
+
+    void StandaloneIOSMidiOutput::send (const juce::MidiBuffer& midi, juce::Optional<juce::uint64> hostTimeNs, int numSamples)
+    {
+        if (impl == nullptr)
+            return;
+        const auto now = mach_absolute_time();
+        const auto nowNs = StandaloneMidiClock::nanosecondsToHostTicks (now, impl->timebase.denom, impl->timebase.numer);
+        const auto blockTime = impl->clock.beginBlock (hostTimeNs, nowNs, numSamples);
+        alignas (MIDIEventList) std::byte storage[4096] {};
+        auto* events = reinterpret_cast<MIDIEventList*> (storage);
+        auto* end = MIDIEventListInit (events, kMIDIProtocol_1_0);
+        forEachStandaloneMidiPacket (midi, impl->group, [&] (int offset, const juce::ump::View& view)
+        {
+            const auto time = StandaloneMidiClock::nanosecondsToHostTicks (impl->clock.eventTime (blockTime, offset),
+                                                                         impl->timebase.numer, impl->timebase.denom);
+            const auto* words = reinterpret_cast<const UInt32*> (view.data());
+            auto* added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
+            if (added == nullptr)
+            {
+                impl->submit (events);
+                end = MIDIEventListInit (events, kMIDIProtocol_1_0);
+                added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
+            }
+            jassert (added != nullptr); // A UMP is at most 16 bytes.
+            end = added;
+            impl->lastScheduledTime = juce::jmax (impl->lastScheduledTime, time);
+        });
+        if (events->numPackets != 0)
+            impl->submit (events);
+    }
+
+    void StandaloneIOSMidiOutput::stop()
+    {
+        if (impl == nullptr || impl->lastScheduledTime == 0)
+            return;
+        const auto now = mach_absolute_time();
+        if (!impl->virtualSource)
+            MIDIFlushOutput (impl->endpoint);
+        impl->silence (now);
+        // Published virtual events cannot be recalled from other clients. Ensure
+        // their queued note-ons are followed by a final panic as well.
+        if (impl->lastScheduledTime > now)
+            impl->silence (impl->lastScheduledTime + 1);
+        impl->lastScheduledTime = 0;
     }
 
     // JUCE 8 on iOS 18+ treats the session's port as a multi-group UMP device
@@ -154,13 +340,14 @@ namespace ksh
         if (impl == nullptr)
             return;
         MIDIPortDisconnectSource (impl->input, impl->source);
+        MIDIFlushOutput (impl->destination);
         alignas (MIDIEventList) std::byte storage[1024] {};
         auto* events = reinterpret_cast<MIDIEventList*> (storage);
         auto* packet = MIDIEventListInit (events, kMIDIProtocol_1_0);
         for (UInt32 channel = 0; channel < 16 && packet != nullptr; ++channel)
         {
-            const UInt32 allNotesOff = 0x20000000u | ((0xB0u | channel) << 16) | (123u << 8);
-            packet = MIDIEventListAdd (events, sizeof (storage), packet, 0, 1, &allNotesOff);
+            const UInt32 silence[] { 0x20b04000u | (channel << 16), 0x20b07b00u | (channel << 16) };
+            packet = MIDIEventListAdd (events, sizeof (storage), packet, 0, 2, silence);
         }
         MIDISendEventList (impl->output, impl->destination, events);
         impl.reset();

@@ -129,7 +129,7 @@ TEST_CASE ("nudged generative playback is repeatable across different callback s
     CHECK (render (8189) == small);
 }
 
-TEST_CASE ("early cells repeat across host loop wraps without duplicate hits", "[engine][transport][nudge]")
+TEST_CASE ("early loop-start cells wait for the host wrap without duplicate hits", "[engine][transport][nudge]")
 {
     EngineFixture fixture;
     fixture.clearAll();
@@ -154,7 +154,7 @@ TEST_CASE ("early cells repeat across host loop wraps without duplicate hits", "
             if (event.getMessage().isNoteOn())
                 ons.push_back (sample + event.samplePosition);
     }
-    CHECK (ons == std::vector<int> { 0, 21000, 45000, 69000 });
+    CHECK (ons == std::vector<int> { 0, 24000, 48000 });
 }
 
 TEST_CASE ("deferred roll notes and gates keep exact sample timing across buffer boundaries", "[engine][transport][realtime]")
@@ -289,7 +289,7 @@ TEST_CASE ("timing humanize is centered on every swung or straight hit including
     }
 }
 
-TEST_CASE ("humanized early hits cross host loop boundaries once regardless of buffer size", "[engine][transport][humanize]")
+TEST_CASE ("humanized early hits respect host loop boundaries regardless of buffer size", "[engine][transport][humanize]")
 {
     const int nudge = GENERATE (0, -100);
     EngineFixture fixture;
@@ -319,7 +319,8 @@ TEST_CASE ("humanized early hits cross host loop boundaries once regardless of b
             if (! looping)
                 state.stepCount = 4;
             runner.processBlock (state, static_cast<double> (looping ? sample % loopSamples : sample) / 24000.0,
-                                 120.0, true, count, midi, {}, { looping, 0.0, 1.0 });
+                                 120.0, true, count, midi, {}, { looping, 0.0, 1.0 }, 0.0,
+                                 looping ? std::nullopt : std::optional<int> { 32 });
             for (const auto event : midi)
                 if (event.getMessage().isNoteOn())
                     hits.push_back (sample + event.samplePosition);
@@ -327,10 +328,93 @@ TEST_CASE ("humanized early hits cross host loop boundaries once regardless of b
         }
         return hits;
     };
-    const auto expected = render (64, false);
-    REQUIRE (expected.size() >= 31);
+    auto expected = render (64, false);
+    REQUIRE (expected.size() == 32);
+    for (size_t i = 0; i < expected.size(); ++i)
+        expected[i] = std::max (expected[i], static_cast<int> (i / 4) * 24000);
     CHECK (render (64, true) == expected);
     CHECK (render (3000, true) == expected);
+}
+
+TEST_CASE ("host loop downbeats never anticipate the wrap or disappear between callbacks", "[engine][transport][humanize][loop-boundary]")
+{
+    const int loopSteps = GENERATE (1, 4, 16);
+    const int blockSize = GENERATE (64, 512, 700, 4096);
+    const int nudge = GENERATE (0, -100);
+    CAPTURE (loopSteps, blockSize, nudge);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (loopSteps);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTimingHumanize (100);
+    fixture.engine.setCell (0, 0, 0, true, 100);
+    fixture.engine.setCellNudge (0, 0, 0, nudge);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const int loopSamples = loopSteps * 6000;
+    const auto render = [&] (bool looping)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<int> hits;
+        for (int sample = 0; sample < loopSamples * 8; sample += blockSize)
+        {
+            juce::MidiBuffer midi;
+            const int count = std::min (blockSize, loopSamples * 8 - sample);
+            runner.processBlock (snapshot, static_cast<double> (looping ? sample % loopSamples : sample) / 24000.0,
+                                 120.0, true, count, midi, {}, { looping, 0.0, loopSteps * 0.25 }, 0.0,
+                                 looping ? std::nullopt : std::optional<int> { loopSteps * 8 });
+            for (const auto event : midi)
+                if (event.getMessage().isNoteOn())
+                    hits.push_back (sample + event.samplePosition);
+        }
+        return hits;
+    };
+    auto expected = render (false);
+    REQUIRE (expected.size() == 8);
+    for (size_t i = 0; i < expected.size(); ++i)
+        expected[i] = std::max (expected[i], static_cast<int> (i) * loopSamples);
+    CHECK (render (true) == expected);
+}
+
+TEST_CASE ("the initial host loop downbeat cannot be humanized into the lead-in", "[engine][transport][humanize][loop-boundary]")
+{
+    const double loopStart = GENERATE (0.0, 4.0);
+    const int blockSize = GENERATE (64, 512, 700);
+    CAPTURE (loopStart, blockSize);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setVelocityHumanize (11);
+    fixture.engine.setTimingHumanize (100);
+    fixture.engine.setCell (0, 0, 0, true, 100);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto render = [&] (bool reportLoop)
+    {
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<int> hits;
+        for (int sample = 0; sample < 12000; sample += blockSize)
+        {
+            juce::MidiBuffer midi;
+            runner.processBlock (snapshot, loopStart - 0.25 + static_cast<double> (sample) / 24000.0,
+                                 120.0, true, blockSize, midi, {}, { reportLoop, loopStart, loopStart + 1.0 });
+            for (const auto event : midi)
+                if (event.getMessage().isNoteOn())
+                    hits.push_back (sample + event.samplePosition);
+        }
+        return hits;
+    };
+    const auto unbounded = render (false);
+    REQUIRE (unbounded.size() == 1);
+    REQUIRE (unbounded.front() < 6000);
+    CHECK (render (true) == std::vector<int> { 6000 });
 }
 
 TEST_CASE ("audition note gate expires at its exact sample deadline", "[engine][transport][realtime]")
@@ -1132,27 +1216,27 @@ TEST_CASE ("midi playback uses the selected swing subdivision phase", "[engine][
                                                 4096);
 
     REQUIRE (defaultStep1.noteHitCount > 0);
-    REQUIRE (defaultStep1.noteHits[0].delayMs == 0.0);
+    REQUIRE (defaultStep1.noteHits[0].delayMs == 62.5);
 
-    fixture.engine.setSwingSubdivisionIndex (0);
-    ksh::MidiPlaybackRunner fineRunner;
-    fineRunner.prepare (44100.0);
-    const auto fineSnapshot = fixture.engine.makePlaybackSnapshot();
-    [[maybe_unused]] const auto fineStep0 = runPlaybackBlock (fineRunner,
-                                                               fineSnapshot,
+    fixture.engine.setSwingSubdivisionIndex (1);
+    ksh::MidiPlaybackRunner coarseRunner;
+    coarseRunner.prepare (44100.0);
+    const auto coarseSnapshot = fixture.engine.makePlaybackSnapshot();
+    [[maybe_unused]] const auto coarseStep0 = runPlaybackBlock (coarseRunner,
+                                                               coarseSnapshot,
                                                                0.0,
                                                                120.0,
                                                                true,
                                                                512);
-    const auto fineStep1 = runPlaybackBlock (fineRunner,
-                                             fineSnapshot,
+    const auto coarseStep1 = runPlaybackBlock (coarseRunner,
+                                             coarseSnapshot,
                                              0.25,
                                              120.0,
                                              true,
                                              4096);
 
-    REQUIRE (fineStep1.noteHitCount > 0);
-    REQUIRE (fineStep1.noteHits[0].delayMs == 62.5);
+    REQUIRE (coarseStep1.noteHitCount > 0);
+    REQUIRE (coarseStep1.noteHits[0].delayMs == 0.0);
 }
 
 TEST_CASE ("midi playback does not fire while transport is stopped", "[engine][transport]")

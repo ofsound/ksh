@@ -421,7 +421,8 @@ namespace ksh::ui
             copySource = -1;
         }
         selected.reset();
-        soloChannel = -1;
+        if (source() != index)
+            exitSolo();
         command ("static_source", index < 0 ? nlohmann::json::array ({ "mute" }) : nlohmann::json::array ({ index + 1 }));
     }
     void EditorController::deleteSelection()
@@ -466,18 +467,14 @@ namespace ksh::ui
         commit();
         notify();
     }
-    void EditorController::clearRow (int ch, bool reset)
+    void EditorController::clearRow (int ch)
     {
         if (source() < 0)
             return;
         begin ("Clear channel");
-        if (reset)
-            command ("source_channel_reset", { source() + 1, ch + 1 });
-        else
-            for (int i = 0; i < 32; ++i)
-                editCell ({ ch, i }, {});
+        for (int i = 0; i < 32; ++i)
+            editCell ({ ch, i }, {});
         commit();
-        notify();
     }
     void EditorController::clearPattern()
     {
@@ -492,26 +489,58 @@ namespace ksh::ui
         }
         commit();
     }
-    void EditorController::toggleMute (int ch, bool solo)
+    void EditorController::toggleMute (int ch)
     {
-        if (source() < 0)
+        const int pattern = source();
+        if (pattern < 0)
             return;
-        begin (solo ? "Solo channel" : "Mute channel");
-        if (solo)
-        {
-            if (soloChannel < 0)
-                soloRestore = state.playback.sourceChannelMutes[static_cast<size_t> (source())];
-            const bool restore = soloChannel == ch;
-            for (int i = 0; i < state.playback.channelCount; ++i)
-                command ("source_channel_mute", { source() + 1, i + 1, restore ? soloRestore[static_cast<size_t> (i)] : i != ch });
-            soloChannel = restore ? -1 : ch;
-        }
-        else
-        {
-            soloChannel = -1;
-            command ("source_channel_mute", { source() + 1, ch + 1, !state.playback.sourceChannelMutes[static_cast<size_t> (source())][static_cast<size_t> (ch)] });
-        }
+        soloChannel = -1;
+        command ("source_channel_mute", { pattern + 1, ch + 1, !state.playback.sourceChannelMutes[static_cast<size_t> (pattern)][static_cast<size_t> (ch)] }, "Mute channel");
+    }
+
+    int EditorController::soloedChannel() const
+    {
+        if (soloChannel < 0 || soloSource != source() || soloChannel >= state.playback.channelCount)
+            return -1;
+        const auto& mutes = state.playback.sourceChannelMutes[static_cast<size_t> (soloSource)];
+        for (int i = 0; i < state.playback.channelCount; ++i)
+            if (mutes[static_cast<size_t> (i)] != (i != soloChannel))
+                return -1;
+        return soloChannel;
+    }
+
+    bool EditorController::exitSolo()
+    {
+        if (soloedChannel() < 0)
+            return false;
+        const int pattern = soloSource;
+        soloChannel = -1;
+        begin ("Exit solo");
+        for (int i = 0; i < state.playback.channelCount; ++i)
+            command ("source_channel_mute", { pattern + 1, i + 1, soloRestore[static_cast<size_t> (i)] });
         commit();
+        return true;
+    }
+
+    void EditorController::toggleSolo (int ch)
+    {
+        const int pattern = source();
+        if (pattern < 0 || !juce::isPositiveAndBelow (ch, state.playback.channelCount))
+            return;
+        if (soloedChannel() == ch)
+        {
+            exitSolo();
+            return;
+        }
+        if (soloedChannel() < 0)
+            soloRestore = state.playback.sourceChannelMutes[static_cast<size_t> (pattern)];
+        begin ("Solo channel");
+        for (int i = 0; i < state.playback.channelCount; ++i)
+            command ("source_channel_mute", { pattern + 1, i + 1, i != ch });
+        soloSource = pattern;
+        soloChannel = ch;
+        commit();
+        notify();
     }
     void EditorController::setCycle (int length, int mask, const std::vector<Location>& locations)
     {

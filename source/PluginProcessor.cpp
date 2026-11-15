@@ -466,7 +466,8 @@ bool PluginProcessor::producesMidi() const
 bool PluginProcessor::isMidiEffect() const
 {
    #if JucePlugin_IsMidiEffect
-    return true;
+    // JUCE's standalone player gives MIDI effects a zero-channel process buffer.
+    return !hasStandaloneTransport();
    #else
     return false;
    #endif
@@ -506,8 +507,10 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::ignoreUnused (samplesPerBlock);
+    if (standaloneMidiOutput != nullptr)
+        standaloneMidiOutput->prepare (sampleRate, samplesPerBlock);
     recordingSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+    metronomeClickSample = juce::roundToInt (recordingSampleRate * 0.018);
     midiPlayback.prepare (recordingSampleRate);
     recordingClockHistory.fill ({});
     recordingClockHistoryIndex = 0;
@@ -526,7 +529,82 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::releaseResources()
 {
+    if (standaloneMidiOutput != nullptr)
+        standaloneMidiOutput->stop();
     midiPlayback.reset();
+}
+
+void PluginProcessor::setStandaloneMidiOutput (ksh::StandaloneMidiOutput* output)
+{
+    const juce::ScopedLock lock (getCallbackLock());
+    if (standaloneMidiOutput == output)
+        return;
+    if (standaloneMidiOutput != nullptr)
+        standaloneMidiOutput->stop();
+    standaloneMidiOutput = hasStandaloneTransport() ? output : nullptr;
+    if (standaloneMidiOutput != nullptr)
+        standaloneMidiOutput->prepare (recordingSampleRate, getBlockSize());
+}
+
+void PluginProcessor::sendStandaloneMidiOutput (const juce::MidiBuffer& midi, int numSamples)
+{
+    if (hasStandaloneTransport() && !midi.isEmpty())
+        standaloneMidiActivity.fetch_add (1, std::memory_order_relaxed);
+    if (standaloneMidiOutput == nullptr)
+        return;
+    juce::Optional<juce::uint64> hostTime;
+    if (const auto* head = getPlayHead())
+        if (const auto position = head->getPosition())
+            hostTime = position->getHostTimeNs();
+    standaloneMidiOutput->send (midi, hostTime, numSamples);
+}
+
+void PluginProcessor::renderStandaloneMetronome (juce::AudioBuffer<float>& buffer, double ppq, double bpm, bool playing, bool reset)
+{
+    const int clickLength = juce::roundToInt (recordingSampleRate * 0.018);
+    const bool active = playing && isStandaloneMetronomeEnabled() && buffer.getNumChannels() > 0;
+    if (reset || !active)
+        metronomeClickSample = clickLength;
+    if (!active)
+        return;
+
+    const double beatsPerSample = bpm / (60.0 * recordingSampleRate);
+    const float volume = static_cast<float> (getMetronomeVolume()) / 100.0f;
+    const int numSamples = buffer.getNumSamples();
+    // Assign each beat to its nearest sample, with the half-sample tie going to the next sample.
+    auto beat = static_cast<int64_t> (std::ceil (ppq - 0.5 * beatsPerSample));
+    int start = 0;
+    while (start < numSamples)
+    {
+        const int nextClick = juce::jmax (0, static_cast<int> (std::floor ((static_cast<double> (beat) - ppq) / beatsPerSample + 0.5)));
+        const int end = juce::jmin (nextClick, numSamples);
+        const double pitchRatio = clickPitch < 0 ? 0.75 : clickPitch > 0 ? 1.3333333333333333 : 1.0;
+        const double frequency = clickSound == MetronomeSound::wood ? 830.0 : clickSound == MetronomeSound::claves ? 1630.0 : 1175.0;
+        const double accent = metronomeDownbeat ? 1760.0 / 1175.0 : 1.0;
+        const double phaseStep = juce::MathConstants<double>::twoPi * frequency * accent * pitchRatio / recordingSampleRate;
+        const float amplitude = volume * (metronomeDownbeat ? 0.18f : 0.12f);
+        for (int sample = start; sample < end && metronomeClickSample < clickLength; ++sample, ++metronomeClickSample)
+        {
+            const float decay = 1.0f - static_cast<float> (metronomeClickSample) / static_cast<float> (clickLength);
+            const double phase = phaseStep * metronomeClickSample;
+            double tone = std::sin (phase);
+            if (clickSound == MetronomeSound::wood)
+                tone = 0.78 * tone + 0.22 * std::sin (phase * 2.45) * decay * decay;
+            else if (clickSound == MetronomeSound::claves)
+                tone = (0.72 * tone + 0.28 * std::sin (phase * 1.73)) * decay * decay;
+            const float click = amplitude * decay * decay * static_cast<float> (tone);
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                buffer.setSample (channel, sample, click);
+        }
+        if (nextClick >= numSamples)
+            break;
+        metronomeClickSample = 0;
+        metronomeDownbeat = (beat % 4) == 0;
+        clickSound = getMetronomeSound();
+        clickPitch = getMetronomePitch();
+        ++beat;
+        start = nextClick;
+    }
 }
 
 bool PluginProcessor::hasStandaloneTransport() const
@@ -631,7 +709,10 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const auto* snapshot = playbackMailbox.current();
 
     if (snapshot == nullptr)
+    {
+        sendStandaloneMidiOutput (midiMessages, numSamples);
         return;
+    }
 
     const bool playbackReset = playbackResetRequested.exchange (false, std::memory_order_acquire);
     const bool standaloneReset = standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0;
@@ -647,6 +728,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         ppqPosition = standaloneTransportPpqPosition.load (std::memory_order_relaxed);
         bpm = clampStandaloneTempoBpm (snapshot->tempo);
         isPlaying = isStandaloneTransportPlaying();
+        renderStandaloneMetronome (buffer, ppqPosition, bpm, isPlaying, standaloneReset);
     }
     else if (const auto* playHead = getPlayHead())
     {
@@ -774,13 +856,17 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     // Drained by the message-thread timer; posting an OS message from here could block.
     if (pushedHit || notify)
         requestMessageThreadWork();
+
+    sendStandaloneMidiOutput (midiMessages, numSamples);
 }
 
 void PluginProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     buffer.clear();
+    metronomeClickSample = juce::roundToInt (recordingSampleRate * 0.018);
     midiPlayback.suspend (midiMessages);
     currentStepForUi.store (0, std::memory_order_relaxed);
+    sendStandaloneMidiOutput (midiMessages, buffer.getNumSamples());
 }
 
 juce::MidiBuffer& PluginProcessor::reservedMidiOutputBuffer()

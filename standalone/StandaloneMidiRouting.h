@@ -1,10 +1,28 @@
 #pragma once
 #include <juce_audio_devices/juce_audio_devices.h>
+#include "../source/platform/StandaloneMidiOutput.h"
 
 namespace ksh
 {
    #if JUCE_IOS
     juce::MidiDeviceInfo enableStandaloneNetworkMidi();
+
+    class StandaloneIOSMidiOutput final : public StandaloneMidiOutput
+    {
+    public:
+        StandaloneIOSMidiOutput();
+        ~StandaloneIOSMidiOutput() override;
+        // Open/replace only while detached from the processor.
+        juce::String open (const juce::MidiDeviceInfo&, bool virtualSource);
+        bool matches (const juce::MidiDeviceInfo&, bool virtualSource) const;
+        void prepare (double sampleRate, int maximumBlockSize) override;
+        void send (const juce::MidiBuffer&, juce::Optional<juce::uint64> hostTimeNs, int numSamples) override;
+        void stop() override;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl;
+    };
 
     // Sends everything published on a local CoreMIDI source to the network session.
     class StandaloneNetworkMidiForwarder

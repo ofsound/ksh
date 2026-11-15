@@ -57,8 +57,24 @@ namespace ksh::ui
                 addAndMakeVisible (*button);
             previous.setTitle ("Scroll keyboard left");
             next.setTitle ("Scroll keyboard right");
+            previous.getProperties().set ("icon", "keyboardPrevious");
+            next.getProperties().set ("icon", "keyboardNext");
             previous.onClick = [this] { scroll (-12); };
             next.onClick = [this] { scroll (12); };
+            constexpr std::array labels { "−12", "−1", "+1", "+12" };
+            constexpr std::array titles { "Transpose all rows down an octave", "Transpose all rows down a semitone",
+                                          "Transpose all rows up a semitone", "Transpose all rows up an octave" };
+            for (size_t i = 0; i < transposeButtons.size(); ++i)
+            {
+                auto& button = transposeButtons[i];
+                addAndMakeVisible (button);
+                button.setButtonText (juce::String::fromUTF8 (labels[i]));
+                button.setTitle (titles[i]);
+                button.onClick = [this, i] { if (onTransposeAll) onTransposeAll (transposeOffsets[i]); };
+            }
+            addAndMakeVisible (scalePresets);
+            scalePresets.getProperties().set ("dropdown", true);
+            scalePresets.onClick = [this] { showScalePresets(); };
             for (int index = 0; index < keyCount; ++index)
             {
                 auto& key = keys[static_cast<size_t> (index)];
@@ -76,26 +92,48 @@ namespace ksh::ui
                 if (key.black)
                     key.toFront (false);
         }
-        std::function<void (int)> onChoose;
+        std::function<void (int)> onChoose, onNavigate;
+        using RowNotes = std::array<int, Constants::maxChannels>;
+        std::function<void (int)> onTransposeAll;
+        std::function<void (const RowNotes&)> onPresetAll;
+
+        void setRowNoteInput (int row, NoteInput& input)
+        {
+            rowNoteInputs[static_cast<size_t> (row)] = &input;
+        }
+
+        void setTransposeRange (int lowest, int highest)
+        {
+            for (size_t i = 0; i < transposeButtons.size(); ++i)
+                transposeButtons[i].setEnabled (lowest + transposeOffsets[i] >= 0 && highest + transposeOffsets[i] <= 127);
+        }
+
+        void setAssignedNote (int note)
+        {
+            candidate = assignedNote = note;
+            if (candidate < firstNote || candidate >= firstNote + keyCount)
+                firstNote = juce::jlimit (0, lastFirstNote, (candidate / 12 - 1) * 12);
+            refresh();
+        }
         void open (juce::Rectangle<int> target, const juce::String& rowName, int note, juce::Component* input, juce::Component* rowTitle = nullptr)
         {
             anchor = target;
             returnFocus = input;
             activeRowTitle = rowTitle;
-            setDescription ("Editing row " + rowName);
-            candidate = juce::jlimit (0, 127, note);
+            setDescription ("Editing track " + rowName + ". Up and Down switch tracks.");
+            candidate = assignedNote = juce::jlimit (0, 127, note);
             firstNote = juce::jlimit (0, lastFirstNote, (candidate / 12 - 1) * 12);
             refresh();
             setVisible (true);
             resized();
             toFront (false);
-            if (getPeer() != nullptr && isShowing() && !isCurrentlyModal())
-                enterModalState (true);
+            // The full-editor overlay already catches clicks outside the panel.
+            // JUCE modality would also block native window and app commands.
+            if (isShowing())
+                grabKeyboardFocus();
         }
         void dismiss()
         {
-            if (isCurrentlyModal())
-                exitModalState (0);
             setVisible (false);
             if (returnFocus != nullptr && returnFocus->isShowing())
                 returnFocus->grabKeyboardFocus();
@@ -106,16 +144,24 @@ namespace ksh::ui
                 dismiss();
             else if (key == juce::KeyPress::returnKey)
                 choose (candidate);
+            else if ((key == juce::KeyPress::upKey || key == juce::KeyPress::downKey) && onNavigate)
+            {
+                if (candidate != assignedNote)
+                    choose (candidate, false);
+                if (isVisible())
+                    onNavigate (key == juce::KeyPress::upKey ? -1 : 1);
+            }
             else if (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)
             {
                 candidate = juce::jlimit (0, 127, candidate + (key == juce::KeyPress::rightKey ? 1 : -1));
+                if (candidate < firstNote || candidate >= firstNote + keyCount)
+                    firstNote = juce::jlimit (0, lastFirstNote, (candidate / 12 - 1) * 12);
                 refresh();
             }
             else
                 return false;
             return true;
         }
-        void inputAttemptWhenModal() override { dismiss(); }
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (!panel.contains (e.getPosition()))
@@ -143,7 +189,7 @@ namespace ksh::ui
         }
         void resized() override
         {
-            constexpr int height = 244;
+            constexpr int height = 244 + allRowsHeight;
             constexpr int anchorGap = 24;
             const int rightSpace = getWidth() - anchor.getRight() - anchorGap - 12;
             const int leftSpace = anchor.getX() - anchorGap - 12;
@@ -158,8 +204,15 @@ namespace ksh::ui
             panel = { xPosition, juce::jlimit (12, juce::jmax (12, getHeight() - height - 12), yPosition), width, height };
             const int x = panel.getX(), y = panel.getY();
             close.setBounds (panel.getRight() - 44, y + 12, 28, 28);
-            previous.setBounds (x + 20, y + 64, 36, 30);
-            next.setBounds (panel.getRight() - 56, y + 64, 36, 30);
+            int controlX = x + 110;
+            for (auto& button : transposeButtons)
+            {
+                button.setBounds (controlX, y + 7, 52, 36);
+                controlX += 58;
+            }
+            scalePresets.setBounds (controlX + 6, y + 7, 156, 36);
+            previous.setBounds (x + 20, y + allRowsHeight + 64, 36, 30);
+            next.setBounds (panel.getRight() - 56, y + allRowsHeight + 64, 36, 30);
             const float whiteWidth = static_cast<float> (width - 40) / 28.0f;
             int white = 0;
             for (int index = 0; index < keyCount; ++index)
@@ -167,10 +220,10 @@ namespace ksh::ui
                 auto& key = keys[static_cast<size_t> (index)];
                 const float left = static_cast<float> (x + 20) + static_cast<float> (white) * whiteWidth;
                 if (key.black)
-                    key.setBounds (juce::roundToInt (left - whiteWidth * 0.3f), y + 108, juce::roundToInt (whiteWidth * 0.6f), 74);
+                    key.setBounds (juce::roundToInt (left - whiteWidth * 0.3f), y + allRowsHeight + 108, juce::roundToInt (whiteWidth * 0.6f), 74);
                 else
                 {
-                    key.setBounds (juce::roundToInt (left), y + 108, juce::roundToInt (whiteWidth) - 1, 116);
+                    key.setBounds (juce::roundToInt (left), y + allRowsHeight + 108, juce::roundToInt (whiteWidth) - 1, 116);
                     ++white;
                 }
             }
@@ -178,27 +231,12 @@ namespace ksh::ui
         void paint (juce::Graphics& g) override
         {
             g.fillAll (juce::Colours::black.withAlpha (0.58f));
-            if (auto* input = dynamic_cast<NoteInput*> (returnFocus.getComponent()); input != nullptr && input->isVisible())
-            {
-                auto button = anchor.toFloat();
-                if (input->caption.isNotEmpty())
-                {
-                    if (input->captionWidth > 0)
-                        button.removeFromLeft (static_cast<float> (input->captionWidth));
-                    else
-                        button.removeFromTop (18.0f + static_cast<float> (input->captionGap));
-                }
-                if (input->valueWidth > 0)
-                    button.setWidth (static_cast<float> (juce::jmin (input->valueWidth, input->getWidth())));
-                for (int spread = 8; spread > 0; --spread)
-                {
-                    g.setColour (Palette::accent.withAlpha (0.018f * static_cast<float> (9 - spread)));
-                    g.drawRoundedRectangle (button.expanded (static_cast<float> (spread)), 5.0f + static_cast<float> (spread), 2);
-                }
-                surface (g, button.reduced (0.5f), true, false);
-                const auto label = input->format ? input->format (input->value) : juce::String (input->value) + input->suffix;
-                text (g, label, button, input->valueFontSize, juce::Colours::white, true);
-            }
+            const auto* activeInput = dynamic_cast<NoteInput*> (returnFocus.getComponent());
+            for (const auto& row : rowNoteInputs)
+                if (auto* input = row.getComponent(); input != nullptr && input != activeInput && input->isVisible())
+                    paintNoteInput (g, *input, false);
+            if (activeInput != nullptr && activeInput->isVisible())
+                paintNoteInput (g, *activeInput, true);
             if (activeRowTitle != nullptr && activeRowTitle->isVisible())
             {
                 const auto origin = getLocalPoint (activeRowTitle.getComponent(), juce::Point<int>());
@@ -211,12 +249,14 @@ namespace ksh::ui
             g.fillRoundedRectangle (r, 9);
             g.setColour (Palette::border);
             g.drawRoundedRectangle (r.reduced (0.5f), 9, 1);
+            g.drawHorizontalLine (panel.getY() + allRowsHeight, r.getX() + 16, r.getRight() - 16);
+            text (g, "All rows", { r.getX() + 20, r.getY() + 7, 86, 36 }, labelFontSize, Palette::muted, true, juce::Justification::centredLeft);
             const auto noteName = juce::MidiMessage::getMidiNoteName (candidate, true, true, 4);
             const auto midiNumber = juce::String (candidate);
             const auto labelFont = font (36, true);
             constexpr float noteWidth = 88, numberWidth = 78, gap = 12;
             const float groupX = r.getCentreX() - (noteWidth + gap + numberWidth) / 2;
-            text (g, noteName, { groupX, r.getY() + 44, noteWidth, 48 }, 36, Palette::accent, true, juce::Justification::centredRight);
+            text (g, noteName, { groupX, r.getY() + allRowsHeight + 44, noteWidth, 48 }, 36, Palette::accent, true, juce::Justification::centredRight);
 
             // Reserve three equal-width digit slots, keeping units in the same place
             // across both proportional glyphs and changes between 1/2/3 digits.
@@ -224,7 +264,7 @@ namespace ksh::ui
             for (const auto digit : juce::String ("0123456789"))
                 digitWidth = juce::jmax (digitWidth, juce::GlyphArrangement::getStringWidth (labelFont, juce::String::charToString (digit)));
             const float numberX = groupX + noteWidth + gap;
-            const float baseline = r.getY() + 68 + (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
+            const float baseline = r.getY() + allRowsHeight + 68 + (labelFont.getAscent() - labelFont.getDescent()) * 0.5f;
             g.setColour (Palette::text);
             for (int index = 0; index < midiNumber.length(); ++index)
             {
@@ -257,7 +297,7 @@ namespace ksh::ui
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 auto colour = getToggleState() ? Palette::accent : black ? Palette::app : Palette::text.darker (0.12f);
-                if (hover || down)
+                if (isEnabled() && (hover || down || hasKeyboardFocus (false)))
                     colour = colour.interpolatedWith (Palette::accent, 0.25f);
                 g.setColour (colour.withMultipliedAlpha (isEnabled() ? 1.0f : 0.2f));
                 g.fillRoundedRectangle (r, 4);
@@ -268,13 +308,73 @@ namespace ksh::ui
         };
         static constexpr int keyCount = 48;
         static constexpr int lastFirstNote = 84;
+        static constexpr int allRowsHeight = 50;
+        static constexpr std::array transposeOffsets { -12, -1, 1, 12 };
         std::array<PianoKey, keyCount> keys;
+        std::array<juce::TextButton, transposeOffsets.size()> transposeButtons;
+        juce::TextButton scalePresets { "Scale presets" };
         juce::TextButton previous { "<" }, next { ">" };
         juce::TextButton close { juce::String::fromUTF8 ("×") };
         juce::Rectangle<int> anchor, panel;
         juce::Component::SafePointer<juce::Component> returnFocus;
         juce::Component::SafePointer<juce::Component> activeRowTitle;
-        int candidate = 36, firstNote = 24, lastScrubNote = -1;
+        int candidate = 36, assignedNote = 36, firstNote = 24, lastScrubNote = -1;
+        std::array<juce::Component::SafePointer<NoteInput>, Constants::maxChannels> rowNoteInputs;
+
+        void paintNoteInput (juce::Graphics& g, const NoteInput& input, bool active)
+        {
+            auto bounds = getLocalArea (&input, input.getLocalBounds()).toFloat();
+            if (input.caption.isNotEmpty())
+            {
+                if (input.captionWidth > 0)
+                    bounds.removeFromLeft (static_cast<float> (input.captionWidth));
+                else
+                    bounds.removeFromTop (18.0f + static_cast<float> (input.captionGap));
+            }
+            if (input.valueWidth > 0)
+                bounds.setWidth (static_cast<float> (juce::jmin (input.valueWidth, input.getWidth())));
+            if (active)
+            {
+                for (int spread = 8; spread > 0; --spread)
+                {
+                    g.setColour (Palette::accent.withAlpha (0.018f * static_cast<float> (9 - spread)));
+                    g.drawRoundedRectangle (bounds.expanded (static_cast<float> (spread)), 5.0f + static_cast<float> (spread), 2);
+                }
+                surface (g, bounds.reduced (0.5f), true, false);
+            }
+            const auto label = input.format ? input.format (input.value) : juce::String (input.value) + input.suffix;
+            text (g, label, bounds, input.valueFontSize, juce::Colours::white, true);
+        }
+        void showScalePresets()
+        {
+            struct Preset { const char* label; RowNotes intervals; };
+            static constexpr std::array presets {
+                Preset { "Chromatic", { 0, 1, 2, 3, 4, 5, 6, 7 } },
+                Preset { "Major", { 0, 2, 4, 5, 7, 9, 11, 12 } },
+                Preset { "Natural minor", { 0, 2, 3, 5, 7, 8, 10, 12 } },
+                Preset { "Dorian", { 0, 2, 3, 5, 7, 9, 10, 12 } },
+                Preset { "Mixolydian", { 0, 2, 4, 5, 7, 9, 10, 12 } },
+                Preset { "Major pentatonic", { 0, 2, 4, 7, 9, 12, 14, 16 } },
+                Preset { "Minor pentatonic", { 0, 3, 5, 7, 10, 12, 15, 17 } },
+                Preset { "Whole tone", { 0, 2, 4, 6, 8, 10, 12, 14 } },
+            };
+            juce::PopupMenu menu;
+            menu.setLookAndFeel (&getLookAndFeel());
+            for (size_t i = 0; i < presets.size(); ++i)
+                menu.addItem (static_cast<int> (i) + 1, presets[i].label);
+            const juce::Component::SafePointer<NoteChooser> safe (this);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&scalePresets).withParentComponent (this).withStandardItemHeight (44),
+                [safe] (int result)
+                {
+                    if (safe == nullptr || !safe->isVisible() || !safe->onPresetAll
+                        || !juce::isPositiveAndBelow (result - 1, static_cast<int> (presets.size())))
+                        return;
+                    auto notes = presets[static_cast<size_t> (result - 1)].intervals;
+                    for (auto& note : notes)
+                        note += Constants::defaultChannelNotes.front();
+                    safe->onPresetAll (notes);
+                });
+        }
         void refresh()
         {
             previous.setEnabled (firstNote > 0);
@@ -315,7 +415,7 @@ namespace ksh::ui
         {
             if (!isVisible() || midi < 0 || midi > 127)
                 return;
-            candidate = midi;
+            candidate = assignedNote = midi;
             refresh();
             if (onChoose)
                 onChoose (midi);

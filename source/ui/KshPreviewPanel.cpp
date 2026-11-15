@@ -1,26 +1,60 @@
 #include "KshPreviewPanel.h"
+#include "KshLayout.h"
 namespace ksh::ui
 {
     namespace
     {
         const juce::Rectangle<float> wordmarkBounds { 24, 34.68f, 242.88f, 95.04f };
         const juce::Rectangle<float> makerBounds { 24, 19, 170, 20 };
-        juce::AffineTransform wordmarkTransform (float inspectorCentreY)
+        juce::AffineTransform wordmarkTransform (juce::Rectangle<float> bounds)
         {
-            constexpr float scale = 0.8f * 1.05f;
+            constexpr float margin = 16.0f;
+            constexpr float wordmarkScale = 0.9f;
+            const float scale = wordmarkScale * juce::jmax (0.0f, bounds.getWidth() - 2.0f * margin) / wordmarkBounds.getWidth();
             const auto brandingBounds = wordmarkBounds.getUnion (makerBounds);
-            return juce::AffineTransform::scale (scale).translated (16.0f - brandingBounds.getX() * scale, inspectorCentreY - brandingBounds.getCentreY() * scale);
+            return juce::AffineTransform::scale (scale).translated (bounds.getCentreX() - brandingBounds.getCentreX() * scale,
+                                                                    bounds.getCentreY() - brandingBounds.getCentreY() * scale);
         }
-        void paintWordmark (juce::Graphics& g, float inspectorCentreY)
+        juce::Rectangle<float> brandingBoundsForInspector (juce::Rectangle<int> inspector)
         {
-            const juce::Graphics::ScopedSaveState savedState (g);
-            g.addTransform (wordmarkTransform (inspectorCentreY));
-            // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
-            static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
-            text (g, "OFSOUND", makerBounds, 13, Palette::text, true, juce::Justification::centredLeft);
-            if (artwork != nullptr)
-                artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
+            return inspector.toFloat().withX (0).withWidth (static_cast<float> (inspector.getX()));
         }
+    }
+
+    void PreviewPanel::paintBranding (juce::Graphics& g, juce::Rectangle<float> bounds)
+    {
+        const juce::Graphics::ScopedSaveState savedState (g);
+        g.addTransform (wordmarkTransform (bounds));
+        // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
+        static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
+        text (g, "OFSOUND", makerBounds, 13, Palette::text, true, juce::Justification::centredLeft);
+        if (artwork == nullptr)
+            return;
+
+        // Switch off to draw the original flat SVG with the same placement.
+        constexpr bool useRaisedWordmark = true;
+        if constexpr (useRaisedWordmark)
+        {
+            static const auto outline = []
+            {
+                auto path = artwork->getOutlineAsPath();
+                path.applyTransform (juce::RectanglePlacement (juce::RectanglePlacement::centred)
+                                         .getTransformToFit (artwork->getDrawableBounds(), wordmarkBounds));
+                return path;
+            }();
+            g.setColour (juce::Colours::black.withAlpha (0.25f));
+            g.fillPath (outline, juce::AffineTransform::translation (0, 1.5f));
+            artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
+
+            juce::ColourGradient finish (juce::Colours::white.withAlpha (0.12f), wordmarkBounds.getTopLeft(),
+                                         juce::Colours::black.withAlpha (0.14f), wordmarkBounds.getBottomLeft(), false);
+            finish.addColour (0.42, juce::Colours::transparentBlack);
+            g.reduceClipRegion (outline);
+            g.setGradientFill (finish);
+            g.fillRect (wordmarkBounds);
+        }
+        else
+            artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
     }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
     {
@@ -29,6 +63,7 @@ namespace ksh::ui
         addMouseListener (&childHoverListener, true);
         if (!randomSection)
         {
+            getProperties().set ("hideDisabledHelp", true);
             for (auto* button : { &orangeLogo, &blueLogo })
             {
                 addAndMakeVisible (*button);
@@ -36,8 +71,8 @@ namespace ksh::ui
             }
             orangeLogo.setTitle ("Orange accent");
             blueLogo.setTitle ("Blue accent");
-            orangeLogo.setTooltip ("K: use the orange accent throughout the app. Double-click the logo to open controls.");
-            blueLogo.setTooltip ("H: use the blue accent throughout the app. Double-click the logo to open controls.");
+            orangeLogo.setTooltip ("Orange accent. Double-click for controls.");
+            blueLogo.setTooltip ("Blue accent. Double-click for controls.");
             orangeLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (false); };
             blueLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (true); };
         }
@@ -49,31 +84,9 @@ namespace ksh::ui
         addAndMakeVisible (nudge);
         addAndMakeVisible (remove);
         addAndMakeVisible (cycle);
-        addChildComponent (cycleLength);
-        cycleLength.caption = "Length";
-        cycleLength.setTitle ("Selected cycle length");
-        cycleLength.setTooltip ("Set the cycle length of selected cells from 1 to 8 beats");
-        cycleLength.minimum = 1;
-        cycleLength.maximum = 8;
-        cycleLength.resetValue = 1;
-        cycleLength.sensitivity = 12;
-        cycleLength.onBegin = [this] { controller.begin ("Cycle length"); };
-        cycleLength.onChange = [this] (int v)
-        {
-            const auto cells = controller.selection (true);
-            for (auto p : cells)
-            {
-                const auto cell = controller.cell (p);
-                controller.setCycle (v, cell.cycleMask, { p });
-            }
-            controller.notify();
-        };
-        cycleLength.onEnd = [this] { controller.commit(); };
-        cycleLength.onCancel = [this] { controller.cancel(); };
         mode.onClick = [this] { const auto m = controller.state.playback.generationMode; controller.command ("mode", { m == GenerationMode::staticSource ? "stack" : m == GenerationMode::stack ? "per_channel" : "static" }, "Generation mode"); };
-        mode.setTooltip ("Switch generation mode: Off, Stack, or Per Channel");
         refresh.setTitle ("Generation refresh length");
-        refresh.setTooltip ("Set how many steps play before the generated pattern refreshes");
+        refresh.setTooltip ("Steps between generations");
         refresh.caption = "Length";
         refresh.minimum = 1;
         refresh.maximum = 32;
@@ -91,7 +104,7 @@ namespace ksh::ui
             lock.sensitivity = 14;
             lock.caption = juce::String (ch + 1);
             lock.setTitle ("Pattern lock channel " + juce::String (ch + 1));
-            lock.setTooltip ("Choose this channel's source pattern; Off lets generation choose");
+            lock.setTooltip ("Off lets generation pick a pattern");
             lock.format = [] (int v) { return v < 0 ? juce::String ("OFF") : "P" + juce::String (v + 1); };
             lock.onBegin = [this] { controller.begin ("Channel lock"); };
             lock.onChange = [this, ch] (int v) { controller.command ("channel_lock", v < 0 ? nlohmann::json::array ({ ch + 1, "random" }) : nlohmann::json::array ({ ch + 1, v + 1 })); };
@@ -100,20 +113,20 @@ namespace ksh::ui
         velocity.setTitle ("Selected velocity offset");
         probability.setTitle ("Selected probability offset");
         roll.setTitle ("Selected roll");
-        velocity.setTooltip ("Adjust selected cell velocities together, preserving their differences");
-        probability.setTooltip ("Adjust selected cell probabilities together, preserving their differences");
-        roll.setTooltip ("Set the number of repeated hits per step for selected cells");
+        velocity.setTooltip ("Offsets selected velocities together");
+        probability.setTooltip ("Offsets selected probabilities together");
         velocity.caption = "Velocity";
         probability.caption = "Probability";
         roll.caption = "Roll";
         nudge.caption = "Nudge";
         nudge.setTitle ("Selected timing nudge");
-        nudge.setTooltip ("Drag left to move selected hits earlier, or right to move them later, preserving their timing differences.");
+        nudge.setTooltip ("Drag left for earlier hits, right for later");
         nudge.minimum = -100;
         nudge.maximum = 100;
         nudge.resetValue = 0;
         nudge.sensitivity = 2;
         nudge.horizontalAdjustment = true;
+        nudge.gestureOnly = true;
         nudge.onBegin = [this] { beginRelative ("Selected nudge"); };
         nudge.onChange = [this] (int v)
         {
@@ -140,7 +153,10 @@ namespace ksh::ui
         probability.minimum = -100;
         probability.maximum = 100;
         for (auto* control : { &velocity, &probability })
+        {
             control->showAdjustmentHintAtZero = true;
+            control->horizontalDragOnTouch = true;
+        }
         roll.minimum = 1;
         roll.maximum = 8;
         roll.resetValue = 1;
@@ -150,7 +166,11 @@ namespace ksh::ui
         velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
         probability.onChange = [this] (int v) { applyRelative (Layer::chance, v); };
         roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) { auto cell = controller.cell (p); cell.roll = juce::jlimit (1, 8, v); controller.editCell (p, cell); } controller.notify(); };
-        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance }, std::pair { &nudge, Layer::nudge }, std::pair { &roll, Layer::roll }, std::pair { &cycleLength, Layer::cycle } })
+        velocity.onDoubleClick = [this] { resetSelectedValue ("Reset velocity", &Cell::velocity, CellDefaults::velocity); };
+        probability.onDoubleClick = [this] { resetSelectedValue ("Reset probability", &Cell::probability, CellDefaults::probability); };
+        nudge.onDoubleClick = [this] { resetSelectedValue ("Reset nudge", &Cell::nudge, CellDefaults::nudge); };
+        roll.onDoubleClick = [this] { resetSelectedValue ("Reset roll", &Cell::roll, CellDefaults::roll); };
+        for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance }, std::pair { &nudge, Layer::nudge }, std::pair { &roll, Layer::roll } })
         {
             const auto begin = control->onBegin;
             control->onBegin = [this, begin, layer]
@@ -161,7 +181,7 @@ namespace ksh::ui
                 controller.notify();
             };
         }
-        for (auto* control : { &velocity, &probability, &roll, &nudge, &cycleLength })
+        for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->onCancel = [this]
             {
@@ -187,14 +207,14 @@ namespace ksh::ui
             };
         }
         remove.getProperties().set ("icon", "clear");
-        remove.setTooltip ("Delete selected cells");
+        remove.setTooltip ("Delete key clears selected steps");
         remove.onClick = [this] { controller.deleteSelection(); };
         cycle.locations = [this] { return controller.selection (true); };
         cycle.inlineLayout = !randomSection;
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = 22;
-            control->captionFontSize = 10;
+            control->captionFontSize = 16;
             control->captionGap = 6;
         }
         mode.setVisible (randomSection);
@@ -227,7 +247,7 @@ namespace ksh::ui
             return;
         }
         for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
-                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::chance }, { &cycleLength, Layer::chance } })
+                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::chance } })
         {
             auto bounds = control->getBounds();
             if (control == &cycle && !compact)
@@ -240,18 +260,29 @@ namespace ksh::ui
         }
         setHoverLayer (std::nullopt);
     }
-    void PreviewPanel::mouseEnter (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
-    void PreviewPanel::mouseMove (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
-    void PreviewPanel::mouseExit (const juce::MouseEvent& event) { updateHoverLayer (event.getEventRelativeTo (this).getPosition()); }
+    void PreviewPanel::mouseMove (const juce::MouseEvent& event)
+    {
+        if (event.source.canHover())
+            updateHoverLayer (event.getEventRelativeTo (this).getPosition());
+    }
+    void PreviewPanel::mouseEnter (const juce::MouseEvent& event) { mouseMove (event); }
+    void PreviewPanel::mouseExit (const juce::MouseEvent& event) { mouseMove (event); }
     void PreviewPanel::visibilityChanged()
     {
         if (!isVisible())
             setHoverLayer (std::nullopt);
     }
+    void PreviewPanel::setDisplayedLayer (Layer layer)
+    {
+        velocity.setLayerHighlighted (layer == Layer::velocity);
+        probability.setLayerHighlighted (layer == Layer::chance);
+        nudge.setLayerHighlighted (layer == Layer::nudge);
+        roll.setLayerHighlighted (layer == Layer::roll);
+    }
     void PreviewPanel::mouseDoubleClick (const juce::MouseEvent& event)
     {
         if (!randomSection && event.mods.isLeftButtonDown()
-            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform (inspectorBounds.toFloat().getCentreY()).inverted()))
+            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform (brandingBoundsForInspector (inspectorBounds)).inverted()))
             && onLogoDoubleClick)
             onLogoDoubleClick();
     }
@@ -268,6 +299,18 @@ namespace ksh::ui
             controller.editCell (p, withValue (c, layer, cellValue (c, layer) + offset));
         controller.notify();
     }
+    void PreviewPanel::resetSelectedValue (const juce::String& label, int Cell::* field, int value)
+    {
+        controller.begin (label);
+        for (auto location : controller.selection (true))
+        {
+            auto cell = controller.cell (location);
+            cell.*field = value;
+            controller.editCell (location, cell);
+        }
+        controller.commit();
+        sync();
+    }
     void PreviewPanel::setInspectorBounds (juce::Rectangle<int> bounds)
     {
         if (inspectorBounds == bounds)
@@ -280,27 +323,24 @@ namespace ksh::ui
     {
         compact = enabled;
         cycle.compact = enabled;
-        cycleLength.setVisible (compact && !randomSection);
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = compact ? 17.0f : 22.0f;
-            control->captionFontSize = 10.0f;
+            control->captionFontSize = compact ? 10.0f : 16.0f;
             control->captionGap = compact ? 2 : 6;
         }
         probability.caption = compact ? "Chance" : "Probability";
-        cycleLength.caption = compact ? "Cycle" : "Length";
         velocity.captionWidth = compact ? 44 : 0;
         probability.captionWidth = compact ? 44 : 0;
         nudge.captionWidth = compact ? 40 : 0;
         roll.captionWidth = compact ? 28 : 0;
-        cycleLength.captionWidth = compact ? 36 : 0;
         resized();
         repaint();
     }
     void PreviewPanel::cancelGesture()
     {
         setHoverLayer (std::nullopt);
-        for (auto* control : { &velocity, &probability, &roll, &nudge, &cycleLength, &refresh })
+        for (auto* control : { &velocity, &probability, &roll, &nudge, &refresh })
             control->cancelGesture();
         for (auto& lock : locks)
             lock.cancelGesture();
@@ -312,7 +352,7 @@ namespace ksh::ui
         blueLogo.setVisible (!compact && !randomSection);
         if (!compact && !randomSection)
         {
-            const auto transform = wordmarkTransform (inspectorBounds.toFloat().getCentreY());
+            const auto transform = wordmarkTransform (brandingBoundsForInspector (inspectorBounds));
             const float unit = wordmarkBounds.getWidth() / 556.632813f;
             orangeLogo.setBounds (wordmarkBounds.withWidth (197.021484f * unit).transformedBy (transform).getSmallestIntegerContainer());
             blueLogo.setBounds (wordmarkBounds.withTrimmedLeft (358.0f * unit).transformedBy (transform).getSmallestIntegerContainer());
@@ -329,7 +369,7 @@ namespace ksh::ui
                 return;
             }
             int inputX = 6;
-            for (auto* control : { &velocity, &probability, &nudge, &roll, &cycleLength })
+            for (auto* control : { &velocity, &probability, &nudge, &roll })
             {
                 const int width = control->captionWidth + 44;
                 control->setBounds (inputX, 4, width, 40);
@@ -339,24 +379,35 @@ namespace ksh::ui
             cycle.setBounds (inputX - 4, 2, juce::jlimit (0, cycle.preferredWidth (44), remove.getX() - inputX), 44);
             return;
         }
-        mode.setBounds (378, 44, 164, 28);
-        refresh.setBounds (566, 23, 82, 49);
+        mode.setBounds (378, 40, 180, 64);
+        refresh.setBounds (574, 20, 144, 84);
         for (int ch = 0; ch < 8; ++ch)
-            locks[static_cast<size_t> (ch)].setBounds (378 + ch * ((getWidth() - 408) / 8), 106, (getWidth() - 408) / 8 - 8, 48);
+            {
+            auto& lock = locks[static_cast<size_t> (ch)];
+            lock.setBounds (378 + ch * ((getWidth() - 408) / 8), 140, (getWidth() - 408) / 8 - 8, 84);
+            lock.captionFontSize = 16;
+            lock.captionGap = 2;
+            lock.valueFontSize = 22;
+        }
+        refresh.captionFontSize = 16;
+        refresh.captionGap = 2;
+        refresh.valueFontSize = 22;
         if (randomSection || inspectorBounds.isEmpty())
             return;
         const int x = inspectorBounds.getX();
-        constexpr int inputHeight = 42;
+        constexpr int inputHeight = Layout::touchTarget;
         constexpr int captionHeight = 24;
-        constexpr int inputWidth = 56;
-        int inputX = x + 20;
+        constexpr int inputWidth = 90;
+        const int captionY = inspectorBounds.getCentreY() - (captionHeight + inputHeight) / 2 - 2;
+        const int inputY = captionY + captionHeight;
+        int inputX = x + 16;
         for (auto* control : { &velocity, &probability, &nudge, &roll })
         {
-            control->setBounds (inputX, 32, inputWidth, captionHeight + inputHeight);
-            inputX += inputWidth + 16;
+            control->setBounds (inputX, captionY, inputWidth, captionHeight + inputHeight);
+            inputX += inputWidth + 10;
         }
-        remove.setBounds (inspectorBounds.getRight() - 96, 56, inputHeight * 20 / 24, inputHeight);
-        cycle.setBounds (inputX, 52, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - inputX - 16), inputHeight + 8);
+        remove.setBounds (inspectorBounds.getRight() - 76, inputY, inputHeight, inputHeight);
+        cycle.setBounds (inputX, inputY - 4, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - inputX - 16), inputHeight + 8);
     }
     void PreviewPanel::sync()
     {
@@ -374,11 +425,7 @@ namespace ksh::ui
         const bool active = !selected.empty();
         if (!active)
             setHoverLayer (std::nullopt);
-        cycleLength.setEnabled (active);
-        cycleLength.setValue (active ? controller.cell (selected.front()).cycle : 1);
-        cycleLength.mixed = active && std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).cycle != controller.cell (selected.front()).cycle; });
         const float inspectorAlpha = active ? 1.0f : 0.25f;
-        cycleLength.setAlpha (inspectorAlpha);
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->setEnabled (active);
@@ -460,14 +507,14 @@ namespace ksh::ui
             surface (g, inspectorBounds.toFloat());
             const auto selectedCount = controller.selection (true).size();
             const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
-            text (g, "Cycle", cycle.getBounds().withY (32).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (32).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Cycle beats", cycle.getBounds().withY (velocity.getY()).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
+            text (g, "Delete", remove.getBounds().withY (velocity.getY()).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
         }
         else
         {
-            surface (g, { 360, 10, static_cast<float> (getWidth() - 372), 160 });
-            text (g, "Random Mode", { 378, 20, 164, 20 }, 10, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Channel Lock", { 378, 82, 300, 20 }, 10, Palette::text, true, juce::Justification::centredLeft);
+            surface (g, { 360, 10, static_cast<float> (getWidth() - 372), 224 });
+            text (g, "Random Mode", { 378, 16, 180, 20 }, 16, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "Channel Lock", { 378, 114, 300, 20 }, 16, Palette::text, true, juce::Justification::centredLeft);
         }
         const auto& state = controller.state.playback;
         const auto now = juce::Time::getMillisecondCounterHiRes();
@@ -488,15 +535,15 @@ namespace ksh::ui
         if (randomSection)
         {
             const float width = static_cast<float> (getWidth() - 64);
-            surface (g, { 24, 190, width + 16, static_cast<float> (getHeight() - 214) });
-            text (g, "KSH / ofsound", { 48, 212, width, 44 }, 32, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Rhythm, with a little mischief.", { 48, 268, width, 28 }, 18, Palette::accent, false, juce::Justification::centredLeft);
-            text (g, "Made by ofsound. Built with JUCE.", { 48, 314, width, 24 }, 13, Palette::muted, false, juce::Justification::centredLeft);
-            text (g, "You found the random laboratory. Try a mode, set the length, lock a channel. Leave the rest to chance.", { 48, 354, width, 28 }, 13, Palette::text, false, juce::Justification::centredLeft);
+            surface (g, { 24, 250, width + 16, static_cast<float> (getHeight() - 274) });
+            text (g, "KSH / ofsound", { 48, 270, width, 44 }, 32, Palette::text, true, juce::Justification::centredLeft);
+            text (g, "Rhythm, with a little mischief.", { 48, 322, width, 28 }, 18, Palette::accent, false, juce::Justification::centredLeft);
+            text (g, "Made by ofsound. Built with JUCE.", { 48, 362, width, 24 }, 13, Palette::muted, false, juce::Justification::centredLeft);
+            text (g, "You found the random laboratory. Try a mode, set the length, lock a channel. Leave the rest to chance.", { 48, 400, width, 48 }, 13, Palette::text, false, juce::Justification::centredLeft);
             text (g, "Double-click KSH again or press Escape to return.", { 48, static_cast<float> (getHeight() - 62), width, 24 }, 12, Palette::muted, false, juce::Justification::centredLeft);
             return;
         }
-        paintWordmark (g, inspectorBounds.toFloat().getCentreY());
+        paintBranding (g, brandingBoundsForInspector (inspectorBounds));
     }
     void PreviewPanel::updatePlayback()
     {

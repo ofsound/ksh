@@ -68,6 +68,7 @@ namespace ksh::ui
         bool drumColors = true, noteNames = true, graphicalCellValues = true;
         bool keyboardModifiersEnabled = true;
         bool selectLatched = false, selectHeld = false, selectUsed = false;
+        bool chanceHeld = false, chanceUsed = false;
         bool shiftDown (const juce::ModifierKeys& mods) const { return selectLatched || selectHeld || (keyboardModifiersEnabled && mods.isShiftDown()); }
         bool optionDown (const juce::ModifierKeys& mods) const { return keyboardModifiersEnabled && mods.isAltDown(); }
         bool useSelectionModifier (const juce::ModifierKeys& mods)
@@ -126,9 +127,12 @@ namespace ksh::ui
         void deleteSelection();
         void moveSelection (Location anchor, Location target, bool copy);
         void shift (int channel, int delta);
-        void clearRow (int channel, bool reset);
+        void clearRow (int channel);
         void clearPattern();
-        void toggleMute (int channel, bool solo);
+        void toggleMute (int channel);
+        void toggleSolo (int channel);
+        int soloedChannel() const;
+        bool exitSolo();
         void setCycle (int length, int mask, const std::vector<Location>& cells);
         void notify()
         {
@@ -157,7 +161,7 @@ namespace ksh::ui
         juce::String gestureLabel, gestureParameter;
         bool transaction = false;
         std::array<bool, 8> soloRestore {};
-        int soloChannel = -1;
+        int soloChannel = -1, soloSource = -1;
         uint64_t epoch = 0;
         void applyHistory (const Entry&, bool redoing);
         void applyDocument (const DocumentState&);

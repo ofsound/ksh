@@ -229,6 +229,18 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "channel_notes")
+    {
+        if (!args.is_array() || args.size() != Constants::maxChannels)
+            return false;
+        for (const auto& note : args)
+            if (!note.is_number_integer() || note < 0 || note > 127)
+                return false;
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
+            engine.setChannelNote (channel, args[static_cast<size_t> (channel)].get<int>());
+        return true;
+    }
+
     if (selector == "channel_audition")
     {
         [[maybe_unused]] const auto audition = engine.auditionChannel (zeroBased (argInt (args, 0, 1)));

@@ -4,6 +4,7 @@
 #include <ui/KshEditorController.h>
 #include "../standalone/StandaloneMidiRouting.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -1216,6 +1217,84 @@ TEST_CASE ("Transport seeks invalidate queued and already scheduled recording mo
         notes += countNoteOns (midi);
     }
     CHECK (notes == 1);
+}
+
+TEST_CASE ("Standalone metronome clicks at quarter notes across audio callbacks", "[plugin][metronome]")
+{
+    const int blockSize = GENERATE (128, 511);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    CHECK_FALSE (processor.isMidiEffect());
+    processor.setStandaloneTempoBpm (120.0);
+    processor.prepareToPlay (48000.0, blockSize);
+    processor.setStandaloneMetronomeEnabled (true);
+    juce::AudioBuffer<float> audio (2, blockSize);
+    juce::MidiBuffer midi;
+    processor.processBlock (audio, midi);
+    CHECK (audio.hasBeenCleared());
+    CHECK (midi.isEmpty());
+
+    processor.setStandaloneTransportPlaying (true);
+    std::vector<int> clicks;
+    bool wasAudible = false;
+    for (int offset = 0; offset < 96500; offset += blockSize)
+    {
+        processor.processBlock (audio, midi);
+        CHECK (std::equal (audio.getReadPointer (0), audio.getReadPointer (0) + blockSize, audio.getReadPointer (1)));
+        for (int sample = 0; sample < blockSize; ++sample)
+        {
+            const float left = audio.getSample (0, sample);
+            const bool audible = std::abs (left) > 0.001f;
+            if (audible && !wasAudible && (clicks.empty() || offset + sample - clicks.back() > 1000))
+                clicks.push_back (offset + sample);
+            wasAudible = audible;
+        }
+        CHECK (midi.isEmpty());
+    }
+    CHECK (clicks == std::vector<int> { 1, 24001, 48001, 72001, 96001 });
+    CHECK (processor.getStandaloneMidiActivity() == 0);
+    REQUIRE (processor.auditionRowFromUi (0));
+    processor.setStandaloneMetronomeEnabled (false);
+    processor.processBlock (audio, midi);
+    CHECK (audio.hasBeenCleared());
+    CHECK_FALSE (midi.isEmpty());
+    CHECK (processor.getStandaloneMidiActivity() == 1);
+}
+
+TEST_CASE ("Standalone metronome settings change the click independently of transport", "[plugin][metronome]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    processor.setStandaloneTempoBpm (120.0);
+    processor.prepareToPlay (48000.0, 256);
+    processor.setStandaloneMetronomeEnabled (true);
+    juce::AudioBuffer<float> audio (2, 256);
+    juce::MidiBuffer midi;
+    const auto renderClick = [&]
+    {
+        processor.setStandaloneTransportPlaying (true);
+        processor.processBlock (audio, midi);
+        processor.setStandaloneTransportPlaying (false);
+        return audio.getSample (0, 10);
+    };
+    const auto classic = renderClick();
+    REQUIRE (std::abs (classic) > 0.01f);
+    processor.setMetronomeVolume (50);
+    CHECK (renderClick() == Catch::Approx (classic * 0.5f));
+    processor.setMetronomeVolume (0);
+    CHECK (renderClick() == Catch::Approx (0.0f));
+    processor.setMetronomeVolume (100);
+    processor.setMetronomePitch (1);
+    CHECK (renderClick() != Catch::Approx (classic));
+    processor.setMetronomePitch (0);
+    processor.setMetronomeSound (PluginProcessor::MetronomeSound::wood);
+    const auto wood = renderClick();
+    CHECK (wood != Catch::Approx (classic));
+    processor.setMetronomeSound (PluginProcessor::MetronomeSound::claves);
+    CHECK (renderClick() != Catch::Approx (wood));
+    CHECK (processor.isStandaloneMetronomeEnabled());
 }
 
 TEST_CASE ("Standalone MIDI discovery excludes its virtual output and preserves external input choices", "[plugin][standalone-midi][realtime]")

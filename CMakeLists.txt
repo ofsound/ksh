@@ -84,6 +84,10 @@ endif()
 
 set(KSH_IOS_PROJECT_OPTIONS)
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if (NOT KSH_IOS_IPHONE_ONLY)
+        # Ask iPadOS to use its full-screen compatibility mode for the standalone app.
+        list(APPEND KSH_IOS_PROJECT_OPTIONS REQUIRES_FULL_SCREEN TRUE)
+    endif()
     set(KSH_IOS_ICLOUD_PLIST_ENTRIES "")
     if (KSH_IOS_ICLOUD_ENABLED)
         set(KSH_IOS_ICLOUD_PLIST_ENTRIES [=[
@@ -263,7 +267,35 @@ if (TARGET "${PROJECT_NAME}_Standalone")
             "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneApp.cpp")
     if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
         target_sources("${PROJECT_NAME}_Standalone" PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneIPhoneWindow.mm"
             "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneIOSMidi.mm")
+        if (NOT KSH_IOS_IPHONE_ONLY)
+            enable_language(Swift)
+            # Isolate Swift from the JUCE wrapper's C++ compiler and linker flags.
+            add_library(KshIPadWindow STATIC
+                "${CMAKE_CURRENT_SOURCE_DIR}/standalone/StandaloneIPadWindow.swift")
+            set_target_properties(KshIPadWindow PROPERTIES Swift_LANGUAGE_VERSION 5)
+            # SwiftUI supplies its internal frameworks through its own linkage.
+            target_compile_options(KshIPadWindow PRIVATE
+                "SHELL:-Xfrontend -disable-autolink-framework -Xfrontend SwiftUICore"
+                "SHELL:-Xfrontend -disable-autolink-framework -Xfrontend UIUtilities")
+            target_link_libraries("${PROJECT_NAME}_Standalone" PRIVATE KshIPadWindow)
+            target_compile_definitions("${PROJECT_NAME}_Standalone" PRIVATE KSH_IPAD_SYSTEM_OVERLAYS)
+            set_target_properties("${PROJECT_NAME}_Standalone" PROPERTIES
+                LINKER_LANGUAGE CXX
+                XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)")
+            if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
+                execute_process(COMMAND xcrun --find swiftc
+                    OUTPUT_VARIABLE KSH_SWIFT_COMPILER_PATH OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+                get_filename_component(KSH_SWIFT_BIN "${KSH_SWIFT_COMPILER_PATH}" DIRECTORY)
+                set(KSH_SWIFT_PLATFORM iphoneos)
+                if (CMAKE_OSX_SYSROOT MATCHES "[Ii][Pp]hone[Ss]imulator")
+                    set(KSH_SWIFT_PLATFORM iphonesimulator)
+                endif()
+                target_link_directories("${PROJECT_NAME}_Standalone" PRIVATE
+                    "${KSH_SWIFT_BIN}/../lib/swift/${KSH_SWIFT_PLATFORM}")
+            endif()
+        endif()
     endif()
 endif()
 

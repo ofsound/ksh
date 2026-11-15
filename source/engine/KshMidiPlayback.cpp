@@ -433,12 +433,13 @@ void MidiPlaybackRunner::scheduleHit (int stepSampleOffset,
                                       int numSamples,
                                       const NativeHit& hit,
                                       juce::MidiBuffer& midiOut,
-                                      MidiPlaybackResult& result)
+                                      MidiPlaybackResult& result,
+                                      int earliestHitSample)
 {
     const int delaySamples = static_cast<int> (std::llround (hit.delayMs * sampleRate / 1000.0));
     if (wasRecordedHit (hit, blockStartSample + stepSampleOffset + delaySamples))
         return;
-    const int onSample = std::max (0, stepSampleOffset + delaySamples);
+    const int onSample = std::max ({ 0, earliestHitSample, stepSampleOffset + delaySamples });
 
     if (onSample >= numSamples)
     {
@@ -456,7 +457,8 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                                              juce::MidiBuffer& midiOut,
                                              MidiPlaybackResult& result,
                                              int staticSourceOverride,
-                                             double stepDurationMs)
+                                             double stepDurationMs,
+                                             int earliestHitSample)
 {
     if (! snapshot.deviceActive || snapshot.stepCount <= 0 || snapshot.channelCount <= 0)
         return;
@@ -563,7 +565,8 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
                              cycleStep
                          },
                          midiOut,
-                         result);
+                         result,
+                         earliestHitSample);
         }
     }
 }
@@ -826,7 +829,15 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
             result.generatedSourcesChanged = true;
 
         const int staticSourceOverride = staticSourceForStep (snapshot, patternSelections, stepSample);
-        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result, staticSourceOverride, stepDurationMs);
+        int earliestHitSample = 0;
+        if (hostLoopValid && ppqPosition < hostLoop.startPpq
+            && globalStep >= firstGlobalStepAtOrAfter (hostLoop.startPpq - edgeTolerance, beatsPerStep))
+        {
+            // The first pass needs the same protection when playback approaches
+            // the loop start from an earlier song position or count-in.
+            earliestHitSample = std::max (0, static_cast<int> (std::llround ((hostLoop.startPpq - ppqPosition) / beatsPerSample)));
+        }
+        evaluateGlobalStep (snapshot, globalStep, stepSample, numSamples, midiOut, result, staticSourceOverride, stepDurationMs, earliestHitSample);
         lastScheduledGlobalStep = globalStep;
     }
 
@@ -849,7 +860,12 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
             if (regenerateWindowIfDue (snapshot, loopStep))
                 result.generatedSourcesChanged = true;
             const int source = staticSourceForStep (snapshot, patternSelections, stepSample);
-            evaluateGlobalStep (snapshot, loopStep, stepSample, numSamples, midiOut, result, source, stepDurationMs);
+            // A host may reset downstream instruments at its loop boundary. An
+            // early attack from the next pass would then be cut off, while our
+            // anticipated-step marker prevents it from playing again. Keep all
+            // attacks belonging to that pass on or after the actual wrap.
+            const int loopStartSample = std::max (0, static_cast<int> (std::llround ((hostLoop.endPpq - ppqPosition) / beatsPerSample)));
+            evaluateGlobalStep (snapshot, loopStep, stepSample, numSamples, midiOut, result, source, stepDurationMs, loopStartSample);
             anticipatedLoopStep = loopStep;
         }
     }

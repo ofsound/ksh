@@ -241,10 +241,11 @@ TEST_CASE ("legacy persistence defaults swing target to 2x", "[engine][persisten
 {
     EngineFixture fixture;
     auto payload = fixture.engine.serializeForPersistence();
+    REQUIRE (fixture.engine.getSwingSubdivisionIndex() == 0);
     payload.erase ("swingSubdivisionIndex");
 
     REQUIRE (fixture.engine.deserializeForPersistence (payload));
-    REQUIRE (fixture.engine.getSwingSubdivisionIndex() == Constants::defaultSwingSubdivisionIndex);
+    REQUIRE (fixture.engine.getSwingSubdivisionIndex() == 1);
 }
 
 TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persistence]")

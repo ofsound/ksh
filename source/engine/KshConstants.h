@@ -27,7 +27,7 @@ struct Constants
     static constexpr int maxRoll = 8;
 
     static constexpr int swingSubdivisionCount = 3;
-    static constexpr int defaultSwingSubdivisionIndex = 1;
+    static constexpr int defaultSwingSubdivisionIndex = 0;
 
     static constexpr int defaultMidiChannel = 1;
     static constexpr int defaultNoteDurationMs = 100;
