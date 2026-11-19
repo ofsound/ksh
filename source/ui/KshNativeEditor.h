@@ -35,12 +35,26 @@ namespace ksh::ui
     private:
         LookAndFeel look;
         std::shared_ptr<juce::PropertiesFile> uiPreferences;
+        struct Theme
+        {
+            bool blue;
+            Palette::AccentColours colours;
+            Palette::BackgroundTone backdrop;
+            bool operator== (const Theme&) const = default;
+        };
+        std::optional<Theme> themeBeforeGesture;
+        static Theme currentTheme();
+        static void applyTheme (const Theme&, juce::PropertiesFile&);
+        void editTheme (const Theme&);
+        void finishThemeGesture();
         FooterHelp footerHelp { *this };
         juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Graphical values" };
         juce::TextButton modifierToggle { "Shift/Option shortcuts" };
         juce::TextButton midiOutput { "MIDI Output" };
         juce::TextButton settings;
         juce::TextButton linkSettings { "Link" };
+        std::unique_ptr<juce::Component> trackColourContent;
+        std::unique_ptr<juce::CallOutBox> trackColourPopup;
         bool zenMode = false, lastStandalonePlaying = false, lastStandaloneLaunchPending = false;
         uint32_t lastMidiActivity = 0;
         double lastMidiActivityMs = 0.0;
@@ -85,10 +99,9 @@ namespace ksh::ui
         int previousScale = 100;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         bool syncing = false;
-        enum class Panel { none, project, pattern, feel, topSecret, superSecret, view, help, channel, tempo };
+        enum class Panel { none, project, pattern, feel, topSecret, superSecret, view, help, channel };
         Panel panel = Panel::none;
         Panel lastSettingsPanel = Panel::pattern;
-        Panel tempoReturnPanel = Panel::none;
         bool confirmPatternClear = false;
         int clearSource = -1;
         uint64_t clearEpoch = 0;
@@ -100,6 +113,17 @@ namespace ksh::ui
         juce::TextButton recordOptions { "Timing options..." };
         juce::TextButton phoneTempo, metronomeOptions { "Metronome sound..." };
         juce::Slider tempoFader { juce::Slider::LinearHorizontal, juce::Slider::TextBoxAbove };
+        juce::TextButton tempoDown { "-" }, tempoUp { "+" };
+        class TempoOverlay : public juce::Component
+        {
+        public:
+            std::function<void()> dismiss;
+            juce::Rectangle<int> card;
+            void paint (juce::Graphics&) override;
+            void mouseDown (const juce::MouseEvent&) override;
+        } tempoOverlay;
+        bool tempoOpen = false;
+        void setTempoOpen (bool);
         AccentWordmark phoneAboutWordmark;
         std::array<juce::TextButton, 7> panelTabs;
         ValueControl loopStart, loopLength;
@@ -110,6 +134,7 @@ namespace ksh::ui
         juce::Rectangle<int> compactPadPreviewBounds() const;
         void paintCompactPadPreview (juce::Graphics&) const;
         void paintPhoneMenu (juce::Graphics&) const;
+        bool phonePatternPanel() const;
         void layoutPhoneMenu (std::vector<juce::Component*>&);
         void resizedCompact();
         void setupCompactControls();

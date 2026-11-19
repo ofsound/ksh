@@ -41,8 +41,6 @@ public:
     void createNewProject (std::function<void (juce::var)> complete);
     void cycleProject (int direction,
         std::function<void (juce::var)> complete);
-    bool hasPreviousProject() const;
-    bool hasNextProject() const;
     juce::String getCurrentProjectFileName() const;
 
 private:
@@ -77,21 +75,29 @@ private:
     void updateNativeSize();
     std::unique_ptr<juce::FileChooser> projectFileChooser;
 
-    struct SwingDrop
+    struct FileDrop
     {
         uint64_t request, document;
         double beatsPerStep, bpm;
         int swing, target;
     };
-    SwingDrop beginSwingDrop();
-    void analyseSwingDrop (SwingDrop, const juce::File&, std::shared_ptr<juce::TemporaryFile> stagedFile = {});
-    void completeSwingDrop (SwingDrop, const ksh::ui::SwingImportResult&);
-    void showSwingDropStatus (const juce::String&, bool pending = false);
-    uint64_t swingDropRequest = 0;
-    bool swingDragOver = false;
-    juce::String swingDropStatus;
-    juce::TimedCallback swingDropStatusTimer { [this] { showSwingDropStatus ({}); } };
-    std::unique_ptr<juce::ThreadPool> swingDropWorker;
+    struct ProjectDrop
+    {
+        std::string data;
+        juce::String error, summary;
+        std::optional<double> bpm;
+    };
+    FileDrop beginFileDrop();
+    void analyseFileDrop (FileDrop, const juce::File&, const juce::String& originalName,
+                          std::shared_ptr<juce::TemporaryFile> stagedFile = {});
+    void completeProjectDrop (FileDrop, ProjectDrop);
+    void completeSwingDrop (FileDrop, const ksh::ui::SwingImportResult&);
+    void showFileDropStatus (const juce::String&, bool pending = false);
+    uint64_t fileDropRequest = 0;
+    bool fileDragOver = false;
+    juce::String fileDropStatus;
+    juce::TimedCallback fileDropStatusTimer { [this] { showFileDropStatus ({}); } };
+    std::unique_ptr<juce::ThreadPool> fileDropWorker;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

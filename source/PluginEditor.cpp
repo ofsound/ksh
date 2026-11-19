@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "engine/KshPersistence.h"
+#include "ui/KshDrumComputerImport.h"
 #include "ui/KshUiScale.h"
 
 PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
@@ -13,19 +14,19 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
    #if JUCE_IOS
     iosFileDrop = std::make_unique<ksh::IOSFileDrop> (*this, [this]
     {
-        const auto drop = beginSwingDrop();
+        const auto drop = beginFileDrop();
         const juce::Component::SafePointer<PluginEditor> safe (this);
-        return [safe, drop] (std::shared_ptr<juce::TemporaryFile> staged)
+        return [safe, drop] (std::shared_ptr<juce::TemporaryFile> staged, juce::String originalName)
         {
-            if (safe == nullptr || drop.request != safe->swingDropRequest)
+            if (safe == nullptr || drop.request != safe->fileDropRequest)
                 return;
             if (staged == nullptr)
             {
-                safe->showSwingDropStatus ("Couldn't open the dropped file.");
+                safe->showFileDropStatus ("Couldn't open the dropped file.");
                 return;
             }
             const auto file = staged->getFile();
-            safe->analyseSwingDrop (drop, file, std::move (staged));
+            safe->analyseFileDrop (drop, file, originalName, std::move (staged));
         };
     });
    #endif
@@ -74,12 +75,12 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 PluginEditor::~PluginEditor()
 {
     stopTimer();
-    swingDropStatusTimer.stopTimer();
+    fileDropStatusTimer.stopTimer();
    #if JUCE_IOS
     iosFileDrop.reset();
     iosLibrary->cancel();
    #endif
-    swingDropWorker.reset();
+    fileDropWorker.reset();
     nativeView.reset();
 }
 void PluginEditor::setZenMode (bool enabled)
@@ -220,12 +221,12 @@ void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow !
 void PluginEditor::paintOverChildren (juce::Graphics& g)
 {
     using namespace ksh::ui;
-    if (swingDragOver)
+    if (fileDragOver)
     {
         g.setColour (Palette::accent.withAlpha (0.65f));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 6.0f, 2.0f);
     }
-    if (swingDropStatus.isNotEmpty())
+    if (fileDropStatus.isNotEmpty())
     {
         const auto fontHeight = 15.0f;
         const auto width = juce::jmin (getWidth() - 24, 440);
@@ -236,24 +237,28 @@ void PluginEditor::paintOverChildren (juce::Graphics& g)
         g.drawRoundedRectangle (area.toFloat(), 6.0f, 1.0f);
         g.setColour (juce::Colours::white);
         g.setFont (font (fontHeight));
-        g.drawFittedText (swingDropStatus, area.reduced (10, 0), juce::Justification::centred, 1);
+        g.drawFittedText (fileDropStatus, area.reduced (10, 0), juce::Justification::centred, 1);
     }
 }
 
 bool PluginEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    return files.size() == 1 && ksh::ui::swingFileType (juce::File (files[0])).has_value();
+    if (files.size() != 1)
+        return false;
+    const juce::File file (files[0]);
+    return file.hasFileExtension ("sbb") || ksh::ui::isDrumAudioFile (file)
+        || ksh::ui::swingFileType (file) == ksh::ui::SwingFileType::midi;
 }
 
 void PluginEditor::fileDragEnter (const juce::StringArray&, int, int)
 {
-    swingDragOver = true;
+    fileDragOver = true;
     repaint();
 }
 
 void PluginEditor::fileDragExit (const juce::StringArray&)
 {
-    swingDragOver = false;
+    fileDragOver = false;
     repaint();
 }
 
@@ -261,35 +266,76 @@ void PluginEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     fileDragExit (files);
     if (isInterestedInFileDrag (files))
-        analyseSwingDrop (beginSwingDrop(), juce::File (files[0]));
+    {
+        const juce::File file (files[0]);
+        analyseFileDrop (beginFileDrop(), file, file.getFileName());
+    }
 }
 
-PluginEditor::SwingDrop PluginEditor::beginSwingDrop()
+PluginEditor::FileDrop PluginEditor::beginFileDrop()
 {
-    if (swingDropWorker != nullptr)
-        swingDropWorker->removeAllJobs (false, 0);
+    if (fileDropWorker != nullptr)
+        fileDropWorker->removeAllJobs (false, 0);
     const auto state = processorRef.nativeUiState();
-    showSwingDropStatus ("Reading groove...", true);
-    return { ++swingDropRequest, state.documentEpoch, state.playback.beatsPerStep,
-             processorRef.hasStandaloneTransport() ? processorRef.getStandaloneTempoBpm() : 120.0,
+    showFileDropStatus ("Reading file...", true);
+    return { ++fileDropRequest, state.documentEpoch, state.playback.beatsPerStep,
+             processorRef.hasStandaloneTransport() ? processorRef.getStandaloneTempoBpm() : state.playback.tempo,
              state.playback.swing, state.playback.swingSubdivisionIndex };
 }
 
-void PluginEditor::analyseSwingDrop (SwingDrop drop, const juce::File& file, std::shared_ptr<juce::TemporaryFile> stagedFile)
+void PluginEditor::analyseFileDrop (FileDrop drop, const juce::File& file, const juce::String& originalName,
+                                   std::shared_ptr<juce::TemporaryFile> stagedFile)
 {
-    const auto type = ksh::ui::swingFileType (file);
-    if (! type)
+    if (fileDropWorker == nullptr)
+        fileDropWorker = std::make_unique<juce::ThreadPool> (1);
+
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    const bool isPreset = file.hasFileExtension ("sbb");
+    if (isPreset || ksh::ui::isDrumAudioFile (file) || (stagedFile != nullptr && file.hasFileExtension ("audio")))
     {
-        showSwingDropStatus ("Drop a MIDI or WAV file to match its groove.");
+        showFileDropStatus (isPreset ? "Reading DrumComputer preset..." : "Transcribing drums...", true);
+        fileDropWorker->addJob ([safe, drop, file, originalName, isPreset, staged = std::move (stagedFile)]
+        {
+            ProjectDrop converted;
+            if (isPreset)
+            {
+                auto preset = ksh::ui::importDrumComputerPreset (file, originalName, drop.bpm);
+                auto summary = juce::String ("Imported ") + juce::String (preset.populatedPatterns)
+                             + (preset.populatedPatterns == 1 ? " pattern" : " patterns");
+                if (preset.approximateTiming)
+                    summary += " (timing approximated)";
+                converted = { std::move (preset.projectData), preset.error, summary, preset.bpm };
+            }
+            else
+            {
+                auto drums = ksh::ui::importDrumAudio (file, originalName, drop.bpm);
+                auto summary = juce::String ("Transcribed ") + juce::String (drums.bars)
+                             + (drums.bars == 1 ? " bar" : " bars") + ", " + juce::String (drums.hits) + " hits";
+                if (!drums.estimatedTempo)
+                    summary += " (current tempo)";
+                converted = { std::move (drums.projectData), drums.error, summary, drums.estimatedTempo ? std::optional<double> (drums.bpm) : std::nullopt };
+            }
+            juce::MessageManager::callAsync ([safe, drop, result = std::move (converted)] () mutable
+            {
+                if (safe != nullptr)
+                    safe->completeProjectDrop (drop, std::move (result));
+            });
+        });
         return;
     }
 
-    if (swingDropWorker == nullptr)
-        swingDropWorker = std::make_unique<juce::ThreadPool> (1);
-    const juce::Component::SafePointer<PluginEditor> safe (this);
-    swingDropWorker->addJob ([safe, drop, file, fileType = *type, staged = std::move (stagedFile)]
+    const auto type = ksh::ui::swingFileType (file);
+    if (type != ksh::ui::SwingFileType::midi)
     {
-        const auto result = ksh::ui::analyseSwingFile (file, fileType, drop.beatsPerStep, drop.bpm);
+        showFileDropStatus ("Drop a DrumComputer preset, MIDI file, or drum recording.");
+        return;
+    }
+
+    showFileDropStatus ("Reading groove...", true);
+    const auto referenceBpm = processorRef.hasStandaloneTransport() ? drop.bpm : 120.0;
+    fileDropWorker->addJob ([safe, drop, file, fileType = *type, referenceBpm, staged = std::move (stagedFile)]
+    {
+        const auto result = ksh::ui::analyseSwingFile (file, fileType, drop.beatsPerStep, referenceBpm);
         juce::MessageManager::callAsync ([safe, drop, result]
         {
             if (safe != nullptr)
@@ -298,13 +344,64 @@ void PluginEditor::analyseSwingDrop (SwingDrop drop, const juce::File& file, std
     });
 }
 
-void PluginEditor::completeSwingDrop (SwingDrop drop, const ksh::ui::SwingImportResult& result)
+void PluginEditor::completeProjectDrop (FileDrop drop, ProjectDrop converted)
 {
-    if (drop.request != swingDropRequest)
+    if (drop.request != fileDropRequest)
+        return;
+    if (converted.error.isNotEmpty())
+    {
+        showFileDropStatus (converted.error);
+        return;
+    }
+    if (drop.document != processorRef.getUiBridge().getDocumentEpoch())
+    {
+        showFileDropStatus ("The project changed. Drop the file again to import it.");
+        return;
+    }
+
+    showFileDropStatus ({});
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    confirmDiscardingChanges ([safe, drop, result = std::move (converted)]
+    {
+        if (safe == nullptr || drop.request != safe->fileDropRequest)
+            return;
+        auto& processor = safe->processorRef;
+        const bool busy = safe->projectFileChooser != nullptr
+       #if JUCE_IOS
+                       || safe->iosLibrary->busy()
+       #endif
+            ;
+        if (drop.document != processor.getUiBridge().getDocumentEpoch() || safe->nativeView->controller.editing() || busy)
+        {
+            safe->showFileDropStatus ("Finish the current project operation and drop the file again.");
+            return;
+        }
+        if (!processor.loadStateFromData (result.data.data(), static_cast<int> (result.data.size()), true))
+        {
+            safe->showFileDropStatus ("Couldn't open the converted KSH project.");
+            return;
+        }
+
+        if (result.bpm && processor.hasStandaloneTransport())
+            processor.setStandaloneTempoBpm (*result.bpm);
+        safe->nativeView->controller.refresh();
+        safe->updateNativeSize();
+
+        auto status = result.summary;
+        if (result.bpm)
+            status += juce::String::fromUTF8 ("  ·  ") + juce::String (*result.bpm, 1)
+                    + (processor.hasStandaloneTransport() ? " BPM" : " BPM in preset");
+        safe->showFileDropStatus (status);
+    });
+}
+
+void PluginEditor::completeSwingDrop (FileDrop drop, const ksh::ui::SwingImportResult& result)
+{
+    if (drop.request != fileDropRequest)
         return;
     if (result.error.isNotEmpty() || (! result.bpm && ! result.swing))
     {
-        showSwingDropStatus (result.error.isNotEmpty() ? result.error : "Couldn't find a consistent swing pattern.");
+        showFileDropStatus (result.error.isNotEmpty() ? result.error : "Couldn't find a consistent swing pattern.");
         return;
     }
 
@@ -317,7 +414,7 @@ void PluginEditor::completeSwingDrop (SwingDrop drop, const ksh::ui::SwingImport
         || (result.swing && (drop.swing != current.playback.swing || drop.target != current.playback.swingSubdivisionIndex))
         || (applyTempo && std::abs (drop.bpm - processorRef.getStandaloneTempoBpm()) > 0.01))
     {
-        showSwingDropStatus ("Groove controls changed. Drop the file again to apply it.");
+        showFileDropStatus ("Groove controls changed. Drop the file again to apply it.");
         return;
     }
 
@@ -338,17 +435,17 @@ void PluginEditor::completeSwingDrop (SwingDrop drop, const ksh::ui::SwingImport
                                : juce::String ("Swing unclear");
     if (result.bpm)
         status += juce::String::fromUTF8 ("  ·  ") + juce::String (*result.bpm, 1) + (applyTempo ? " BPM" : " BPM in file");
-    showSwingDropStatus (status);
+    showFileDropStatus (status);
 }
 
-void PluginEditor::showSwingDropStatus (const juce::String& message, bool pending)
+void PluginEditor::showFileDropStatus (const juce::String& message, bool pending)
 {
-    swingDropStatus = message;
+    fileDropStatus = message;
     if (pending || message.isEmpty())
-        swingDropStatusTimer.stopTimer();
+        fileDropStatusTimer.stopTimer();
     else
     {
-        swingDropStatusTimer.startTimer (3600);
+        fileDropStatusTimer.startTimer (3600);
         juce::AccessibilityHandler::postAnnouncement (message, juce::AccessibilityHandler::AnnouncementPriority::low);
     }
     repaint();
@@ -390,7 +487,9 @@ void PluginEditor::resized()
     const int percent = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
     if (!centered && !fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    const auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    if (layout.phoneRowControls)
+        offset.y = available.getY();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }
@@ -440,20 +539,9 @@ juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
     return files;
 }
 
-bool PluginEditor::hasPreviousProject() const
-{
-    return getSiblingProjectFiles().size() > 1;
-}
-
-bool PluginEditor::hasNextProject() const
-{
-    return getSiblingProjectFiles().size() > 1;
-}
-
 juce::String PluginEditor::getCurrentProjectFileName() const
 {
-    const auto currentProjectFile = processorRef.getProjectFile();
-    return currentProjectFile.existsAsFile() ? currentProjectFile.getFileName() : juce::String();
+    return processorRef.getProjectFile().getFileName();
 }
 
 juce::var PluginEditor::projectOperationResult (const bool success,
@@ -471,8 +559,6 @@ juce::var PluginEditor::projectOperationResult (const bool success,
         object->setProperty ("projectCreatedAt", processorRef.getProjectCreatedAt());
         object->setProperty ("projectModifiedAt", processorRef.getProjectModifiedAt());
         object->setProperty ("projectFileName", getCurrentProjectFileName());
-        object->setProperty ("hasPreviousProject", hasPreviousProject() ? 1 : 0);
-        object->setProperty ("hasNextProject", hasNextProject() ? 1 : 0);
         object->setProperty ("projectUiScalePercent", processorRef.getProjectUiScalePercent());
     }
 
@@ -685,8 +771,12 @@ void PluginEditor::showLoadProjectDialog (
         return;
     }
 
-    const auto start = currentProjectFile.existsAsFile() ? currentProjectFile
-                                                         : getDefaultProjectsDirectory();
+    auto start = currentProjectFile;
+    if (!start.existsAsFile())
+    {
+        start = getDefaultProjectsDirectory();
+        start.createDirectory();
+    }
     projectFileChooser = std::make_unique<juce::FileChooser> (
         "Load KSH Project", start, "*.kshproject", true);
     const juce::Component::SafePointer<PluginEditor> safeThis (this);

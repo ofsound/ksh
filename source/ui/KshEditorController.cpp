@@ -42,6 +42,23 @@ namespace ksh::ui
             visit (target.roll, a.roll, b.roll);
             visit (target.nudge, a.nudge, b.nudge);
             visit (target.span, a.span, b.span);
+            if (a.splitGates == b.splitGates && a.splitVelocities == b.splitVelocities)
+                return;
+            for (size_t i = 0; i < target.splitGates.size(); ++i)
+            {
+                visit (target.splitVelocities[i], a.splitVelocities[i], b.splitVelocities[i]);
+                auto& gate = target.splitGates[i];
+                const auto& first = a.splitGates[i];
+                const auto& second = b.splitGates[i];
+                if (first == second)
+                    continue;
+                int chance = gate.probability(), length = gate.cycle(), mask = gate.cycleMask();
+                visit (chance, first.probability(), second.probability());
+                visit (length, first.cycle(), second.cycle());
+                visit (mask, first.cycleMask(), second.cycleMask());
+                gate.setProbability (chance);
+                gate.setCycle (length, mask);
+            }
         }
 
         template <typename Visit>
@@ -81,6 +98,7 @@ namespace ksh::ui
                 {
                     visit (t.loopRanges[ch].loopStart, x.loopRanges[ch].loopStart, y.loopRanges[ch].loopStart);
                     visit (t.loopRanges[ch].loopLength, x.loopRanges[ch].loopLength, y.loopRanges[ch].loopLength);
+                    visit (t.playbackModes[ch], x.playbackModes[ch], y.playbackModes[ch]);
                 }
                 for (size_t ch = 0; ch < target.sourceChannelMutes[src].size(); ++ch)
                     visit (target.sourceChannelMutes[src][ch], a.sourceChannelMutes[src][ch], b.sourceChannelMutes[src][ch]);
@@ -96,8 +114,10 @@ namespace ksh::ui
         }
     }
 
-    EditorController::EditorController (PluginProcessor& p) : processor (p), state (p.nativeUiState()), epoch (state.documentEpoch)
+    EditorController::EditorController (PluginProcessor& p) : processor (p), state (*uiState)
     {
+        processor.copyNativeUiState (state);
+        epoch = state.documentEpoch;
         // History belongs to this editor; don't adopt hits from before it opened.
         (void) processor.takePatternRecordingEdits();
         processor.getUiBridge().onNoteHit = [this] (const NativeHit& hit) {
@@ -105,6 +125,8 @@ namespace ksh::ui
             const auto row = hit.uiChannel - 1;
             if (row < 0 || row >= Constants::maxChannels)
                 return;
+            if (onPlaybackHit)
+                onPlaybackHit (row, hit.velocity);
             if (hit.uiGeneratedStep > 0 && hit.uiGeneratedStep <= Constants::maxSteps)
                 generatedFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiGeneratedStep - 1)] = until;
             if (hit.uiSource == source() + 1 && hit.uiSourceStep > 0 && hit.uiSourceStep <= Constants::maxSteps)
@@ -120,6 +142,7 @@ namespace ksh::ui
             const auto step = static_cast<size_t> (visit.step - 1);
             sourceCycleFlashes[row][step] = juce::Time::getMillisecondCounterHiRes() + 200.0;
             sourceCycleSteps[row][step] = visit.cycleStep;
+            sourceSplitCycleSteps[row][step] = visit.splitSteps;
         };
     }
     EditorController::~EditorController()
@@ -161,8 +184,8 @@ namespace ksh::ui
         if (transaction)
             return;
         refresh();
-        before = processor.editorDocument();
-        lastOwn = before;
+        processor.copyEditorDocument (documents->before);
+        documents->lastOwn = documents->before;
         gestureLabel = label;
         gestureParameter = parameter;
         if (parameter.isNotEmpty())
@@ -184,9 +207,11 @@ namespace ksh::ui
         if (!transaction)
             return;
         rebaseExternal();
+        const auto& before = documents->before;
+        const auto& lastOwn = documents->lastOwn;
         if (before != lastOwn)
         {
-            Entry entry { before.settings, lastOwn.settings, {}, gestureLabel };
+            Entry entry { before.settings, lastOwn.settings, {}, gestureLabel, {} };
             for (int index = 0; index < cellCount; ++index)
             {
                 const auto& from = cellAt (before, index);
@@ -194,28 +219,49 @@ namespace ksh::ui
                 if (from != to)
                     entry.cells.push_back ({ index, from, to });
             }
-            undoEntries.push_back (std::move (entry));
-            if (undoEntries.size() > 128)
-                undoEntries.erase (undoEntries.begin());
-            redoEntries.clear();
+            pushHistory (std::move (entry));
         }
         transaction = false;
         finishParameter();
         notify();
     }
+    void EditorController::recordUiEdit (const juce::String& label, std::function<void (bool)> apply)
+    {
+        commit();
+        collectRecordingEdits();
+        Entry entry;
+        entry.label = label;
+        entry.applyUiEdit = std::move (apply);
+        pushHistory (std::move (entry));
+        notify();
+    }
+    void EditorController::pushHistory (Entry entry)
+    {
+        undoEntries.push_back (std::move (entry));
+        if (undoEntries.size() > 128)
+            undoEntries.erase (undoEntries.begin());
+        redoEntries.clear();
+    }
     void EditorController::rebaseExternal()
     {
         if (!transaction)
             return;
-        auto current = processor.editorDocument();
+        auto& current = documents->scratch;
+        processor.copyEditorDocument (current);
         // External changes become part of the baseline, never part of this gesture's undo action.
-        visitDocument (before, lastOwn, current, rebaseField);
-        lastOwn = std::move (current);
+        visitDocument (documents->before, documents->lastOwn, current, rebaseField);
+        documents->lastOwn = current;
     }
     void EditorController::applyHistory (const Entry& entry, bool redoing)
     {
+        if (entry.applyUiEdit)
+        {
+            entry.applyUiEdit (redoing);
+            return;
+        }
         // Conditional merge: a field is written only while it still holds the value this entry left behind.
-        auto current = processor.editorDocument();
+        auto& current = documents->scratch;
+        processor.copyEditorDocument (current);
         visitSettings (current.settings, redoing ? entry.before : entry.after, redoing ? entry.after : entry.before, mergeField);
         for (const auto& change : entry.cells)
             visitCell (cellAt (current, change.index), redoing ? change.before : change.after, redoing ? change.after : change.before, mergeField);
@@ -233,8 +279,9 @@ namespace ksh::ui
         pending.clear();
         if (transaction && epoch == processor.getUiBridge().getDocumentEpoch())
         {
-            auto current = processor.editorDocument();
-            visitDocument (current, lastOwn, before, mergeField);
+            auto& current = documents->scratch;
+            processor.copyEditorDocument (current);
+            visitDocument (current, documents->lastOwn, documents->before, mergeField);
             applyDocument (current);
         }
         transaction = false;
@@ -274,11 +321,7 @@ namespace ksh::ui
         std::erase_if (recordingEntry.cells, [] (const auto& change) { return change.before == change.after; });
         if (recordingEntry.cells.empty())
             return;
-        undoEntries.push_back (std::move (recordingEntry));
-        recordingEntry = {};
-        if (undoEntries.size() > 128)
-            undoEntries.erase (undoEntries.begin());
-        redoEntries.clear();
+        pushHistory (std::exchange (recordingEntry, {}));
     }
     void EditorController::collectRecordingEdits()
     {
@@ -327,7 +370,7 @@ namespace ksh::ui
         if (selector == "pattern_record_enabled")
             rebaseExternal();
         if (transaction)
-            lastOwn = processor.editorDocument();
+            processor.copyEditorDocument (documents->lastOwn);
         refresh();
         if (single)
             commit();
@@ -363,7 +406,7 @@ namespace ksh::ui
         }
         pending.clear();
         if (transaction)
-            lastOwn = processor.editorDocument();
+            processor.copyEditorDocument (documents->lastOwn);
         reloadState();
     }
     bool EditorController::poll()
@@ -570,13 +613,18 @@ namespace ksh::ui
         commit();
         notify();
     }
-    void EditorController::setCycle (int length, int mask, const std::vector<Location>& locations)
+    void EditorController::setCycle (int length, int mask, const std::vector<Location>& locations, int split)
     {
         for (auto p : locations)
         {
             auto c = cell (p);
-            c.cycle = juce::jlimit (1, 64, length);
-            c.cycleMask = normalizeCycleMask (mask, c.cycle);
+            if (split < 0)
+            {
+                c.cycle = juce::jlimit (1, 64, length);
+                c.cycleMask = normalizeCycleMask (mask, c.cycle);
+            }
+            else if (split < c.roll)
+                c.splitGates[static_cast<size_t> (split)].setCycle (length, mask);
             editCell (p, c);
         }
         notify();

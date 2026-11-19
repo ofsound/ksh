@@ -69,6 +69,51 @@ namespace
         REQUIRE (writer != nullptr);
         REQUIRE (writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()));
     }
+
+    void writeDrumRecording (const juce::File& file, double bpm, int swing, int bars, bool tagTempo)
+    {
+        constexpr double sampleRate = 12000.0, leadIn = 0.064;
+        const auto stepSeconds = 15.0 / bpm;
+        juce::AudioBuffer<float> audio (1, juce::roundToInt ((leadIn + 16.0 * bars * stepSeconds) * sampleRate));
+        audio.clear();
+
+        const auto strike = [&] (int step, double subdivision, double level, const std::array<double, 2>& frequencies)
+        {
+            const auto start = juce::roundToInt ((leadIn + (step + subdivision
+                + swingDelayStepsForPosition (step, swing, 0)) * stepSeconds) * sampleRate);
+            for (int i = 0; i < 330 && start + i < audio.getNumSamples(); ++i)
+            {
+                const auto t = i / sampleRate;
+                const auto angle = juce::MathConstants<double>::twoPi * t;
+                const auto wave = (std::cos (frequencies[0] * angle) + 0.5 * std::cos (frequencies[1] * angle)) / 1.5;
+                audio.addSample (0, start + i, static_cast<float> (level * wave * std::exp (-t * 115.0)));
+            }
+        };
+
+        for (int bar = 0; bar < bars; ++bar)
+        {
+            const auto base = bar * 16;
+            for (const auto step : { 0, 8 })
+                strike (base + step, 0.0, 0.85, { 65.0, 97.0 });
+            for (const auto step : { 4, 12 })
+                strike (base + step, 0.0, 0.71, { 270.0, 1150.0 });
+            strike (base + 4, 0.0, 0.43, { 3410.0, 5420.0 });
+            for (const auto step : { 1, 3, 5, 7, 9, 11, 13, 15 })
+                strike (base + step, 0.0, step == 1 ? 0.23 : 0.38, { 3410.0, 5420.0 });
+            if (bar > 0)
+                strike (base + 9, 0.5, 0.25, { 3410.0, 5420.0 });
+        }
+
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
+        auto options = juce::AudioFormatWriterOptions().withSampleRate (sampleRate).withNumChannels (1).withBitsPerSample (16);
+        if (tagTempo)
+            options = options.withMetadataValues ({ { juce::WavAudioFormat::acidTempo, juce::String (bpm) },
+                                                     { juce::WavAudioFormat::acidBeats, juce::String (bars * 4) } });
+        auto writer = wav.createWriterFor (stream, options);
+        REQUIRE (writer != nullptr);
+        REQUIRE (writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()));
+    }
 }
 
 TEST_CASE ("MIDI swing import fits KSH's grouping in beat space across tracks", "[swing-import]")
@@ -152,15 +197,16 @@ TEST_CASE ("WAV loop metadata gives a tempo for a clip with too few attacks", "[
     CHECK_FALSE (result.swing.has_value());
 }
 
-TEST_CASE ("A WAV drop changes standalone tempo and swing in a single undoable edit", "[swing-import][native-ui]")
+TEST_CASE ("A drum recording drop creates a new sequenced project with the source tempo and swing", "[drum-audio-import][native-ui]")
 {
     const juce::TemporaryFile file (".wav");
-    writeWave (file.getFile(), 131, 68, 1, 32);
+    writeDrumRecording (file.getFile(), 131, 48, 2, false);
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
     REQUIRE (processor.dispatchUiEngineCommand ("swing", { 12 }));
-    const auto initial = processor.editorDocument();
+    processor.markDocumentClean();
+    const auto epoch = processor.getUiBridge().getDocumentEpoch();
     PluginEditor editor (processor);
     const juce::StringArray files { file.getFile().getFullPathName() };
     REQUIRE (editor.isInterestedInFileDrag (files));
@@ -168,19 +214,46 @@ TEST_CASE ("A WAV drop changes standalone tempo and swing in a single undoable e
     editor.filesDropped (files, 100, 130);
 
     const auto deadline = juce::Time::getMillisecondCounterHiRes() + 5000.0;
-    while (processor.enginePlaybackSnapshot().swing == 12 && juce::Time::getMillisecondCounterHiRes() < deadline)
+    while (processor.getUiBridge().getDocumentEpoch() == epoch && juce::Time::getMillisecondCounterHiRes() < deadline)
         juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
 
     const auto current = processor.editorDocument();
-    CHECK (current.settings.swing == Catch::Approx (68).margin (6));
-    CHECK (current.settings.swingSubdivisionIndex == 1);
+    REQUIRE (processor.getUiBridge().getDocumentEpoch() != epoch);
+    CHECK (current.settings.swing == Catch::Approx (48).margin (6));
+    CHECK (current.settings.swingSubdivisionIndex == 0);
     CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (131).margin (1));
-    CHECK (current.sources == initial.sources);
-    auto* view = dynamic_cast<NativeEditor*> (editor.getChildComponent (0));
-    REQUIRE (view != nullptr);
-    REQUIRE (view->controller.canUndo());
-    view->controller.undo();
-    CHECK (processor.editorDocument() == initial);
-    view->controller.redo();
-    CHECK (processor.editorDocument() == current);
+    CHECK (current.settings.channelCount == 3);
+    CHECK (current.settings.stepCount == 32);
+    CHECK (current.settings.channels[0].note == 36);
+    CHECK (current.settings.channels[1].note == 38);
+    CHECK (current.settings.channels[2].note == 42);
+    CHECK (current.sources[0][0][0].enabled);
+    CHECK (current.sources[0][1][4].enabled);
+    CHECK (current.sources[0][2][1].enabled);
+    CHECK (current.sources[0][2][4].enabled);
+    CHECK_FALSE (current.sources[0][2][12].enabled);
+    CHECK (current.sources[0][2][1].velocity < current.sources[0][2][3].velocity);
+    CHECK (current.sources[0][2][25].roll == 2);
+    CHECK (processor.isDocumentModified());
+}
+
+TEST_CASE ("Drum transcription fits the first 64 bars across all 16 pattern slots", "[drum-audio-import]")
+{
+    const juce::TemporaryFile file (".wav");
+    writeDrumRecording (file.getFile(), 140, 44, 65, true);
+    const auto result = importDrumAudio (file.getFile(), "Acetate.wav", 120.0);
+    REQUIRE (result.error.isEmpty());
+    CHECK (result.bpm == Catch::Approx (140.0));
+    CHECK (result.bars == 64);
+    CHECK (result.estimatedTempo);
+    const auto json = nlohmann::json::parse (result.projectData);
+    CHECK (json.at ("projectName") == "Acetate");
+    CHECK (json.at ("stepCount") == 64);
+    auto engine = std::make_unique<KickSnareHatEngine>();
+    REQUIRE (engine->deserializeForPersistence (json));
+    const auto document = engine->documentState();
+    CHECK (document.sources[15][0][0].enabled);
+    CHECK (document.sources[15][1][60].enabled);
+    CHECK (document.sources[15][2][63].enabled);
+    CHECK (document.settings.sourceSettings[15].stepCount == 64);
 }

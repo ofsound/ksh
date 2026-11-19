@@ -7,6 +7,17 @@
 namespace ksh
 {
 
+inline void to_json (nlohmann::json& json, const SplitGate& gate)
+{
+    json = { gate.probability(), gate.cycle(), gate.cycleMask() };
+}
+
+inline void from_json (const nlohmann::json& json, SplitGate& gate)
+{
+    gate.setProbability (json.at (0).get<int>());
+    gate.setCycle (json.at (1).get<int>(), json.at (2).get<int>());
+}
+
 inline void to_json (nlohmann::json& json, const Cell& cell)
 {
     json = {
@@ -21,6 +32,10 @@ inline void to_json (nlohmann::json& json, const Cell& cell)
     };
     if (cell.span != CellDefaults::span)
         json["span"] = cell.span;
+    if (cell.splitGates != Cell {}.splitGates)
+        json["splitGates"] = cell.splitGates;
+    if (cell.splitVelocities != Cell {}.splitVelocities)
+        json["splitVelocities"] = cell.splitVelocities;
 }
 
 inline void from_json (const nlohmann::json& json, Cell& cell)
@@ -64,6 +79,10 @@ inline void from_json (const nlohmann::json& json, Cell& cell)
 
     cell.nudge = json.value ("nudge", 0);
     cell.span = json.value ("span", CellDefaults::span);
+    cell.splitGates = json.value ("splitGates", Cell {}.splitGates);
+    const auto velocities = json.value ("splitVelocities", std::array<int, Constants::maxRoll> {});
+    for (int i = 0; i < Constants::maxRoll; ++i)
+        cell.setSplitVelocity (i, velocities[static_cast<size_t> (i)]);
 
     if (json.contains ("source"))
         cell.source = json["source"].get<int>();

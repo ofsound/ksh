@@ -33,6 +33,7 @@ struct NativeCycleVisit
     int channel = 0;
     int step = 0;
     int cycleStep = 0;
+    std::array<uint8_t, Constants::maxRoll> splitSteps {};
 };
 
 /** Source chosen for each generated cell (-1 = none), as picked by the audio thread. */

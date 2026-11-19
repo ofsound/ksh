@@ -57,21 +57,22 @@ struct RowPlaybackStep
     LoopRange loop;
 };
 
-RowPlaybackStep playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int playbackIndex)
+RowPlaybackStep playbackStepForChannel (const PlaybackSnapshot& snapshot, int channel, int playbackIndex, int staticSource)
 {
-    channel = clampInt (channel, 0, Constants::maxChannels - 1);
-    const auto& channelState = snapshot.channels[static_cast<size_t> (channel)];
-    const int source = clampInt (snapshot.staticSource, 0, Constants::sourceCount - 1);
+    const auto index = static_cast<size_t> (channel);
+    auto mode = snapshot.channels[index].playbackMode;
     LoopRange range { 0, snapshot.generatedStepCount };
-    if (snapshot.generationMode == GenerationMode::staticSource)
+    if (staticSource >= 0)
     {
-        range = snapshot.sourceSettings[static_cast<size_t> (source)].loopRanges[static_cast<size_t> (channel)];
-        range.loopStart = clampInt (range.loopStart, 0, snapshot.stepCount - 1);
-        range.loopLength = clampInt (range.loopLength, 1, snapshot.stepCount - range.loopStart);
+        const auto& settings = snapshot.sourceSettings[static_cast<size_t> (staticSource)];
+        const int steps = clampInt (staticSource == snapshot.staticSource ? snapshot.stepCount : settings.stepCount, 1, Constants::maxSteps);
+        range = settings.loopRanges[index];
+        range.loopStart = clampInt (range.loopStart, 0, steps - 1);
+        range.loopLength = clampInt (range.loopLength, 1, steps - range.loopStart);
+        mode = settings.playbackModes[index];
     }
     const int loopStart = range.loopStart;
     const int loopLength = range.loopLength;
-    const auto mode = channelState.playbackMode;
     if (mode == PlaybackMode::reverse)
     {
         const int activeIndex = mod (playbackIndex, loopLength);
@@ -198,6 +199,7 @@ void MidiPlaybackRunner::reset (bool clearAuditions)
 void MidiPlaybackRunner::resetCycleCounters()
 {
     cycleCounters.fill (0);
+    splitCycles->fill ({});
 }
 
 void MidiPlaybackRunner::queueAuditionNote (const MidiNoteEvent& note)
@@ -362,6 +364,15 @@ double MidiPlaybackRunner::nextRandomUnit()
     return static_cast<double> (rngState) / static_cast<double> (UINT32_MAX);
 }
 
+double MidiPlaybackRunner::nextTimingOffsetMs (double rangeMs)
+{
+    // Inverse CDF of a symmetric triangle, using one draw per timing offset.
+    const double unit = nextRandomUnit();
+    const double offset = unit < 0.5 ? std::sqrt (2.0 * unit) - 1.0
+                                     : 1.0 - std::sqrt (2.0 * (1.0 - unit));
+    return offset * rangeMs;
+}
+
 int MidiPlaybackRunner::staticSourceForStep (const PlaybackSnapshot& snapshot,
                                              const MidiPatternSelectionBlock& patternSelections,
                                              int stepSampleOffset)
@@ -484,7 +495,7 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
 
     for (int channel = 0; channel < snapshot.channelCount; ++channel)
     {
-        const auto position = playbackStepForChannel (snapshot, channel, globalStep);
+        const auto position = playbackStepForChannel (snapshot, channel, globalStep, staticSourceOverride);
         const auto cellAtStep = [&] (int step)
         {
             auto cell = staticSourceOverride >= 0
@@ -543,8 +554,28 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
             cycleStep = count % cycle + 1;
         }
 
+        NativeCycleVisit visit { cell.source + 1, channel + 1, cell.sourceStep + 1, cycleStep, {} };
+        const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
+        std::array<bool, Constants::maxRoll> splitCycleAllows {};
+        if (roll > 1)
+            for (int part = 0; part < roll; ++part)
+            {
+                const auto index = static_cast<size_t> (part);
+                const auto& gate = cell.splitGates[index];
+                int phase = 0;
+                if (cycleIndex < splitCycles->size())
+                {
+                    auto& state = (*splitCycles)[cycleIndex][index];
+                    if (state.definition != gate.cycleDefinition())
+                        state = { gate.cycleDefinition(), 0 };
+                    phase = state.nextPhase;
+                    state.nextPhase = static_cast<uint8_t> ((phase + 1) % gate.cycle());
+                }
+                splitCycleAllows[index] = (gate.cycleMask() & (1 << phase)) != 0;
+                visit.splitSteps[index] = static_cast<uint8_t> (phase + 1);
+            }
         if (result.cycleVisitCount < result.cycleVisits.size())
-            result.cycleVisits[result.cycleVisitCount++] = { cell.source + 1, channel + 1, cell.sourceStep + 1, cycleStep };
+            result.cycleVisits[result.cycleVisitCount++] = visit;
 
         if (! cycleGateMatches (cycleStep - 1, cycle, cell.cycleMask))
             continue;
@@ -557,39 +588,38 @@ void MidiPlaybackRunner::evaluateGlobalStep (const PlaybackSnapshot& snapshot,
         if (probability < 100 && ! (nextRandomUnit() * 100.0 < static_cast<double> (probability)))
             continue;
 
-        int velocity = clampInt (cell.velocity, 1, 127);
+        const double velocityVariation = snapshot.velocityHumanize > 0 ? nextRandomUnit() * 2.0 - 1.0 : 0.0;
 
-        if (snapshot.velocityHumanize > 0)
-        {
-            const double range = static_cast<double> (velocity)
-                                 * (static_cast<double> (snapshot.velocityHumanize) / 100.0);
-            velocity = clampInt (static_cast<int> (std::lround (static_cast<double> (velocity)
-                                                                 + (nextRandomUnit() * 2.0 - 1.0) * range)),
-                                 1,
-                                 127);
-        }
-
-        const int roll = clampInt (cell.roll, 1, Constants::maxRoll);
         const bool spanned = cell.span > 1;
         const double intervalMs = spanned ? stepDurationMs * cell.span : snapshot.stepIntervalMs;
         const int noteDurationMs = rollNoteDurationMs (intervalMs, roll);
         const double timingRange = timingHumanizeRangeMs (snapshot);
-        const double groupTimingMs = spanned && timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : 0.0;
+        const double groupTimingMs = spanned && timingRange > 0.0 ? nextTimingOffsetMs (timingRange) : 0.0;
         const int pitch = snapshot.channels[static_cast<size_t> (channel)].note;
 
         for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
         {
+            if (roll > 1)
+            {
+                const auto index = static_cast<size_t> (rollIndex);
+                const int chance = cell.splitGates[index].probability();
+                if (!splitCycleAllows[index] || chance == 0 || (chance < 100 && nextRandomUnit() * 100.0 >= chance))
+                    continue;
+            }
             const double part = static_cast<double> (rollIndex) / roll;
             const double rollDelayMs = part * intervalMs;
             const double swingDelayMs = spanned ? 0.0
                 : swingDelayStepsForPosition (globalStep + part, snapshot.swing, snapshot.swingSubdivisionIndex) * intervalMs;
-            const double timingDelayMs = !spanned && timingRange > 0.0 ? (nextRandomUnit() * 2.0 - 1.0) * timingRange : groupTimingMs;
+            const double timingDelayMs = !spanned && timingRange > 0.0 ? nextTimingOffsetMs (timingRange) : groupTimingMs;
             const double delayMs = rollDelayMs + swingDelayMs + timingDelayMs
                                    + static_cast<double> (cell.nudge) * stepDurationMs / 100.0;
 
             if (spanned && stepSampleOffset + std::llround (delayMs * sampleRate / 1000.0) >= spanEndSample)
                 break;
 
+            const int baseVelocity = roll > 1 ? cell.splitVelocity (rollIndex) : cell.velocity;
+            const double range = static_cast<double> (baseVelocity) * (static_cast<double> (snapshot.velocityHumanize) / 100.0);
+            const int velocity = clampInt (static_cast<int> (std::lround (baseVelocity + velocityVariation * range)), 1, 127);
             scheduleHit (stepSampleOffset,
                          numSamples,
                          NativeHit {

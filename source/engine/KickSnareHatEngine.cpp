@@ -97,6 +97,16 @@ GenerationMode generationModeFromJson (const nlohmann::json& state, GenerationMo
 
     return fallback;
 }
+
+nlohmann::json playbackModesToJson (const SourceSettings& settings)
+{
+    auto modes = nlohmann::json::array();
+    const auto last = std::find_if (settings.playbackModes.rbegin(), settings.playbackModes.rend(),
+                                   [] (PlaybackMode mode) { return mode != PlaybackMode::normal; });
+    for (auto mode = settings.playbackModes.begin(); mode != last.base(); ++mode)
+        modes.push_back (playbackModeToString (*mode));
+    return modes;
+}
 } // namespace
 
 namespace
@@ -213,16 +223,18 @@ int KickSnareHatEngine::generatedBufferLength() const
 void KickSnareHatEngine::applyActiveSourceSettings()
 {
     const auto activeSource = activeSettingsSource();
-    const auto& settings = sourceSettings[static_cast<size_t> (activeSource)];
+    auto& settings = sourceSettings[static_cast<size_t> (activeSource)];
     stepCount = clampInt (settings.stepCount, 1, Constants::maxSteps);
     rate = Constants::normalizeRate (settings.rate);
     currentStep = mod (currentStep, stepCount);
 
     for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
-        auto& range = sourceSettings[static_cast<size_t> (activeSource)].loopRanges[static_cast<size_t> (channel)];
+        const auto index = static_cast<size_t> (channel);
+        auto& range = settings.loopRanges[index];
         clampLoopRange (range, stepCount);
-        copyLoopRange (channels[static_cast<size_t> (channel)], range);
+        copyLoopRange (channels[index], range);
+        channels[index].playbackMode = settings.playbackModes[index];
     }
 
     updateStepIntervalMs();
@@ -466,6 +478,7 @@ void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int 
 void KickSnareHatEngine::setChannelPlaybackMode (int channel, PlaybackMode mode)
 {
     channel = clampChannel (channel);
+    sourceSettings[static_cast<size_t> (activeSettingsSource())].playbackModes[static_cast<size_t> (channel)] = mode;
     channels[static_cast<size_t> (channel)].playbackMode = mode;
     ++playbackSnapshotVersion_;
     status ([&] { return "channel_playback_mode " + std::to_string (channel + 1) + " " + playbackModeToString (mode); });
@@ -739,6 +752,8 @@ void KickSnareHatEngine::copySourcePattern (int source, int destination)
     sources[static_cast<size_t> (destination)] = sources[static_cast<size_t> (source)];
     sourceSettings[static_cast<size_t> (destination)] = sourceSettings[static_cast<size_t> (source)];
     sourceChannelMutes[static_cast<size_t> (destination)] = sourceChannelMutes[static_cast<size_t> (source)];
+    if (destination == staticSource)
+        applyActiveSourceSettings();
 
     recomposeGenerated();
     status ([&] { return "source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1); });
@@ -1007,7 +1022,8 @@ nlohmann::json KickSnareHatEngine::snapshot() const
         sourceSettingsOut.push_back ({
             { "stepCount", settings.stepCount },
             { "rate", settings.rate },
-            { "loopRanges", loopRanges }
+            { "loopRanges", loopRanges },
+            { "playbackModes", playbackModesToJson (settings) }
         });
     }
 
@@ -1055,7 +1071,18 @@ nlohmann::json KickSnareHatEngine::snapshot() const
 DocumentState KickSnareHatEngine::documentState() const
 {
     DocumentState document;
-    auto& settings = document.settings;
+    fillDocumentState (document);
+    return document;
+}
+
+void KickSnareHatEngine::fillDocumentState (DocumentState& document) const
+{
+    fillDocumentSettings (document.settings);
+    document.sources = sources;
+}
+
+void KickSnareHatEngine::fillDocumentSettings (DocumentSettings& settings) const
+{
     settings.stepCount = stepCount;
     settings.generatedStepCount = generatedStepCount;
     settings.channelCount = channelCount;
@@ -1072,21 +1099,28 @@ DocumentState KickSnareHatEngine::documentState() const
     settings.channels = channels;
     settings.sourceSettings = sourceSettings;
     settings.sourceChannelMutes = sourceChannelMutes;
-    document.sources = sources;
-    return document;
 }
 
 nlohmann::json KickSnareHatEngine::serializeForPersistence() const
 {
-    return documentToJson (documentState());
+    // Hosts can save or restore state on a thread with a small stack.
+    DocumentSettings settings;
+    fillDocumentSettings (settings);
+    return documentToJson (settings, sources);
 }
 
 nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document)
 {
-    const auto& settingsIn = document.settings;
+    return documentToJson (document.settings, document.sources);
+}
+
+nlohmann::json KickSnareHatEngine::documentToJson (const DocumentSettings& settingsIn,
+                                                const std::array<SourcePattern, Constants::sourceCount>& patterns)
+{
     nlohmann::json cells = nlohmann::json::array();
     nlohmann::json nudges = nlohmann::json::array();
     nlohmann::json spans = nlohmann::json::array();
+    nlohmann::json splitGates = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
@@ -1098,7 +1132,7 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
         {
             for (int step = 0; step < Constants::maxSteps; ++step)
             {
-                const auto& cell = document.sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
+                const auto& cell = patterns[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
 
                 // Keep the existing v1 cell rows unambiguous with the historical
                 // ten-field cycle-offset layout. Nudge is an optional sparse extension.
@@ -1106,6 +1140,14 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
                     nudges.push_back ({ source, channel, step, cell.nudge });
                 if (cell.span != CellDefaults::span)
                     spans.push_back ({ source, channel, step, cell.span });
+                for (int split = 0; split < Constants::maxRoll; ++split)
+                {
+                    const auto part = static_cast<size_t> (split);
+                    const auto& gate = cell.splitGates[part];
+                    const auto velocity = cell.splitVelocities[part];
+                    if (gate != SplitGate {} || velocity != 0)
+                        splitGates.push_back ({ source, channel, step, split, gate.probability(), gate.cycle(), gate.cycleMask(), velocity });
+                }
 
                 if (! cell.enabled
                     && cell.velocity == 100
@@ -1155,7 +1197,8 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
         sourceSettingsOut.push_back (nlohmann::json::array ({
             settings.stepCount,
             settings.rate,
-            loopRanges
+            loopRanges,
+            playbackModesToJson (settings)
         }));
     }
 
@@ -1192,6 +1235,8 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
     };
     if (! spans.empty())
         state["cellSpans"] = std::move (spans);
+    if (! splitGates.empty())
+        state["splitGates"] = std::move (splitGates);
     return state;
 }
 
@@ -1272,6 +1317,16 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
                 return false;
     }
 
+    if (const auto entries = state.find ("splitGates"); entries != state.end())
+    {
+        if (!entries->is_array())
+            return false;
+        for (const auto& entry : *entries)
+            if (!entry.is_array() || (entry.size() != 7 && entry.size() != 8)
+                || !std::all_of (entry.begin(), entry.end(), [] (const auto& value) { return value.is_number_integer(); }))
+                return false;
+    }
+
     if (state.contains ("sourceSettings"))
     {
         const auto validRanges = [&allNumbers] (const nlohmann::json& ranges)
@@ -1280,6 +1335,11 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
                    && std::all_of (ranges.begin(), ranges.end(), [&allNumbers] (const nlohmann::json& range)
                                    { return ! range.is_array() || allNumbers (range); });
         };
+        const auto validModes = [] (const nlohmann::json& modes)
+        {
+            return modes.is_array() && modes.size() <= Constants::maxChannels
+                && std::all_of (modes.begin(), modes.end(), [] (const auto& mode) { return mode.is_string(); });
+        };
 
         for (const auto& row : state.at ("sourceSettings"))
         {
@@ -1287,14 +1347,16 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
             {
                 if ((! row.empty() && ! row[0].is_number())
                     || (row.size() > 1 && ! row[1].is_string())
-                    || (row.size() > 2 && row[2].is_array() && ! validRanges (row[2])))
+                    || (row.size() > 2 && row[2].is_array() && ! validRanges (row[2]))
+                    || (row.size() > 3 && ! validModes (row[3])))
                     return false;
             }
             else if (row.is_object())
             {
                 if ((row.contains ("stepCount") && ! row.at ("stepCount").is_number())
                     || (row.contains ("rate") && ! row.at ("rate").is_string())
-                    || (row.contains ("loopRanges") && row.at ("loopRanges").is_array() && ! validRanges (row.at ("loopRanges"))))
+                    || (row.contains ("loopRanges") && row.at ("loopRanges").is_array() && ! validRanges (row.at ("loopRanges")))
+                    || (row.contains ("playbackModes") && ! validModes (row.at ("playbackModes"))))
                     return false;
             }
         }
@@ -1337,6 +1399,7 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         settings.rate = rate;
     }
 
+    std::array<bool, Constants::sourceCount> hasSourceModes {};
     if (state.contains ("sourceSettings") && state["sourceSettings"].is_array())
     {
         const auto& settingsIn = state["sourceSettings"];
@@ -1348,6 +1411,14 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
 
             const auto& row = settingsIn[static_cast<size_t> (source)];
             auto& settings = sourceSettings[static_cast<size_t> (source)];
+            const auto* modes = row.is_array() && row.size() > 3 ? &row[3]
+                : row.is_object() && row.contains ("playbackModes") ? &row["playbackModes"] : nullptr;
+            if (modes != nullptr)
+            {
+                hasSourceModes[static_cast<size_t> (source)] = true;
+                for (size_t ch = 0; ch < modes->size(); ++ch)
+                    settings.playbackModes[ch] = normalizePlaybackMode ((*modes)[ch].get<std::string>());
+            }
 
             if (row.is_array())
             {
@@ -1452,9 +1523,6 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         }
     }
 
-    if (staticSource >= 0)
-        applyActiveSourceSettings();
-
     for (auto& mutes : sourceChannelMutes)
         for (auto& muted : mutes)
             muted = false;
@@ -1478,6 +1546,7 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         }
     }
 
+    std::array<bool, Constants::sourceCount> hasActiveCells {};
     for (const auto& entry : state["cells"])
     {
         if (! entry.is_array() || entry.size() < 7)
@@ -1502,9 +1571,11 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
                               ? entry[9].get<int>()
                               : entry.size() > 8 ? entry[8].get<int>() : 1;
 
+        const bool enabled = entry[3].get<int>() != 0;
+        hasActiveCells[static_cast<size_t> (source)] |= enabled;
         sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)] =
             cloneCell ({
-                .enabled = entry[3].get<int>() != 0,
+                .enabled = enabled,
                 .velocity = entry[4].get<int>(),
                 .probability = entry[5].get<int>(),
                 .cycle = cycle,
@@ -1512,6 +1583,21 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
                 .roll = roll
             });
     }
+
+    // Legacy v1 projects stored direction globally. Keep it on existing patterns
+    // and let unused slots start with normal playback.
+    for (size_t source = 0; source < sourceSettings.size(); ++source)
+    {
+        const bool used = source == static_cast<size_t> (activeSettingsSource()) || hasActiveCells[source];
+        if (!used && (!state.contains ("sourceSettings") || source >= state["sourceSettings"].size()))
+            sourceSettings[source] = defaultSourceSettings();
+        else if (used && !hasSourceModes[source])
+            for (size_t ch = 0; ch < channels.size(); ++ch)
+                sourceSettings[source].playbackModes[ch] = channels[ch].playbackMode;
+    }
+
+    if (staticSource >= 0)
+        applyActiveSourceSettings();
 
     for (const auto& [key, field, minimum, maximum] : {
              std::tuple { "cellNudges", &Cell::nudge, -100, 100 },
@@ -1530,6 +1616,24 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
                 sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)].*field = clampInt (entry[3].get<int>(), minimum, maximum);
         }
     }
+
+    if (const auto entries = state.find ("splitGates"); entries != state.end())
+        for (const auto& entry : *entries)
+        {
+            const int source = entry[0].get<int>();
+            const int channel = entry[1].get<int>();
+            const int step = entry[2].get<int>();
+            const int split = entry[3].get<int>();
+            if (source >= 0 && source < Constants::sourceCount && channel >= 0 && channel < Constants::maxChannels
+                && step >= 0 && step < Constants::maxSteps && split >= 0 && split < Constants::maxRoll)
+            {
+                auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
+                auto& gate = cell.splitGates[static_cast<size_t> (split)];
+                gate.setProbability (entry[4].get<int>());
+                gate.setCycle (entry[5].get<int>(), entry[6].get<int>());
+                cell.setSplitVelocity (split, entry.size() == 8 ? entry[7].get<int>() : 0);
+            }
+        }
 
     if (keepGeneratedSources)
     {

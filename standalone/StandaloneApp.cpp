@@ -410,6 +410,9 @@ private:
 };
 
 class KshStandaloneApp final : public JUCEApplication
+#if JUCE_MAC
+                             , private MenuBarModel
+#endif
 {
 public:
     KshStandaloneApp()
@@ -505,6 +508,13 @@ public:
 
         if (mainWindow != nullptr)
         {
+           #if JUCE_MAC
+            menuCommands.setFirstCommandTarget (this);
+            menuCommands.registerAllCommandsForTarget (this);
+            PopupMenu applicationMenu;
+            applicationMenu.addCommandItem (&menuCommands, audioSettingsCommand);
+            MenuBarModel::setMacMainMenu (this, &applicationMenu);
+           #endif
            #if JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE
             Desktop::getInstance().setKioskModeComponent (mainWindow.get(), false);
            #endif
@@ -522,6 +532,9 @@ public:
 
     void shutdown() override
     {
+       #if JUCE_MAC
+        MenuBarModel::setMacMainMenu (nullptr);
+       #endif
         saveCurrentPluginState();
         pluginHolder = nullptr;
         mainWindow = nullptr;
@@ -570,6 +583,47 @@ protected:
     std::unique_ptr<StandaloneFilterWindow> mainWindow;
 
 private:
+   #if JUCE_MAC
+    static constexpr CommandID audioSettingsCommand = 0x2000;
+    ApplicationCommandManager menuCommands;
+
+    StringArray getMenuBarNames() override { return {}; }
+    PopupMenu getMenuForIndex (int, const String&) override { return {}; }
+    void menuItemSelected (int, int) override {}
+
+    void getAllCommands (Array<CommandID>& commands) override
+    {
+        JUCEApplication::getAllCommands (commands);
+        commands.add (audioSettingsCommand);
+    }
+
+    void getCommandInfo (CommandID command, ApplicationCommandInfo& info) override
+    {
+        if (command != audioSettingsCommand)
+        {
+            JUCEApplication::getCommandInfo (command, info);
+            return;
+        }
+
+        info.setInfo (String::fromUTF8 ("Settings…"), "Open Audio/MIDI Settings", "Application", 0);
+        info.addDefaultKeypress (',', ModifierKeys::commandModifier);
+    }
+
+    bool perform (const InvocationInfo& info) override
+    {
+        if (info.commandID != audioSettingsCommand)
+            return JUCEApplication::perform (info);
+
+        if (mainWindow != nullptr)
+            if (auto* holder = mainWindow->getPluginHolder())
+            {
+                holder->showAudioSettingsDialog();
+                return true;
+            }
+        return false;
+    }
+   #endif
+
    #if JUCE_IOS
    #if defined (KSH_STANDALONE_LINK)
     void setLinkForeground (bool foreground)

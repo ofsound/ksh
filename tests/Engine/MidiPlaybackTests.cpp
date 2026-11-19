@@ -60,6 +60,44 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 }
 } // namespace
 
+TEST_CASE ("Split hits apply their own probability cycle and velocity on the original timing", "[engine][transport][split-edits]")
+{
+    const int span = GENERATE (1, 2);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelLoopLength (0, 4);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    Cell cell { .enabled = true, .velocity = 74, .cycle = 3, .cycleMask = 0b101, .roll = 3, .span = span };
+    cell.splitGates[0].setCycle (2, 0b10);
+    cell.splitGates[1].setProbability (0);
+    cell.setSplitVelocity (0, 31);
+    fixture.engine.setCell (0, 0, 0, cell);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    constexpr int loopSamples = 24000;
+    constexpr int blockSize = 503;
+    std::vector<std::pair<int, int>> onsets;
+    std::vector<int> splitPhases;
+    for (int sample = 0; sample < 4 * loopSamples; sample += blockSize)
+    {
+        const auto played = runPlaybackBlock (runner, snapshot, sample / 24000.0, 120.0, true,
+                                              std::min (blockSize, 4 * loopSamples - sample));
+        for (size_t i = 0; i < played.cycleVisitCount; ++i)
+            splitPhases.push_back (played.cycleVisits[i].splitSteps[0]);
+        for (const auto event : played.midi)
+            if (const auto message = event.getMessage(); message.isNoteOn())
+                onsets.emplace_back (sample + event.samplePosition, message.getVelocity());
+    }
+    const int lastHit = span * 4000;
+    CHECK (splitPhases == std::vector<int> { 1, 2, 1, 2 });
+    CHECK (onsets == std::vector<std::pair<int, int>> { { lastHit, 74 }, { 2 * loopSamples + lastHit, 74 },
+                                                       { 3 * loopSamples, 31 }, { 3 * loopSamples + lastHit, 74 } });
+}
+
 TEST_CASE ("Spanned rolls play evenly on a swung sixteenth grid", "[engine][transport][realtime][triplets]")
 {
     const int span = GENERATE (2, 4, 8);
@@ -309,7 +347,7 @@ TEST_CASE ("deferred swing and humanize timing matches a single block", "[engine
     REQUIRE (timestamps (3000) == expected);
 }
 
-TEST_CASE ("timing humanize is centered on every swung or straight hit including rolls", "[engine][transport][realtime][humanize]")
+TEST_CASE ("triangular timing humanize clusters near each swung or straight hit including rolls", "[engine][transport][realtime][humanize]")
 {
     const int swing = GENERATE (0, 30);
     const int roll = GENERATE (1, 2);
@@ -353,7 +391,7 @@ TEST_CASE ("timing humanize is centered on every swung or straight hit including
     CHECK (render (8189) == hits);
     for (int rollIndex = 0; rollIndex < roll; ++rollIndex)
     {
-        int early = 0, late = 0;
+        int early = 0, late = 0, insideHalfRange = 0;
         double sum = 0.0;
         for (int step = 2; step < stepCount; ++step)
         {
@@ -364,11 +402,14 @@ TEST_CASE ("timing humanize is centered on every swung or straight hit including
             CHECK (std::abs (offset) <= 480.5);
             early += offset < -0.5 ? 1 : 0;
             late += offset > 0.5 ? 1 : 0;
+            insideHalfRange += std::abs (offset) <= 240.0 ? 1 : 0;
             sum += offset;
         }
         // A fixed random phase exercises both halves without requiring exact equal counts.
         CHECK (early > 40);
         CHECK (late > 40);
+        const double innerShare = static_cast<double> (insideHalfRange) / (stepCount - 2);
+        CHECK (std::abs (innerShare - 0.75) < 0.12);
         CHECK (std::abs (sum / (stepCount - 2)) < 75.0);
     }
 }

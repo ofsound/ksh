@@ -21,4 +21,17 @@ namespace ksh::ui
     enum class SwingFileType { midi, wave };
     std::optional<SwingFileType> swingFileType (const juce::File&);
     SwingImportResult analyseSwingFile (const juce::File&, SwingFileType, double beatsPerStep, double referenceBpm);
+
+    struct AudioDrumImport
+    {
+        std::string projectData;
+        juce::String error;
+        double bpm = 120.0;
+        int bars = 0;
+        int hits = 0;
+        bool estimatedTempo = false;
+    };
+
+    bool isDrumAudioFile (const juce::File&);
+    AudioDrumImport importDrumAudio (const juce::File&, const juce::String& originalName, double referenceBpm);
 }

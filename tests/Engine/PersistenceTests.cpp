@@ -42,6 +42,36 @@ TEST_CASE ("Roll spans round trip as sparse v1 data", "[engine][persistence][tri
     CHECK_FALSE (restored.engine.deserializeForPersistence (payload));
 }
 
+TEST_CASE ("Split edits round trip and copy with their step in existing project files", "[engine][persistence][split-edits]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    Cell cell { .enabled = true, .velocity = 86, .probability = 61, .roll = 8 };
+    cell.splitGates[2].setProbability (28);
+    cell.splitGates[7].setCycle (8, 0b10000001);
+    cell.setSplitVelocity (0, 48);
+    fixture.engine.setCell (0, 0, 2, cell);
+    auto saved = fixture.engine.serializeForPersistence();
+    CHECK (saved["v"] == 1);
+    CHECK (saved["splitGates"].size() == 3);
+    REQUIRE (fixture.engine.deserializeForPersistence (saved));
+    CHECK (fixture.engine.sourceCellAt (0, 0, 2) == cell);
+    fixture.engine.copySourcePattern (0, 1);
+    CHECK (fixture.engine.sourceCellAt (1, 0, 2) == cell);
+    const nlohmann::json json = cell;
+    CHECK (json.get<Cell>() == cell);
+    saved.erase ("splitGates");
+    REQUIRE (fixture.engine.deserializeForPersistence (saved));
+    const auto legacy = fixture.engine.sourceCellAt (0, 0, 2);
+    CHECK (legacy.probability == 61);
+    CHECK (legacy.roll == 8);
+    CHECK (legacy.splitGates == Cell {}.splitGates);
+    CHECK (legacy.splitVelocity (0) == 86);
+    CHECK_FALSE (fixture.engine.serializeForPersistence().contains ("splitGates"));
+    saved["splitGates"] = { { 0, 0, 2, 0, 50, 2.5, 1, 48 } };
+    CHECK_FALSE (fixture.engine.deserializeForPersistence (saved));
+}
+
 TEST_CASE ("Generated pattern length persists separately from the active grid", "[engine][persistence][generation]")
 {
     EngineFixture original, restored;
@@ -193,27 +223,55 @@ TEST_CASE ("persistence payload restores per-source resolution", "[engine][persi
     REQUIRE (std::string { restored.engine.getRate() } == "8n");
 }
 
-TEST_CASE ("persistence payload restores loop ranges per source pattern", "[engine][persistence]")
+TEST_CASE ("persistence restores each pattern's loop and direction with defaults for unused slots", "[engine][persistence]")
 {
     EngineFixture original;
     original.engine.setStepCount (16);
     original.engine.setStaticSource (0);
     original.engine.setChannelLoopLength (0, 3, 2);
+    original.engine.setChannelPlaybackMode (0, PlaybackMode::reverse);
     original.engine.setSourceStepCount (1, 12);
     original.engine.setStaticSource (1);
     original.engine.setChannelLoopLength (0, 5, 4);
+    original.engine.setChannelPlaybackMode (0, PlaybackMode::ping_pong);
 
-    const auto payload = original.engine.serializeForPersistence();
+    auto payload = original.engine.serializeForPersistence();
     EngineFixture restored;
     REQUIRE (restored.engine.deserializeForPersistence (payload));
 
     restored.engine.setStaticSource (0);
     REQUIRE (restored.engine.channelAt (0).loopStart == 2);
     REQUIRE (restored.engine.channelAt (0).loopLength == 3);
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::reverse);
 
     restored.engine.setStaticSource (1);
     REQUIRE (restored.engine.channelAt (0).loopStart == 4);
     REQUIRE (restored.engine.channelAt (0).loopLength == 5);
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::ping_pong);
+
+    restored.engine.setStaticSource (2);
+    REQUIRE (restored.engine.getStepCount() == 16);
+    REQUIRE (restored.engine.channelAt (0).loopStart == 0);
+    REQUIRE (restored.engine.channelAt (0).loopLength == 16);
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::normal);
+
+    restored.engine.copySourcePattern (0, 2);
+    REQUIRE (restored.engine.channelAt (0).loopLength == 3);
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::reverse);
+
+    for (auto& settings : payload["sourceSettings"])
+        settings.erase (3);
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::ping_pong);
+    restored.engine.setStaticSource (2);
+    REQUIRE (restored.engine.channelAt (0).playbackMode == PlaybackMode::normal);
+
+    payload.erase ("sourceSettings");
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    restored.engine.setStaticSource (2);
+    CHECK (restored.engine.getStepCount() == 16);
+    CHECK (restored.engine.channelAt (0).loopLength == 16);
+    CHECK (restored.engine.channelAt (0).playbackMode == PlaybackMode::normal);
 }
 
 TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persistence]")

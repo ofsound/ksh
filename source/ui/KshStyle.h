@@ -63,7 +63,7 @@ namespace ksh::ui
         static inline const juce::Colour& border = backgrounds.border;
         static inline const juce::Colour text { 0xfff4fafb }, muted { 0xff95b4bb }, faint { 0xff6f8f97 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
         static inline const juce::Colour orangeAccent { 0xfff1954a }, blueAccent { 0xff40add1 };
-        static inline juce::Colour accent { orangeAccent };
+        static inline juce::Colour accent { blueAccent };
         static juce::ChangeBroadcaster& changes()
         {
             static juce::ChangeBroadcaster changes;
@@ -161,7 +161,7 @@ namespace ksh::ui
             static auto colours = defaultTrackColours();
             return colours;
         }
-        static inline bool useBlueAccent = false;
+        static inline bool useBlueAccent = true;
         static inline AccentColours accentColours {};
     };
     inline void paintLengthGrip (juce::Graphics& g, juce::Rectangle<float> grip, juce::Colour dots = Palette::text, float opacity = 1.0f)
@@ -303,9 +303,9 @@ namespace ksh::ui
     inline void paintPatternCopyOutline (juce::Graphics& g, juce::Rectangle<float> bounds)
     {
         bounds.reduce (1.5f, 1.5f);
-        g.setColour (Palette::blueAccent.withAlpha (0.28f));
+        g.setColour (Palette::accent.withAlpha (0.28f));
         g.drawRoundedRectangle (bounds, 4, 4);
-        g.setColour (Palette::blueAccent.brighter (0.18f));
+        g.setColour (Palette::accent.brighter (0.18f));
         g.drawRoundedRectangle (bounds, 4, 1.5f);
     }
 
@@ -330,6 +330,8 @@ namespace ksh::ui
         shape.addEllipse (8.5f, 8.5f, 7, 7);
         return shape;
     }
+
+    inline constexpr float metronomeArtworkScale = 0.85f;
 
     namespace phoneMenu
     {
@@ -405,6 +407,7 @@ namespace ksh::ui
                         dot (x, 9);
                     line ({ { 7, 14 }, { 17, 14 } }); break;
                 case metronome:
+                    bounds = bounds.withSizeKeepingCentre (bounds.getWidth() * metronomeArtworkScale, bounds.getHeight() * metronomeArtworkScale);
                     line ({ { 3, 20 }, { 8, 4 }, { 15, 4 }, { 21, 20 }, { 3, 20 } });
                     line ({ { 11, 16 }, { 20, 5 } }); dot (18, 8); break;
                 case midi:
@@ -649,6 +652,11 @@ namespace ksh::ui
             if (b.getProperties().contains ("transport"))
             {
                 controlSurface (g, r, down, b.isEnabled() && (hover || b.hasKeyboardFocus (false)));
+                if (const float pulse = static_cast<float> (b.getProperties()["tempoPulse"]); pulse > 0.0f)
+                {
+                    g.setColour (Palette::accent.withAlpha (pulse * 0.20f));
+                    g.fillRoundedRectangle (r, 5);
+                }
                 if (static_cast<bool> (b.getProperties()["launchPending"]))
                 {
                     const auto phase = juce::Time::getMillisecondCounter() % 600u;
@@ -875,6 +883,7 @@ namespace ksh::ui
                 }
                 if (icon == "metronome")
                 {
+                    g.addTransform (juce::AffineTransform::scale (metronomeArtworkScale, metronomeArtworkScale, 12.0f, 12.0f));
                     path.startNewSubPath (8, 4);
                     path.lineTo (15, 4);
                     path.lineTo (20, 21);
@@ -1624,6 +1633,11 @@ namespace ksh::ui
             }
             else
                 controlSurface (g, r.reduced (0.5f), dragging || input.isVisible(), isEnabled() && (isMouseOver() || hasKeyboardFocus (false)));
+            if (const float pulse = static_cast<float> (getProperties()["tempoPulse"]); pulse > 0.0f)
+            {
+                g.setColour (Palette::accent.withAlpha (pulse * 0.20f));
+                g.fillRoundedRectangle (r.reduced (0.5f), 5);
+            }
             if (gestureOnly || (showAdjustmentHintAtZero && value == 0 && !mixed))
             {
                 const auto centre = r.getCentre();

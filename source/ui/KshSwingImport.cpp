@@ -1,8 +1,11 @@
 #include "KshSwingImport.h"
+#include "../engine/KickSnareHatEngine.h"
 #include "../engine/KshMath.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <juce_dsp/juce_dsp.h>
+#include <span>
 
 namespace ksh::ui
 {
@@ -362,34 +365,43 @@ namespace ksh::ui
             return std::clamp (adjusted, beat * 0.98, beat * 1.02);
         }
 
-        SwingImportResult analyseWave (const juce::File& file, double beatsPerStep, double referenceBpm)
+        struct AudioGroove
         {
-            juce::WavAudioFormat format;
-            auto stream = file.createInputStream();
-            if (stream == nullptr)
-                return { {}, {}, "Couldn't open this WAV file." };
-            std::unique_ptr<juce::AudioFormatReader> reader (format.createReaderFor (stream.release(), true));
-            if (reader == nullptr || ! std::isfinite (reader->sampleRate) || reader->sampleRate < 4000.0
-                || reader->sampleRate > 384000.0 || reader->numChannels == 0 || reader->lengthInSamples <= 0)
-                return { {}, {}, "Couldn't read this WAV file." };
+            SwingImportResult result;
+            GridFit fit;
+            std::optional<double> exactTempo;
+        };
 
-            const auto samples = std::min (reader->lengthInSamples, static_cast<int64_t> (reader->sampleRate * maxWaveSeconds));
-            const auto duration = static_cast<double> (samples) / reader->sampleRate;
+        bool usableReader (const std::unique_ptr<juce::AudioFormatReader>& reader)
+        {
+            return reader != nullptr && std::isfinite (reader->sampleRate) && reader->sampleRate >= 4000.0
+                && reader->sampleRate <= 384000.0 && reader->numChannels > 0 && reader->lengthInSamples > 0;
+        }
+
+        int64_t analysisSamples (const juce::AudioFormatReader& reader, double seconds)
+        {
+            return std::min (reader.lengthInSamples, static_cast<int64_t> (reader.sampleRate * seconds));
+        }
+
+        AudioGroove measureAudioGroove (const juce::AudioFormatReader& reader, int64_t samples,
+                                        std::vector<Hit> hits, double beatsPerStep, double referenceBpm)
+        {
+            const auto duration = static_cast<double> (samples) / reader.sampleRate;
             // Keep the tempo search sensitive to sixteenth-note grooves even
             // when the project currently uses a coarser grid.
             const auto analysisStep = std::min (beatsPerStep, Constants::beatsForRate ("16n"));
-            auto hits = waveOnsets (*reader, samples);
             hits.resize (std::min (maxFitHits, hits.size()));
 
-            const auto taggedTempo = reader->metadataValues[juce::WavAudioFormat::acidTempo].getDoubleValue();
+            const auto taggedTempo = reader.metadataValues[juce::WavAudioFormat::acidTempo].getDoubleValue();
             if (taggedTempo >= 20.0 && taggedTempo <= 300.0
-                && reader->metadataValues[juce::WavAudioFormat::acidOneShot].getIntValue() == 0)
+                && reader.metadataValues[juce::WavAudioFormat::acidOneShot].getIntValue() == 0)
             {
-                const auto swing = hits.size() >= 4 ? fitGrid (hits, 60.0 * analysisStep / taggedTempo, true).result() : std::nullopt;
-                return { swingForRate (swing, analysisStep, beatsPerStep), std::round (taggedTempo * 10.0) / 10.0, {} };
+                const auto fit = hits.size() >= 4 ? fitGrid (hits, 60.0 * analysisStep / taggedTempo, true) : GridFit {};
+                return { { swingForRate (fit.result(), analysisStep, beatsPerStep), std::round (taggedTempo * 10.0) / 10.0, {} },
+                         fit, taggedTempo };
             }
             if (hits.size() < 4)
-                return { {}, {}, "This WAV has too few distinct attacks to measure tempo or swing." };
+                return { { {}, {}, "This audio has too few distinct attacks to measure tempo or swing." }, {}, {} };
 
             const auto end = std::upper_bound (hits.begin(), hits.end(), hits.front().time + 10.0,
                                                [] (double time, const Hit& hit) { return time < hit.time; });
@@ -428,7 +440,7 @@ namespace ksh::ui
                 const auto bpmDistance = std::abs (std::log2 ((60.0 / refined) / referenceBpm));
                 const auto loopBeats = duration / refined;
                 const auto wholeBar = 4.0 * std::round (loopBeats / 4.0);
-                const auto loopBonus = samples == reader->lengthInSamples && wholeBar >= 4.0
+                const auto loopBonus = samples == reader.lengthInSamples && wholeBar >= 4.0
                                             && hits.front().time < refined * 0.1 && duration - hits.back().time < refined * 1.15
                                             && std::abs (loopBeats - wholeBar) < 0.06 ? 0.035 : 0.0;
                 const auto score = rhythm.score + 0.16 * std::min (1.0, beatCoverage / span) + loopBonus - 0.095 * bpmDistance;
@@ -451,8 +463,331 @@ namespace ksh::ui
                 if (projectSwing && projectFit.rhythm().score > bestFit.rhythm().score + 0.025)
                     swing = projectSwing;
             }
-            return { swing, std::round (600.0 / bestBeat) / 10.0, {} };
+            return { { swing, std::round (600.0 / bestBeat) / 10.0, {} }, bestFit, 60.0 / bestBeat };
         }
+
+        std::unique_ptr<juce::AudioFormatReader> openAudio (const juce::File& file)
+        {
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            return std::unique_ptr<juce::AudioFormatReader> (formats.createReaderFor (file.createInputStream()));
+        }
+
+        SwingImportResult analyseWave (const juce::File& file, double beatsPerStep, double referenceBpm)
+        {
+            const auto reader = openAudio (file);
+            if (!usableReader (reader))
+                return { {}, {}, "Couldn't read this WAV file." };
+            const auto samples = analysisSamples (*reader, maxWaveSeconds);
+            return measureAudioGroove (*reader, samples, waveOnsets (*reader, samples), beatsPerStep, referenceBpm).result;
+        }
+
+        constexpr int drumRows = 3, stepsPerBar = 16, barsPerPattern = Constants::maxSteps / stepsPerBar;
+        constexpr int maximumBars = Constants::sourceCount * barsPerPattern;
+
+        struct DrumHit
+        {
+            double time, strength;
+        };
+
+        using DrumTracks = std::array<std::vector<DrumHit>, drumRows>;
+
+        // Measure the change in spectral energy around each transient. Using
+        // both sides of the attack suppresses sustained notes and drum tails.
+        class AttackSpectrum
+        {
+        public:
+            explicit AttackSpectrum (juce::AudioFormatReader& input)
+                : reader (input),
+                  channels (static_cast<int> (std::min (input.numChannels, 2u))),
+                  stride (std::max (1, static_cast<int> (input.sampleRate / 22050.0))),
+                  plan (juce::roundToInt (std::log2 (input.sampleRate * 0.0375 / stride))),
+                  audio (channels, plan.getSize() * stride),
+                  frame (static_cast<size_t> (2 * plan.getSize())),
+                  window (static_cast<size_t> (plan.getSize()))
+            {
+                for (size_t i = 0; i < window.size(); ++i)
+                    window[i] = 0.5f - 0.5f * static_cast<float> (std::cos (
+                        juce::MathConstants<double>::twoPi * static_cast<double> (i) / static_cast<double> (window.size())));
+            }
+
+            using Bands = std::array<double, 5>;
+
+            Bands rise (double time)
+            {
+                const auto onset = static_cast<int64_t> (std::llround (time * reader.sampleRate));
+                const auto lead = static_cast<int64_t> (std::llround (0.005 * reader.sampleRate));
+                const auto before = energy (onset - lead - audio.getNumSamples());
+                auto after = energy (onset - lead);
+                for (size_t i = 0; i < after.size(); ++i)
+                    after[i] = std::max (0.0, after[i] - 0.9 * before[i]);
+                return after;
+            }
+
+        private:
+            Bands energy (int64_t start)
+            {
+                Bands bands {};
+                audio.clear();
+                const int offset = static_cast<int> (std::clamp<int64_t> (-start, 0, audio.getNumSamples()));
+                const auto count = audio.getNumSamples() - offset;
+                if (count <= 0 || !reader.read (&audio, offset, count, std::max (start, int64_t { 0 }), true, channels > 1))
+                    return bands;
+
+                const auto binFrequency = reader.sampleRate / (stride * plan.getSize());
+                constexpr std::array<double, 4> boundaries { 160.0, 550.0, 1700.0, 4300.0 };
+                for (int channel = 0; channel < channels; ++channel)
+                {
+                    std::ranges::fill (frame, 0.0f);
+                    const auto* source = audio.getReadPointer (channel);
+                    for (size_t i = 0; i < window.size(); ++i)
+                    {
+                        float sum = 0.0f;
+                        for (int part = 0; part < stride; ++part)
+                        {
+                            const auto value = source[i * static_cast<size_t> (stride) + static_cast<size_t> (part)];
+                            if (std::isfinite (value))
+                                sum += value;
+                        }
+                        frame[i] = sum * window[i] / static_cast<float> (stride);
+                    }
+                    plan.performFrequencyOnlyForwardTransform (frame.data(), true);
+                    size_t band = 0;
+                    for (size_t bin = 1; bin < window.size() / 2; ++bin)
+                    {
+                        const auto frequency = static_cast<double> (bin) * binFrequency;
+                        if (frequency < 28.0)
+                            continue;
+                        while (band < boundaries.size() && frequency >= boundaries[band])
+                            ++band;
+                        const double amplitude = frame[bin];
+                        bands[band] += amplitude * amplitude;
+                    }
+                }
+                return bands;
+            }
+
+            juce::AudioFormatReader& reader;
+            int channels, stride;
+            juce::dsp::FFT plan;
+            juce::AudioBuffer<float> audio;
+            std::vector<float> frame, window;
+        };
+
+        DrumTracks classifyDrumHits (juce::AudioFormatReader& reader, const std::vector<Hit>& hits)
+        {
+            AttackSpectrum spectrum (reader);
+            DrumTracks tracks;
+            for (const auto& hit : hits)
+            {
+                const auto [bass, body, snap, high, air] = spectrum.rise (hit.time);
+                const auto snare = body + 0.75 * snap;
+                const auto hats = high + air;
+                const auto strongest = std::max ({ bass, snare, hats });
+                if (strongest <= 1.0e-6)
+                    continue;
+
+                const bool kick = bass > 0.45 * snare && bass > 0.15 * strongest;
+                const bool snareHit = snare > 0.40 * hats && snare > (kick ? 0.27 : 0.15) * strongest
+                                   && (!kick || snap > 0.07 * bass || body > 0.55 * bass);
+                // Subtract the snare's usual high-frequency spill before looking for a coincident hat.
+                const auto independentHat = std::max (0.0, high - 0.50 * snap - 0.07 * body)
+                                          + std::max (0.0, air - 0.16 * snap - 0.02 * body);
+                const bool hat = snareHit ? independentHat > 0.06 * strongest && air > 0.025 * strongest
+                                          : hats > 0.55 * snare && hats > 0.03 * strongest;
+                if (kick)
+                    tracks[0].push_back ({ hit.time, bass });
+                if (snareHit)
+                    tracks[1].push_back ({ hit.time, snare });
+                if (hat)
+                    tracks[2].push_back ({ hit.time, snareHit ? independentHat : hats });
+            }
+            return tracks;
+        }
+
+        int closestDrumStep (double position, ImportedSwing swing, int maximumSteps)
+        {
+            const auto centre = static_cast<int> (std::floor (position));
+            auto best = std::clamp (centre, -1, maximumSteps);
+            double distance = std::numeric_limits<double>::infinity();
+            for (int step = std::max (-1, centre - 3); step <= std::min (maximumSteps, centre + 2); ++step)
+            {
+                const auto candidate = std::abs (position - (step + swingDelayStepsForPosition (step, swing.amount, swing.target)));
+                if (candidate < distance)
+                {
+                    distance = candidate;
+                    best = step;
+                }
+            }
+            return best;
+        }
+
+        int matchedRoll (std::span<const DrumHit> hits, double stepSeconds, double offset)
+        {
+            if (std::abs (offset) > 0.23)
+                return 1;
+            const auto maxRoll = static_cast<int> (std::min (hits.size(), static_cast<size_t> (Constants::maxRoll)));
+            for (int roll = maxRoll; roll > 1; --roll)
+            {
+                bool fits = true;
+                for (int i = 1; i < roll; ++i)
+                {
+                    const auto time = (hits[static_cast<size_t> (i)].time - hits.front().time) / stepSeconds;
+                    if (std::abs (time - static_cast<double> (i) / roll) > 0.07)
+                    {
+                        fits = false;
+                        break;
+                    }
+                }
+                if (fits)
+                    return roll;
+            }
+            return 1;
+        }
+
+        int printDrumTrack (DocumentState& document, size_t row, const std::vector<DrumHit>& hits,
+                            double origin, double stepSeconds, ImportedSwing swing, int endStep)
+        {
+            if (hits.empty())
+                return 0;
+
+            std::vector<double> strengths;
+            strengths.reserve (hits.size());
+            for (const auto& hit : hits)
+                strengths.push_back (hit.strength);
+            const auto reference = strengths.begin() + std::ssize (strengths) * 9 / 10;
+            std::nth_element (strengths.begin(), reference, strengths.end());
+            const auto velocity = [peak = *reference] (const DrumHit& hit)
+            {
+                return std::clamp (juce::roundToInt (22.0 + 95.0 * std::pow (hit.strength / peak, 0.33)), 1, 127);
+            };
+
+            int printed = 0;
+            for (size_t i = 0; i < hits.size();)
+            {
+                const auto position = (hits[i].time - origin) / stepSeconds;
+                const int step = closestDrumStep (position, swing, endStep);
+                if (step >= endStep)
+                    break;
+                const auto timing = position - (step + swingDelayStepsForPosition (step, swing.amount, swing.target));
+                if (step < 0 || std::abs (timing) > 0.74)
+                {
+                    ++i;
+                    continue;
+                }
+                const auto roll = matchedRoll (std::span (hits).subspan (i), stepSeconds, timing);
+                auto& cell = document.sources[static_cast<size_t> (step / Constants::maxSteps)][row]
+                                             [static_cast<size_t> (step % Constants::maxSteps)];
+                const auto vel = velocity (hits[i]);
+                if (!cell.enabled || vel > cell.velocity || roll > cell.roll)
+                {
+                    printed += roll - (cell.enabled ? cell.roll : 0);
+                    cell = {};
+                    cell.enabled = true;
+                    cell.velocity = vel;
+                    cell.nudge = clampInt (juce::roundToInt (100.0 * timing), -100, 100);
+                    cell.roll = roll;
+                    for (int part = 1; part < roll; ++part)
+                        cell.setSplitVelocity (part, velocity (hits[i + static_cast<size_t> (part)]));
+                }
+                i += static_cast<size_t> (roll);
+            }
+            return printed;
+        }
+    }
+
+    bool isDrumAudioFile (const juce::File& file)
+    {
+        return file.hasFileExtension ("wav;wave;aif;aiff;aifc;flac;mp3;m4a;aac;caf;ogg");
+    }
+
+    AudioDrumImport importDrumAudio (const juce::File& file, const juce::String& originalName, double referenceBpm)
+    {
+        AudioDrumImport result;
+        const auto reader = openAudio (file);
+        if (!usableReader (reader))
+        {
+            result.error = "Couldn't read the dropped drum audio.";
+            return result;
+        }
+
+        const auto excerptSamples = analysisSamples (*reader, maxWaveSeconds);
+        auto hits = waveOnsets (*reader, excerptSamples);
+        if (hits.empty())
+        {
+            result.error = "Couldn't find drum attacks in the audio.";
+            return result;
+        }
+
+        auto groove = measureAudioGroove (*reader, excerptSamples, hits, 0.25, std::clamp (referenceBpm, 90.0, 145.0));
+        result.estimatedTempo = groove.exactTempo.has_value();
+        result.bpm = groove.exactTempo.value_or (std::clamp (referenceBpm, 20.0, 300.0));
+        const auto stepSeconds = 15.0 / result.bpm;
+        if (!result.estimatedTempo && hits.size() >= 4)
+        {
+            const auto count = std::min (maxFitHits, hits.size());
+            groove.fit = fitGrid (std::vector<Hit> (hits.begin(), hits.begin() + static_cast<std::ptrdiff_t> (count)), stepSeconds, true);
+            groove.result.swing = groove.fit.result();
+        }
+        const auto swing = groove.result.swing.value_or (ImportedSwing {});
+        const auto fit = swing.amount > 0 ? groove.fit.swung : groove.fit.straight;
+        const auto phase = fit.score >= 0.0 ? fit.phase : hits.front().time / stepSeconds;
+        const auto swingPeriod = swing.amount > 0 ? 2.0 * (1 << swing.target) : 1.0;
+        const auto firstPosition = hits.front().time / stepSeconds;
+        const auto origin = (phase + swingPeriod * std::floor ((firstPosition - phase + 0.22) / swingPeriod)) * stepSeconds;
+
+        const auto sourceSeconds = static_cast<double> (reader->lengthInSamples) / reader->sampleRate;
+        const auto bars = std::ceil (((sourceSeconds - origin) / stepSeconds - 0.5) / stepsPerBar);
+        result.bars = static_cast<int> (std::clamp (bars, 1.0, static_cast<double> (maximumBars)));
+        const auto endTime = origin + stepSeconds * (result.bars * stepsPerBar + 0.25);
+        const auto samples = analysisSamples (*reader, endTime);
+        if (samples > excerptSamples)
+            hits = waveOnsets (*reader, samples);
+        while (!hits.empty() && hits.back().time >= endTime)
+            hits.pop_back();
+        const auto tracks = classifyDrumHits (*reader, hits);
+
+        auto document = std::make_unique<DocumentState>();
+        auto& settings = document->settings;
+        settings.channelCount = drumRows;
+        settings.tempo = result.bpm;
+        settings.swing = swing.amount;
+        settings.swingSubdivisionIndex = swing.target;
+        settings.stepCount = settings.generatedStepCount = settings.refreshSteps = std::min (result.bars, barsPerPattern) * stepsPerBar;
+        constexpr std::array labels { "Kick", "Snare", "Hat" };
+        constexpr std::array pitches { 36, 38, 42 };
+        for (size_t row = 0; row < labels.size(); ++row)
+        {
+            settings.channels[row].label = labels[row];
+            settings.channels[row].note = pitches[row];
+            settings.channels[row].loopLength = settings.stepCount;
+            result.hits += printDrumTrack (*document, row, tracks[row], origin, stepSeconds, swing, result.bars * stepsPerBar);
+        }
+        if (result.hits == 0)
+        {
+            result.error = "Couldn't identify kick, snare, or hi-hat hits.";
+            return result;
+        }
+
+        for (int slot = 0; slot < Constants::sourceCount; ++slot)
+        {
+            const auto remaining = result.bars - slot * barsPerPattern;
+            const int steps = remaining > 0 ? std::min (remaining, barsPerPattern) * stepsPerBar : stepsPerBar;
+            auto& source = settings.sourceSettings[static_cast<size_t> (slot)];
+            source.stepCount = steps;
+            source.loopRanges.fill ({ 0, steps });
+        }
+
+        auto project = KickSnareHatEngine::documentToJson (*document);
+        project["projectName"] = originalName.upToLastOccurrenceOf (".", false, false).toStdString();
+        auto description = juce::String ("Drum transcription from ") + originalName + ". "
+                         + juce::String (result.bars) + (result.bars == 1 ? " bar." : " bars.");
+        if (!result.estimatedTempo)
+            description += " Used the current tempo because the recording's tempo was unclear.";
+        project["projectDescription"] = description.toStdString();
+        project["standaloneTransportPlaying"] = false;
+        result.projectData = project.dump();
+        return result;
     }
 
     std::optional<SwingFileType> swingFileType (const juce::File& file)

@@ -7,7 +7,7 @@ namespace ksh
     class IOSFileDrop final : private juce::ComponentMovementWatcher
     {
     public:
-        using FileReady = std::function<void (std::shared_ptr<juce::TemporaryFile>)>;
+        using FileReady = std::function<void (std::shared_ptr<juce::TemporaryFile>, juce::String originalName)>;
         IOSFileDrop (juce::Component&, std::function<FileReady()>);
         ~IOSFileDrop() override;
 

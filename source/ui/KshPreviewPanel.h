@@ -8,11 +8,13 @@ namespace ksh::ui
     public:
         explicit AccentWordmark (bool showRandomizer = false, float artworkScale = 1.0f);
         std::function<void (bool)> onAccentSelected;
-        std::function<void (bool, std::optional<juce::Colour>, bool)> onAccentColourEdited;
-        std::function<void (Palette::BackgroundTone, bool)> onBackgroundToneEdited;
+        std::function<void (bool)> onThemeGesture;
+        std::function<void (bool, std::optional<juce::Colour>)> onAccentColourEdited;
+        std::function<void (Palette::BackgroundTone)> onBackgroundToneEdited;
         std::function<void()> onRandomizerCycle;
         void paint (juce::Graphics&) override;
         void resized() override;
+        void setArtworkBounds (juce::Rectangle<float>);
         static void paintBranding (juce::Graphics&, juce::Rectangle<float>, float artworkScale = 1.0f);
 
     private:
@@ -31,7 +33,8 @@ namespace ksh::ui
         {
         public:
             explicit AccentLogoButton (bool blue) : blueAccent (blue) { setTriggeredOnMouseDown (true); }
-            std::function<void (std::optional<juce::Colour>, bool)> onColourEdited;
+            std::function<void (bool)> onThemeGesture;
+            std::function<void (std::optional<juce::Colour>)> onColourEdited;
             void mouseDown (const juce::MouseEvent&) override;
             void mouseDrag (const juce::MouseEvent&) override;
             void mouseUp (const juce::MouseEvent&) override;
@@ -43,6 +46,7 @@ namespace ksh::ui
             bool draggingAccent = false;
         };
         const float artworkScale;
+        std::optional<juce::Rectangle<float>> artworkBounds;
         LogoButton backdrop;
         std::optional<Palette::BackgroundTone> startingTone;
         bool draggingBackdrop = false;
@@ -61,8 +65,9 @@ namespace ksh::ui
         std::function<void()> onClose;
         std::function<void()> onRhythm;
         std::function<void (bool)> onAccentSelected;
-        std::function<void (bool, std::optional<juce::Colour>, bool)> onAccentColourEdited;
-        std::function<void (Palette::BackgroundTone, bool)> onBackgroundToneEdited;
+        std::function<void (bool)> onThemeGesture;
+        std::function<void (bool, std::optional<juce::Colour>)> onAccentColourEdited;
+        std::function<void (Palette::BackgroundTone)> onBackgroundToneEdited;
         void mouseEnter (const juce::MouseEvent&) override;
         void mouseMove (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override;
@@ -96,9 +101,10 @@ namespace ksh::ui
         bool xyRandomizer = false;
         int randomizerRightInset = 0;
         PatternXYPad xyPad { controller };
+        std::array<juce::TextButton, generatorSeedCount> xySeeds;
         juce::Rectangle<int> inspectorBounds;
         juce::TextButton close { "Back to Grid" }, mode, remove { juce::String::fromUTF8 ("×") };
-        juce::TextButton rhythm { "Rhythm" };
+        juce::TextButton rhythm { "Triplets" };
         ValueControl patternLength, refresh, velocity, probability, roll, nudge;
         std::array<ValueControl, 8> locks;
         CycleEditor cycle;
@@ -123,5 +129,6 @@ namespace ksh::ui
         void updateHoverLayer (juce::Point<int>);
         void setHoverLayer (std::optional<Layer>);
         void paintRandomizerGrid (juce::Graphics&, juce::Rectangle<float>, float labelWidth, float labelSize) const;
+        void layoutXYPad (juce::Rectangle<int>);
     };
 }

@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <memory>
 
 namespace ksh
 {
@@ -164,6 +165,13 @@ private:
 
     std::array<uint16_t, cycleCounterSlots> cycleCounters {};
     std::array<CycleDefinition, cycleCounterSlots> cycleDefinitions {};
+    struct SplitCycleState
+    {
+        uint16_t definition = 0;
+        uint8_t nextPhase = 0;
+    };
+    using SplitCycles = std::array<std::array<SplitCycleState, Constants::maxRoll>, cycleCounterSlots>;
+    const std::unique_ptr<SplitCycles> splitCycles = std::make_unique<SplitCycles>();
     GeneratedSources generatedSources {};
     std::optional<unsigned long> adoptedGenerationVersion;
     uint32_t rngState = 0x12345678u;
@@ -180,6 +188,7 @@ private:
     void dropPendingNoteOnsAtOrAfter (int sampleOffset);
     void resetCycleCounters();
     [[nodiscard]] double nextRandomUnit();
+    [[nodiscard]] double nextTimingOffsetMs (double rangeMs);
     void adoptGeneratedSources (const PlaybackSnapshot& snapshot);
     [[nodiscard]] bool regenerateWindowIfDue (const PlaybackSnapshot& snapshot, int globalStep);
     [[nodiscard]] Cell generatedCellForStep (const PlaybackSnapshot& snapshot, int channel, int playbackStep) const;

@@ -83,7 +83,11 @@ namespace ksh::ui
             startingTone.reset();
             draggingBackdrop = false;
             if (event.mods.isLeftButtonDown() && !event.mods.isPopupMenu())
+            {
                 startingTone = Palette::backgroundTone();
+                if (onThemeGesture)
+                    onThemeGesture (true);
+            }
         };
         backdrop.dragged = [this] (const juce::MouseEvent& event)
         {
@@ -93,26 +97,28 @@ namespace ksh::ui
                 const int brightness = -juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartY()) * sensitivity);
                 const int tint = juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartX()) * sensitivity);
                 draggingBackdrop = true;
-                onBackgroundToneEdited ({ startingTone->brightness + brightness, startingTone->tint + tint }, false);
+                onBackgroundToneEdited ({ startingTone->brightness + brightness, startingTone->tint + tint });
             }
         };
         backdrop.released = [this] (const juce::MouseEvent&)
         {
-            startingTone.reset();
-            if (std::exchange (draggingBackdrop, false) && onBackgroundToneEdited)
-                onBackgroundToneEdited (Palette::backgroundTone(), true);
+            const bool pressed = std::exchange (startingTone, std::nullopt).has_value();
+            draggingBackdrop = false;
+            if (pressed && onThemeGesture)
+                onThemeGesture (false);
         };
         backdrop.onDoubleClick = [this]
         {
             startingTone.reset();
             draggingBackdrop = false;
             if (onBackgroundToneEdited)
-                onBackgroundToneEdited ({ 0, 0 }, true);
+                onBackgroundToneEdited ({ 0, 0 });
         };
         for (auto* letter : { &orangeLogo, &blueLogo })
         {
             addAndMakeVisible (*letter);
             letter->setMouseCursor (juce::MouseCursor::UpDownLeftRightResizeCursor);
+            letter->onThemeGesture = [this] (bool started) { if (onThemeGesture) onThemeGesture (started); };
         }
         orangeLogo.setTitle ("Orange accent");
         blueLogo.setTitle ("Blue accent");
@@ -120,8 +126,8 @@ namespace ksh::ui
             letter->setTooltip ("Drag left or right for hue, up or down for luminosity. Double-click to reset.");
         orangeLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (false); };
         blueLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (true); };
-        orangeLogo.onColourEdited = [this] (std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (false, colour, finished); };
-        blueLogo.onColourEdited = [this] (std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (true, colour, finished); };
+        orangeLogo.onColourEdited = [this] (std::optional<juce::Colour> colour) { if (onAccentColourEdited) onAccentColourEdited (false, colour); };
+        blueLogo.onColourEdited = [this] (std::optional<juce::Colour> colour) { if (onAccentColourEdited) onAccentColourEdited (true, colour); };
         if (showRandomizer)
         {
             addAndMakeVisible (randomizerLogo);
@@ -137,6 +143,8 @@ namespace ksh::ui
             return;
         startingColour = Palette::accentColour (blueAccent);
         draggingAccent = false;
+        if (onThemeGesture)
+            onThemeGesture (true);
         LogoButton::mouseDown (event);
     }
 
@@ -151,7 +159,7 @@ namespace ksh::ui
             const float amount = juce::jlimit (-1.0f, 1.0f, static_cast<float> (delta) / 110.0f);
             const auto lightness = juce::jmap (std::abs (amount), startingColour->getLightness(), amount > 0 ? 0.88f : 0.20f);
             if (onColourEdited)
-                onColourEdited (juce::Colour::fromHSL (hue - std::floor (hue), startingColour->getSaturationHSL(), lightness, 1.0f), false);
+                onColourEdited (juce::Colour::fromHSL (hue - std::floor (hue), startingColour->getSaturationHSL(), lightness, 1.0f));
         }
         else
             LogoButton::mouseDrag (event);
@@ -159,11 +167,11 @@ namespace ksh::ui
 
     void AccentWordmark::AccentLogoButton::mouseUp (const juce::MouseEvent& event)
     {
-        startingColour.reset();
+        const bool pressed = std::exchange (startingColour, std::nullopt).has_value();
         if (!std::exchange (draggingAccent, false))
             LogoButton::mouseUp (event);
-        else if (onColourEdited)
-            onColourEdited (Palette::accentOverride (blueAccent), true);
+        if (pressed && onThemeGesture)
+            onThemeGesture (false);
     }
 
     void AccentWordmark::AccentLogoButton::mouseDoubleClick (const juce::MouseEvent& event)
@@ -172,13 +180,22 @@ namespace ksh::ui
             return;
         startingColour.reset();
         draggingAccent = false;
-        onColourEdited (std::nullopt, true);
+        onColourEdited (std::nullopt);
+    }
+
+    void AccentWordmark::setArtworkBounds (juce::Rectangle<float> bounds)
+    {
+        if (artworkBounds == bounds)
+            return;
+        artworkBounds = bounds;
+        resized();
+        repaint();
     }
 
     void AccentWordmark::resized()
     {
         backdrop.setBounds (getLocalBounds());
-        const auto transform = wordmarkTransform (getLocalBounds().toFloat(), artworkScale);
+        const auto transform = wordmarkTransform (artworkBounds.value_or (getLocalBounds().toFloat()), artworkScale);
         const float unit = wordmarkBounds.getWidth() / 556.632813f;
         orangeLogo.setBounds (wordmarkBounds.withWidth (197.021484f * unit).transformedBy (transform).getSmallestIntegerContainer());
         blueLogo.setBounds (wordmarkBounds.withTrimmedLeft (358.0f * unit).transformedBy (transform).getSmallestIntegerContainer());
@@ -187,7 +204,7 @@ namespace ksh::ui
 
     void AccentWordmark::paint (juce::Graphics& g)
     {
-        paintBranding (g, getLocalBounds().toFloat(), artworkScale);
+        paintBranding (g, artworkBounds.value_or (getLocalBounds().toFloat()), artworkScale);
     }
 
     void AccentWordmark::paintBranding (juce::Graphics& g, juce::Rectangle<float> bounds, float scale)
@@ -232,12 +249,13 @@ namespace ksh::ui
                                          .getTransformToFit (artwork->getDrawableBounds(), wordmarkBounds));
                 return path;
             }();
-            g.setColour (juce::Colours::black.withAlpha (0.25f));
+            constexpr float effectIntensity = 1.12f;
+            g.setColour (juce::Colours::black.withAlpha (0.25f * effectIntensity));
             g.fillPath (outline, juce::AffineTransform::translation (0, 1.5f));
             artwork->drawWithin (g, wordmarkBounds, juce::RectanglePlacement::centred, 1.0f);
 
-            juce::ColourGradient finish (juce::Colours::white.withAlpha (0.12f), wordmarkBounds.getTopLeft(),
-                                         juce::Colours::black.withAlpha (0.14f), wordmarkBounds.getBottomLeft(), false);
+            juce::ColourGradient finish (juce::Colours::white.withAlpha (0.12f * effectIntensity), wordmarkBounds.getTopLeft(),
+                                         juce::Colours::black.withAlpha (0.14f * effectIntensity), wordmarkBounds.getBottomLeft(), false);
             finish.addColour (0.42, juce::Colours::transparentBlack);
             g.reduceClipRegion (outline);
             g.setGradientFill (finish);
@@ -253,6 +271,20 @@ namespace ksh::ui
         {
             addChildComponent (close);
             addChildComponent (xyPad);
+            for (size_t i = 0; i < xySeeds.size(); ++i)
+            {
+                auto& button = xySeeds[i];
+                addChildComponent (button);
+                button.setButtonText (juce::String (i + 1));
+                button.setTitle ("Generator seed " + button.getButtonText());
+                button.setToggleState (i == 0, juce::dontSendNotification);
+                button.onClick = [this, i]
+                {
+                    xyPad.selectSeed (static_cast<int> (i));
+                    for (size_t seed = 0; seed < xySeeds.size(); ++seed)
+                        xySeeds[seed].setToggleState (seed == i, juce::dontSendNotification);
+                };
+            }
             close.getProperties().set ("footerControl", true);
             close.getProperties().set ("backToGrid", true);
             close.setTooltip ("Return to the step grid (Esc)");
@@ -278,8 +310,9 @@ namespace ksh::ui
             getProperties().set ("hideDisabledHelp", true);
             addAndMakeVisible (wordmark);
             wordmark.onAccentSelected = [this] (bool blue) { if (onAccentSelected) onAccentSelected (blue); };
-            wordmark.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (blue, colour, finished); };
-            wordmark.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone, bool finished) { if (onBackgroundToneEdited) onBackgroundToneEdited (tone, finished); };
+            wordmark.onThemeGesture = [this] (bool started) { if (onThemeGesture) onThemeGesture (started); };
+            wordmark.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour) { if (onAccentColourEdited) onAccentColourEdited (blue, colour); };
+            wordmark.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone) { if (onBackgroundToneEdited) onBackgroundToneEdited (tone); };
             wordmark.onRandomizerCycle = [this] { if (onRandomizerCycle) onRandomizerCycle(); };
         }
         addAndMakeVisible (mode);
@@ -321,12 +354,12 @@ namespace ksh::ui
         }
         velocity.setTitle ("Selected velocity offset");
         probability.setTitle ("Selected probability offset");
-        roll.setTitle ("Selected roll");
+        roll.setTitle ("Selected split");
         velocity.setTooltip ("Offsets selected velocities together");
         probability.setTooltip ("Offsets selected probabilities together");
         velocity.caption = "Velocity";
         probability.caption = "Probability";
-        roll.caption = "Roll";
+        roll.caption = "Split";
         nudge.caption = "Nudge";
         nudge.setTitle ("Selected timing nudge");
         nudge.setTooltip ("Drag left for earlier hits, right for later");
@@ -371,14 +404,14 @@ namespace ksh::ui
         roll.resetValue = 1;
         velocity.onBegin = [this] { beginRelative ("Selected velocity"); };
         probability.onBegin = [this] { beginRelative ("Selected probability"); };
-        roll.onBegin = [this] { controller.begin ("Selected roll"); };
+        roll.onBegin = [this] { controller.begin ("Selected split"); };
         velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
         probability.onChange = [this] (int v) { applyRelative (Layer::chance, v); };
         roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) { auto cell = controller.cell (p); cell.roll = juce::jlimit (1, 8, v); controller.editCell (p, cell); } controller.notify(); };
         velocity.onDoubleClick = [this] { resetSelectedValue ("Reset velocity", &Cell::velocity, CellDefaults::velocity); };
         probability.onDoubleClick = [this] { resetSelectedValue ("Reset probability", &Cell::probability, CellDefaults::probability); };
         nudge.onDoubleClick = [this] { resetSelectedValue ("Reset nudge", &Cell::nudge, CellDefaults::nudge); };
-        roll.onDoubleClick = [this] { resetSelectedValue ("Reset roll", &Cell::roll, CellDefaults::roll); };
+        roll.onDoubleClick = [this] { resetSelectedValue ("Reset split", &Cell::roll, CellDefaults::roll); };
         for (auto [control, layer] : { std::pair { &velocity, Layer::velocity }, std::pair { &probability, Layer::chance }, std::pair { &nudge, Layer::nudge }, std::pair { &roll, Layer::roll } })
         {
             const auto begin = control->onBegin;
@@ -496,6 +529,8 @@ namespace ksh::ui
         cancelGesture();
         xyRandomizer = enabled;
         xyPad.setVisible (enabled);
+        for (auto& seed : xySeeds)
+            seed.setVisible (enabled);
         patternLength.setVisible (!enabled);
         mode.setVisible (!enabled);
         refresh.setVisible (!enabled);
@@ -589,6 +624,17 @@ namespace ksh::ui
             lock.cancelGesture();
         cycle.cancelGesture();
     }
+    void PreviewPanel::layoutXYPad (juce::Rectangle<int> bounds)
+    {
+        constexpr int buttonHeight = 42, gap = 5;
+        const auto buttons = bounds.removeFromBottom (buttonHeight);
+        const int side = juce::jmax (0, juce::jmin (48, (buttons.getWidth() - gap * (generatorSeedCount - 1)) / generatorSeedCount));
+        const int start = buttons.getCentreX() - (side * generatorSeedCount + gap * (generatorSeedCount - 1)) / 2;
+        for (int i = 0; i < generatorSeedCount; ++i)
+            xySeeds[static_cast<size_t> (i)].setBounds (start + i * (side + gap), buttons.getY(), side, buttonHeight);
+        xyPad.setBounds (bounds.withTrimmedBottom (5));
+    }
+
     void PreviewPanel::resized()
     {
         wordmark.setVisible (!compact && !randomSection);
@@ -602,7 +648,7 @@ namespace ksh::ui
             const auto controls = phone.controls.reduced (14, 0);
             if (xyRandomizer)
             {
-                xyPad.setBounds (controls.withTrimmedTop (30).withTrimmedBottom (12));
+                layoutXYPad (controls.reduced (0, 12));
                 return;
             }
             mode.setBounds (controls.withY (33).withWidth (controls.getWidth() - 118).withHeight (48));
@@ -648,10 +694,7 @@ namespace ksh::ui
             patternLength.setBounds (lab.preview.reduced (20, 0).removeFromRight (90).withTrimmedTop (10).withHeight (36));
             if (xyRandomizer)
             {
-                auto area = lab.controls.reduced (16, 12);
-                area.removeFromTop (24);
-                area.removeFromBottom (44);
-                xyPad.setBounds (area);
+                layoutXYPad (lab.controls.reduced (16, 12));
                 return;
             }
             mode.setBounds (lab.mode);
@@ -836,15 +879,13 @@ namespace ksh::ui
             const auto pattern = controller.source() < 0 ? juce::String ("Muted Pattern")
                                                         : "Pattern " + juce::String (controller.source() + 1);
             phoneMenu::card (g, phone.preview.toFloat(), xyRandomizer ? pattern : juce::String ("Generated Pattern"));
-            phoneMenu::card (g, phone.controls.toFloat(), xyRandomizer ? juce::String ("Density / Variation") : juce::String {});
+            phoneMenu::card (g, phone.controls.toFloat());
             if (!xyRandomizer)
             {
                 const auto heading = phone.controls.toFloat().reduced (14, 0);
                 text (g, "Random Mode", heading.withY (static_cast<float> (refresh.getY())).withHeight (18),
                       refresh.captionFontSize, refresh.captionColour, true, juce::Justification::centredLeft);
                 text (g, lockHeading, heading.withY (94).withHeight (18), 12, Palette::muted, true, juce::Justification::centredLeft);
-                text (g, "Drag a lock to pin its channel to a pattern.", heading.withY (249).withHeight (18),
-                      12, Palette::muted, false, juce::Justification::centredLeft);
             }
 
             paintRandomizerGrid (g, phone.preview.toFloat().reduced (14, 12).withTrimmedTop (26), 46.0f, 11.0f);
@@ -857,7 +898,6 @@ namespace ksh::ui
             {
                 text (g, "Generation mode", { 18, 8, 180, 18 }, 12, Palette::text, true, juce::Justification::centredLeft);
                 text (g, lockHeading, { 18, 78, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
-                text (g, "OFF lets the generator choose a pattern. Drag a lock to pin a channel to P1-P16.", { 18, 180, static_cast<float> (getWidth() - 36), 32 }, 12, Palette::muted, false, juce::Justification::centredLeft);
                 paintRandomizerGrid (g, getLocalBounds().toFloat().reduced (12, 8).withTrimmedTop (210), 78.0f, 11.0f);
             }
             return;
@@ -875,15 +915,7 @@ namespace ksh::ui
             paintRandomizerGrid (g, previewContent, 76.0f, 15.0f);
 
             if (xyRandomizer)
-            {
-                text (g, "Density / Variation", lab.controls.reduced (22, 12).withHeight (24).toFloat(), 17, Palette::text, true, juce::Justification::centredLeft);
-                auto help = lab.controls.reduced (22, 12).toFloat();
-                help = help.withY (help.getBottom() - 40).withHeight (40);
-                for (const auto* line : { "Rows 1–4: kick, snare, closed and open hat.",
-                                          "Rows 5–8: clap, tom, percussion and cymbal." })
-                    text (g, juce::String::fromUTF8 (line), help.removeFromTop (20), 13, Palette::muted, false, juce::Justification::centredLeft);
                 return;
-            }
             text (g, "Random Mode", lab.mode.withY (lab.refresh.getY()).withHeight (18).toFloat(),
                   refresh.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
             text (g, lockHeading, lab.locksHeading.toFloat(), 17, Palette::text, true, juce::Justification::centredLeft);
@@ -892,9 +924,6 @@ namespace ksh::ui
                                       "Stack picks one per refresh. Per Channel can mix them per step.",
                                       "Refresh Every sets the number of steps between refreshes." })
                 text (g, line, help.removeFromTop (18), 13, Palette::muted, false, juce::Justification::centredLeft);
-            help.removeFromTop (4);
-            text (g, "Drag to pick a pattern. Off lets the generator choose.", help,
-                  13, Palette::muted, false, juce::Justification::centredLeft);
             return;
         }
         g.setColour (Palette::raised);

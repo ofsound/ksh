@@ -20,8 +20,8 @@ namespace ksh::ui
         std::function<void (Location)> revealKeyboardCell;
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
         bool copySelection = false;
-        void setPresetPreferences (juce::PropertiesFile& preferences) { presetPreferences = &preferences; }
         void showSelectedRhythmPresets();
+        juce::Component* openPresetMenu() const;
         void sync();
         juce::Rectangle<float> loopHandleBounds (int channel, bool end, bool touch) const;
         void updatePlayback();
@@ -55,7 +55,6 @@ namespace ksh::ui
 
     private:
         EditorController& controller;
-        juce::PropertiesFile* presetPreferences = nullptr;
         static constexpr float selectionGlowExtent = 20.0f;
         // Share the cached, position-independent blur across equal-sized cells.
         melatonin::DropShadow selectionGlow {
@@ -106,6 +105,15 @@ namespace ksh::ui
         void holdMute (int channel);
         void paintMute (int channel);
         bool muteGestureCurrent() const;
+        struct DirectionSwipe
+        {
+            int channel, lastRow, source;
+            uint64_t epoch;
+            bool reverse, value, painting = false;
+        };
+        std::optional<DirectionSwipe> directionSwipe;
+        void setDirection (int channel, bool reverse, bool enabled);
+        bool directionSwipeCurrent() const;
         int displayedSource = -2;
         uint64_t displayedEpoch = 0;
         enum class Drag { none,
@@ -133,6 +141,7 @@ namespace ksh::ui
         {
             VelocityEdge edge;
             Location cell;
+            juce::Point<float> position;
             juce::Time time;
             bool touch;
         };
@@ -153,6 +162,17 @@ namespace ksh::ui
         void cancelPresetHold();
         void openHeldPreset();
         std::optional<PresetPress> cyclePress;
+        struct SplitPress
+        {
+            PresetPress target;
+            int index, value;
+            bool openEditor, scrubbing = false;
+        };
+        std::optional<SplitPress> splitPress;
+        bool beginSplitPress (const PresetPress&, bool touch, bool openEditor);
+        void showSplitEditor (const PresetPress&, int index, bool touch);
+        void setSplitValue (Location, int, Layer, int);
+        void dragSplitValue (const juce::MouseEvent&);
         enum class CycleTapAction { none, toggle, select, deselect };
         struct CycleTap
         {
@@ -176,12 +196,18 @@ namespace ksh::ui
         class CyclePopup;
         std::unique_ptr<CyclePopup> cyclePopup;
         bool canSetPreset (const PresetPress&) const;
-        int spanForPreset (int id) const;
-        bool canApplyPreset (const PresetPress&, int id) const;
-        void showCellPresets (PresetPress, bool touch, bool rhythmOnly = false);
-        void applyCellPreset (const PresetPress&, int result);
+        void showCellPresets (PresetPress, bool touch, bool trackPress = true);
         juce::Point<float> hoverPosition;
-        bool hoverMarkerVisible = false, pointerInGrid = false;
+        double hoverMarkerStarted = 0.0;
+        juce::TimedCallback hoverMarkerTimer { [this]
+        {
+            if (hoverEdge)
+            {
+                const auto centre = hoverMarkerPoint();
+                repaint (juce::Rectangle<float> (30.0f, 30.0f).withCentre (centre).getSmallestIntegerContainer());
+            }
+        } };
+        bool pointerInGrid = false;
         juce::Point<float> origin, current;
         Cell original;
         Layer dragLayer = Layer::velocity;
@@ -226,6 +252,7 @@ namespace ksh::ui
         std::optional<bool> loopHandleAt (juce::Point<float>, bool touch) const;
         void updateCursor();
         std::optional<VelocityEdge> velocityHintAt (juce::Point<float>) const;
+        juce::Point<float> hoverMarkerPoint() const;
         std::optional<VelocityEdge> velocityEdgeAt (juce::Point<float>, bool touch = false) const;
         float velocityEdgeX (VelocityEdge) const;
         float velocityLineStartX (VelocityEdge, bool touch = false) const;

@@ -1,0 +1,7 @@
+Target dependency graph (3 targets)
+Target 'KSH' in project 'KSH'
+➜ Explicit dependency on target 'Assets' in project 'KSH'
+➜ Explicit dependency on target 'ZERO_CHECK' in project 'KSH'
+Target 'Assets' in project 'KSH'
+➜ Explicit dependency on target 'ZERO_CHECK' in project 'KSH'
+Target 'ZERO_CHECK' in project 'KSH' (no dependencies)

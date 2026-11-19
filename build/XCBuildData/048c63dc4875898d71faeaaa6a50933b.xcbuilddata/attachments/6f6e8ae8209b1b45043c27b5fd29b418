@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+if test "$CONFIGURATION" = "Debug"; then :
+  cd /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link
+  make -f /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link/CMakeScripts/ReRunCMake.make
+fi
+if test "$CONFIGURATION" = "Release"; then :
+  cd /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link
+  make -f /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link/CMakeScripts/ReRunCMake.make
+fi
+if test "$CONFIGURATION" = "MinSizeRel"; then :
+  cd /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link
+  make -f /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link/CMakeScripts/ReRunCMake.make
+fi
+if test "$CONFIGURATION" = "RelWithDebInfo"; then :
+  cd /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link
+  make -f /Users/ben/Dev/JUCE/ksh/Builds-native-ios-link/CMakeScripts/ReRunCMake.make
+fi
+

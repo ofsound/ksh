@@ -1226,7 +1226,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     [[maybe_unused]] const bool restored = loadStateFromData (data, sizeInBytes);
 }
 
-bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
+bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes, bool imported)
 {
     if (data == nullptr || sizeInBytes <= 0)
         return false;
@@ -1313,7 +1313,10 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
 
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
-    markDocumentClean();
+    if (imported)
+        markDocumentModified();
+    else
+        markDocumentClean();
     uiBridge.invalidate();
     requestMessageThreadWork();
     return true;
@@ -1915,9 +1918,16 @@ void PluginProcessor::copyNativeUiState (UiState& state)
 
 ksh::DocumentState PluginProcessor::editorDocument()
 {
+    ksh::DocumentState document;
+    copyEditorDocument (document);
+    return document;
+}
+
+void PluginProcessor::copyEditorDocument (ksh::DocumentState& document)
+{
     std::scoped_lock lock { engineStateMutex };
     applyPendingMacroParametersLocked();
-    return engine.documentState();
+    engine.fillDocumentState (document);
 }
 
 bool PluginProcessor::applyEditorDocument (const ksh::DocumentState& document)

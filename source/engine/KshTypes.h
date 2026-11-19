@@ -3,6 +3,7 @@
 #include "KshConstants.h"
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <string>
 
@@ -90,6 +91,33 @@ enum class PlaybackMode
     return ! (lower == "0" || lower == "false" || lower == "off");
 }
 
+class SplitGate
+{
+public:
+    static constexpr int maxCycle = 8;
+
+    [[nodiscard]] int probability() const { return settings & 0x7f; }
+    [[nodiscard]] int cycle() const { return std::bit_width (static_cast<unsigned int> (cycleDefinition())) - 1; }
+    [[nodiscard]] int cycleMask() const { return cycleDefinition() ^ (1 << cycle()); }
+    [[nodiscard]] uint16_t cycleDefinition() const { return settings >> 7; }
+
+    void setProbability (int value)
+    {
+        settings = static_cast<uint16_t> ((settings & ~0x7f) | clampInt (value, 0, 100));
+    }
+    void setCycle (int length, int mask)
+    {
+        const int lengthBit = 1 << clampInt (length, 1, maxCycle);
+        settings = static_cast<uint16_t> (((lengthBit | (std::max (0, mask) & (lengthBit - 1))) << 7) | probability());
+    }
+
+    [[nodiscard]] bool operator== (const SplitGate&) const = default;
+
+private:
+    // Seven bits of probability, then the active beats with a length bit above them.
+    uint16_t settings = 100 | (3 << 7);
+};
+
 struct Cell
 {
     bool enabled = false;
@@ -102,6 +130,18 @@ struct Cell
     int source = -1;
     int sourceStep = 0;
     int span = 1; // Grid steps occupied by this roll.
+    std::array<SplitGate, Constants::maxRoll> splitGates {};
+    std::array<uint8_t, Constants::maxRoll> splitVelocities {}; // Zero inherits the step velocity.
+
+    [[nodiscard]] int splitVelocity (int part) const
+    {
+        const auto value = splitVelocities[static_cast<size_t> (part)];
+        return value == 0 ? velocity : value;
+    }
+    void setSplitVelocity (int part, int value)
+    {
+        splitVelocities[static_cast<size_t> (part)] = static_cast<uint8_t> (clampInt (value, 0, 127));
+    }
 
     [[nodiscard]] bool operator== (const Cell&) const = default;
 };
@@ -178,6 +218,9 @@ inline constexpr int maxCycleMaskBits = 30;
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;
     out.span = clampInt (cell.span, 1, Constants::maxSteps);
+    out.splitGates = cell.splitGates;
+    for (int i = 0; i < Constants::maxRoll; ++i)
+        out.setSplitVelocity (i, cell.splitVelocities[static_cast<size_t> (i)]);
     return out;
 }
 
@@ -231,6 +274,7 @@ struct SourceSettings
     int stepCount = 16;
     std::string rate = std::string { Constants::defaultRate };
     std::array<LoopRange, Constants::maxChannels> loopRanges {};
+    std::array<PlaybackMode, Constants::maxChannels> playbackModes {};
 
     [[nodiscard]] bool operator== (const SourceSettings&) const = default;
 };

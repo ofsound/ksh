@@ -109,7 +109,8 @@ namespace ksh::ui
             controlSurface (g, getLocalBounds().toFloat().reduced (0.5f));
             g.setColour (Palette::text);
             g.setFont (font (getHeight() >= 60 ? 18.0f : 13.0f, true));
-            g.drawText (name, getLocalBounds().reduced (12, 0), juce::Justification::centredLeft, true);
+            g.drawText (name, getLocalBounds().withTrimmedLeft (18).withTrimmedRight (12),
+                        juce::Justification::centredLeft, true);
         }
 
     private:

@@ -110,19 +110,27 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     auto& tempoButton = phoneButton (editor, "Set tempo");
     CHECK (tempoButton.getButtonText() == "120 BPM");
     CHECK (tempoButton.getProperties().contains ("transport"));
+    CHECK (tempoButton.getY() == 0);
     tempoButton.onClick();
-    CHECK_FALSE (grid.isVisible());
+    CHECK (grid.isVisible());
     juce::Slider* fader = nullptr;
     for (auto* child : editor.getChildren())
-        if (child->getTitle() == "Tempo BPM fader")
-            fader = dynamic_cast<juce::Slider*> (child);
+        if (child->isVisible() && child->getTitle() == "Tempo")
+            for (auto* control : child->getChildren())
+                if (control->getTitle() == "Tempo BPM fader")
+                    fader = dynamic_cast<juce::Slider*> (control);
     REQUIRE (fader != nullptr);
     CHECK (fader->isVisible());
-    CHECK (fader->getWidth() > editor.getWidth() / 2);
+    CHECK (fader->getWidth() < editor.getWidth() / 2);
     fader->setValue (168, juce::sendNotificationSync);
     CHECK (processor.getStandaloneTempoBpm() == 168.0);
+    phoneButton (editor, "Increase tempo by 1 BPM").onClick();
+    CHECK (processor.getStandaloneTempoBpm() == 169.0);
+    phoneButton (editor, "Decrease tempo by 1 BPM").onClick();
+    CHECK (processor.getStandaloneTempoBpm() == 168.0);
     capturePhone (editor, "iphone-tempo");
-    phoneButton (editor, "Done").onClick();
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (fader->getParentComponent()->isVisible());
     CHECK (grid.isVisible());
     CHECK (tempoButton.getButtonText() == "168 BPM");
     auto& menu = phoneButton (editor, "Open menu");
@@ -131,7 +139,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK_FALSE (menu.getToggleState());
     menu.onClick();
     CHECK_FALSE (grid.isVisible());
-    for (const auto* tab : { "Project", "Feel", "Top Secret", "Super Secret", "Settings", "About" })
+    for (const auto* tab : { "Project", "Feel", "Settings", "About" })
     {
         phoneButton (editor, tab).onClick();
         CHECK (menu.getBounds() == menuBounds);
@@ -146,6 +154,9 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
             }
         capturePhone (editor, "iphone-panel-" + juce::String (tab).toLowerCase());
     }
+    auto& backdrop = phoneButton (editor, "Background tone");
+    const juce::Point<int> motifCentre { editor.getWidth() * 3 / 4, editor.getHeight() / 2 };
+    CHECK (backdrop.getScreenBounds().contains (editor.localPointToGlobal (motifCentre)));
     phoneButton (editor, "Close menu").onClick();
     CHECK (grid.isVisible());
     CHECK_FALSE (menu.getToggleState());
@@ -201,6 +212,21 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     for (auto* child : bank->getChildren())
         if (child->getTitle() == "Duplicate pattern" || child->getTitle() == "Close pattern picker")
             CHECK_FALSE (child->isVisible());
+    juce::Component& sourceTile = phoneButton (editor, "Choose pattern 1");
+    const auto tileCentre = sourceTile.getLocalBounds().getCentre().toFloat();
+    sourceTile.mouseDown (phoneEvent (sourceTile, tileCentre, tileCentre));
+    const auto now = juce::Time::getCurrentTime();
+    sourceTile.mouseUp ({ juce::Desktop::getInstance().getMainMouseSource(), tileCentre, juce::ModifierKeys(),
+                          1, 0, 0, 0, 0, &sourceTile, &sourceTile, now, tileCentre, now - juce::RelativeTime::milliseconds (600), 1, false });
+    REQUIRE (phoneButton (editor, "Cancel copy").isVisible());
+    CHECK (patternBank.getToggleState());
+    CHECK_FALSE (phoneButton (editor, "Duplicate pattern").isEnabled());
+    phoneButton (editor, "Choose pattern 3").onClick();
+    REQUIRE (phoneButton (editor, "Copy to P3").isEnabled());
+    phoneButton (editor, "Copy to P3").onClick();
+    CHECK (editor.controller.source() == 2);
+    CHECK (editor.controller.state.playback.sources[2] == editor.controller.state.playback.sources[0]);
+    patternBank.onClick();
     patternBank.onClick();
     CHECK_FALSE (patternBank.getToggleState());
     CHECK (grid.isVisible());
@@ -261,7 +287,10 @@ TEST_CASE ("iPhone applies triplets from the selected step inspector across step
     REQUIRE (rhythm.isEnabled());
     rhythm.onClick();
     REQUIRE (phoneButton (editor, "Quarter triplet").isEnabled());
+    editor.sync();
+    REQUIRE (phoneButton (editor, "Quarter triplet").isEnabled());
     phoneButton (editor, "Quarter triplet").onClick();
+    CHECK (grid.openPresetMenu() == nullptr);
     REQUIRE (editor.controller.cell (step).span == 8);
     CHECK (editor.controller.cell (step).roll == 3);
     phoneButton (editor, "Switch step page").onClick();
@@ -273,6 +302,83 @@ TEST_CASE ("iPhone applies triplets from the selected step inspector across step
     REQUIRE (rhythm.isEnabled());
     rhythm.onClick();
     CHECK (phoneButton (editor, "Quarter triplet").getToggleState());
+    CHECK (phoneButton (editor, "Quarter triplet").getHeight() == 42);
+    REQUIRE (grid.openPresetMenu() != nullptr);
+    ValueControl* span = nullptr;
+    for (auto* child : grid.openPresetMenu()->getChildren())
+        if (child->getTitle() == "Step span")
+            span = dynamic_cast<ValueControl*> (child);
+    REQUIRE (span != nullptr);
+    CHECK (span->value == 8);
+    const auto origin = span->getLocalBounds().getCentre().toFloat();
+    span->mouseDown (phoneEvent (*span, origin, origin));
+    span->mouseUp (phoneEvent (*span, origin, origin, 0));
+    REQUIRE (grid.openPresetMenu() != nullptr);
+
+    const auto target = origin.translated (0.0f, 8.0f);
+    span->mouseDown (phoneEvent (*span, origin, origin));
+    span->mouseDrag (phoneEvent (*span, target, origin));
+    CHECK (span->value == 7);
+    CHECK (editor.controller.cell (step).span == 8);
+    span->mouseUp (phoneEvent (*span, target, origin, 0));
+    CHECK (grid.openPresetMenu() == nullptr);
+    CHECK (editor.controller.cell (step).span == 7);
+    CHECK (editor.controller.cell (step).roll == 3);
+    editor.controller.undo();
+    CHECK (editor.controller.cell (step).span == 8);
+}
+
+TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases onto a preset", "[native-ui][step-presets][touch]")
+{
+    const bool phone = GENERATE (false, true);
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    if (phone)
+        editor.setCompactViewport (true, 814, 390);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+
+    // macOS JUCE has no touch sources. Pen events use the same non-mouse gesture path.
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+    const auto pointer = *source;
+
+    auto& grid = phoneGrid (editor);
+    const Location cell { 0, 3 };
+    const auto origin = grid.cellBounds (cell).getCentre();
+    const auto event = [&] (juce::Point<float> position, int modifiers)
+    {
+        return juce::MouseEvent (pointer, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                 juce::Time::getCurrentTime(), origin, time, 1, position != origin);
+    };
+    const int pressed = juce::ModifierKeys::leftButtonModifier;
+    grid.mouseDown (event (origin, pressed));
+    CHECK (grid.openPresetMenu() == nullptr);
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    while (grid.openPresetMenu() == nullptr && juce::Time::getMillisecondCounterHiRes() < deadline)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    REQUIRE (grid.openPresetMenu() != nullptr);
+    CHECK_FALSE (editor.controller.cell (cell).enabled);
+    auto& preset = phoneButton (editor, "8th triplet");
+    const auto target = grid.getLocalPoint (&preset, preset.getLocalBounds().getCentre().toFloat());
+    grid.mouseDrag (event (target, pressed));
+    CHECK (grid.openPresetMenu() != nullptr);
+    CHECK_FALSE (editor.controller.cell (cell).enabled);
+    grid.mouseUp (event (target, 0));
+    CHECK (grid.openPresetMenu() == nullptr);
+    CHECK (editor.controller.cell (cell).enabled);
+    CHECK (editor.controller.cell (cell).span == 4);
+    CHECK (editor.controller.cell (cell).roll == 3);
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell (cell).enabled);
 }
 
 TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gesture", "[native-ui][iphone]")
@@ -516,7 +622,8 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
-    processor.showStandaloneMidiOutputMenu = [] (juce::Component&) {};
+    bool openedMidi = false;
+    processor.showStandaloneMidiOutputMenu = [&openedMidi] (juce::Component&) { openedMidi = true; };
     bool openedLink = false;
     processor.showStandaloneLinkSettings = [&openedLink] (juce::Component&) { openedLink = true; };
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
@@ -558,7 +665,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (play.getRight() < pattern.getX());
     capturePhone (editor, "iphone-32-minimum");
     phoneButton (editor, "Open menu").onClick();
-    for (const auto* page : { "Project", "Feel", "Top Secret", "Super Secret", "Settings", "About" })
+    for (const auto* page : { "Project", "Feel", "Super Secret", "Settings", "About" })
     {
         CAPTURE (page);
         auto& tab = phoneButton (editor, page);
@@ -577,8 +684,15 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
         }
         capturePhone (editor, "iphone-minimum-menu-" + juce::String (page).toLowerCase());
     }
+    auto& midiOutput = phoneButton (editor, "MIDI output destination");
+    auto& superSecret = phoneButton (editor, "Super Secret");
+    CHECK (midiOutput.getY() == phoneButton (editor, "About").getY());
+    midiOutput.onClick();
+    CHECK (openedMidi);
+    phoneButton (editor, "Close menu").onClick();
+    pattern.onClick();
     auto& topSecret = phoneButton (editor, "Top Secret");
-    CHECK (topSecret.getRight() < phoneButton (editor, "Super Secret").getX());
+    CHECK_FALSE (superSecret.isVisible());
     topSecret.onClick();
     juce::Viewport* generatorViewport = nullptr;
     for (auto* child : editor.getChildren())
@@ -607,6 +721,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
             gridLength = dynamic_cast<ValueControl*> (child);
     REQUIRE (gridLength != nullptr);
     REQUIRE (gridLength->isVisible());
+    CHECK (gridLength->captionFontSize == 10.0f);
     CHECK (gridLength->value == 32);
     const auto setLength = [] (ValueControl& control, int count)
     {
@@ -615,8 +730,6 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     };
     setLength (*gridLength, 64);
     CHECK (editor.controller.state.playback.stepCount == 64);
-    pattern.onClick();
-    phoneButton (editor, "Open menu").onClick();
     topSecret.onClick();
     CHECK_FALSE (patternLength->isVisible());
     REQUIRE (pad->isVisible());
@@ -629,9 +742,25 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (editor.controller.cell ({ 0, 16 }).enabled);
     CHECK (editor.controller.cell ({ 0, 48 }).enabled);
     pad->mouseUp (phoneEvent (*pad, centre, centre, 0));
+    const auto firstSeedPattern = editor.controller.state.playback.sources[0];
+    auto& firstSeed = phoneButton (editor, "Generator seed 1");
+    auto& nextSeed = phoneButton (editor, "Generator seed 2");
+    CHECK (firstSeed.getToggleState());
+    CHECK (nextSeed.getY() >= pad->getBottom());
+    nextSeed.onClick();
+    CHECK (nextSeed.getToggleState());
+    CHECK_FALSE (firstSeed.getToggleState());
+    CHECK (editor.controller.state.playback.sources[0] != firstSeedPattern);
+    editor.controller.undo();
+    CHECK (editor.controller.state.playback.sources[0] == firstSeedPattern);
     editor.controller.undo();
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
-    phoneButton (editor, "Super Secret").onClick();
+    pattern.onClick();
+    pattern.onClick();
+    phoneButton (editor, "Open menu").onClick();
+    CHECK_FALSE (topSecret.isVisible());
+    REQUIRE (superSecret.isVisible());
+    superSecret.onClick();
     CHECK_FALSE (pad->isVisible());
     CHECK (patternLength->isVisible());
     CHECK (generatorViewport->getViewArea().contains (patternLength->getBounds()));
@@ -650,7 +779,9 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (phoneButton (editor, "Random mode").getX() > generator->getWidth() / 2);
     phoneButton (editor, "Settings").onClick();
     auto& link = phoneButton (editor, "Ableton Link settings");
-    auto& midiOutput = phoneButton (editor, "MIDI output destination");
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Switch accent")
+            CHECK_FALSE (child->isVisible());
     CHECK (link.isVisible());
     CHECK (midiOutput.isVisible());
     CHECK (link.getY() >= midiOutput.getBottom());
@@ -719,6 +850,18 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
         CHECK (trigger.getButtonText().isEmpty());
     }
     CHECK (grid.getBounds() == gridBounds);
+    auto& playbackPad = phoneButton (editor, "Trigger channel 1");
+    const auto flashBrightness = [&]
+    {
+        const auto image = playbackPad.createComponentSnapshot (playbackPad.getLocalBounds());
+        return image.getPixelAt (image.getWidth() / 2, image.getHeight() / 2).getBrightness();
+    };
+    const float idleBrightness = flashBrightness();
+    processor.getUiBridge().emitNoteHit ({ .velocity = 40, .uiChannel = 1 });
+    const float quietBrightness = flashBrightness();
+    processor.getUiBridge().emitNoteHit ({ .velocity = 127, .uiChannel = 1 });
+    CHECK (flashBrightness() > quietBrightness);
+    CHECK (quietBrightness > idleBrightness);
     if (compact)
     {
         CHECK_FALSE (grid.isVisible());
@@ -948,7 +1091,7 @@ TEST_CASE ("iPhone visible rows enlarge the grid and scroll without changing the
         if (child->getTitle() == "Scroll rows") scroll = dynamic_cast<juce::ScrollBar*> (child);
     REQUIRE (scroll != nullptr);
     CHECK_FALSE (scroll->isVisible());
-    for (const int count : { 1, 2, 4, 6, 8 })
+    for (const int count : { 4, 5, 6, 7, 8 })
     {
         editor.setCompactVisibleRows (count);
         CHECK (rowsButton.getButtonText() == "Rows: " + juce::String (count));

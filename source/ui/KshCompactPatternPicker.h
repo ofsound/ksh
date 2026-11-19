@@ -19,6 +19,12 @@ namespace ksh::ui
                 addAndMakeVisible (tile);
                 tile.setButtonText (juce::String (i + 1));
                 tile.setTitle ("Choose pattern " + juce::String (i + 1));
+                tile.onHold = [this, i]
+                {
+                    if (isVisible() && fullView && copySource < 0
+                        && epoch == controller.processor.getUiBridge().getDocumentEpoch())
+                        beginDuplicate (i);
+                };
                 tile.onClick = [this, i]
                 {
                     if (copySource >= 0)
@@ -42,14 +48,8 @@ namespace ksh::ui
             duplicate.setTitle ("Duplicate pattern");
             duplicate.onClick = [this]
             {
-                if (fullView)
-                    return;
                 if (copySource < 0)
-                {
-                    copySource = controller.source();
-                    destination = -1;
-                    sync();
-                }
+                    beginDuplicate (controller.source());
                 else if (destination >= 0 && destination != copySource)
                 {
                     // Capture the source explicitly; the destination tap only previews this operation.
@@ -92,6 +92,8 @@ namespace ksh::ui
         }
         void dismiss()
         {
+            for (auto& tile : tiles)
+                tile.cancelHold();
             copySource = destination = -1;
             controller.copySource = -1;
             setVisible (false);
@@ -117,10 +119,12 @@ namespace ksh::ui
                 tile.hits = hits;
                 tile.current = controller.source() == i;
                 tile.copyDestination = copySource >= 0 && copySource != i;
+                tile.setTooltip (fullView && copySource < 0 ? "Hold to duplicate this pattern" : "");
                 tile.setToggleState (copySource >= 0 ? destination == i : tile.current, juce::dontSendNotification);
                 tile.setEnabled (copySource != i);
                 tile.repaint();
             }
+            duplicate.setVisible (!fullView || copySource >= 0);
             duplicate.setEnabled (copySource < 0 ? controller.source() >= 0 : destination >= 0 && destination != copySource);
             duplicate.setButtonText (copySource < 0 ? controller.source() < 0 ? juce::String ("Duplicate pattern") : "Duplicate P" + juce::String (controller.source() + 1)
                                                    : destination >= 0 ? "Copy to P" + juce::String (destination + 1) : "Choose destination");
@@ -150,6 +154,7 @@ namespace ksh::ui
             content.removeFromTop (44);
             auto actions = content.removeFromBottom (44);
             mute.setBounds (actions.removeFromLeft (actions.getWidth() / 3));
+            duplicate.setBounds (actions.withTrimmedLeft (gap).removeFromRight (mute.getWidth()));
             content.reduce (0, gap);
             const int width = content.getWidth() - (columns - 1) * gap;
             const int height = content.getHeight() - (rows - 1) * gap;
@@ -183,9 +188,9 @@ namespace ksh::ui
             }
             g.fillAll (Palette::shell);
             const auto heading = juce::Rectangle<float> (14, 8, static_cast<float> (getWidth() - 72), 44);
-            text (g, title, copySource >= 0 ? heading.withHeight (22) : heading, 18, Palette::text, true, juce::Justification::centredLeft);
-            if (copySource >= 0)
-                text (g, hint, heading.withTrimmedTop (22), 12, Palette::muted, false, juce::Justification::centredLeft);
+            text (g, title, heading.withHeight (22), 18, Palette::text, true, juce::Justification::centredLeft);
+            text (g, copySource >= 0 ? hint : "Hold a pattern to duplicate it.",
+                  heading.withTrimmedTop (22), 12, Palette::muted, false, juce::Justification::centredLeft);
         }
         void mouseDown (const juce::MouseEvent& event) override
         {
@@ -201,13 +206,50 @@ namespace ksh::ui
         }
 
     private:
+        void beginDuplicate (int source)
+        {
+            if (source < 0)
+                return;
+            copySource = source;
+            destination = -1;
+            for (auto& tile : tiles)
+                tile.cancelHold();
+            sync();
+        }
+
         juce::Rectangle<int> overlayBounds() const { return { 6, 4, juce::jmin (428, getWidth() - 12), 316 }; }
 
-        class Tile : public juce::TextButton
+        class Tile : public juce::TextButton, private juce::Timer
         {
         public:
+            std::function<void()> onHold;
             int hits = 0;
             bool current = false, fullView = false, copyDestination = false;
+            void cancelHold() { stopTimer(); }
+            void mouseDown (const juce::MouseEvent& event) override
+            {
+                held = false;
+                juce::TextButton::mouseDown (event);
+                if (fullView && !copyDestination && isEnabled() && event.mods.isLeftButtonDown() && !event.mods.isPopupMenu())
+                    startTimer (holdMs);
+            }
+            void mouseDrag (const juce::MouseEvent& event) override
+            {
+                if (event.getDistanceFromDragStart() >= 10 || !getLocalBounds().contains (event.getPosition()))
+                    cancelHold();
+                if (!held)
+                    juce::TextButton::mouseDrag (event);
+            }
+            void mouseUp (const juce::MouseEvent& event) override
+            {
+                const bool finishedHold = isTimerRunning() && event.getLengthOfMousePress() >= holdMs
+                    && getLocalBounds().contains (event.getPosition());
+                cancelHold();
+                if (finishedHold)
+                    activateHold();
+                if (!std::exchange (held, false))
+                    juce::TextButton::mouseUp (event);
+            }
             void paintButton (juce::Graphics& g, bool hover, bool down) override
             {
                 const auto bounds = getLocalBounds().toFloat();
@@ -234,6 +276,25 @@ namespace ksh::ui
                     g.fillEllipse (9, 36, 4, 4);
                 }
             }
+
+        private:
+            void timerCallback() override
+            {
+                cancelHold();
+                if (isShowing())
+                    activateHold();
+            }
+            void activateHold()
+            {
+                if (!isEnabled())
+                    return;
+                held = true;
+                setState (buttonNormal);
+                if (onHold)
+                    onHold();
+            }
+            static constexpr int holdMs = 550;
+            bool held = false;
         };
         EditorController& controller;
         std::array<Tile, 16> tiles;

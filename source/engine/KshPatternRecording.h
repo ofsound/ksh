@@ -28,8 +28,7 @@ inline PatternRecordingGrid patternRecordingGrid (const PlaybackSnapshot& snapsh
     grid.swing = snapshot.swing;
     grid.swingSubdivisionIndex = snapshot.swingSubdivisionIndex;
     grid.loops = settings.loopRanges;
-    for (size_t channel = 0; channel < grid.modes.size(); ++channel)
-        grid.modes[channel] = snapshot.channels[channel].playbackMode;
+    grid.modes = settings.playbackModes;
     return grid;
 }
 

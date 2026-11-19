@@ -135,6 +135,10 @@ public:
 private:
     friend struct test::EngineTestPeer;
 
+    void fillDocumentSettings (DocumentSettings&) const;
+    [[nodiscard]] static nlohmann::json documentToJson (const DocumentSettings&,
+                                                       const std::array<SourcePattern, Constants::sourceCount>&);
+
     struct ActiveSourceList
     {
         std::array<int, Constants::sourceCount> values {};
@@ -242,7 +246,8 @@ public:
 
     [[nodiscard]] nlohmann::json snapshot() const;
     [[nodiscard]] DocumentState documentState() const;
-    /** The `v:1` encoding of a document; serializeForPersistence() is documentToJson (documentState()). */
+    void fillDocumentState (DocumentState&) const;
+    /** The `v:1` encoding shared by saved documents and live engine state. */
     [[nodiscard]] static nlohmann::json documentToJson (const DocumentState& document);
     [[nodiscard]] nlohmann::json serializeForPersistence() const;
     /** Replaces the whole document. Returns false without mutating anything when required

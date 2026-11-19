@@ -57,11 +57,13 @@ namespace ksh::ui
 
     class EditorController
     {
+        const std::unique_ptr<PluginProcessor::UiState> uiState = std::make_unique<PluginProcessor::UiState>();
+
     public:
         explicit EditorController (PluginProcessor&);
         ~EditorController();
         PluginProcessor& processor;
-        PluginProcessor::UiState state;
+        PluginProcessor::UiState& state;
         Selection selected;
         Layer layer = Layer::velocity;
         std::optional<Layer> inspectorHoverLayer;
@@ -99,9 +101,11 @@ namespace ksh::ui
         }
         int copySource = -1;
         std::function<void()> changed;
+        std::function<void (int channel, int velocity)> onPlaybackHit;
         static constexpr double sourceFlashDurationMs = 80.0;
         std::array<std::array<double, Constants::maxSteps>, Constants::maxChannels> sourceFlashes {}, generatedFlashes {}, sourceCycleFlashes {};
         std::array<std::array<int, Constants::maxSteps>, Constants::maxChannels> sourceCycleSteps {};
+        std::array<std::array<std::array<uint8_t, Constants::maxRoll>, Constants::maxSteps>, Constants::maxChannels> sourceSplitCycleSteps {};
         int playingStep = 0;
         int playingGlobalStep = 0;
 
@@ -112,6 +116,7 @@ namespace ksh::ui
         void selectSource (int sourceIndex, bool copy = false);
         void command (std::string_view, const nlohmann::json&, const juce::String& label = {});
         void begin (const juce::String& label, const juce::String& parameter = {});
+        void recordUiEdit (const juce::String& label, std::function<void (bool redoing)>);
         void commit();
         void cancel();
         bool editing() const { return transaction; }
@@ -133,7 +138,7 @@ namespace ksh::ui
         void toggleSolo (int channel);
         int soloedChannel() const;
         bool exitSolo();
-        void setCycle (int length, int mask, const std::vector<Location>& cells);
+        void setCycle (int length, int mask, const std::vector<Location>& cells, int split = -1);
         void notify()
         {
             if (changed)
@@ -152,17 +157,24 @@ namespace ksh::ui
             DocumentSettings before, after;
             std::vector<CellChange> cells;
             juce::String label;
+            std::function<void (bool redoing)> applyUiEdit;
         };
         std::vector<Entry> undoEntries, redoEntries;
         Entry recordingEntry;
         uint64_t recordingSession = 0;
         std::vector<PluginProcessor::CellEdit> pending;
-        DocumentState before, lastOwn;
+        struct GestureDocuments
+        {
+            DocumentState before, lastOwn, scratch;
+        };
+        // These snapshots contain every pattern. Keep them off the UI thread stack.
+        const std::unique_ptr<GestureDocuments> documents = std::make_unique<GestureDocuments>();
         juce::String gestureLabel, gestureParameter;
         bool transaction = false;
         std::array<bool, 8> soloRestore {};
         int soloChannel = -1, soloSource = -1;
         uint64_t epoch = 0;
+        void pushHistory (Entry);
         void applyHistory (const Entry&, bool redoing);
         void applyDocument (const DocumentState&);
         void reloadState();

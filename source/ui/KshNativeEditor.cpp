@@ -164,13 +164,27 @@ namespace ksh::ui
             juce::TimedCallback saveTimer { [this] { save(); } };
         };
 
+        class TrackColourCallout final : public juce::CallOutBox
+        {
+        public:
+            using juce::CallOutBox::CallOutBox;
+
+            bool canModalEventBeSentToComponent (const juce::Component* target) override
+            {
+                const auto* editor = getParentComponent();
+                return target != nullptr && editor != nullptr && editor->isParentOf (target)
+                    && dynamic_cast<const RowTriggerButton*> (target) != nullptr
+                    && static_cast<bool> (target->getProperties()["rowNumber"])
+                    && juce::ModifierKeys::getCurrentModifiersRealtime().isPopupMenu();
+            }
+        };
+
         class SettingsMenuRow final : public juce::PopupMenu::CustomComponent
         {
         public:
             SettingsMenuRow (const juce::String& label, std::optional<bool> checked, std::function<void()> action = {})
                 : CustomComponent (false), button (label)
             {
-                button.getProperties().set ("footerControl", true);
                 button.setClickingTogglesState (checked.has_value());
                 button.setToggleState (checked.value_or (false), juce::dontSendNotification);
                 if (action)
@@ -193,20 +207,51 @@ namespace ksh::ui
         private:
             class MenuButton final : public juce::TextButton
             {
+                static constexpr int padding = 14, checkboxSize = 16, checkboxGap = 10;
+
             public:
                 using juce::TextButton::TextButton;
 
+                int idealWidth() const
+                {
+                    return juce::GlyphArrangement::getStringWidthInt (font (labelFontSize), getButtonText())
+                        + 2 * padding + checkboxSize + checkboxGap;
+                }
+
                 void paintButton (juce::Graphics& g, bool hovered, bool down) override
                 {
-                    juce::PopupMenu::Item item (getButtonText());
-                    item.isTicked = getToggleState();
-                    const auto bounds = getLocalBounds();
-                    const bool highlight = !getClickingTogglesState() && (hovered || down);
-                    getLookAndFeel().drawPopupMenuItemWithOptions (g, bounds, highlight, item, juce::PopupMenu::Options().withTargetComponent (this));
+                    const auto bounds = getLocalBounds().toFloat();
+                    const bool checked = getToggleState();
+                    const bool toggle = getClickingTogglesState();
+                    const bool highlight = isEnabled() && (hovered || down);
+                    auto content = bounds.reduced (static_cast<float> (padding), 0.0f);
+                    const auto box = content.removeFromLeft (checkboxSize).withSizeKeepingCentre (checkboxSize, checkboxSize);
+                    if (toggle)
+                    {
+                        if (checked)
+                        {
+                            const auto fill = highlight ? Palette::accent.brighter (0.15f) : Palette::accent;
+                            g.setColour (fill);
+                            g.fillRoundedRectangle (box, 3.0f);
+                            juce::Path tick;
+                            tick.startNewSubPath (box.getX() + 4.0f, box.getCentreY());
+                            tick.lineTo (box.getX() + 7.0f, box.getCentreY() + 3.0f);
+                            tick.lineTo (box.getRight() - 3.0f, box.getCentreY() - 3.0f);
+                            g.setColour (fill.contrasting());
+                            g.strokePath (tick, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                        }
+                        g.setColour (highlight ? Palette::text : checked ? Palette::accent : Palette::muted.withAlpha (0.75f));
+                        g.drawRoundedRectangle (box.reduced (0.5f), 2.5f, 1.0f);
+                    }
+                    const auto labelColour = checked ? juce::Colours::white : toggle ? Palette::muted : Palette::text;
+                    const auto ink = !isEnabled() ? Palette::faint
+                        : highlight ? labelColour.interpolatedWith (juce::Colours::white, 0.45f) : labelColour;
+                    ksh::ui::text (g, getButtonText(), content.withTrimmedLeft (checkboxGap), labelFontSize,
+                                   ink, false, juce::Justification::centredLeft);
                     if (showKeyboardFocus && hasKeyboardFocus (false))
                     {
                         g.setColour (Palette::muted.withAlpha (0.7f));
-                        g.drawRoundedRectangle (bounds.toFloat().reduced (6.5f, 1.5f), 4.0f, 1.0f);
+                        g.drawRoundedRectangle (bounds.reduced (6.5f, 1.5f), 4.0f, 1.0f);
                     }
                 }
 
@@ -244,8 +289,8 @@ namespace ksh::ui
 
             void getIdealSize (int& width, int& height) override
             {
-                const auto options = juce::PopupMenu::Options().withTargetComponent (&button);
-                getLookAndFeel().getIdealPopupMenuItemSizeWithOptions (button.getButtonText(), false, 44, width, height, options);
+                width = button.idealWidth();
+                height = 44;
             }
 
             void resized() override { button.setBounds (getLocalBounds()); }
@@ -306,10 +351,9 @@ namespace ksh::ui
        #if JUCE_IOS
         layout.touchRows = true;
        #endif
-        grid.setPresetPreferences (*uiPreferences);
         Palette::setBackgroundTone ({ uiPreferences->getIntValue (backgroundBrightnessPreference),
                                       uiPreferences->getIntValue (backgroundTintPreference) });
-        Palette::setAccentPreferences (uiPreferences->getBoolValue ("blueAccent", Palette::blueAccentSelected()),
+        Palette::setAccentPreferences (uiPreferences->getBoolValue ("blueAccent", true),
                                        { readAccentColour (*uiPreferences, 0), readAccentColour (*uiPreferences, 1) });
         auto trackColours = Palette::defaultTrackColours();
         for (int ch = 0; ch < Constants::maxChannels; ++ch)
@@ -364,6 +408,18 @@ namespace ksh::ui
         grid.rowTriggered = [this] (int channel) { triggerPad (channel); };
         grid.trackColourRequested = [this] (int channel, juce::Component& track)
         {
+            const auto anchor = getLocalArea (&track, track.getLocalBounds());
+            if (trackColourPopup != nullptr && trackColourPopup->isVisible())
+            {
+                auto& picker = static_cast<TrackColourPicker&> (*trackColourContent);
+                picker.setTrack (channel);
+                trackColourPopup->updatePosition (anchor, getLocalBounds());
+                if (picker.isShowing())
+                    picker.grabKeyboardFocus();
+                return;
+            }
+
+            trackColourPopup.reset();
             auto picker = std::make_unique<TrackColourPicker> (channel, uiPreferences);
             auto* content = picker.get();
             content->onNavigate = [this, content] (int delta)
@@ -374,16 +430,18 @@ namespace ksh::ui
                 const int next = layout.channelForRow (row);
                 if (!layout.channelVisible (next))
                     return;
-                if (auto* anchor = grid.rowTitle (next))
+                if (auto* nextTrack = grid.rowTitle (next))
                 {
                     content->setTrack (next);
                     if (auto* callout = dynamic_cast<juce::CallOutBox*> (content->getParentComponent()))
-                        callout->updatePosition (getLocalArea (anchor, anchor->getLocalBounds()), getLocalBounds());
+                        callout->updatePosition (getLocalArea (nextTrack, nextTrack->getLocalBounds()), getLocalBounds());
                 }
             };
-            auto& popup = juce::CallOutBox::launchAsynchronously (std::move (picker), getLocalArea (&track, track.getLocalBounds()), this);
-            popup.setAlwaysOnTop (true);
-            popup.setDismissalMouseClicksAreAlwaysConsumed (true);
+            trackColourContent = std::move (picker);
+            trackColourPopup = std::make_unique<TrackColourCallout> (*content, anchor, this);
+            trackColourPopup->setAlwaysOnTop (true);
+            trackColourPopup->setDismissalMouseClicksAreAlwaysConsumed (true);
+            trackColourPopup->enterModalState (false);
             if (content->isShowing())
                 content->grabKeyboardFocus();
         };
@@ -472,33 +530,30 @@ namespace ksh::ui
                 toggleAboutPanel();
         };
         randomPanel.onClose = [this] { toggleAboutPanel(); };
+        preview.onThemeGesture = [this] (bool started)
+        {
+            if (started)
+                themeBeforeGesture = currentTheme();
+            else
+                finishThemeGesture();
+        };
         preview.onAccentSelected = [this] (bool blue)
         {
-            uiPreferences->setValue ("blueAccent", blue);
-            uiPreferences->saveIfNeeded();
-            Palette::setBlueAccent (blue);
+            auto theme = currentTheme();
+            theme.blue = blue;
+            editTheme (theme);
         };
-        preview.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour, bool finished)
+        preview.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour)
         {
-            const size_t index = blue ? 1 : 0;
-            Palette::setAccentColour (blue, colour);
-            if (colour)
-                uiPreferences->setValue (accentColourKeys[index], colour->toString());
-            else
-                uiPreferences->removeValue (accentColourKeys[index]);
-            uiPreferences->removeValue (legacyAccentModeKeys[index]);
-            uiPreferences->removeValue (legacyAccentShadeKeys[index]);
-            if (finished)
-                uiPreferences->saveIfNeeded();
+            auto theme = currentTheme();
+            theme.colours[blue ? 1 : 0] = colour;
+            editTheme (theme);
         };
-        preview.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone, bool finished)
+        preview.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone)
         {
-            Palette::setBackgroundTone (tone);
-            const auto applied = Palette::backgroundTone();
-            uiPreferences->setValue (backgroundBrightnessPreference, applied.brightness);
-            uiPreferences->setValue (backgroundTintPreference, applied.tint);
-            if (finished)
-                uiPreferences->saveIfNeeded();
+            auto theme = currentTheme();
+            theme.backdrop = tone;
+            editTheme (theme);
         };
         const std::array<juce::String, 6> projectLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
         const std::array<juce::String, 6> projectTips { "", "", "", "Previous project in this folder", "Next project in this folder", "" };
@@ -525,6 +580,11 @@ namespace ksh::ui
        #endif
         addChildComponent (recordingStrip);
         recordingStrip.setTitle ("Performance pads");
+        controller.onPlaybackHit = [this] (int channel, int velocity)
+        {
+            if (recordingStrip.isVisible() && juce::isPositiveAndBelow (channel, static_cast<int> (recordingPads.size())))
+                recordingPads[static_cast<size_t> (channel)].flash (velocity);
+        };
         for (int channel = 0; channel < static_cast<int> (recordingPads.size()); ++channel)
         {
             auto& pad = recordingPads[static_cast<size_t> (channel)];
@@ -795,8 +855,75 @@ namespace ksh::ui
         Palette::changes().removeChangeListener (this);
         removeMouseListener (this);
         juce::PopupMenu::dismissAllActiveMenus();
+        trackColourPopup.reset();
+        trackColourContent.reset();
         controller.changed = {};
+        controller.onPlaybackHit = {};
         setLookAndFeel (nullptr);
+    }
+    NativeEditor::Theme NativeEditor::currentTheme()
+    {
+        return { Palette::blueAccentSelected(), { Palette::accentOverride (false), Palette::accentOverride (true) },
+                 Palette::backgroundTone() };
+    }
+    void NativeEditor::applyTheme (const Theme& theme, juce::PropertiesFile& preferences)
+    {
+        const auto previous = currentTheme();
+        if (previous.blue != theme.blue)
+            preferences.setValue ("blueAccent", theme.blue);
+        for (size_t i = 0; i < theme.colours.size(); ++i)
+        {
+            if (previous.colours[i] == theme.colours[i])
+                continue;
+            if (theme.colours[i])
+                preferences.setValue (accentColourKeys[i], theme.colours[i]->toString());
+            else
+                preferences.removeValue (accentColourKeys[i]);
+            preferences.removeValue (legacyAccentModeKeys[i]);
+            preferences.removeValue (legacyAccentShadeKeys[i]);
+        }
+        Palette::setAccentPreferences (theme.blue, theme.colours);
+        Palette::setBackgroundTone (theme.backdrop);
+        const auto appliedTone = Palette::backgroundTone();
+        if (previous.backdrop.brightness != appliedTone.brightness)
+            preferences.setValue (backgroundBrightnessPreference, appliedTone.brightness);
+        if (previous.backdrop.tint != appliedTone.tint)
+            preferences.setValue (backgroundTintPreference, appliedTone.tint);
+    }
+    void NativeEditor::editTheme (const Theme& theme)
+    {
+        const bool singleEdit = !themeBeforeGesture;
+        if (singleEdit)
+            themeBeforeGesture = currentTheme();
+        applyTheme (theme, *uiPreferences);
+        if (singleEdit)
+            finishThemeGesture();
+    }
+    void NativeEditor::finishThemeGesture()
+    {
+        const auto startingTheme = std::exchange (themeBeforeGesture, std::nullopt);
+        const auto after = currentTheme();
+        uiPreferences->saveIfNeeded();
+        if (!startingTheme || *startingTheme == after)
+            return;
+        controller.recordUiEdit ("Change interface colors", [prefs = uiPreferences, before = *startingTheme, after] (bool redoing)
+        {
+            const auto& from = redoing ? before : after;
+            const auto& to = redoing ? after : before;
+            auto theme = currentTheme();
+            const auto merge = [] (auto& value, const auto& original, const auto& replacement)
+            {
+                if (value == original)
+                    value = replacement;
+            };
+            merge (theme.blue, from.blue, to.blue);
+            for (size_t i = 0; i < theme.colours.size(); ++i)
+                merge (theme.colours[i], from.colours[i], to.colours[i]);
+            merge (theme.backdrop.brightness, from.backdrop.brightness, to.backdrop.brightness);
+            merge (theme.backdrop.tint, from.backdrop.tint, to.backdrop.tint);
+            applyTheme (theme, *prefs);
+            prefs->saveIfNeeded();
+        });
     }
     void NativeEditor::setZenMode (bool enabled)
     {
@@ -1019,6 +1146,8 @@ namespace ksh::ui
         constexpr int target = Layout::touchTarget;
         const bool phoneMenu = layout.phoneRowControls && panel >= Panel::project && panel <= Panel::help;
         steps.valueWidth = phoneMenu ? 0 : target;
+        if (layout.compact)
+            steps.captionFontSize = layout.phoneRowControls ? 10.0f : 12.0f;
         for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize })
         {
             value->valueWidth = phoneMenu ? 0 : layout.compact ? 42 : target;
@@ -1140,11 +1269,10 @@ namespace ksh::ui
             }
             if (panel != Panel::none)
             {
-                if (!layout.phoneRowControls || panel == Panel::channel || panel == Panel::tempo)
+                if (!layout.phoneRowControls || panel == Panel::channel)
                 {
                     const juce::String menuTitle = "Settings";
                     const auto heading = panel == Panel::channel ? "Track " + juce::String (selectedChannel + 1)
-                                         : panel == Panel::tempo ? juce::String ("Tempo")
                                          : panel == Panel::pattern ? menuTitle + (controller.source() < 0 ? " / Muted Pattern" : " / Pattern " + juce::String (controller.source() + 1))
                                                                    : menuTitle;
                     const auto headingColour = panel == Panel::channel && layout.phoneRowControls
@@ -1225,7 +1353,7 @@ namespace ksh::ui
             const auto bounds = button.getBounds().toFloat().reduced (0.5f);
             if (!g.clipRegionIntersects (bounds.expanded (static_cast<float> (patternGlowExtent)).getSmallestIntegerContainer()))
                 return;
-            const auto colour = copyDestinationHovered ? Palette::blueAccent : Palette::accent;
+            const auto colour = copyDestinationHovered ? Palette::accent.brighter (0.18f) : Palette::accent;
             patternGlow.setColor (colour.withAlpha ((copyDestinationHovered ? 0.50f : 0.8f) * button.getAlpha()), 0);
             patternGlow.setColor (colour.withAlpha (0.55f * button.getAlpha()), 1);
             juce::Path silhouette;
@@ -1345,6 +1473,11 @@ namespace ksh::ui
         }
         if (key == juce::KeyPress::escapeKey)
         {
+            if (tempoOpen)
+            {
+                setTempoOpen (false);
+                return true;
+            }
             if (grid.dismissCyclePopup())
                 return true;
             if (controller.exitSolo())
@@ -1439,7 +1572,7 @@ namespace ksh::ui
         const auto layer = grid.displayLayer();
         preview.setDisplayedLayer (layer);
         layerHint.setVisible (!layout.compact && overviewLayer (layer));
-        layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Roll" : "Cycle") + " / overview" : juce::String(), juce::dontSendNotification);
+        layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Split" : "Cycle") + " / overview" : juce::String(), juce::dontSendNotification);
         const bool selecting = grid.isSelectMode() || controller.selected.any();
         const bool chance = grid.displayLayer() == Layer::chance;
         velocityLayer.setToggleState (!selecting && grid.displayLayer() == Layer::velocity, juce::dontSendNotification);
@@ -1486,10 +1619,10 @@ namespace ksh::ui
             volume.addItem (volumeId + percent, juce::String (percent) + "%", true, percent == current.getMetronomeVolume());
         menu.addSubMenu ("Pitch", pitch);
         menu.addSubMenu ("Volume: " + juce::String (current.getMetronomeVolume()) + "%", volume);
-        auto options = juce::PopupMenu::Options().withTargetComponent (&anchor).withStandardItemHeight (44);
-       #if JUCE_IOS || JUCE_ANDROID
-        options = options.withParentComponent (getTopLevelComponent());
-       #endif
+        const auto options = juce::PopupMenu::Options().withTargetComponent (anchor)
+                                 .withParentComponent (getTopLevelComponent())
+                                 .withStandardItemHeight (44)
+                                 .withMaximumNumColumns (1);
         const juce::Component::SafePointer<NativeEditor> safe (this);
         menu.showMenuAsync (options, [safe] (int result)
         {
@@ -1764,6 +1897,19 @@ namespace ksh::ui
             const float pulse = juce::jmax (0.0f, static_cast<float> (1.0 - (now - lastMidiActivityMs) / pulseLengthMs));
             if (midiOutput.getProperties().set ("midiActivity", pulse * pulse))
                 midiOutput.repaint();
+        }
+        if (layout.standalone)
+        {
+            float pulse = 0.0f;
+            if (controller.processor.isStandaloneTransportPlaying() && !controller.processor.isStandaloneLaunchPending())
+            {
+                const double position = controller.processor.getStandaloneTransportPpqForUi();
+                const double beatAgeMs = (position - std::floor (position)) * 60000.0 / juce::jmax (1, tempo.value);
+                pulse = juce::jmax (0.0f, static_cast<float> (1.0 - beatAgeMs / 150.0));
+            }
+            for (auto* control : std::array<juce::Component*, 2> { &tempo, &phoneTempo })
+                if (control->getProperties().set ("tempoPulse", pulse * pulse))
+                    control->repaint();
         }
         // Drain hits immediately before repainting, without an audio-thread wakeup
         // or an additional frame of delay between the processor and editor timers.

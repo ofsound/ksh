@@ -6,7 +6,9 @@ namespace ksh::ui
 {
     // Stable priorities describe drum roles across a sixteen-step phrase. Increasing
     // density adds supporting hits while the kick/downbeat and snare/backbeat remain.
-    inline Cell generatedDrumCell (int channel, int step, float density, float variation)
+    inline constexpr int generatorSeedCount = 5;
+
+    inline Cell generatedDrumCell (int channel, int step, float density, float variation, int seed = 0)
     {
         static constexpr int priorities[8][16] {
             { 0, 95, 72, 48, 62, 92, 38, 78, 12, 90, 55, 32, 60, 85, 42, 70 },
@@ -18,10 +20,17 @@ namespace ksh::ui
             { 90, 74, 88, 48, 92, 62, 86, 58, 94, 66, 82, 44, 90, 56, 78, 50 },
             { 62, 100, 100, 100, 100, 100, 94, 100, 85, 100, 100, 100, 100, 100, 90, 100 }
         };
+        static constexpr int phaseOffsets[generatorSeedCount][8] {
+            { 0, 0, 0, 0, 0, 0, 0, 0 },
+            { 3, 1, 1, 3, 1, 4, 2, 3 },
+            { 6, 3, 2, 1, 4, 2, 5, 1 },
+            { 9, 7, 3, 5, 2, 6, 3, 5 },
+            { 12, 5, 5, 2, 7, 3, 6, 6 }
+        };
         const int phase = step % 16;
-        const auto hash = [channel, step] (int family)
+        const auto hash = [channel, step, seed] (int family)
         {
-            auto value = static_cast<juce::uint32> (channel * 193 + step * 977 + family * 7919 + 12345);
+            auto value = static_cast<juce::uint32> (channel * 193 + step * 977 + family * 7919 + seed * 104729 + 12345);
             value ^= value >> 16;
             value *= 0x7feb352dU;
             value ^= value >> 15;
@@ -38,7 +47,11 @@ namespace ksh::ui
         const float chaos = juce::jlimit (0.0f, 1.0f, (variation - 0.8f) * 5.0f);
         const int priority = priorities[channel][phase];
         const bool anchor = priority == 0;
-        const float structured = anchor ? -12.0f : static_cast<float> (priority) + (noise - 0.5f) * variation * 65.0f;
+        const int shifted = priorities[channel][(phase + phaseOffsets[seed][channel]) % 16];
+        // Change supporting rhythms while retaining the kick and snare anchors.
+        const float seededPriority = seed == 0 ? static_cast<float> (priority)
+            : 0.30f * static_cast<float> (priority) + 0.70f * static_cast<float> (shifted);
+        const float structured = anchor ? -12.0f : seededPriority + (noise - 0.5f) * variation * 65.0f;
         // At the top of the pad, even the kick and snare anchors give way to independent hits.
         const float threshold = juce::jmap (chaos, structured, 100.0f * variationNoise (101));
         Cell result;
@@ -81,6 +94,20 @@ namespace ksh::ui
                 controller.cancel();
         }
         void visibilityChanged() override { if (!isVisible()) cancelGesture(); }
+        bool hitTest (int x, int y) override { return padBounds().contains (static_cast<float> (x), static_cast<float> (y)); }
+        void selectSeed (int next)
+        {
+            if (next == seed)
+                return;
+            seed = next;
+            if (controller.source() < 0)
+                return;
+            cancelGesture();
+            controller.begin ("Change generator seed");
+            controller.command ("mode", { "static" });
+            generate();
+            controller.commit();
+        }
         void paint (juce::Graphics& g) override
         {
             const auto area = padBounds();
@@ -130,21 +157,7 @@ namespace ksh::ui
             const auto area = padBounds();
             density = std::round (juce::jlimit (0.0f, 1.0f, (event.position.x - area.getX()) / area.getWidth()) * 127.0f) / 127.0f;
             variation = std::round (juce::jlimit (0.0f, 1.0f, (area.getBottom() - event.position.y) / area.getHeight()) * 127.0f) / 127.0f;
-            for (int ch = 0; ch < controller.state.playback.channelCount; ++ch)
-            {
-                const auto loop = controller.loop (ch);
-                for (int step = loop.loopStart; step < juce::jmin (controller.state.playback.stepCount, loop.loopStart + loop.loopLength); ++step)
-                {
-                    auto cell = generatedDrumCell (ch, step - loop.loopStart, density, variation);
-                    // An open hat takes the place of its closed counterpart.
-                    if (ch == 2 && controller.state.playback.channelCount > 3)
-                        cell.enabled = cell.enabled && !generatedDrumCell (3, step - loop.loopStart, density, variation).enabled;
-                    controller.editCell ({ ch, step }, cell);
-                }
-            }
-            controller.flush();
-            controller.notify();
-            repaint();
+            generate();
         }
         void mouseUp (const juce::MouseEvent&) override
         {
@@ -155,6 +168,24 @@ namespace ksh::ui
             }
         }
     private:
+        void generate()
+        {
+            for (int ch = 0; ch < controller.state.playback.channelCount; ++ch)
+            {
+                const auto loop = controller.loop (ch);
+                for (int step = loop.loopStart; step < juce::jmin (controller.state.playback.stepCount, loop.loopStart + loop.loopLength); ++step)
+                {
+                    auto cell = generatedDrumCell (ch, step - loop.loopStart, density, variation, seed);
+                    // An open hat takes the place of its closed counterpart.
+                    if (ch == 2 && controller.state.playback.channelCount > 3)
+                        cell.enabled = cell.enabled && !generatedDrumCell (3, step - loop.loopStart, density, variation, seed).enabled;
+                    controller.editCell ({ ch, step }, cell);
+                }
+            }
+            controller.flush();
+            controller.notify();
+            repaint();
+        }
         juce::Rectangle<float> padBounds() const
         {
             const auto bounds = getLocalBounds().toFloat().reduced (10, 26);
@@ -163,7 +194,7 @@ namespace ksh::ui
         }
         EditorController& controller;
         bool dragging = false;
-        int source = -1;
+        int source = -1, seed = 0;
         uint64_t epoch = 0;
         float density = 0.4f, variation = 0.0f;
     };

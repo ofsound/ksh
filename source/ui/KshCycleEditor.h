@@ -32,6 +32,7 @@ namespace ksh::ui
         bool previewCycleLayer = true;
         bool useAnchorPatternForGroup = false;
         bool resetOnDoubleClickAnywhere = false;
+        int split = -1;
         int captionHeight = 0;
         void setBeatAccent (juce::Colour colour)
         {
@@ -59,7 +60,7 @@ namespace ksh::ui
         {
             const auto list = locations();
             setEnabled (!list.empty());
-            const auto c = list.empty() ? Cell {} : controller.cell (list.front());
+            const auto c = cycleFor (list.empty() ? Cell {} : controller.cell (list.front()));
             updatePlayback();
             const std::tuple shown { !list.empty(), c.cycle, c.cycleMask, compact };
             if (displayed == shown)
@@ -84,8 +85,11 @@ namespace ksh::ui
             {
                 const bool flashing = controller.playingStep > 0 && std::any_of (list.begin(), list.end(), [&] (Location p)
                 {
-                    return controller.sourceCycleFlashes[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] > now
-                        && controller.sourceCycleSteps[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] == i + 1;
+                    const auto row = static_cast<size_t> (p.channel);
+                    const auto step = static_cast<size_t> (p.step);
+                    const int phase = split < 0 ? controller.sourceCycleSteps[row][step]
+                                                : controller.sourceSplitCycleSteps[row][step][static_cast<size_t> (split)];
+                    return controller.sourceCycleFlashes[row][step] > now && phase == i + 1;
                 });
                 auto& bit = bits[static_cast<size_t> (i)];
                 if (bit.flashing != flashing)
@@ -107,7 +111,7 @@ namespace ksh::ui
             for (int i = 0; i < 8; ++i)
             {
                 auto& beat = bits[static_cast<size_t> (i)];
-                beat.fontHeight = inlineLayout ? (compact ? 13.0f : 18.0f) : 12.0f;
+                beat.fontHeight = inlineLayout ? (compact ? 16.0f : 20.0f) : 12.0f;
                 beat.setBounds (beatPadding + i * cellStride, top, side, beatHeight);
             }
             const int lastBeatRight = bits[static_cast<size_t> (length - 1)].getRight();
@@ -163,15 +167,30 @@ namespace ksh::ui
             std::vector<Cell> cells;
         };
         std::optional<PendingClick> pendingClick;
+        struct Cycle
+        {
+            int cycle, cycleMask;
+        };
+        Cycle cycleFor (const Cell& cell) const
+        {
+            if (split < 0)
+                return { cell.cycle, cell.cycleMask };
+            const auto& gate = cell.splitGates[static_cast<size_t> (split)];
+            return { gate.cycle(), gate.cycleMask() };
+        }
+        void setCycle (int length, int mask, const std::vector<Location>& list)
+        {
+            controller.setCycle (length, mask, list, split);
+        }
         void toggleBeat (int index, const std::vector<Location>& list)
         {
             if (list.empty())
                 return;
-            const auto first = controller.cell (list.front());
+            const auto first = cycleFor (controller.cell (list.front()));
             const int nextLength = juce::jmax (first.cycle, index + 1);
             const int mask = index >= first.cycle ? first.cycleMask : first.cycleMask ^ (1 << index);
             beginEdit ("Cycle pattern");
-            controller.setCycle (nextLength, mask, list);
+            setCycle (nextLength, mask, list);
             endEdit();
             sync();
         }
@@ -210,7 +229,7 @@ namespace ksh::ui
             if (list.empty())
                 return;
             beginEdit ("Reset cycle");
-            controller.setCycle (CellDefaults::cycle, CellDefaults::cycleMask, list);
+            setCycle (CellDefaults::cycle, CellDefaults::cycleMask, list);
             endEdit();
             sync();
         }
@@ -230,7 +249,7 @@ namespace ksh::ui
             const auto list = locations();
             if (!isEnabled() || list.empty())
                 return;
-            const auto first = controller.cell (list.front());
+            const auto first = cycleFor (controller.cell (list.front()));
             const bool canMove = index < first.cycle && (first.cycleMask & (1 << index)) != 0;
             if (!canMove && !resetOnDoubleClickAnywhere)
                 return;
@@ -266,14 +285,14 @@ namespace ksh::ui
                 beginEdit ("Move cycle beat");
                 if (useAnchorPatternForGroup)
                 {
-                    const auto& cell = dragCells.front();
-                    controller.setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), dragLocations);
+                    const auto cell = cycleFor (dragCells.front());
+                    setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), dragLocations);
                 }
                 else for (size_t i = 0; i < dragLocations.size(); ++i)
                 {
-                    const auto& cell = dragCells[i];
+                    const auto cell = cycleFor (dragCells[i]);
                     if (dragTo < cell.cycle && (cell.cycleMask & (1 << dragFrom)) != 0)
-                        controller.setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), { dragLocations[i] });
+                        setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), { dragLocations[i] });
                 }
                 endEdit();
             }
@@ -404,15 +423,15 @@ namespace ksh::ui
             {
                 if (owner.useAnchorPatternForGroup)
                 {
-                    const auto cell = owner.controller.cell (targets.front());
+                    const auto cell = owner.cycleFor (owner.controller.cell (targets.front()));
                     if (cell.cycle != n)
-                        owner.controller.setCycle (n, cell.cycleMask, targets);
+                        owner.setCycle (n, cell.cycleMask, targets);
                 }
                 else for (auto target : targets)
                 {
-                    const auto cell = owner.controller.cell (target);
+                    const auto cell = owner.cycleFor (owner.controller.cell (target));
                     if (cell.cycle != n)
-                        owner.controller.setCycle (n, cell.cycleMask, { target });
+                        owner.setCycle (n, cell.cycleMask, { target });
                 }
                 owner.sync();
             }
@@ -532,8 +551,9 @@ namespace ksh::ui
                     background = background.brighter (0.12f);
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
                 g.fillRoundedRectangle (r, 3);
-                ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getHeight() * 0.45f),
-                      flashing || on ? Palette::controls.app : inCycle ? Palette::muted : Palette::faint, true);
+                const auto ink = flashing || on ? background.contrasting() : inCycle ? Palette::text : Palette::muted;
+                ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getWidth() * 0.56f, r.getHeight() * 0.52f),
+                               ink.withMultipliedAlpha (isEnabled() ? 1.0f : 0.52f), true);
             }
         };
         std::array<CycleBit, 8> bits;

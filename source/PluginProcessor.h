@@ -56,8 +56,8 @@ public:
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
-    /** Same as setStateInformation, but reports whether the project was actually restored. */
-    [[nodiscard]] bool loadStateFromData (const void* data, int sizeInBytes);
+    /** Reports whether the project was restored. Imported projects start with unsaved changes. */
+    [[nodiscard]] bool loadStateFromData (const void* data, int sizeInBytes, bool imported = false);
 
     /** True after an in-app edit since the last load, save, or new project. */
     [[nodiscard]] bool isDocumentModified() const { return documentModified.load (std::memory_order_acquire); }
@@ -100,6 +100,7 @@ public:
     [[nodiscard]] bool applyPersistenceFromUi (const nlohmann::json& state);
     /** Typed project document for undo/redo; applying keeps the current generated choices. */
     [[nodiscard]] ksh::DocumentState editorDocument();
+    void copyEditorDocument (ksh::DocumentState&);
     [[nodiscard]] bool applyEditorDocument (const ksh::DocumentState& document);
 
     /** UI-owned host gesture. Engine-driven parameter writes inside it do not open nested gestures. */
@@ -129,6 +130,7 @@ public:
     void setStandaloneMidiOutput (ksh::StandaloneMidiOutput*);
     void setStandaloneTransportPlaying (bool shouldPlay, bool shareWithPeers = true);
     bool isStandaloneTransportPlaying() const;
+    double getStandaloneTransportPpqForUi() const { return standaloneTransportPpqPosition.load (std::memory_order_relaxed); }
     void setStandaloneTempoBpm (double bpm);
     double getStandaloneTempoBpm();
     void setStandaloneMetronomeEnabled (bool enabled) { standaloneMetronomeEnabled.store (enabled, std::memory_order_relaxed); }
