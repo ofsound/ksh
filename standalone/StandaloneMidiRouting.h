@@ -4,25 +4,29 @@
 
 namespace ksh
 {
-   #if JUCE_IOS
-    juce::MidiDeviceInfo enableStandaloneNetworkMidi();
-
-    class StandaloneIOSMidiOutput final : public StandaloneMidiOutput
+   #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
+    class StandaloneCoreMidiOutput final : public StandaloneMidiOutput
     {
     public:
-        StandaloneIOSMidiOutput();
-        ~StandaloneIOSMidiOutput() override;
+        static bool isAvailable();
+        StandaloneCoreMidiOutput();
+        ~StandaloneCoreMidiOutput() override;
         // Open/replace only while detached from the processor.
         juce::String open (const juce::MidiDeviceInfo&, bool virtualSource);
         bool matches (const juce::MidiDeviceInfo&, bool virtualSource) const;
         void prepare (double sampleRate, int maximumBlockSize) override;
-        void send (const juce::MidiBuffer&, juce::Optional<juce::uint64> hostTimeNs, int numSamples) override;
+        void send (const juce::MidiBuffer&, juce::Optional<juce::uint64> hostTimeNs, int numSamples,
+                   juce::Optional<juce::uint64> presentationTimeNs) override;
         void stop() override;
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl;
     };
+
+   #endif
+   #if JUCE_IOS
+    juce::MidiDeviceInfo enableStandaloneNetworkMidi();
 
     // Sends everything published on a local CoreMIDI source to the network session.
     class StandaloneNetworkMidiForwarder

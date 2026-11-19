@@ -59,6 +59,7 @@ struct PlaybackSnapshot
     GenerationMode generationMode = GenerationMode::staticSource;
     int staticSource = 0;
     int stepCount = 16;
+    int generatedStepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 16;
     double beatsPerStep = 0.25;
@@ -70,6 +71,7 @@ struct PlaybackSnapshot
     int timingHumanize = 0;
     bool deviceActive = true;
     bool hasEarlyCells = false;
+    bool hasSpannedCells = false;
 };
 
 } // namespace ksh

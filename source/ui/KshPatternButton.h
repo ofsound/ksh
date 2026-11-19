@@ -9,6 +9,14 @@ namespace ksh::ui
     {
     public:
         std::function<void()> onDrag;
+        bool copyDestination = false;
+        bool showsCopyDestination() const { return copyDestination && isEnabled() && isOver(); }
+        void paintButton (juce::Graphics& g, bool hover, bool down) override
+        {
+            juce::TextButton::paintButton (g, hover, down);
+            if (showsCopyDestination())
+                paintPatternCopyOutline (g, getLocalBounds().toFloat());
+        }
         void mouseDown (const juce::MouseEvent& e) override
         {
             dragged = false;

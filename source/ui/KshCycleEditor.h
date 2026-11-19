@@ -30,6 +30,9 @@ namespace ksh::ui
         bool inlineLayout = false;
         bool compact = false;
         bool previewCycleLayer = true;
+        bool useAnchorPatternForGroup = false;
+        bool resetOnDoubleClickAnywhere = false;
+        int captionHeight = 0;
         void setBeatAccent (juce::Colour colour)
         {
             if (beatAccent == colour)
@@ -94,8 +97,8 @@ namespace ksh::ui
         }
         void resized() override
         {
-            const int top = inlineLayout ? 4 : 10;
-            const int availableHeight = juce::jmax (0, getHeight() - (inlineLayout ? 8 : 56));
+            const int top = captionHeight + (inlineLayout ? 4 : 10);
+            const int availableHeight = juce::jmax (0, getHeight() - captionHeight - (inlineLayout ? 8 : 56));
             const int availableWidth = juce::jmax (0, getWidth() - 2 * beatPadding - 7 * beatGap);
             const int side = juce::jmin (juce::jmax (0, availableWidth - Layout::rowEndHandleSpace) / 8, availableHeight);
             const int length = juce::jlimit (1, 8, cycleLength);
@@ -125,6 +128,20 @@ namespace ksh::ui
             g.drawRoundedRectangle (range, 6, 1);
             if (!inlineLayout)
                 text (g, "CYCLE", { 120.0f, static_cast<float> (getHeight() - 30), static_cast<float> (getWidth() - 132), 20.0f }, 10, Palette::muted, true, juce::Justification::centredRight);
+        }
+        void mouseDoubleClick (const juce::MouseEvent& event) override
+        {
+            if (!resetOnDoubleClickAnywhere || !isEnabled() || !event.mods.isLeftButtonDown() || event.mods.isPopupMenu()
+                || event.mouseWasDraggedSinceMouseDown() || !getLocalBounds().contains (event.getEventRelativeTo (this).getPosition())
+                || controller.editing())
+                return;
+            if (pendingClick)
+            {
+                finishPendingClick (true);
+                return;
+            }
+            controller.refresh();
+            resetCycle (locations());
         }
 
     private:
@@ -158,9 +175,9 @@ namespace ksh::ui
             endEdit();
             sync();
         }
-        void queueActiveBeatClick (const juce::MouseEvent& event)
+        void queueBeatClick (int index, const juce::MouseEvent& event)
         {
-            pendingClick = PendingClick { dragFrom, dragSource, dragEpoch, dragLocations, dragCells };
+            pendingClick = PendingClick { index, dragSource, dragEpoch, dragLocations, dragCells };
             startTimer (juce::jmax (1, juce::MouseEvent::getDoubleClickTimeout() - event.getLengthOfMousePress()));
         }
         void cancelPendingClick()
@@ -186,8 +203,14 @@ namespace ksh::ui
                 toggleBeat (click->index, click->locations);
                 return;
             }
+            resetCycle (click->locations);
+        }
+        void resetCycle (const std::vector<Location>& list)
+        {
+            if (list.empty())
+                return;
             beginEdit ("Reset cycle");
-            controller.setCycle (CellDefaults::cycle, CellDefaults::cycleMask, click->locations);
+            controller.setCycle (CellDefaults::cycle, CellDefaults::cycleMask, list);
             endEdit();
             sync();
         }
@@ -208,9 +231,11 @@ namespace ksh::ui
             if (!isEnabled() || list.empty())
                 return;
             const auto first = controller.cell (list.front());
-            if (index >= first.cycle || (first.cycleMask & (1 << index)) == 0)
+            const bool canMove = index < first.cycle && (first.cycleMask & (1 << index)) != 0;
+            if (!canMove && !resetOnDoubleClickAnywhere)
                 return;
-            dragFrom = dragTo = index;
+            if (canMove)
+                dragFrom = dragTo = index;
             dragSource = controller.source();
             dragEpoch = controller.state.documentEpoch;
             dragLocations = list;
@@ -239,7 +264,12 @@ namespace ksh::ui
             if (valid)
             {
                 beginEdit ("Move cycle beat");
-                for (size_t i = 0; i < dragLocations.size(); ++i)
+                if (useAnchorPatternForGroup)
+                {
+                    const auto& cell = dragCells.front();
+                    controller.setCycle (cell.cycle, (cell.cycleMask & ~(1 << dragFrom)) | (1 << dragTo), dragLocations);
+                }
+                else for (size_t i = 0; i < dragLocations.size(); ++i)
                 {
                     const auto& cell = dragCells[i];
                     if (dragTo < cell.cycle && (cell.cycleMask & (1 << dragFrom)) != 0)
@@ -312,7 +342,8 @@ namespace ksh::ui
                 targets = owner.locations();
                 if (targets.empty())
                     return;
-                grabKeyboardFocus();
+                if (isShowing())
+                    grabKeyboardFocus();
                 dragStartX = e.getEventRelativeTo (&owner).position.x;
                 dragStartLength = owner.cycleLength;
                 dragging = true;
@@ -346,6 +377,7 @@ namespace ksh::ui
                     owner.endEdit();
                 }
             }
+            void mouseDoubleClick (const juce::MouseEvent& event) override { owner.mouseDoubleClick (event); }
             bool keyPressed (const juce::KeyPress& key) override
             {
                 if (!isEnabled())
@@ -370,7 +402,13 @@ namespace ksh::ui
         private:
             void apply (int n)
             {
-                for (auto target : targets)
+                if (owner.useAnchorPatternForGroup)
+                {
+                    const auto cell = owner.controller.cell (targets.front());
+                    if (cell.cycle != n)
+                        owner.controller.setCycle (n, cell.cycleMask, targets);
+                }
+                else for (auto target : targets)
                 {
                     const auto cell = owner.controller.cell (target);
                     if (cell.cycle != n)
@@ -445,21 +483,28 @@ namespace ksh::ui
                 {
                     const bool clicked = isDown() && e.mods.isLeftButtonDown() && !e.mods.isPopupMenu()
                         && !e.mouseWasDraggedSinceMouseDown() && getLocalBounds().contains (e.getPosition());
-                    if (owner->pendingClick && owner->pendingClick->index == index)
+                    if (clicked && owner->resetOnDoubleClickAnywhere && e.getNumberOfClicks() >= 2)
+                    {
+                        // JUCE delivers mouseDoubleClick after this release.
+                        setState (juce::Button::buttonNormal);
+                    }
+                    else if (owner->pendingClick && owner->pendingClick->index == index)
                     {
                         setState (juce::Button::buttonNormal);
                         owner->finishPendingClick (clicked && e.getNumberOfClicks() >= 2);
                     }
-                    else if (clicked && armedMove && e.getNumberOfClicks() == 1)
+                    else if (clicked && (armedMove || (!owner->dragLocations.empty() && owner->resetOnDoubleClickAnywhere))
+                             && e.getNumberOfClicks() == 1)
                     {
                         // Let a double-click replace this toggle with one undoable reset.
                         setState (juce::Button::buttonNormal);
-                        owner->queueActiveBeatClick (e);
+                        owner->queueBeatClick (index, e);
                     }
                     owner->cancelBitDrag();
                     juce::TextButton::mouseUp (e);
                 }
             }
+            void mouseDoubleClick (const juce::MouseEvent& event) override { owner->mouseDoubleClick (event); }
             bool keyPressed (const juce::KeyPress& key) override
             {
                 if (key == juce::KeyPress::escapeKey && (owner->dragFrom >= 0 || owner->pendingClick))
@@ -480,7 +525,7 @@ namespace ksh::ui
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
                 const bool preview = owner != nullptr && owner->bitDragging && owner->dragTo >= 0;
                 const bool on = preview && index == owner->dragTo ? true : preview && index == owner->dragFrom ? false : getToggleState();
-                auto background = on ? owner->accent() : inCycle ? Palette::surface : Palette::app;
+                auto background = on ? owner->accent() : inCycle ? Palette::controls.surface : Palette::controls.app;
                 if (flashing)
                     background = Palette::text;
                 if (isEnabled() && (hover || down))
@@ -488,7 +533,7 @@ namespace ksh::ui
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
                 g.fillRoundedRectangle (r, 3);
                 ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getHeight() * 0.45f),
-                      flashing || on ? Palette::app : inCycle ? Palette::muted : Palette::faint, true);
+                      flashing || on ? Palette::controls.app : inCycle ? Palette::muted : Palette::faint, true);
             }
         };
         std::array<CycleBit, 8> bits;

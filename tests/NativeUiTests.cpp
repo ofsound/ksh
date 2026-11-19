@@ -93,18 +93,19 @@ TEST_CASE ("Row power ink reflects mute after a tap and remains stable when hove
     for (auto* child : editor.getChildren())
         if (auto* candidate = dynamic_cast<PatternGrid*> (child)) grid = candidate;
     REQUIRE (grid != nullptr);
-    GestureButton* power = nullptr;
+    RowPlaybackButton* power = nullptr;
     for (auto* child : grid->getChildren())
-        if (child->getTitle() == "power channel 1") power = dynamic_cast<GestureButton*> (child);
+        if (child->getTitle() == "power channel 1") power = dynamic_cast<RowPlaybackButton*> (child);
     REQUIRE (power != nullptr);
-    power->setSize (30, 30);
-    LookAndFeel style;
     const auto ink = [&] (bool hover, bool down)
     {
-        juce::Image image (juce::Image::ARGB, 30, 30, true);
+        power->setSize (30, 30);
+        constexpr int scale = 3;
+        juce::Image image (juce::Image::ARGB, 30 * scale, 30 * scale, true);
         juce::Graphics graphics (image);
-        style.drawButtonText (graphics, *power, hover, down);
-        return image;
+        graphics.addTransform (juce::AffineTransform::scale (static_cast<float> (scale)));
+        power->paintButton (graphics, hover, down);
+        return image.getPixelAt (15 * scale, 12 * scale);
     };
     const auto active = ink (false, false);
     const auto now = juce::Time::getCurrentTime();
@@ -116,18 +117,10 @@ TEST_CASE ("Row power ink reflects mute after a tap and remains stable when hove
     power->mouseUp (press);
     REQUIRE (editor.controller.state.playback.sourceChannelMutes[0][0]);
     REQUIRE_FALSE (power->getToggleState());
-    const auto held = ink (true, true);
-    const auto hovered = ink (true, false);
-    const auto away = ink (false, false);
-    bool changed = false;
-    for (int y = 0; y < 30; ++y)
-        for (int x = 0; x < 30; ++x)
-        {
-            CHECK (held.getPixelAt (x, y) == away.getPixelAt (x, y));
-            CHECK (hovered.getPixelAt (x, y) == away.getPixelAt (x, y));
-            changed = changed || active.getPixelAt (x, y) != away.getPixelAt (x, y);
-        }
-    CHECK (changed);
+    CHECK (active == Palette::accent);
+    CHECK (ink (false, false) == Palette::text);
+    CHECK (ink (true, false) == Palette::text);
+    CHECK (ink (true, true) == Palette::text);
     editor.controller.undo();
     CHECK (power->getToggleState());
 }
@@ -201,20 +194,15 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
     editor.setBounds (viewport);
     auto* view = dynamic_cast<NativeEditor*> (editor.getChildComponent (0));
     REQUIRE (view != nullptr);
-    juce::TextButton* zen = nullptr;
     ValueControl* scaleControl = nullptr;
     for (auto* child : view->getChildren())
     {
-        if (child->getTitle() == "Zen mode")
-            zen = dynamic_cast<juce::TextButton*> (child);
         if (auto* value = dynamic_cast<ValueControl*> (child); value && value->getTitle().startsWith ("UI scale"))
             scaleControl = value;
     }
-    REQUIRE (zen != nullptr);
     REQUIRE (scaleControl != nullptr);
-    CHECK (zen->isVisible());
     CHECK_FALSE (scaleControl->isVisible());
-    zen->onClick();
+    editor.setZenMode (true);
     CHECK (editor.isZenMode());
     CHECK (scaleControl->isVisible());
     CHECK (scaleControl->isEnabled());
@@ -245,7 +233,6 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
     }
     CHECK (view->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
     CHECK_FALSE (editor.isZenMode());
-    CHECK_FALSE (zen->getToggleState());
     CHECK_FALSE (scaleControl->isVisible());
     CHECK (editor.getBounds() == viewport);
 }
@@ -313,13 +300,22 @@ TEST_CASE ("The full editor uses a shared 4:3 canvas with header transport only 
     CHECK (editor.getConstrainer()->getFixedAspectRatio() == Catch::Approx (4.0 / 3.0));
     CHECK (view->getWidth() * 3 == view->getHeight() * 4);
 
-    for (const int steps : { 16, 24, 32 })
+    auto layoutAt32 = view->layout;
+    layoutAt32.steps = 32;
+    for (const int steps : { 16, 24, 32, 48, 64 })
     {
         auto layout = view->layout;
         layout.steps = steps;
         const Location location { 0, steps - 1 };
         const auto body = layout.cell (location).reduced (layout.cellInsetX(), Layout::cellInsetY);
-        CHECK (body.getWidth() == Catch::Approx (body.getHeight()));
+        if (steps <= 32)
+            CHECK (body.getWidth() == Catch::Approx (body.getHeight()));
+        else
+        {
+            CHECK (body.getWidth() < body.getHeight());
+            CHECK (body.getHeight() == Catch::Approx (layoutAt32.cell (location).reduced (layout.cellInsetX(), Layout::cellInsetY).getHeight()));
+        }
+        CHECK (layout.visibleSteps() == steps);
         CHECK (body.getCentreY() == Catch::Approx (view->layout.cell ({ 0, 0 }).getCentreY()));
         CHECK (layout.at (body.getCentre()) == location);
     }
@@ -618,7 +614,7 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     CHECK (processor.getProjectName() == "Untitled Project");
 }
 
-TEST_CASE ("Footer row order toggle reverses presentation without editing the project", "[native-ui][render][row-order]")
+TEST_CASE ("Row order preference reverses presentation without editing the project", "[native-ui][render][row-order]")
 {
     PluginProcessor processor;
     for (int ch = 1; ch <= 8; ++ch)
@@ -626,18 +622,13 @@ TEST_CASE ("Footer row order toggle reverses presentation without editing the pr
     NativeEditor editor (processor);
     editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
     juce::TextButton* toggle = nullptr;
-    juce::TextButton* tips = nullptr;
-    juce::TextButton* colors = nullptr;
     for (auto* child : editor.getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
             if (button->getTitle() == "Reverse row order") toggle = button;
-            if (button->getButtonText() == "Tips") tips = button;
-            if (button->getButtonText() == "DC") colors = button;
         }
     REQUIRE (toggle != nullptr);
-    REQUIRE (tips != nullptr);
-    REQUIRE (colors != nullptr);
+    CHECK_FALSE (toggle->isVisible());
     const bool originalOrder = editor.layout.reverseRows;
     if (originalOrder)
         toggle->onClick();
@@ -646,8 +637,6 @@ TEST_CASE ("Footer row order toggle reverses presentation without editing the pr
     toggle->onClick();
     CHECK (toggle->getToggleState());
     CHECK (editor.layout.cell ({ 0, 0 }).getY() > editor.layout.cell ({ 7, 0 }).getY());
-    CHECK (tips->getRight() < toggle->getX());
-    CHECK (toggle->getRight() < colors->getX());
     CHECK (processor.editorDocument() == before);
     CHECK (editor.controller.selected.test (0));
     CHECK_FALSE (editor.controller.canUndo());
@@ -1294,13 +1283,121 @@ namespace
     }
 }
 
+TEST_CASE ("Grid cell artwork has a small inset and keeps full hit zones", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 80, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.layout.compact = GENERATE (false, true);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    const Location hit { 0, 2 };
+    const auto hitBounds = grid.cellBounds (hit);
+    const auto fullFace = hitBounds.reduced (grid.layout.cellInsetX(), Layout::cellInsetY);
+    const auto face = grid.layout.cellArtwork (hitBounds);
+    CHECK (face.getWidth() == Catch::Approx (fullFace.getWidth() * 0.95f));
+    CHECK (face.getHeight() == Catch::Approx (fullFace.getHeight() * 0.95f));
+
+    controller.layer = Layer::velocity;
+    grid.sync();
+    const Location empty { 0, 6 };
+    const auto slot = grid.layout.cell (empty);
+    const auto paintedSlot = grid.layout.cellArtwork (slot);
+    const auto gap = slot.getCentre().withX ((slot.getX() + grid.layout.cellInsetX() + paintedSlot.getX()) * 0.5f);
+    REQUIRE_FALSE (grid.layout.cellArtwork (slot).contains (gap));
+    grid.mouseDown (gridEvent (grid, gap, gap, juce::ModifierKeys::leftButtonModifier));
+    grid.mouseUp (gridEvent (grid, gap, gap, 0));
+    CHECK (controller.cell (empty).enabled);
+}
+
+TEST_CASE ("Editor cursors follow the control and ignore disabled actions", "[native-ui][cursor]")
+{
+    using Cursor = juce::MouseCursor;
+    LookAndFeel look;
+    juce::Component panel;
+    juce::TextButton button;
+    juce::ComboBox menu;
+    juce::TextEditor text;
+    juce::Slider fader (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+    ValueControl value;
+    for (auto* component : std::array<juce::Component*, 5> { &button, &menu, &text, &fader, &value })
+        panel.addChildComponent (component);
+    CHECK (look.getMouseCursorFor (panel) == Cursor::NormalCursor);
+    CHECK (look.getMouseCursorFor (button) == Cursor::PointingHandCursor);
+    CHECK (look.getMouseCursorFor (menu) == Cursor::PointingHandCursor);
+    CHECK (look.getMouseCursorFor (text) == Cursor::IBeamCursor);
+    CHECK (look.getMouseCursorFor (fader) == Cursor::LeftRightResizeCursor);
+    CHECK (look.getMouseCursorFor (value) == Cursor::UpDownResizeCursor);
+    value.horizontalAdjustment = true;
+    CHECK (look.getMouseCursorFor (value) == Cursor::LeftRightResizeCursor);
+    button.setMouseCursor (Cursor::UpDownLeftRightResizeCursor);
+    CHECK (look.getMouseCursorFor (button) == Cursor::UpDownLeftRightResizeCursor);
+    panel.setEnabled (false);
+    CHECK (look.getMouseCursorFor (button) == Cursor::NormalCursor);
+    CHECK (look.getMouseCursorFor (value) == Cursor::NormalCursor);
+}
+
+TEST_CASE ("Pattern copy highlights only the hovered destination", "[native-ui][pattern-copy]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    const auto findPattern = [&] (const juce::String& label)
+    {
+        for (auto* child : editor.getChildren())
+            if (auto* button = dynamic_cast<PatternButton*> (child); button != nullptr && button->getButtonText() == label)
+                return button;
+        return static_cast<PatternButton*> (nullptr);
+    };
+    auto* source = findPattern ("1");
+    auto* destination = findPattern ("2");
+    REQUIRE (source != nullptr);
+    REQUIRE (destination != nullptr);
+
+    destination->setState (juce::Button::buttonOver);
+    CHECK_FALSE (destination->showsCopyDestination());
+    editor.controller.selectSource (0, true);
+    CHECK (destination->showsCopyDestination());
+    destination->setState (juce::Button::buttonNormal);
+    CHECK_FALSE (destination->showsCopyDestination());
+    source->setState (juce::Button::buttonOver);
+    CHECK_FALSE (source->showsCopyDestination());
+    destination->setState (juce::Button::buttonOver);
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (destination->showsCopyDestination());
+}
+
+TEST_CASE ("Grid cursor signals copying on the selected cells", "[native-ui][cursor]")
+{
+    using Cursor = juce::MouseCursor;
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 90 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    const Location selected { 0, 3 };
+    controller.selected.set (static_cast<size_t> (selected.key()));
+    grid.copySelection = true;
+    grid.sync();
+    const auto centre = grid.cellBounds (selected).getCentre();
+    const auto other = grid.layout.cell ({ 0, 4 }).getCentre();
+    grid.mouseMove (gridEvent (grid, centre, centre, 0));
+    CHECK (grid.getMouseCursor() == Cursor::CopyingCursor);
+    grid.mouseMove (gridEvent (grid, other, other, 0));
+    CHECK (grid.getMouseCursor() == Cursor::NormalCursor);
+}
+
 TEST_CASE ("Step presets support a right drag or a menu that stays open for both edits", "[native-ui][step-presets]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 4, 3, 1, 90 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 90 }));
     EditorController controller (processor);
+    juce::TemporaryFile settings (".settings");
+    juce::PropertiesFile::Options options;
+    juce::PropertiesFile preferences (settings.getFile(), options);
     PatternGrid grid (controller);
+    grid.setPresetPreferences (preferences);
     grid.setSize (1338, 554);
     grid.sync();
     const Location step { 3, 2 };
@@ -1308,8 +1405,9 @@ TEST_CASE ("Step presets support a right drag or a menu that stays open for both
     const auto empty = grid.cellBounds ({ 3, 3 }).getCentre();
     constexpr int right = juce::ModifierKeys::rightButtonModifier;
     grid.mouseDown (gridEvent (grid, empty, empty, right));
-    CHECK_FALSE (grid.hasActiveGesture());
+    CHECK (grid.hasActiveGesture());
     grid.mouseUp (gridEvent (grid, empty, empty, 0));
+    CHECK_FALSE (controller.cell ({ 3, 3 }).enabled);
     grid.mouseDown (gridEvent (grid, active, active, right));
     juce::Component* menu = nullptr;
     for (auto* child : grid.getChildren())
@@ -1328,7 +1426,6 @@ TEST_CASE ("Step presets support a right drag or a menu that stays open for both
     auto* cycle = findPreset ("First of 2");
     auto* skipFourth = findPreset ("First three of 4");
     auto* roll = findPreset ("3");
-    CHECK (menu->getNumChildComponents() == 12);
     REQUIRE (cycle != nullptr);
     REQUIRE (skipFourth != nullptr);
     REQUIRE (roll != nullptr);
@@ -1343,7 +1440,9 @@ TEST_CASE ("Step presets support a right drag or a menu that stays open for both
     CHECK (menu->isVisible());
     CHECK (controller.cell (step).cycle == 1);
     CHECK (controller.cell (step).roll == 1);
+    CHECK (cycle->getY() < skipFourth->getY());
     skipFourth->onClick();
+    CHECK (cycle->getY() < skipFourth->getY());
     CHECK (menu->isVisible());
     CHECK (skipFourth->getToggleState());
     roll->onClick();
@@ -1360,12 +1459,162 @@ TEST_CASE ("Step presets support a right drag or a menu that stays open for both
     controller.undo();
     controller.undo();
     CHECK_FALSE (controller.canUndo());
+    juce::PropertiesFile reopened (settings.getFile(), options);
+    grid.setPresetPreferences (reopened);
     const auto nearTop = grid.cellBounds ({ 0, 2 }).getCentre();
     grid.mouseDown (gridEvent (grid, nearTop, nearTop, right));
     CHECK (menu->isVisible());
     CHECK (menu->getX() + menu->getWidth() / 2 == nearTop.roundToInt().x);
     CHECK (menu->getY() == 0);
+    CHECK (skipFourth->getY() < cycle->getY());
     CHECK (grid.getLocalBounds().contains (menu->getBounds()));
+
+    grid.mouseDown (gridEvent (grid, empty, empty, right));
+    grid.mouseUp (gridEvent (grid, empty, empty, 0));
+    REQUIRE (menu->isVisible());
+    REQUIRE (roll->isEnabled());
+    roll->onClick();
+    CHECK (controller.cell ({ 3, 3 }).enabled);
+    CHECK (controller.cell ({ 3, 3 }).roll == 3);
+    controller.undo();
+    CHECK_FALSE (controller.cell ({ 3, 3 }).enabled);
+    CHECK_FALSE (controller.canUndo());
+}
+
+TEST_CASE ("Chance cycle strip double-click resets the clicked step or its selection", "[native-ui][cycle-reset]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 75, 48, 4, 5, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 55, 42, 3, 2, 2 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 5, 1, 65, 52, 2, 1, 4 }));
+    EditorController controller (processor);
+    controller.layer = Layer::chance;
+    PatternGrid grid (controller);
+    grid.layout.phoneRowControls = grid.layout.compact = GENERATE (false, true);
+    const auto selectionMode = GENERATE (0, 1, 2, 3);
+    const Location step { 0, 2 }, other { 0, 3 }, unrelated { 0, 4 };
+    if (selectionMode > 0)
+        controller.selected.set (static_cast<size_t> (other.key()));
+    if (selectionMode > 1)
+        controller.selected.set (static_cast<size_t> (step.key()));
+    controller.selectLatched = selectionMode == 3;
+    const auto selection = controller.selected;
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto original = std::array { controller.cell (step), controller.cell (other), controller.cell (unrelated) };
+    auto expected = original;
+    const auto bounds = grid.cellBounds (step);
+    const juce::Point<float> point { bounds.getCentreX(), bounds.getY() + bounds.getHeight() * 0.90f };
+    for (int clicks : { 1, 2 })
+    {
+        grid.mouseDown (gridEvent (grid, point, point, juce::ModifierKeys::leftButtonModifier, false, clicks));
+        grid.mouseUp (gridEvent (grid, point, point, 0, false, clicks));
+        if (clicks == 1)
+            CHECK_FALSE (controller.canUndo());
+    }
+    expected[0].cycle = CellDefaults::cycle;
+    expected[0].cycleMask = CellDefaults::cycleMask;
+    if (selectionMode > 1)
+    {
+        expected[1].cycle = CellDefaults::cycle;
+        expected[1].cycleMask = CellDefaults::cycleMask;
+    }
+    CHECK (controller.selected == selection);
+    CHECK (controller.cell (step) == expected[0]);
+    CHECK (controller.cell (other) == expected[1]);
+    CHECK (controller.cell (unrelated) == expected[2]);
+    REQUIRE (controller.canUndo());
+    controller.undo();
+    CHECK (controller.cell (step) == original[0]);
+    CHECK (controller.cell (other) == original[1]);
+    CHECK_FALSE (controller.canUndo());
+}
+
+TEST_CASE ("Velocity and Probability step clicks remove immediately and recreate with defaults", "[native-ui][cycle-reset]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 75, 48, 4, 5, 3 }));
+    EditorController controller (processor);
+    controller.layer = GENERATE (Layer::velocity, Layer::chance);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const Location step { 0, 2 };
+    const auto original = controller.cell (step);
+    const auto bounds = grid.cellBounds (step);
+    const juce::Point<float> point { bounds.getCentreX(), bounds.getY() + bounds.getHeight() * 0.25f };
+    const auto enabledDefault = Cell { .enabled = true };
+    for (int clicks : { 1, 2 })
+    {
+        grid.mouseDown (gridEvent (grid, point, point, juce::ModifierKeys::leftButtonModifier, false, clicks));
+        grid.mouseUp (gridEvent (grid, point, point, 0, false, clicks));
+        CHECK (controller.cell (step) == (clicks == 1 ? Cell {} : enabledDefault));
+    }
+    controller.undo();
+    CHECK (controller.cell (step) == Cell {});
+    controller.undo();
+    CHECK (controller.cell (step) == original);
+}
+
+TEST_CASE ("Triplet presets set span and roll while both remain independently editable", "[native-ui][step-presets][triplets]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 67, 4, 5, 2 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 8, 1, 80 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 16, 1, 95 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+    const Location anchor { 0, 0 };
+    const auto openMenu = [&] (Location location)
+    {
+        const auto point = grid.layout.cell (location).getCentre();
+        grid.mouseDown (gridEvent (grid, point, point, juce::ModifierKeys::rightButtonModifier));
+        grid.mouseUp (gridEvent (grid, point, point, 0));
+    };
+    openMenu (anchor);
+    const auto preset = [&] (const juce::String& label) -> juce::TextButton&
+    {
+        for (auto* child : grid.getChildren())
+            if (child->getTitle() == "Step presets" && child->isVisible())
+                for (auto* entry : child->getChildren())
+                    if (auto* button = dynamic_cast<juce::TextButton*> (entry); button && button->getButtonText() == label)
+                        return *button;
+        FAIL ("Missing preset " + label.toStdString());
+        std::terminate();
+    };
+    CHECK_FALSE (preset ("Quarter triplet").isEnabled());
+    REQUIRE (preset ("8th triplet").isEnabled());
+    preset ("8th triplet").onClick();
+    CHECK (preset ("8th triplet").getToggleState());
+    const auto triplet = controller.cell (anchor);
+    CHECK (triplet.span == 4);
+    CHECK (triplet.roll == 3);
+    CHECK (triplet.velocity == 90);
+    CHECK (triplet.probability == 67);
+    CHECK (triplet.cycleMask == 5);
+    CHECK (grid.cellBounds (anchor).getWidth() == Catch::Approx (4 * grid.layout.cellWidth()));
+    CHECK (grid.hitPosition (anchor, 2).x - grid.hitPosition (anchor, 0).x == Catch::Approx (8 * grid.layout.cellWidth() / 3));
+    preset ("5").onClick();
+    CHECK (controller.cell (anchor).roll == 5);
+    CHECK (controller.cell (anchor).span == 4);
+    preset ("3 steps").onClick();
+    CHECK (controller.cell (anchor).roll == 5);
+    CHECK (controller.cell (anchor).span == 3);
+    controller.undo();
+    controller.undo();
+    CHECK (controller.cell (anchor) == triplet);
+    openMenu ({ 0, 2 });
+    CHECK (preset ("8th triplet").getToggleState());
+    preset ("1 step").onClick();
+    CHECK (controller.cell (anchor).span == 1);
+    CHECK (controller.cell (anchor).roll == 3);
+    openMenu ({ 0, 15 });
+    CHECK_FALSE (preset ("16th triplet").isEnabled());
+    CHECK_FALSE (preset ("2 steps").isEnabled());
+    CHECK (preset ("3").isEnabled());
+    CHECK (controller.cell ({ 0, 15 }).roll == 1);
 }
 
 TEST_CASE ("Step presets dismiss on clicks elsewhere in the editor", "[native-ui][step-presets]")
@@ -1405,7 +1654,7 @@ TEST_CASE ("Step presets dismiss on clicks elsewhere in the editor", "[native-ui
         if (child->getTitle() == "Step presets")
             menu = child;
     REQUIRE (menu != nullptr);
-    REQUIRE (menu->getNumChildComponents() == 12);
+    REQUIRE (menu->getNumChildComponents() > 0);
     for (auto* item : menu->getChildren())
         CHECK (menu->getLocalBounds().contains (item->getBounds()));
     editor.controller.selected.set (2);
@@ -1422,17 +1671,18 @@ TEST_CASE ("Step presets dismiss on clicks elsewhere in the editor", "[native-ui
     CHECK_FALSE (editor.controller.canUndo());
 }
 
-TEST_CASE ("Clicking the cycle strip opens a single-step editor without changing selection", "[native-ui][cycle-selection]")
+TEST_CASE ("The mini Cycle editor applies the clicked pattern to the selected steps", "[native-ui][cycle-selection]")
 {
     PluginProcessor processor;
     const int row = GENERATE (0, 7);
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, row + 1, 3, 1, 90, 50, 4, 5, 1 }));
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, row + 1, 4, 1, 85, 60, 4, 5, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, row + 1, 4, 1, 90, 50, 4, 5, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, row + 1, 3, 1, 85, 60, 5, 9, 1 }));
     EditorController controller (processor);
     controller.layer = Layer::chance;
     controller.graphicalCellValues = GENERATE (false, true);
-    const Location step { row, 2 }, other { row, 3 };
-    controller.selected.set (static_cast<size_t> (step.key()));
+    const Location step { row, 3 }, other { row, 2 };
+    const bool editGroup = GENERATE (false, true);
+    controller.selected.set (static_cast<size_t> (step.key()), editGroup);
     controller.selected.set (static_cast<size_t> (other.key()));
     const auto selection = controller.selected;
     PatternGrid grid (controller);
@@ -1472,7 +1722,28 @@ TEST_CASE ("Clicking the cycle strip opens a single-step editor without changing
     CHECK (controller.selected == selection);
     CHECK (controller.layer == Layer::chance);
     CHECK (controller.cell (step).cycleMask == 7);
-    CHECK (controller.cell (other) == otherOriginal);
+    auto otherExpected = otherOriginal;
+    if (editGroup)
+    {
+        otherExpected.cycle = 4;
+        otherExpected.cycleMask = 7;
+    }
+    CHECK (controller.cell (other) == otherExpected);
+
+    juce::Component* lengthHandle = nullptr;
+    for (auto* child : cycle->getChildren())
+        if (child->getTitle() == "Cycle length")
+            lengthHandle = child;
+    REQUIRE (lengthHandle != nullptr);
+    CHECK (lengthHandle->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (controller.cell (step).cycle == 5);
+    auto afterResize = otherExpected;
+    if (editGroup)
+        afterResize.cycle = 5;
+    CHECK (controller.cell (other) == afterResize);
+    controller.undo();
+    CHECK (controller.cell (step).cycle == 4);
+    CHECK (controller.cell (other) == otherExpected);
     controller.drumColors = true;
     grid.sync();
     const auto beatImage = secondBeat->createComponentSnapshot (secondBeat->getLocalBounds());
@@ -1496,6 +1767,7 @@ TEST_CASE ("Clicking the cycle strip opens a single-step editor without changing
     REQUIRE (controller.canUndo());
     controller.undo();
     CHECK (controller.cell (step) == original);
+    CHECK (controller.cell (other) == otherOriginal);
 }
 
 TEST_CASE ("Select stays highlighted while cells remain selected after releasing modifiers", "[native-ui][selection-heading]")
@@ -1800,6 +2072,77 @@ TEST_CASE ("Velocity lines can start beside either loop handle", "[native-ui]")
     CHECK (controller.cell ({ 0, step }).velocity == 90);
 }
 
+TEST_CASE ("Freeform velocity drawing edits only active steps on the focused row", "[native-ui][velocity-draw]")
+{
+    PluginProcessor processor;
+    for (const int step : { 2, 4, 6, 8 })
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, step, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 6, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 2, 4, 1, 90 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto startCell = grid.cellBounds ({ 0, 1 });
+    const auto edge = juce::Point<float> (startCell.getX(), startCell.getCentreY());
+    const auto inactive = controller.cell ({ 0, 2 });
+    const auto other = grid.cellBounds ({ 1, 3 }).getCentre();
+    const auto snapshot = [&] { return grid.createComponentSnapshot (grid.getLocalBounds()); };
+    const auto idle = snapshot();
+    const auto tapEdge = [&] (int clicks)
+    {
+        grid.mouseDown (gridEvent (grid, edge, edge, juce::ModifierKeys::leftButtonModifier, false, clicks));
+        grid.mouseUp (gridEvent (grid, edge, edge, 0, false, clicks));
+    };
+
+    tapEdge (1);
+    CHECK (controller.cell ({ 0, 1 }).enabled);
+    CHECK_FALSE (controller.canUndo());
+    tapEdge (2);
+    REQUIRE (controller.editing());
+    CHECK (controller.cell ({ 0, 1 }).velocity == 90);
+    const auto focused = snapshot();
+    const auto pixel = other.roundToInt();
+    CHECK (focused.getPixelAt (pixel.x, pixel.y).getPerceivedBrightness()
+           < idle.getPixelAt (pixel.x, pixel.y).getPerceivedBrightness());
+
+    const auto high = startCell.getCentre().withY (startCell.getY() + 1.0f);
+    const auto endCell = grid.cellBounds ({ 0, 5 });
+    const auto low = endCell.getCentre().withY (endCell.getBottom() - 1.0f);
+    grid.mouseMove (gridEvent (grid, high, edge, 0));
+    grid.mouseMove (gridEvent (grid, low, edge, 0));
+    CHECK (controller.cell ({ 0, 1 }).velocity == 90);
+    CHECK (controller.cell ({ 0, 5 }).velocity == 90);
+
+    const auto press = high.translated (0.0f, 6.0f);
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    grid.mouseDown (gridEvent (grid, press, press, left));
+    grid.mouseDrag (gridEvent (grid, high, press, left, true));
+    grid.mouseDrag (gridEvent (grid, low, press, left, true));
+    CHECK (controller.cell ({ 0, 1 }).velocity > 120);
+    CHECK (controller.cell ({ 0, 3 }).velocity > 60);
+    CHECK (controller.cell ({ 0, 3 }).velocity < 70);
+    CHECK (controller.cell ({ 0, 5 }).velocity < 5);
+    CHECK (controller.cell ({ 0, 2 }) == inactive);
+    grid.mouseDrag (gridEvent (grid, grid.cellBounds ({ 0, 7 }).getCentre(), press, left, true));
+    grid.mouseDrag (gridEvent (grid, other, press, left, true));
+    grid.mouseUp (gridEvent (grid, other, press, 0, true));
+    CHECK (grid.hasActiveGesture());
+    CHECK (controller.cell ({ 0, 7 }).velocity == 90);
+    CHECK (controller.cell ({ 1, 3 }).velocity == 90);
+
+    grid.mouseDown (gridEvent (grid, other, other, left));
+    grid.mouseUp (gridEvent (grid, other, other, 0));
+    CHECK_FALSE (grid.hasActiveGesture());
+    CHECK_FALSE (controller.editing());
+    CHECK (controller.cell ({ 1, 3 }).enabled);
+    CHECK (snapshot().getPixelAt (pixel.x, pixel.y) == idle.getPixelAt (pixel.x, pixel.y));
+    controller.undo();
+    for (const int step : { 1, 3, 5, 7 })
+        CHECK (controller.cell ({ 0, step }).velocity == 90);
+    CHECK_FALSE (controller.canUndo());
+}
+
 TEST_CASE ("Empty row edges keep normal cell clicking and painting", "[native-ui]")
 {
     PluginProcessor processor;
@@ -1910,6 +2253,7 @@ TEST_CASE ("Velocity lines grab and snap at swung cell edges", "[native-ui][swin
         const juce::Point<float> point { straightX + 1.0f, start.y };
         grid.mouseDown (gridEvent (grid, point, point, left));
         grid.mouseUp (gridEvent (grid, point, point, 0));
+        grid.focusLost (juce::Component::focusChangedByMouseClick);
         CHECK_FALSE (controller.cell ({ 0, 2 }).enabled);
         REQUIRE (controller.canUndo());
         controller.undo();
@@ -1920,6 +2264,12 @@ TEST_CASE ("Velocity lines grab and snap at swung cell edges", "[native-ui][swin
         const auto point = juce::Point<float> (edgeX + (useTrailingEdge ? -8.0f : 8.0f), start.y);
         grid.mouseDown (gridEvent (grid, point, point, left));
         grid.mouseUp (gridEvent (grid, point, point, 0));
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 300.0;
+        while (!controller.canUndo() && juce::Time::getMillisecondCounterHiRes() < deadline)
+        {
+            juce::Thread::sleep (10);
+            juce::Timer::callPendingTimersSynchronously();
+        }
         CHECK_FALSE (controller.cell ({ 0, 2 }).enabled);
         REQUIRE (controller.canUndo());
         controller.undo();
@@ -1978,6 +2328,41 @@ TEST_CASE ("Selection preserves the cell display preference and mutes unselected
                 identical = identical && before.getPixelAt (x, y) == after.getPixelAt (x, y);
         CHECK (identical == (step != 2));
     }
+}
+
+TEST_CASE ("Muted steps fade toward the empty grid in every layer", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 100, 80, 3, 2, 3 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    const Location step { 0, 2 };
+    const auto crop = grid.layout.cell (step).getSmallestIntegerContainer();
+    const auto capture = [&] { grid.sync(); return grid.createComponentSnapshot (crop); };
+    const auto distance = [] (const juce::Image& a, const juce::Image& b)
+    {
+        int sum = 0;
+        for (int y = 0; y < a.getHeight(); ++y)
+            for (int x = 0; x < a.getWidth(); ++x)
+            {
+                const auto ca = a.getPixelAt (x, y), cb = b.getPixelAt (x, y);
+                sum += std::abs (ca.getRed() - cb.getRed()) + std::abs (ca.getGreen() - cb.getGreen()) + std::abs (ca.getBlue() - cb.getBlue());
+            }
+        return sum;
+    };
+    controller.layer = GENERATE (Layer::velocity, Layer::chance, Layer::nudge, Layer::roll, Layer::cycle);
+    const auto on = capture();
+    REQUIRE (processor.dispatchUiEngineCommand ("source_channel_mute", { 1, 1, true }));
+    controller.refresh();
+    const auto muted = capture();
+    CHECK (controller.cell (step).enabled);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 0 }));
+    controller.refresh();
+    const auto empty = capture();
+    const int mutedContrast = distance (muted, empty);
+    CHECK (mutedContrast > 0);
+    CHECK (mutedContrast * 4 < distance (on, empty));
 }
 
 TEST_CASE ("Cells outside a channel loop are completely invisible in every layer", "[native-ui][render][loop-visibility]")
@@ -2172,6 +2557,36 @@ TEST_CASE ("Grid clicks switch or clear the selection without editing cells", "[
     }
 }
 
+TEST_CASE ("Dragging from a dense grid row gutter requires Shift or Select", "[native-ui][grid-selection]")
+{
+    PluginProcessor processor;
+    const int steps = GENERATE (32, 64);
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto first = grid.layout.cell ({ 0, 2 });
+    const juce::Point<float> start { first.getCentreX(), first.getY() - 4.0f };
+    const auto end = grid.layout.cell ({ 2, 7 }).getCentre();
+    REQUIRE_FALSE (grid.layout.at (start).valid());
+    const auto before = processor.editorDocument();
+    const auto drag = [&] (int modifiers)
+    {
+        const auto held = modifiers | juce::ModifierKeys::leftButtonModifier;
+        grid.mouseDown (gridEvent (grid, start, start, held));
+        grid.mouseDrag (gridEvent (grid, end, start, held, true));
+        grid.mouseUp (gridEvent (grid, end, start, modifiers, true));
+    };
+    drag (0);
+    CHECK (controller.selected.none());
+    controller.selectLatched = GENERATE (false, true);
+    drag (controller.selectLatched ? 0 : juce::ModifierKeys::shiftModifier);
+    CHECK (controller.selected.test (static_cast<size_t> (Location { 1, 4 }.key())));
+    CHECK (processor.editorDocument() == before);
+    CHECK_FALSE (controller.canUndo());
+}
+
 TEST_CASE ("Clicking selected cells fills blanks then clears the selection in single undo steps", "[native-ui][selection-fill]")
 {
     PluginProcessor processor;
@@ -2204,9 +2619,7 @@ TEST_CASE ("Clicking selected cells fills blanks then clears the selection in si
     {
         for (size_t i = 0; i < cells.size(); ++i)
         {
-            auto expected = before[i];
-            if (!original)
-                expected.enabled = enabled;
+            const auto expected = original || (enabled && before[i].enabled) ? before[i] : Cell { .enabled = enabled };
             CHECK (controller.cell (cells[i]) == expected);
         }
         CHECK (controller.selected == selection);
@@ -2246,10 +2659,13 @@ TEST_CASE ("Host replacement invalidates undo before the next timer tick", "[nat
 TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-ui][render]")
 {
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
+    const int steps = GENERATE (32, 64);
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_playback_mode", { 1, "reverse_ping_pong" }));
+    REQUIRE (processor.dispatchUiEngineCommand ("source_channel_mute", { 1, 2, true }));
     for (int ch = 0; ch < 8; ++ch)
-        for (int step = 0; step < 32; ++step)
-            REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, ch + 1, step + 1, step % 3 != 1 ? 1 : 0, 50 + step * 2, 60 + step, 4, 5, 1 << (step % 4) }));
+        for (int step = 0; step < steps; ++step)
+            REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, ch + 1, step + 1, step % 3 != 1 ? 1 : 0, 50 + step, 60 + step % 32, 4, 5, 1 << (step % 4) }));
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     for (int scale : { 50, 100, 120 })
     for (auto layer : { Layer::velocity, Layer::chance })
@@ -2267,14 +2683,15 @@ TEST_CASE ("Native dense layouts render selection cycles and scaling", "[native-
         CHECK (editor->getWidth() == juce::roundToInt (view->layout.width() * UiScale::factor (scale)));
         if (directory.isNotEmpty())
         {
-            auto stream = juce::File (directory).getChildFile ("native-32-" + juce::String (scale) + "-" + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
+            auto stream = juce::File (directory).getChildFile ("native-" + juce::String (steps) + "-" + juce::String (scale) + "-"
+                                                              + juce::String (static_cast<int> (layer)) + ".png").createOutputStream();
             REQUIRE (stream != nullptr);
             REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
         }
     }
 }
 
-TEST_CASE ("Logo double click reveals about and random controls without resizing the editor", "[native-ui][render][logo-double-click]")
+TEST_CASE ("Clicking S opens the randomizer without resizing the editor", "[native-ui][render][logo-randomizer]")
 {
     PluginProcessor processor;
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
@@ -2283,8 +2700,11 @@ TEST_CASE ("Logo double click reveals about and random controls without resizing
     PatternGrid* grid = nullptr;
     juce::Viewport* panel = nullptr;
     PreviewPanel* inspector = nullptr;
+    juce::Component* gridDivision = nullptr;
     for (auto* child : view->getChildren())
     {
+        if (child->getTitle() == "Pattern rate")
+            gridDivision = child;
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
             CHECK (button->getButtonText() != "Random");
         if (auto* candidate = dynamic_cast<PatternGrid*> (child))
@@ -2299,26 +2719,16 @@ TEST_CASE ("Logo double click reveals about and random controls without resizing
     REQUIRE (grid != nullptr);
     REQUIRE (panel != nullptr);
     REQUIRE (inspector != nullptr);
+    REQUIRE (gridDivision != nullptr);
     REQUIRE (dynamic_cast<PreviewPanel*> (panel->getViewedComponent()) != nullptr);
     const auto editorBounds = editor->getBounds();
     const auto gridBounds = grid->getBounds();
-    const auto event = [inspector] (juce::Point<float> position, int clicks, int modifiers = juce::ModifierKeys::leftButtonModifier)
-    {
-        const auto now = juce::Time::getCurrentTime();
-        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, inspector, inspector, now, position, now, clicks, false);
-    };
-    if (GENERATE (false, true))
-        view->controller.selected.set (0);
-    // Background deselection must coexist with the logo's double-click action.
-    view->mouseDown (event ({ 90, 80 }, 1).getEventRelativeTo (view));
-    CHECK (view->controller.selected.none());
-    inspector->mouseDown (event ({ 90, 80 }, 1));
+    auto* logoButton = dynamic_cast<juce::TextButton*> (inspector->getComponentAt (125, 80));
+    REQUIRE (logoButton != nullptr);
+    REQUIRE (logoButton->getTitle() == "Cycle randomizer view");
+    REQUIRE (logoButton->onClick);
     CHECK_FALSE (panel->isVisible());
-    inspector->mouseDoubleClick (event ({ 280, 80 }, 2));
-    CHECK_FALSE (panel->isVisible());
-    inspector->mouseDoubleClick (event ({ 90, 80 }, 2, juce::ModifierKeys::rightButtonModifier));
-    CHECK_FALSE (panel->isVisible());
-    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
+    logoButton->onClick();
     CHECK (panel->isVisible());
     CHECK (view->layout.randomVisible);
     CHECK (panel->getBounds().intersects (gridBounds));
@@ -2340,12 +2750,20 @@ TEST_CASE ("Logo double click reveals about and random controls without resizing
         REQUIRE (stream != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (image, *stream));
     }
-    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
-    CHECK_FALSE (panel->isVisible());
-    CHECK (grid->getBounds() == gridBounds);
-    inspector->mouseDoubleClick (event ({ 90, 80 }, 2));
-    REQUIRE (panel->isVisible());
     CHECK (view->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (panel->isVisible());
+    CHECK_FALSE (view->layout.randomVisible);
+    logoButton->onClick();
+    REQUIRE (panel->isVisible());
+    juce::TextButton* back = nullptr;
+    for (auto* child : panel->getViewedComponent()->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Back to Grid")
+            back = button;
+    REQUIRE (back != nullptr);
+    CHECK (back->isVisible());
+    CHECK (view->getLocalArea (back, back->getLocalBounds()).getRight() == gridDivision->getRight());
+    REQUIRE (back->onClick);
+    back->onClick();
     CHECK_FALSE (panel->isVisible());
     CHECK_FALSE (view->layout.randomVisible);
     // Small channel counts keep all about/random controls reachable by scrolling.
@@ -2354,6 +2772,7 @@ TEST_CASE ("Logo double click reveals about and random controls without resizing
     CHECK (panel->getViewedComponent()->getHeight() >= 540);
     CHECK (panel->getViewedComponent()->getHeight() > panel->getHeight());
     CHECK (panel->getBottom() == inspector->getY());
+    CHECK (view->getLocalArea (back, back->getLocalBounds()).getRight() == gridDivision->getRight());
 }
 
 TEST_CASE ("Selected value controls temporarily switch the editing layer", "[native-ui]")
@@ -2555,6 +2974,7 @@ TEST_CASE ("Option arms selection duplication without switching layers or editin
     controller.layer = layer;
     controller.selected.set (0);
     controller.selected.set (1);
+    controller.selected.set (2);
     const auto first = controller.cell ({ 0, 0 });
     const auto second = controller.cell ({ 0, 1 });
     editor.sync();
@@ -2567,23 +2987,37 @@ TEST_CASE ("Option arms selection duplication without switching layers or editin
     CHECK (grid->isCopyMode());
     CHECK (copy->getToggleState());
     CHECK_FALSE (grid->copySelection);
-    CHECK (grid->getMouseCursor() == juce::MouseCursor (juce::MouseCursor::CopyingCursor));
     const auto start = grid->layout.cell ({ 0, 0 }).getCentre();
     const auto end = grid->layout.cell ({ 1, 4 }).getCentre();
+    grid->mouseMove (gridEvent (*grid, start, start, option));
+    CHECK (grid->getMouseCursor() == juce::MouseCursor (juce::MouseCursor::CopyingCursor));
     grid->mouseDown (gridEvent (*grid, start, start, left | option));
 
     SECTION ("Dragging copies the entire selection and supports undo redo")
     {
         grid->mouseDrag (gridEvent (*grid, end, start, left | option, true));
         CHECK (grid->displayLayer() == layer);
+        const auto preview = grid->createComponentSnapshot (grid->getLocalBounds());
+        const auto blank = grid->layout.cell ({ 1, 6 }).getCentre();
+        CHECK (preview.getPixelAt (juce::roundToInt (end.x), juce::roundToInt (end.y)).getPerceivedBrightness()
+               > preview.getPixelAt (juce::roundToInt (blank.x), juce::roundToInt (blank.y)).getPerceivedBrightness() + 0.10f);
+        if (layer == Layer::velocity)
+        {
+            const auto cell = grid->layout.cell ({ 1, 4 });
+            const int x = juce::roundToInt (cell.getX() + cell.getWidth() * 0.22f);
+            const auto top = preview.getPixelAt (x, juce::roundToInt (cell.getY() + cell.getHeight() * 0.15f));
+            const auto bottom = preview.getPixelAt (x, juce::roundToInt (cell.getY() + cell.getHeight() * 0.85f));
+            CHECK (bottom.getPerceivedBrightness() > top.getPerceivedBrightness() + 0.12f);
+        }
         grid->mouseUp (gridEvent (*grid, end, start, option, true));
         CHECK (controller.cell ({ 0, 0 }) == first);
         CHECK (controller.cell ({ 0, 1 }) == second);
         CHECK (controller.cell ({ 1, 4 }) == first);
         CHECK (controller.cell ({ 1, 5 }) == second);
-        CHECK (controller.selected.count() == 2);
-        CHECK (controller.selected.test (36));
-        CHECK (controller.selected.test (37));
+        CHECK (controller.selected.count() == 3);
+        CHECK (controller.selected.test (static_cast<size_t> (Location { 1, 4 }.key())));
+        CHECK (controller.selected.test (static_cast<size_t> (Location { 1, 5 }.key())));
+        CHECK (controller.selected.test (static_cast<size_t> (Location { 1, 6 }.key())));
         controller.undo();
         CHECK (controller.cell ({ 0, 0 }) == first);
         CHECK (controller.cell ({ 0, 1 }) == second);
@@ -2646,6 +3080,46 @@ TEST_CASE ("Option can switch a selection drag between moving and copying", "[na
     controller.undo();
     CHECK (controller.cell ({ 0, 0 }) == original);
     CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
+}
+
+TEST_CASE ("Select drags move or duplicate cells from either grid layer", "[native-ui][grid-selection]")
+{
+    const auto layer = GENERATE (Layer::chance, Layer::velocity);
+    const bool latched = GENERATE (false, true);
+    const bool fromCycleStrip = GENERATE (false, true);
+    const bool copy = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 90, 60, 4, 5, 3 }));
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    controller.layer = layer;
+    if (latched)
+    {
+        controller.beginSelect();
+        controller.endSelect (false, true);
+    }
+    const Location source { 0, 2 };
+    const Location destination = latched ? Location { 2, 2 } : Location { 0, 5 };
+    controller.selected.set (static_cast<size_t> (source.key()));
+    grid.sync();
+    const auto original = controller.cell (source);
+    const auto bounds = grid.cellBounds (source);
+    const juce::Point<float> start { bounds.getCentreX(), bounds.getY() + bounds.getHeight() * (fromCycleStrip ? 0.9f : 0.5f) };
+    const auto end = grid.layout.cell (destination).getCentre();
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    const int option = copy ? juce::ModifierKeys::altModifier : 0;
+    grid.mouseDown (gridEvent (grid, start, start, left));
+    grid.mouseDrag (gridEvent (grid, end, start, left, true));
+    grid.modifierKeysChanged (juce::ModifierKeys (left | option));
+    grid.mouseUp (gridEvent (grid, end, start, option, true));
+    CHECK (controller.cell (destination) == original);
+    CHECK (controller.cell (source).enabled == copy);
+    CHECK (controller.selection() == std::vector<Location> { destination });
+    CHECK (controller.layer == layer);
+    controller.undo();
+    CHECK (controller.cell (source) == original);
+    CHECK_FALSE (controller.cell (destination).enabled);
 }
 
 TEST_CASE ("Roll is edited in the inspector while permanent grid layers remain velocity and chance", "[native-ui]")
@@ -2711,7 +3185,7 @@ TEST_CASE ("Roll is edited in the inspector while permanent grid layers remain v
     }
 }
 
-TEST_CASE ("Chance grid clicks toggle cells and preserve their values", "[native-ui][chance-gestures]")
+TEST_CASE ("Chance grid clicks create fresh steps even in older projects", "[native-ui][chance-gestures]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 0, 90, 60, 4, 5, 3 }));
@@ -2732,12 +3206,10 @@ TEST_CASE ("Chance grid clicks toggle cells and preserve their values", "[native
         grid.mouseUp (gridEvent (grid, position, position, modifiers));
     };
     click();
-    auto expected = before;
-    expected.enabled = true;
+    const auto expected = Cell { .enabled = true };
     CHECK (controller.cell ({ 0, 0 }) == expected);
-    // A second quick click turns it off without changing probability, cycle or roll.
     click();
-    CHECK (controller.cell ({ 0, 0 }) == before);
+    CHECK (controller.cell ({ 0, 0 }) == Cell {});
     controller.undo();
     CHECK (controller.cell ({ 0, 0 }) == expected);
     controller.undo();
@@ -2745,7 +3217,7 @@ TEST_CASE ("Chance grid clicks toggle cells and preserve their values", "[native
     controller.redo();
     CHECK (controller.cell ({ 0, 0 }) == expected);
     controller.redo();
-    CHECK (controller.cell ({ 0, 0 }) == before);
+    CHECK (controller.cell ({ 0, 0 }) == Cell {});
 }
 
 TEST_CASE ("Chance grid paints and erases like Velocity while preserving undo and cancellation", "[native-ui][chance-gestures]")
@@ -2766,8 +3238,9 @@ TEST_CASE ("Chance grid paints and erases like Velocity while preserving undo an
     const int left = juce::ModifierKeys::leftButtonModifier;
     grid.mouseDown (gridEvent (grid, start, start, left));
     grid.mouseDrag (gridEvent (grid, end, start, left, true));
-    auto expected = before;
-    expected.enabled = !enabled;
+    grid.sync();
+    CHECK (grid.getMouseCursor() == juce::MouseCursor::NormalCursor);
+    const auto expected = Cell { .enabled = !enabled };
     for (int step = 0; step < 5; ++step)
         CHECK (controller.cell ({ 0, step }) == expected);
     CHECK_FALSE (controller.cell ({ 0, 5 }).enabled);
@@ -2949,7 +3422,10 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
     CHECK_FALSE (chooser->isVisible());
     CHECK_FALSE (input->keyPressed (juce::KeyPress (juce::KeyPress::upKey)));
     CHECK (editor.controller.state.playback.channels[0].note == initial);
-    input->onChoose();
+    const juce::Point<float> inset { start.x, 2.0f };
+    CHECK_FALSE (input->valueFaceBounds().contains (inset));
+    input->mouseDown (gridEvent (*input, inset, inset, juce::ModifierKeys::leftButtonModifier));
+    input->mouseUp (gridEvent (*input, inset, inset, 0));
     REQUIRE (chooser->isVisible());
     const auto click = [&] (const juce::String& title)
     {
@@ -3032,9 +3508,30 @@ TEST_CASE ("The note chooser applies all eight notes in one undo step", "[native
     SECTION ("A scale assignment replaces every row")
     {
         const NoteChooser::RowNotes scale { 36, 38, 40, 41, 43, 45, 47, 48 };
-        chooser->onPresetAll (scale);
+        chooser->onPresetAll (scale, NoteChooser::PresetOctave::current);
         CHECK (notes() == scale);
         CHECK (chooser->isVisible());
+    }
+    SECTION ("A scale follows the current octave and keeps its intervals at the MIDI limit")
+    {
+        const auto octavesUp = GENERATE (2, 7);
+        chooser->onTransposeAll (12 * octavesUp);
+        const auto transposed = notes();
+        const NoteChooser::RowNotes scale { 36, 38, 40, 41, 43, 45, 47, 48 };
+        chooser->onPresetAll (scale, NoteChooser::PresetOctave::current);
+        auto expected = scale;
+        for (auto& note : expected)
+            note += 12 * std::min (octavesUp, 6);
+        CHECK (notes() == expected);
+        REQUIRE (editor.controller.canUndo());
+        editor.controller.undo();
+        CHECK (notes() == transposed);
+    }
+    SECTION ("Ruismaker retains its fixed MIDI notes")
+    {
+        const NoteChooser::RowNotes mapping { 49, 51, 54, 56, 58, 61, 63, 66 };
+        chooser->onPresetAll (mapping, NoteChooser::PresetOctave::fixed);
+        CHECK (notes() == mapping);
     }
     REQUIRE (editor.controller.canUndo());
     editor.controller.undo();
@@ -3301,12 +3798,15 @@ TEST_CASE ("Inspector double-click resets one field across the selection in one 
     const auto field = GENERATE ("Velocity", "Probability", "Nudge", "Roll", "Cycle");
     juce::Component* clickTarget = nullptr;
     juce::Component* handle = nullptr;
+    CycleEditor* cycleEditor = nullptr;
     std::vector<std::pair<juce::Component*, juce::Rectangle<int>>> beatBounds;
     for (auto* child : inspector.getChildren())
     {
         if (auto* value = dynamic_cast<ValueControl*> (child); value != nullptr && value->caption == field)
             clickTarget = value;
         if (auto* cycle = dynamic_cast<CycleEditor*> (child); cycle != nullptr && juce::String (field) == "Cycle")
+        {
+            cycleEditor = cycle;
             for (auto* part : cycle->getChildren())
             {
                 if (part->getTitle() == "Cycle length")
@@ -3314,14 +3814,29 @@ TEST_CASE ("Inspector double-click resets one field across the selection in one 
                 if (auto* beat = dynamic_cast<juce::Button*> (part))
                 {
                     beatBounds.emplace_back (beat, beat->getBounds());
-                    if (beat->getButtonText() == "3")
-                        clickTarget = beat;
                 }
             }
+        }
+    }
+    if (cycleEditor != nullptr)
+    {
+        const auto area = GENERATE (0, 1, 2, 3, 4);
+        CAPTURE (area);
+        REQUIRE (beatBounds.size() == 8);
+        // Active, inactive and out-of-cycle beats, the handle, a gutter, and the caption.
+        clickTarget = area < 3 ? beatBounds[std::array<size_t, 3> { 2, 1, 6 }[static_cast<size_t> (area)]].first
+                              : area == 3 ? handle : cycleEditor;
     }
     REQUIRE (clickTarget != nullptr);
     const int handleX = handle != nullptr ? handle->getX() : 0;
-    const auto point = clickTarget->getLocalBounds().toFloat().getCentre();
+    auto point = clickTarget->getLocalBounds().toFloat().getCentre();
+    if (clickTarget == cycleEditor)
+    {
+        const bool caption = GENERATE (false, true);
+        point = caption ? cycleEditor->getLocalBounds().toFloat().getTopLeft().translated (2.0f, 5.0f)
+                        : point.withX (1.0f);
+        CHECK (cycleEditor->getComponentAt (point.toInt()) == cycleEditor);
+    }
     for (int clicks : { 1, 2 })
     {
         const auto event = gridEvent (*clickTarget, point, point, juce::ModifierKeys::leftButtonModifier, false, clicks);
@@ -3967,12 +4482,6 @@ TEST_CASE ("Record lock stays independent beside Record with a full touch target
     editor->sync();
     if (compact)
     {
-        juce::TextButton* controls = nullptr;
-        for (auto* child : editor->getChildren())
-            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Menu")
-                controls = button;
-        REQUIRE (controls != nullptr);
-        controls->onClick();
         juce::TextButton* pattern = nullptr;
         for (auto* child : editor->getChildren())
             if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "Pattern")
@@ -3994,19 +4503,24 @@ TEST_CASE ("Record lock stays independent beside Record with a full touch target
     CHECK (lock->isVisible());
     CHECK (lock->isEnabled());
     CHECK (lock->getToggleState());
-    CHECK (lock->getBounds().getCentreX() > record->getBounds().getCentreX());
-    CHECK (lock->getBounds().getCentreY() == record->getBounds().getCentreY());
-    CHECK_FALSE (lock->getBounds().intersects (record->getBounds()));
-    CHECK (lock->getX() > record->getRight());
-    CHECK (lock->getY() == record->getY());
-    CHECK (lock->getHeight() == record->getHeight());
-    if (compact)
+    if (!compact)
     {
+        CHECK (lock->getBounds().getCentreX() > record->getBounds().getCentreX());
+        CHECK (lock->getBounds().getCentreY() == record->getBounds().getCentreY());
+        CHECK_FALSE (lock->getBounds().intersects (record->getBounds()));
+        CHECK (lock->getX() > record->getRight());
+        CHECK (lock->getY() == record->getY());
+        CHECK (lock->getHeight() == record->getHeight());
+    }
+    else
+    {
+        CHECK_FALSE (record->isVisible());
         CHECK (lock->getWidth() >= 44);
         CHECK (lock->getHeight() >= 44);
     }
     CHECK (static_cast<bool> (lock->getProperties()["outlinedIcon"]));
-    CHECK_FALSE (lock->getBounds().contains (record->getBounds().getCentre()));
+    if (!compact)
+        CHECK_FALSE (lock->getBounds().contains (record->getBounds().getCentre()));
     CHECK (lock->hitTest (0, 0));
     CHECK (lock->hitTest (lock->getWidth() - 1, lock->getHeight() - 1));
     CHECK (lock->hitTest (lock->getWidth() / 2, lock->getHeight() / 2 + 4));
@@ -4128,10 +4642,25 @@ TEST_CASE ("Grid hits brighten the whole cell with values shown or hidden", "[na
     CHECK (controller.sourceFlashes[0][0] > juce::Time::getMillisecondCounterHiRes());
 }
 
-TEST_CASE ("Logo letters select a shared accent without changing the project", "[native-ui][render][accent]")
+TEST_CASE ("Logo letters and backdrop edit the shared theme without changing the project", "[native-ui][render][accent]")
 {
+    struct RestoreAccent
+    {
+        bool blue = Palette::blueAccentSelected();
+        Palette::AccentColours colours { Palette::accentOverride (false), Palette::accentOverride (true) };
+        Palette::BackgroundTone backdrop = Palette::backgroundTone();
+        ~RestoreAccent()
+        {
+            Palette::setAccentPreferences (blue, colours);
+            Palette::setBackgroundTone (backdrop);
+        }
+    } restore;
+    juce::TemporaryFile settings (".settings");
+    juce::PropertiesFile::Options options;
+    options.millisecondsBeforeSaving = -1;
+    const auto preferences = std::make_shared<juce::PropertiesFile> (settings.getFile(), options);
     PluginProcessor firstProcessor, secondProcessor;
-    NativeEditor first (firstProcessor), second (secondProcessor);
+    NativeEditor first (firstProcessor, preferences), second (secondProcessor, preferences);
     first.setSize (juce::roundToInt (first.layout.width()), juce::roundToInt (first.layout.height()));
     second.setSize (juce::roundToInt (second.layout.width()), juce::roundToInt (second.layout.height()));
     PreviewPanel* inspector = nullptr;
@@ -4139,24 +4668,27 @@ TEST_CASE ("Logo letters select a shared accent without changing the project", "
         if (auto* candidate = dynamic_cast<PreviewPanel*> (child))
             inspector = candidate;
     REQUIRE (inspector != nullptr);
+    AccentWordmark* wordmark = nullptr;
+    for (auto* child : inspector->getChildren())
+        if (auto* candidate = dynamic_cast<AccentWordmark*> (child))
+            wordmark = candidate;
+    REQUIRE (wordmark != nullptr);
     juce::TextButton* orange = nullptr;
     juce::TextButton* blue = nullptr;
-    for (auto* child : inspector->getChildren())
+    juce::TextButton* backdrop = nullptr;
+    for (auto* child : wordmark->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
             if (button->getTitle() == "Orange accent") orange = button;
             if (button->getTitle() == "Blue accent") blue = button;
+            if (button->getTitle() == "Background tone") backdrop = button;
         }
     REQUIRE (orange != nullptr);
     REQUIRE (blue != nullptr);
+    REQUIRE (backdrop != nullptr);
     REQUIRE (orange->isVisible());
     REQUIRE (blue->isVisible());
     CHECK (orange->getRight() < blue->getX());
-    struct RestoreAccent
-    {
-        juce::TextButton& button;
-        ~RestoreAccent() { button.onClick(); }
-    } restore { Palette::blueAccentSelected() ? *blue : *orange };
     const auto document = firstProcessor.editorDocument();
     for (auto* button : { blue, orange, blue })
     {
@@ -4173,18 +4705,208 @@ TEST_CASE ("Logo letters select a shared accent without changing the project", "
         }
         CHECK (firstProcessor.editorDocument() == document);
     }
-    NativeEditor reopened (secondProcessor);
+    const auto event = [] (juce::TextButton& button, int y, int modifiers = juce::ModifierKeys::leftButtonModifier, int clicks = 1)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        const auto center = button.getLocalBounds().toFloat().getCentre();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), center.translated (0, static_cast<float> (y)),
+                                juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &button, &button, now, center, now, clicks, y != 0);
+    };
+    const auto renderLogo = []
+    {
+        juce::Image image (juce::Image::ARGB, 300, 140, true);
+        juce::Graphics graphics (image);
+        AccentWordmark::paintBranding (graphics, image.getBounds().toFloat());
+        return image;
+    };
+    const auto factoryLogo = renderLogo();
+    const auto checkShadeLimit = [] (juce::Colour base, bool brighter)
+    {
+        CHECK (Palette::accent.getHue() == Catch::Approx (base.getHue()).margin (0.006f));
+        CHECK (Palette::accent.getSaturationHSL() == Catch::Approx (base.getSaturationHSL()).margin (0.015f));
+        CHECK (Palette::accent.getLightness() == Catch::Approx (brighter ? 0.88f : 0.20f).margin (0.004f));
+    };
+    auto& blueDragTarget = static_cast<juce::Component&> (*blue);
+    auto& orangeDragTarget = static_cast<juce::Component&> (*orange);
+    orange->onClick();
+    blueDragTarget.mouseDown (event (*blue, 0));
     CHECK (Palette::blueAccentSelected());
-    CHECK (reopened.getLookAndFeel().findColour (juce::PopupMenu::highlightedTextColourId) == Palette::blueAccent);
+    CHECK (Palette::accent == Palette::blueAccent);
+    blueDragTarget.mouseDrag (event (*blue, 120));
+    checkShadeLimit (Palette::blueAccent, false);
+    blueDragTarget.mouseDrag (event (*blue, -120));
+    checkShadeLimit (Palette::blueAccent, true);
+    blueDragTarget.mouseDrag (event (*blue, -45));
+    CHECK (Palette::accent.getPerceivedBrightness() > Palette::blueAccent.getPerceivedBrightness());
+    CHECK (second.getLookAndFeel().findColour (juce::PopupMenu::highlightedTextColourId) == Palette::accent);
+    blueDragTarget.mouseUp (event (*blue, -45, 0));
+    const auto adjustedBlue = Palette::accent;
+    orangeDragTarget.mouseDown (event (*orange, 0));
+    CHECK_FALSE (Palette::blueAccentSelected());
+    CHECK (Palette::accent == Palette::orangeAccent);
+    orangeDragTarget.mouseDrag (event (*orange, 250));
+    checkShadeLimit (Palette::orangeAccent, false);
+    orangeDragTarget.mouseDrag (event (*orange, -120));
+    checkShadeLimit (Palette::orangeAccent, true);
+    orangeDragTarget.mouseDrag (event (*orange, 30));
+    orangeDragTarget.mouseUp (event (*orange, 30, 0));
+    const auto adjustedOrange = Palette::accent;
+    CHECK (adjustedOrange.getPerceivedBrightness() < Palette::orangeAccent.getPerceivedBrightness());
+    CHECK (Palette::accentColour (true) == adjustedBlue);
+    CHECK_FALSE (Palette::blueAccentSelected());
+    const auto shadedLogo = renderLogo();
+    CHECK (shadedLogo.getPixelAt (41, 70).getPerceivedBrightness() < factoryLogo.getPixelAt (41, 70).getPerceivedBrightness());
+    CHECK (shadedLogo.getPixelAt (193, 70).getPerceivedBrightness() > factoryLogo.getPixelAt (193, 70).getPerceivedBrightness());
+    CHECK_FALSE (first.controller.canUndo());
+    CHECK (firstProcessor.editorDocument() == document);
+
+    Palette::setAccentPreferences (true, {});
+    const auto reopenedPreferences = std::make_shared<juce::PropertiesFile> (settings.getFile(), options);
+    NativeEditor reopened (secondProcessor, reopenedPreferences);
+    CHECK_FALSE (Palette::blueAccentSelected());
+    CHECK (Palette::accentColour (true) == adjustedBlue);
+    CHECK (Palette::accentColour (false) == adjustedOrange);
+    CHECK (reopened.getLookAndFeel().findColour (juce::PopupMenu::highlightedTextColourId) == adjustedOrange);
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     if (directory.isNotEmpty())
     {
         juce::File folder (directory);
         REQUIRE (folder.createDirectory().wasOk());
-        auto output = folder.getChildFile ("blue-accent.png").createOutputStream();
+        auto output = folder.getChildFile ("custom-accent.png").createOutputStream();
         REQUIRE (output != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (first.createComponentSnapshot (first.getLocalBounds()), *output));
     }
+    blue->mouseDoubleClick (event (*blue, 0, 0, 2));
+    CHECK_FALSE (Palette::accentOverride (true).has_value());
+    CHECK (Palette::accentColour (true) == Palette::blueAccent);
+    CHECK (Palette::accent == adjustedOrange);
+    orangeDragTarget.mouseDown (event (*orange, 0));
+    const auto centre = orange->getLocalBounds().toFloat().getCentre();
+    const auto dragColour = [&] (float y)
+    {
+        orangeDragTarget.mouseDrag (gridEvent (*orange, centre.translated (80, y), centre, juce::ModifierKeys::leftButtonModifier, true));
+    };
+    dragColour (0);
+    CHECK (std::abs (Palette::accent.getHue() - adjustedOrange.getHue()) > 0.25f);
+    CHECK (Palette::accent.getLightness() == Catch::Approx (adjustedOrange.getLightness()).margin (0.004f));
+    const float horizontalHue = Palette::accent.getHue();
+    dragColour (-35);
+    const auto custom = Palette::accent;
+    CHECK (custom.getHue() == Catch::Approx (horizontalHue).margin (0.006f));
+    CHECK (custom.getLightness() > adjustedOrange.getLightness());
+    CHECK (Palette::accentColour (true) == Palette::blueAccent);
+    CHECK (second.getLookAndFeel().findColour (juce::PopupMenu::highlightedTextColourId) == custom);
+    orangeDragTarget.mouseUp (event (*orange, -35, 0));
+    juce::PropertiesFile colourSettings (settings.getFile(), options);
+    CHECK (colourSettings.getValue ("orangeAccentColour") == custom.toString());
+
+    const auto originalBackground = Palette::app;
+    const auto originalRaised = Palette::raised;
+    juce::TextButton themeButton;
+    themeButton.setLookAndFeel (&first.getLookAndFeel());
+    themeButton.setSize (64, 44);
+    const auto buttonFaceColour = [&]
+    {
+        return themeButton.createComponentSnapshot (themeButton.getLocalBounds()).getPixelAt (16, 12);
+    };
+    const auto originalButton = buttonFaceColour();
+    const auto colourTemperature = [] (juce::Colour colour)
+    {
+        return static_cast<int> (colour.getRed()) - colour.getBlue();
+    };
+    auto& backdropTarget = static_cast<juce::Component&> (*backdrop);
+    const auto backdropCentre = backdrop->getLocalBounds().toFloat().getCentre();
+    const auto dragBackdrop = [&] (float x, float y)
+    {
+        backdropTarget.mouseDrag (gridEvent (*backdrop, backdropCentre.translated (x, y), backdropCentre,
+                                             juce::ModifierKeys::leftButtonModifier, true));
+    };
+    backdropTarget.mouseDown (event (*backdrop, 0));
+    dragBackdrop (160, 0);
+    CHECK (Palette::backgroundTone() == Palette::BackgroundTone { 0, 100 });
+    CHECK (Palette::raised.getRed() > Palette::raised.getBlue());
+    const int buttonWarming = colourTemperature (buttonFaceColour()) - colourTemperature (originalButton);
+    CHECK (buttonWarming > 0);
+    CHECK (buttonWarming < colourTemperature (Palette::raised) - colourTemperature (originalRaised));
+    dragBackdrop (-160, 0);
+    CHECK (Palette::raised.getBlue() > Palette::raised.getRed());
+    dragBackdrop (80, -80);
+    CHECK (Palette::backgroundTone() == Palette::BackgroundTone { 56, 56 });
+    CHECK (Palette::app.getPerceivedBrightness() > originalBackground.getPerceivedBrightness());
+    CHECK (Palette::raised.getPerceivedBrightness() > originalRaised.getPerceivedBrightness());
+    const float buttonBrightening = buttonFaceColour().getPerceivedBrightness() - originalButton.getPerceivedBrightness();
+    CHECK (buttonBrightening > 0);
+    CHECK (buttonBrightening < Palette::raised.getPerceivedBrightness() - originalRaised.getPerceivedBrightness());
+    CHECK (second.getLookAndFeel().findColour (juce::TextEditor::backgroundColourId) == Palette::controls.app);
+    CHECK (Palette::accent == custom);
+    dragBackdrop (-80, 80);
+    CHECK (Palette::app.getPerceivedBrightness() < originalBackground.getPerceivedBrightness());
+    CHECK (Palette::raised.getPerceivedBrightness() < originalRaised.getPerceivedBrightness());
+    const float buttonDarkening = originalButton.getPerceivedBrightness() - buttonFaceColour().getPerceivedBrightness();
+    CHECK (buttonDarkening > 0);
+    CHECK (buttonDarkening < originalRaised.getPerceivedBrightness() - Palette::raised.getPerceivedBrightness());
+    backdropTarget.mouseUp (event (*backdrop, 80, 0));
+    juce::PropertiesFile savedTone (settings.getFile(), options);
+    CHECK (savedTone.getIntValue ("backgroundBrightness") == -56);
+    CHECK (savedTone.getIntValue ("backgroundTint") == -56);
+    backdropTarget.mouseDoubleClick (event (*backdrop, 0, 0, 2));
+    CHECK (Palette::backgroundTone() == Palette::BackgroundTone { 0, 0 });
+    CHECK (Palette::app == originalBackground);
+    CHECK (Palette::raised == originalRaised);
+    CHECK (buttonFaceColour() == originalButton);
+    CHECK (Palette::accent == custom);
+    juce::PropertiesFile resetTone (settings.getFile(), options);
+    CHECK (resetTone.getIntValue ("backgroundBrightness", 1) == 0);
+    CHECK (resetTone.getIntValue ("backgroundTint", 1) == 0);
+    orange->mouseDoubleClick (event (*orange, 0, 0, 2));
+    CHECK_FALSE (Palette::accentOverride (false).has_value());
+    CHECK (Palette::accent == Palette::orangeAccent);
+    juce::PropertiesFile resetColour (settings.getFile(), options);
+    CHECK_FALSE (resetColour.containsKey ("orangeAccentColour"));
+
+    preferences->setValue ("orangeAccentShade", -30);
+    preferences->setValue ("blueAccentColourMode", true);
+    preferences->setValue ("blueAccentColour", adjustedBlue.toString());
+    const auto legacy = std::make_unique<NativeEditor> (secondProcessor, preferences);
+    const auto legacyOrange = Palette::orangeAccent.withLightness (Palette::orangeAccent.getLightness() * 0.85f);
+    CHECK (Palette::accentColour (false) == legacyOrange);
+    CHECK (Palette::accentColour (true) == adjustedBlue);
+    CHECK_FALSE (first.controller.canUndo());
+    CHECK (firstProcessor.editorDocument() == document);
+}
+
+TEST_CASE ("Track color popover stays above toolbar segments and follows the visible row order", "[native-ui]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+    REQUIRE (grid != nullptr);
+    const int firstTrack = editor.layout.channelForRow (0);
+    const int secondTrack = editor.layout.channelForRow (1);
+    auto* anchor = grid->rowTitle (firstTrack);
+    REQUIRE (anchor != nullptr);
+    const auto point = anchor->getLocalBounds().toFloat().getCentre();
+    anchor->mouseDown (gridEvent (*anchor, point, point, juce::ModifierKeys::rightButtonModifier));
+    anchor->mouseUp (gridEvent (*anchor, point, point, 0));
+
+    auto* popup = dynamic_cast<juce::CallOutBox*> (juce::Component::getCurrentlyModalComponent());
+    REQUIRE (popup != nullptr);
+    REQUIRE (popup->getParentComponent() == &editor);
+    REQUIRE (popup->getNumChildComponents() == 1);
+    auto* picker = popup->getChildComponent (0);
+    CHECK (picker->getTitle() == "Track " + juce::String (firstTrack + 1) + " color");
+    editor.sync();
+    CHECK (popup->isAlwaysOnTop());
+    CHECK (editor.getChildComponent (editor.getNumChildComponents() - 1) == popup);
+    CHECK (picker->keyPressed (juce::KeyPress (juce::KeyPress::downKey)));
+    CHECK (picker->getTitle() == "Track " + juce::String (secondTrack + 1) + " color");
+    CHECK (picker->keyPressed (juce::KeyPress (juce::KeyPress::upKey)));
+    CHECK (picker->getTitle() == "Track " + juce::String (firstTrack + 1) + " color");
+    popup->exitModalState (0);
+    popup->setVisible (false);
 }
 
 TEST_CASE ("Compact accent belongs to Settings and leaves both step pages available", "[native-ui][accent][compact]")
@@ -4282,6 +5004,7 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
     if (standalone)
     {
         processor.showStandaloneMidiOutputMenu = [] (juce::Component&) {};
+        processor.showStandaloneLinkSettings = [] (juce::Component&) {};
         processor.showStandaloneAudioSettings = [&] { ++audioSettingsOpens; };
     }
     REQUIRE (processor.dispatchUiEngineCommand ("channels", { 8 }));
@@ -4295,6 +5018,9 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
     NativeEditor editor (processor);
     editor.setSize (Layout::fullWidth, Layout::fullHeight);
     editor.setVisible (true);
+    if (standalone)
+        editor.zenModeChanged = [&editor] (bool enabled) { editor.setZenMode (enabled); };
+    editor.setZenMode (true);
     editor.controller.selected.set (0);
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1, 1, 1 }));
     editor.controller.refresh();
@@ -4308,16 +5034,26 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
     std::vector<juce::Component*> footer;
     juce::Component* swingEye = nullptr;
     ValueControl* swingTarget = nullptr;
-    juce::TextButton* audioSettings = nullptr;
+    juce::TextButton* settingsButton = nullptr;
     for (auto* child : editor.getChildren())
     {
-        if (child->getTitle() == "Audio/MIDI Settings")
-            audioSettings = dynamic_cast<juce::TextButton*> (child);
+        if (child->getTitle() == "Settings")
+            settingsButton = dynamic_cast<juce::TextButton*> (child);
+        if (child->getTitle() == "Shift/Option shortcuts" || child->getTitle() == "Channel colors"
+            || child->getTitle() == "Show cell numbers" || child->getTitle() == "Reverse row order")
+            CHECK_FALSE (child->isVisible());
         if (!child->isVisible()) continue;
         if (child->getTitle() == "Show swing on grid")
             swingEye = child;
         if (child->getTitle() == "Swing target")
             swingTarget = dynamic_cast<ValueControl*> (child);
+        if (child->getTitle() == "Ableton Link settings")
+        {
+            auto* link = dynamic_cast<juce::TextButton*> (child);
+            REQUIRE (link != nullptr);
+            CHECK (link->getButtonText() == "Link");
+            CHECK (link->getWidth() == Layout::touchTarget);
+        }
         CHECK (editor.getLocalBounds().contains (child->getBounds()));
         if (dynamic_cast<juce::TextButton*> (child) != nullptr || dynamic_cast<ValueControl*> (child) != nullptr)
         {
@@ -4336,15 +5072,80 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
                 toolbar.push_back (child);
         }
     }
-    REQUIRE (audioSettings != nullptr);
-    CHECK (audioSettings->isVisible() == standalone);
-    if (standalone)
+    REQUIRE (settingsButton != nullptr);
+    CHECK (std::find (footer.begin(), footer.end(), settingsButton) != footer.end());
+    const auto findSettingsItem = [] (const juce::String& title) -> juce::AccessibilityHandler*
     {
-        CHECK (std::find (footer.begin(), footer.end(), audioSettings) != footer.end());
-        audioSettings->onClick();
-        CHECK (audioSettingsOpens == 1);
+        const auto find = [&title] (auto&& self, juce::Component& component) -> juce::AccessibilityHandler*
+        {
+            if (auto* button = dynamic_cast<juce::TextButton*> (&component); button != nullptr && button->getButtonText() == title)
+                return button->getAccessibilityHandler();
+            for (auto* child : component.getChildren())
+                if (auto* handler = self (self, *child))
+                    return handler;
+            return nullptr;
+        };
+        auto* popup = juce::Component::getCurrentlyModalComponent();
+        return popup != nullptr ? find (find, *popup) : nullptr;
+    };
+    // JUCE popup windows require a display, which is absent in headless test runs.
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
+    {
+        settingsButton->onClick();
+        auto* popup = juce::Component::getCurrentlyModalComponent();
+        REQUIRE (popup != nullptr);
+        CHECK (popup->getParentComponent() == &editor);
+        CHECK (popup->getBottom() <= settingsButton->getY());
+        CHECK (findSettingsItem ("Footer tooltips") != nullptr);
+        CHECK (findSettingsItem ("Reverse row order") != nullptr);
+        auto* numbers = findSettingsItem ("Show cell numbers");
+        REQUIRE (numbers != nullptr);
+        auto* colors = findSettingsItem ("Channel colors");
+        REQUIRE (colors != nullptr);
+        auto& numberRow = numbers->getComponent();
+        const auto rowBounds = numberRow.getLocalBounds();
+        const auto backgroundPoint = juce::Point<int> (rowBounds.getRight() - 16, 8);
+        const auto restingRow = numberRow.createComponentSnapshot (rowBounds);
+        numberRow.grabKeyboardFocus();
+        const auto focusedRow = numberRow.createComponentSnapshot (rowBounds);
+        CHECK (focusedRow.getPixelAt (backgroundPoint.x, backgroundPoint.y)
+               == restingRow.getPixelAt (backgroundPoint.x, backgroundPoint.y));
+        const bool initialColors = editor.controller.drumColors;
+        const bool initialNumbers = !editor.controller.graphicalCellValues;
+        CHECK (colors->getCurrentState().isChecked() == initialColors);
+        CHECK (numbers->getCurrentState().isChecked() == initialNumbers);
+        const auto clickToggle = [popup] (juce::AccessibilityHandler& row)
+        {
+            row.getActions().invoke (juce::AccessibilityActionType::press);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+            REQUIRE (juce::Component::getCurrentlyModalComponent() == popup);
+        };
+        clickToggle (*numbers);
+        clickToggle (*colors);
+        CHECK (editor.controller.graphicalCellValues == initialNumbers);
+        CHECK (editor.controller.drumColors != initialColors);
+        CHECK (numbers->getCurrentState().isChecked() != initialNumbers);
+        CHECK (colors->getCurrentState().isChecked() != initialColors);
+        clickToggle (*numbers);
+        clickToggle (*colors);
+        auto* shortcuts = findSettingsItem ("Shift/Option shortcuts");
+        REQUIRE (shortcuts != nullptr);
+        CHECK (shortcuts->getCurrentState().isChecked() == editor.controller.keyboardModifiersEnabled);
+        auto* zenItem = findSettingsItem ("Zen mode");
+        CHECK ((zenItem != nullptr) == standalone);
+        if (zenItem != nullptr)
+            CHECK (zenItem->getCurrentState().isChecked());
+        auto* audioMenuItem = findSettingsItem (juce::String::fromUTF8 (u8"Audio/MIDI Settings…"));
+        CHECK ((audioMenuItem != nullptr) == standalone);
+        if (audioMenuItem != nullptr)
+            audioMenuItem->getActions().invoke (juce::AccessibilityActionType::press);
+        else
+            CHECK (popup->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+        CHECK (juce::Component::getCurrentlyModalComponent() == nullptr);
+        CHECK (audioSettingsOpens == (standalone ? 1 : 0));
     }
-    REQUIRE_FALSE (footer.empty());
+    REQUIRE (footer.size() == (standalone ? 4 : 1));
     std::sort (footer.begin(), footer.end(), [] (auto* a, auto* b) { return a->getX() < b->getX(); });
     for (size_t i = 1; i < footer.size(); ++i)
         CHECK (footer[i]->getX() - footer[i - 1]->getRight() == Layout::footerGap);
@@ -4356,6 +5157,10 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         CHECK (image.getPixelAt (x, bounds.getY() + 2) == Palette::app);
         CHECK (image.getPixelAt (x, bounds.getY() + 10) != Palette::app);
         CHECK (image.getPixelAt (x, bounds.getBottom() - 3) == Palette::app);
+        CHECK (image.getPixelAt (bounds.getX() + 4, bounds.getCentreY()) == Palette::app);
+        CHECK (image.getPixelAt (bounds.getX() + 7, bounds.getCentreY()) != Palette::app);
+        CHECK (image.getPixelAt (bounds.getRight() - 5, bounds.getCentreY()) == Palette::app);
+        CHECK (image.getPixelAt (bounds.getRight() - 8, bounds.getCentreY()) != Palette::app);
     }
     REQUIRE (swingEye != nullptr);
     REQUIRE (swingTarget != nullptr);
@@ -4411,11 +5216,15 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
     grid.setSize (Layout::fullWidth, juce::roundToInt (grid.layout.gridHeight()));
     grid.sync();
     juce::TextButton* clear = nullptr;
+    RowPlaybackButton* direction = nullptr;
+    RowPlaybackButton* pingPong = nullptr;
+    RowPlaybackButton* power = nullptr;
     for (auto* child : grid.getChildren())
     {
         if (child->getTitle() == "clear channel 3") clear = dynamic_cast<juce::TextButton*> (child);
-        if (child->getTitle() == "forward channel 1" || child->getTitle() == "forward channel 3")
-            CHECK (child->isVisible());
+        if (child->getTitle() == "forward channel 3") direction = dynamic_cast<RowPlaybackButton*> (child);
+        if (child->getTitle() == "ping channel 3") pingPong = dynamic_cast<RowPlaybackButton*> (child);
+        if (child->getTitle() == "power channel 3") power = dynamic_cast<RowPlaybackButton*> (child);
     }
     REQUIRE (clear != nullptr);
     CHECK (clear->getWidth() == 42);
@@ -4471,4 +5280,354 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
         for (int step = 0; step < 16; ++step)
             CHECK_FALSE (target.contains (grid.layout.cell ({ 2, step }).getCentre()));
     }
+    for (const bool touch : { false, true })
+    {
+        grid.layout.touchRows = touch;
+        grid.resized();
+        const auto& note = grid.rowNoteInput (2);
+        const auto noteFace = note.valueFaceBounds();
+        CHECK (noteFace.getHeight() == Catch::Approx (42.0f));
+        CHECK (noteFace.getHeight() < note.getHeight());
+        for (auto* button : { direction, pingPong, power })
+        {
+            REQUIRE (button != nullptr);
+            CHECK (button->isVisible());
+            const auto target = button->getLocalBounds();
+            const auto face = rowControlFace (target.toFloat());
+            CHECK_FALSE (button->getMouseClickGrabsKeyboardFocus());
+            CHECK (button->getWantsKeyboardFocus());
+            CHECK (face.getCentre() == target.toFloat().getCentre());
+            CHECK (face.getWidth() < target.getWidth());
+            CHECK (face.getHeight() == Catch::Approx (noteFace.getHeight()));
+            CHECK (face.getCentreY() + button->getY() == Catch::Approx (noteFace.getCentreY() + note.getY()));
+            CHECK (button->hitTest (1, target.getCentreY()));
+        }
+    }
+    CHECK_FALSE (direction->getToggleState());
+    CHECK_FALSE (pingPong->getToggleState());
+    CHECK (power->getToggleState());
+    direction->onClick();
+    pingPong->onClick();
+    power->onClick();
+    grid.sync();
+    CHECK (direction->getToggleState());
+    CHECK (pingPong->getToggleState());
+    CHECK_FALSE (power->getToggleState());
+    const auto bounds = power->getLocalBounds();
+    const auto face = rowControlFace (bounds.toFloat());
+    const auto renderPower = [&] (bool active)
+    {
+        power->setToggleState (active, juce::dontSendNotification);
+        juce::Image image (juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+        juce::Graphics graphics (image);
+        power->paintButton (graphics, false, false);
+        return image;
+    };
+    const auto off = renderPower (false);
+    const auto on = renderPower (true);
+    const int edgeX = juce::roundToInt (face.getX()) + 1;
+    CHECK (on.getPixelAt (edgeX, bounds.getCentreY()) == off.getPixelAt (edgeX, bounds.getCentreY()));
+    const auto nearStroke = bounds.getCentre() + juce::Point<int> (2, -5);
+    CHECK (on.getPixelAt (nearStroke.x, nearStroke.y).getBrightness() > off.getPixelAt (nearStroke.x, nearStroke.y).getBrightness() + 0.03f);
+}
+
+TEST_CASE ("The XY randomizer repeats coordinates and preserves the drum foundation", "[native-ui][super-randomizer]")
+{
+    for (float variation : { 0.0f, 0.25f, 0.51f, 0.7f, 0.8f, 0.9f, 1.0f })
+    {
+        int active = 0, withProbability = 0, withCycle = 0;
+        for (int step = 0; step < 32; ++step)
+        {
+            for (int channel = 0; channel < 8; ++channel)
+            {
+                const auto sparse = generatedDrumCell (channel, step, 0.1f, variation);
+                const auto dense = generatedDrumCell (channel, step, 0.9f, variation);
+                CHECK (dense == generatedDrumCell (channel, step, 0.9f, variation));
+                CHECK ((!sparse.enabled || dense.enabled));
+                CHECK (dense.velocity >= 1);
+                CHECK (dense.velocity <= 127);
+                active += dense.enabled;
+                withProbability += dense.probability < 100;
+                withCycle += dense.cycle > 1;
+                CHECK (dense.probability >= 55);
+                CHECK (dense.probability <= 100);
+                if (!dense.enabled)
+                {
+                    CHECK (dense.probability == 100);
+                    CHECK (dense.cycle == 1);
+                }
+                if (dense.cycle > 1)
+                {
+                    CHECK (dense.cycle <= 6);
+                    CHECK (dense.cycleMask > 0);
+                    CHECK (dense.cycleMask < cycleMaskForLength (dense.cycle));
+                }
+                if (variation <= 0.8f)
+                    CHECK (dense.nudge == 0);
+                CHECK (std::abs (dense.nudge) <= 45);
+            }
+        }
+        if (variation <= 0.7f)
+        {
+            CHECK (withProbability == 0);
+            CHECK (withCycle == 0);
+        }
+        else if (variation < 1.0f)
+        {
+            CHECK (withProbability > 0);
+            CHECK (withProbability < active);
+            CHECK (withCycle > 0);
+            CHECK (withCycle < active);
+        }
+        else
+        {
+            CHECK (withProbability == active);
+            CHECK (withCycle == active);
+        }
+        if (variation <= 0.8f)
+        {
+            CHECK (generatedDrumCell (0, 0, 0, variation).enabled);
+            CHECK (generatedDrumCell (1, 4, 0, variation).enabled);
+            CHECK (generatedDrumCell (1, 12, 0, variation).enabled);
+        }
+    }
+    int differences = 0;
+    for (int channel = 0; channel < 8; ++channel)
+        for (int step = 0; step < 16; ++step)
+            differences += generatedDrumCell (channel, step, 0.6f, 0).enabled != generatedDrumCell (channel, step, 0.6f, 1).enabled;
+    CHECK (differences > 8);
+    int displaced = 0;
+    for (int step = 0; step < 32; ++step)
+    {
+        const auto hit = generatedDrumCell (0, step, 0.9f, 1.0f);
+        displaced += hit.enabled && std::abs (hit.nudge) >= 15;
+    }
+    CHECK (displaced > 4);
+    CHECK ((!generatedDrumCell (0, 0, 0, 1.0f).enabled
+            || !generatedDrumCell (1, 4, 0, 1.0f).enabled
+            || !generatedDrumCell (1, 12, 0, 1.0f).enabled));
+}
+
+TEST_CASE ("The XY randomizer edits one pattern with undo and cancels stale drags", "[native-ui][super-randomizer]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    controller.command ("source_steps", { 1, 64 });
+    PatternXYPad pad (controller);
+    pad.setSize (400, 400);
+    const auto event = [&pad] (float x, float y)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        const juce::Point<float> point { x, y };
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), point,
+                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+                                &pad, &pad, now, point, now, 1, true);
+    };
+    const auto original = processor.editorDocument();
+    const auto otherPattern = processor.enginePlaybackSnapshot().sources[1];
+    int notifications = 0;
+    controller.changed = [&] { ++notifications; };
+    pad.mouseDown (event (100, 300));
+    const auto firstPosition = processor.enginePlaybackSnapshot().sources[0];
+    const int firstNotifications = notifications;
+    REQUIRE (controller.editing());
+    pad.mouseDrag (event (300, 100));
+    // Both the engine and UI receive the new pattern before mouse-up commits undo.
+    const auto live = processor.enginePlaybackSnapshot();
+    CHECK (live.sources[0] != firstPosition);
+    CHECK (live.stepCount == 64);
+    CHECK (live.sources[0][0][56].enabled);
+    CHECK (live.sources[0][0][56] != firstPosition[0][56]);
+    CHECK (live.sources[0] == controller.state.playback.sources[0]);
+    CHECK (live.sources[1] == otherPattern);
+    CHECK (live.generationMode == GenerationMode::staticSource);
+    CHECK (notifications > firstNotifications);
+    CHECK (controller.editing());
+    const auto chaoticEdge = event (300, 26);
+    pad.mouseDrag (chaoticEdge);
+    const auto chaotic = processor.enginePlaybackSnapshot();
+    int gatedSteps = 0;
+    for (const auto& row : chaotic.sources[0])
+        for (const auto& cell : row)
+            if (cell.enabled)
+            {
+                CHECK (cell.probability < 100);
+                CHECK (cell.cycle > 1);
+                ++gatedSteps;
+            }
+    CHECK (gatedSteps > 0);
+    const auto duringDrag = processor.editorDocument();
+    pad.mouseUp (chaoticEdge);
+    const auto generated = processor.editorDocument();
+    CHECK (generated == duringDrag);
+    CHECK (generated != original);
+    CHECK (controller.canUndo());
+    controller.undo();
+    CHECK (processor.editorDocument() == original);
+    controller.redo();
+    CHECK (processor.editorDocument() == generated);
+    pad.mouseDown (event (100, 300));
+    pad.mouseDrag (chaoticEdge);
+    pad.mouseUp (chaoticEdge);
+    CHECK (processor.editorDocument() == generated);
+    pad.mouseDown (event (100, 300));
+    pad.cancelGesture();
+    CHECK (processor.editorDocument() == generated);
+    pad.mouseDown (event (100, 300));
+    controller.selectSource (1);
+    const auto switched = processor.editorDocument();
+    pad.mouseDrag (event (350, 50));
+    pad.mouseUp (event (350, 50));
+    CHECK (processor.editorDocument() == switched);
+}
+
+TEST_CASE ("Each click on S advances the randomizer view", "[native-ui][super-randomizer][render]")
+{
+    PluginProcessor processor;
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
+    REQUIRE (view != nullptr);
+    PreviewPanel* inspector = nullptr;
+    juce::Viewport* viewport = nullptr;
+    for (auto* child : view->getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PreviewPanel*> (child)) inspector = candidate;
+        if (auto* candidate = dynamic_cast<juce::Viewport*> (child)) viewport = candidate;
+    }
+    REQUIRE (inspector != nullptr);
+    REQUIRE (viewport != nullptr);
+    auto* logoButton = dynamic_cast<juce::TextButton*> (inspector->getComponentAt (125, 80));
+    REQUIRE (logoButton != nullptr);
+    REQUIRE (logoButton->getTitle() == "Cycle randomizer view");
+    REQUIRE (logoButton->onClick);
+    logoButton->onClick();
+    REQUIRE (viewport->isVisible());
+    PatternXYPad* pad = nullptr;
+    ValueControl* patternLength = nullptr;
+    for (auto* child : viewport->getViewedComponent()->getChildren())
+    {
+        if (auto* candidate = dynamic_cast<PatternXYPad*> (child)) pad = candidate;
+        if (child->getTitle() == "Randomizer pattern length") patternLength = dynamic_cast<ValueControl*> (child);
+    }
+    REQUIRE (pad != nullptr);
+    REQUIRE (patternLength != nullptr);
+    CHECK (pad->isVisible());
+    CHECK_FALSE (patternLength->isVisible());
+    CHECK (pad->getWidth() >= 300);
+    const juce::Point<float> position { pad->getWidth() * 0.65f, pad->getHeight() * 0.4f };
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent drag (juce::Desktop::getInstance().getMainMouseSource(), position,
+                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+                                pad, pad, now, position, now, 1, false);
+    pad->mouseDown (drag);
+    pad->mouseUp (drag);
+    const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (directory.isNotEmpty())
+    {
+        juce::File folder (directory);
+        REQUIRE (folder.createDirectory().wasOk());
+        auto output = folder.getChildFile ("top-secret-randomizer.png").createOutputStream();
+        REQUIRE (output != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor->createComponentSnapshot (editor->getLocalBounds()), *output));
+    }
+    logoButton->onClick();
+    CHECK (viewport->isVisible());
+    CHECK_FALSE (pad->isVisible());
+    CHECK (patternLength->isVisible());
+    logoButton->onClick();
+    CHECK_FALSE (viewport->isVisible());
+    logoButton->onClick();
+    CHECK (viewport->isVisible());
+    CHECK (pad->isVisible());
+}
+
+TEST_CASE ("Compact controls open both randomizers in menu order", "[native-ui][compact][super-randomizer]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 390, false);
+    editor.setSize (814, 390);
+
+    juce::TextButton* settings = nullptr;
+    juce::TextButton* topSecret = nullptr;
+    juce::TextButton* superSecret = nullptr;
+    juce::Viewport* viewport = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText() == "Settings") settings = button;
+            if (button->getButtonText() == "Top Secret") topSecret = button;
+            if (button->getButtonText() == "Super Secret") superSecret = button;
+        }
+        if (auto* candidate = dynamic_cast<juce::Viewport*> (child))
+            viewport = candidate;
+    }
+    REQUIRE (settings != nullptr);
+    REQUIRE (topSecret != nullptr);
+    REQUIRE (superSecret != nullptr);
+    REQUIRE (viewport != nullptr);
+    auto* randomizer = dynamic_cast<PreviewPanel*> (viewport->getViewedComponent());
+    REQUIRE (randomizer != nullptr);
+
+    settings->onClick();
+    CHECK (topSecret->isVisible());
+    CHECK (superSecret->isVisible());
+    CHECK (topSecret->getRight() < superSecret->getX());
+    topSecret->onClick();
+    CHECK (viewport->isVisible());
+    CHECK (randomizer->isXYRandomizer());
+    PatternXYPad* pad = nullptr;
+    for (auto* child : randomizer->getChildren())
+        if (auto* candidate = dynamic_cast<PatternXYPad*> (child))
+            pad = candidate;
+    REQUIRE (pad != nullptr);
+    CHECK (pad->isVisible());
+    CHECK_FALSE (pad->getBounds().isEmpty());
+    CHECK (viewport->getViewArea().contains (pad->getBounds()));
+    superSecret->onClick();
+    CHECK (viewport->isVisible());
+    CHECK_FALSE (randomizer->isXYRandomizer());
+    CHECK_FALSE (pad->isVisible());
+}
+
+TEST_CASE ("MPC swing input converts decimal percentages and preserves undo", "[native-ui][swing-scale]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("swing", { 28 }));
+    NativeEditor editor (processor);
+    auto* amount = findValueControl (editor, "Amount");
+    REQUIRE (amount != nullptr);
+    amount->displayScale = 0.25;
+    amount->displayOffset = 50.0;
+    amount->displayDecimalPlaces = 2;
+    CHECK (amount->valueText (amount->value) == "57");
+    CHECK (amount->valueText (0) == "50");
+    CHECK (amount->valueText (100) == "75");
+
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), { 4, 4 },
+        juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+        amount, amount, now, { 4, 4 }, now, 2, false);
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    editor.setVisible (true);
+    amount->mouseDoubleClick (event);
+    auto* input = dynamic_cast<juce::TextEditor*> (amount->getChildComponent (0));
+    REQUIRE (input != nullptr);
+    CHECK (input->getText() == "57");
+    input->setText ("57.25");
+    input->onReturnKey();
+    CHECK (editor.controller.state.playback.swing == 29);
+    CHECK (amount->valueText (amount->value) == "57.25");
+    editor.controller.undo();
+    CHECK (editor.controller.state.playback.swing == 28);
+
+    auto handler = amount->createAccessibilityHandler();
+    auto* accessible = handler->getValueInterface();
+    REQUIRE (accessible != nullptr);
+    CHECK (accessible->getCurrentValue() == Catch::Approx (57.0));
+    accessible->setValue (60.0);
+    CHECK (editor.controller.state.playback.swing == 40);
+    editor.controller.undo();
+    CHECK (editor.controller.state.playback.swing == 28);
 }

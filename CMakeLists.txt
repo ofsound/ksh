@@ -172,9 +172,11 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
 target_sources(SharedCode INTERFACE ${SourceFiles})
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     enable_language(OBJCXX)
-    set(KSH_IOS_LIBRARY_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm")
-    set_source_files_properties("${KSH_IOS_LIBRARY_SOURCE}" PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_sources(SharedCode INTERFACE "${KSH_IOS_LIBRARY_SOURCE}")
+    set(KSH_IOS_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSFileDrop.mm")
+    set_source_files_properties(${KSH_IOS_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_sources(SharedCode INTERFACE ${KSH_IOS_SOURCES})
     target_compile_definitions(SharedCode INTERFACE KSH_IOS_ICLOUD_ENABLED=$<BOOL:${KSH_IOS_ICLOUD_ENABLED}>)
     # Both device families and the AUv3 use the same container, independent of
     # the extension's bundle ID. JUCE's generated iCloud entitlements use that ID.
@@ -257,7 +259,13 @@ target_link_libraries(SharedCode
 # Link the JUCE plugin targets our SharedCode target
 target_link_libraries("${PROJECT_NAME}" PRIVATE SharedCode)
 
+include(KshStandaloneLink)
+if (APPLE AND KSH_ABLETON_LINK_SOURCE_DIR AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    enable_language(OBJCXX)
+endif()
+
 if (TARGET "${PROJECT_NAME}_Standalone")
+    ksh_configure_standalone_link("${PROJECT_NAME}_Standalone")
     target_compile_features("${PROJECT_NAME}_Standalone" PRIVATE cxx_std_23)
     target_compile_definitions("${PROJECT_NAME}_Standalone"
         PRIVATE

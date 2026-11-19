@@ -9,7 +9,7 @@ namespace ksh::ui
     class NativeEditor : public juce::Component, private juce::Timer, private juce::ChangeListener, private juce::ScrollBar::Listener
     {
     public:
-        explicit NativeEditor (PluginProcessor&);
+        explicit NativeEditor (PluginProcessor&, std::shared_ptr<juce::PropertiesFile> preferences = {});
         ~NativeEditor() override;
         EditorController controller;
         Layout layout;
@@ -34,13 +34,14 @@ namespace ksh::ui
 
     private:
         LookAndFeel look;
-        std::unique_ptr<juce::PropertiesFile> uiPreferences;
+        std::shared_ptr<juce::PropertiesFile> uiPreferences;
         FooterHelp footerHelp { *this };
-        juce::TextButton tooltipToggle { "Tips" };
-        juce::TextButton rowOrder, cellDisplay, zen { "Zen" };
-        juce::TextButton modifierToggle { "Keys" };
+        juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Graphical values" };
+        juce::TextButton modifierToggle { "Shift/Option shortcuts" };
         juce::TextButton midiOutput { "MIDI Output" };
-        juce::TextButton audioSettings;
+        juce::TextButton settings;
+        juce::TextButton linkSettings { "Link" };
+        bool zenMode = false, lastStandalonePlaying = false, lastStandaloneLaunchPending = false;
         uint32_t lastMidiActivity = 0;
         double lastMidiActivityMs = 0.0;
         PatternGrid grid;
@@ -59,7 +60,7 @@ namespace ksh::ui
         std::array<juce::TextButton, 6> projectButtons;
         juce::Component recordingStrip;
         std::array<RowTriggerButton, 8> recordingPads;
-        RowTriggerButton padVelocityMode { true };
+        PadVelocitySwitch padVelocityMode;
         void syncRecordingPads();
         void layoutRecordingPads();
         void triggerPad (int channel, int velocity = CellDefaults::velocity);
@@ -78,13 +79,13 @@ namespace ksh::ui
         juce::TextButton stop { "Stop" };
         juce::TextButton showPads, showSwing;
         SettingsButton recordQuantize, metronome;
-        juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "DC" };
+        juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "Channel colors" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
         std::bitset<8> heldPads;
         int previousScale = 100;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         bool syncing = false;
-        enum class Panel { none, project, pattern, feel, generate, view, help, channel, tempo };
+        enum class Panel { none, project, pattern, feel, topSecret, superSecret, view, help, channel, tempo };
         Panel panel = Panel::none;
         Panel lastSettingsPanel = Panel::pattern;
         Panel tempoReturnPanel = Panel::none;
@@ -99,13 +100,17 @@ namespace ksh::ui
         juce::TextButton recordOptions { "Timing options..." };
         juce::TextButton phoneTempo, metronomeOptions { "Metronome sound..." };
         juce::Slider tempoFader { juce::Slider::LinearHorizontal, juce::Slider::TextBoxAbove };
-        std::array<juce::TextButton, 6> panelTabs;
+        AccentWordmark phoneAboutWordmark;
+        std::array<juce::TextButton, 7> panelTabs;
         ValueControl loopStart, loopLength;
         NoteInput channelNote;
         juce::TextButton channelReverse { "Reverse" }, channelPing { "Ping-pong" }, channelSolo { "Solo" };
         bool showingCompactPadPreview() const;
+        bool showingRecordingPads() const;
         juce::Rectangle<int> compactPadPreviewBounds() const;
         void paintCompactPadPreview (juce::Graphics&) const;
+        void paintPhoneMenu (juce::Graphics&) const;
+        void layoutPhoneMenu (std::vector<juce::Component*>&);
         void resizedCompact();
         void setupCompactControls();
         void showPanel (Panel);
@@ -118,6 +123,10 @@ namespace ksh::ui
         void updatePatternButtons();
         void configureValue (ValueControl&, const juce::String&, int, int, const std::string&);
         void rateMenu();
+        void settingsMenu();
+        void toggleKeyboardModifiers();
+        void swingMenu();
+        void updateSwingScale();
         void recordingMenu();
         void metronomeMenu (juce::Component&);
         void dragPattern (int source);

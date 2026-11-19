@@ -81,7 +81,6 @@ namespace ksh::ui
         ProjectHeader()
         {
             setWantsKeyboardFocus (false);
-            setMouseCursor (juce::MouseCursor::PointingHandCursor);
             onClick = [this] { if (onDetails) onDetails(); };
         }
         std::function<void()> onDetails;
@@ -96,7 +95,18 @@ namespace ksh::ui
         }
         void paint (juce::Graphics& g) override
         {
-            surface (g, getLocalBounds().toFloat().reduced (0.5f));
+            if (getProperties().contains ("phoneMenuIcon"))
+            {
+                auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+                controlSurface (g, bounds, isDown(), isOver());
+                auto content = bounds.reduced (12, 0);
+                const auto info = content.removeFromRight (24).withSizeKeepingCentre (20, 20);
+                phoneMenu::drawIcon (g, phoneMenu::info, info, Palette::accent);
+                ui::text (g, name, content.withTrimmedRight (8).withTrimmedTop (8).withHeight (28), 20, Palette::text, true, juce::Justification::centredLeft);
+                ui::text (g, "Project details", content.withTrimmedTop (35).withHeight (22), 12, Palette::muted, false, juce::Justification::centredLeft);
+                return;
+            }
+            controlSurface (g, getLocalBounds().toFloat().reduced (0.5f));
             g.setColour (Palette::text);
             g.setFont (font (getHeight() >= 60 ? 18.0f : 13.0f, true));
             g.drawText (name, getLocalBounds().reduced (12, 0), juce::Justification::centredLeft, true);

@@ -7,7 +7,7 @@ using namespace ksh;
 
 TEST_CASE ("Constants match M4L device limits", "[engine][foundation]")
 {
-    REQUIRE (Constants::maxSteps == 32);
+    REQUIRE (Constants::maxSteps == 64);
     REQUIRE (Constants::maxChannels == 8);
     REQUIRE (Constants::sourceCount == 16);
     REQUIRE (Constants::defaultChannelCount == 8);

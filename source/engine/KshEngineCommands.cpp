@@ -144,6 +144,12 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "generated_steps")
+    {
+        engine.setGeneratedStepCount (argInt (args, 0, engine.getGeneratedStepCount()));
+        return true;
+    }
+
     if (selector == "channels")
     {
         engine.setChannelCount (argInt (args, 0, engine.getChannelCount()));

@@ -37,11 +37,13 @@ namespace ksh::ui
             for (auto* button : { &close, &duplicate, &mute })
                 addAndMakeVisible (*button);
             close.setTitle ("Close pattern picker");
-            close.getProperties().set ("icon", "clear");
+            close.getProperties().set ("icon", "close");
             close.onClick = [this] { dismiss(); };
             duplicate.setTitle ("Duplicate pattern");
             duplicate.onClick = [this]
             {
+                if (fullView)
+                    return;
                 if (copySource < 0)
                 {
                     copySource = controller.source();
@@ -74,6 +76,8 @@ namespace ksh::ui
         void open (bool useFullView)
         {
             fullView = useFullView;
+            close.setVisible (!fullView);
+            duplicate.setVisible (!fullView);
             mute.setTitle (fullView ? "Muted Pattern" : "Mute patterns");
             setOpaque (fullView);
             resized();
@@ -112,6 +116,7 @@ namespace ksh::ui
                         hits += state.sources[static_cast<size_t> (i)][static_cast<size_t> (ch)][static_cast<size_t> (step)].enabled ? 1 : 0;
                 tile.hits = hits;
                 tile.current = controller.source() == i;
+                tile.copyDestination = copySource >= 0 && copySource != i;
                 tile.setToggleState (copySource >= 0 ? destination == i : tile.current, juce::dontSendNotification);
                 tile.setEnabled (copySource != i);
                 tile.repaint();
@@ -142,11 +147,9 @@ namespace ksh::ui
             }
             constexpr int columns = 8, rows = 2, gap = 8;
             auto content = getLocalBounds().reduced (12, 8);
-            close.setBounds (content.removeFromTop (44).removeFromRight (44));
+            content.removeFromTop (44);
             auto actions = content.removeFromBottom (44);
             mute.setBounds (actions.removeFromLeft (actions.getWidth() / 3));
-            actions.removeFromLeft (gap);
-            duplicate.setBounds (actions);
             content.reduce (0, gap);
             const int width = content.getWidth() - (columns - 1) * gap;
             const int height = content.getHeight() - (rows - 1) * gap;
@@ -204,12 +207,14 @@ namespace ksh::ui
         {
         public:
             int hits = 0;
-            bool current = false, fullView = false;
+            bool current = false, fullView = false, copyDestination = false;
             void paintButton (juce::Graphics& g, bool hover, bool down) override
             {
                 const auto bounds = getLocalBounds().toFloat();
                 footerSurface (g, bounds.reduced (0.5f), getToggleState(), hover, down, isEnabled());
-                const auto number = getButtonText().paddedLeft ('0', 2);
+                if (copyDestination && hover && isEnabled())
+                    paintPatternCopyOutline (g, bounds);
+                const auto number = fullView ? getButtonText() : getButtonText().paddedLeft ('0', 2);
                 const auto status = hits == 0 ? "Empty" : juce::String (hits) + " hits";
                 const auto ink = isEnabled() ? Palette::text : Palette::muted;
                 if (fullView)

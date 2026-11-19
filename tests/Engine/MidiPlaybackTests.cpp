@@ -60,6 +60,90 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 }
 } // namespace
 
+TEST_CASE ("Spanned rolls play evenly on a swung sixteenth grid", "[engine][transport][realtime][triplets]")
+{
+    const int span = GENERATE (2, 4, 8);
+    const int hits = GENERATE (3, 5);
+    const int blockSize = GENERATE (257, 8192);
+    const auto mode = GENERATE (PlaybackMode::normal, PlaybackMode::reverse, PlaybackMode::ping_pong, PlaybackMode::reverse_ping_pong);
+    const bool reversed = mode == PlaybackMode::reverse || mode == PlaybackMode::reverse_ping_pong;
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (72);
+    fixture.engine.setChannelPlaybackMode (0, mode);
+    fixture.engine.setCell (0, 0, 1, Cell { .enabled = true, .velocity = 79, .cycle = 2, .cycleMask = 1, .roll = hits, .nudge = 10, .span = span });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    std::vector<int> onsets;
+    int cycleVisits = 0;
+    // Use a host tempo different from the snapshot to check beat-relative spacing.
+    constexpr double bpm = 144.0;
+    constexpr int stepSamples = 5000;
+    const int cycleLength = 16 * stepSamples;
+    for (int sample = 0; sample < 2 * cycleLength; sample += blockSize)
+    {
+        const auto result = runPlaybackBlock (runner, snapshot, static_cast<double> (sample) / 20000.0, bpm, true,
+                                              std::min (blockSize, 2 * cycleLength - sample));
+        cycleVisits += static_cast<int> (result.cycleVisitCount);
+        for (const auto event : result.midi)
+            if (event.getMessage().isNoteOn())
+                onsets.push_back (sample + event.samplePosition);
+    }
+    CHECK (cycleVisits == 2);
+    REQUIRE (onsets.size() == static_cast<size_t> (hits));
+    const int leadStep = reversed ? 15 - span : 1;
+    for (int hit = 0; hit < hits; ++hit)
+        CHECK (onsets[static_cast<size_t> (hit)] == leadStep * stepSamples + 500 + static_cast<int> (std::lround (static_cast<double> (stepSamples * span * hit) / hits)));
+}
+
+TEST_CASE ("Spanned rolls respect row and host loop boundaries", "[engine][transport][realtime][triplets]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .roll = 3, .span = 4 });
+    const bool shortened = GENERATE (false, true);
+    if (shortened)
+        fixture.engine.setChannelLoopLength (0, 2);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    const HostLoopRange loop { true, 0.0, 0.5 };
+    std::vector<int> attacks;
+    for (int sample = 0; sample < 24000; sample += 1000)
+    {
+        juce::MidiBuffer midi;
+        runner.processBlock (snapshot, static_cast<double> (sample % 12000) / 24000.0, 120.0, true, 1000, midi, {}, loop);
+        for (const auto event : midi)
+            if (event.getMessage().isNoteOn())
+                attacks.push_back (sample + event.samplePosition);
+    }
+    if (shortened)
+        CHECK (attacks == std::vector<int> { 0, 2000, 4000, 12000, 14000, 16000 });
+    else
+        CHECK (attacks == std::vector<int> { 0, 8000, 12000, 20000 });
+}
+
+TEST_CASE ("Changing the current pattern releases queued hits from a spanned roll", "[engine][transport][realtime][triplets]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .roll = 3, .span = 8 });
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    CHECK (countNoteOns (runPlaybackBlock (runner, fixture.engine.makePlaybackSnapshot(), 0.0, 120.0, true, 6000).midi) == 1);
+    fixture.engine.setStaticSource (1);
+    CHECK (countNoteOns (runPlaybackBlock (runner, fixture.engine.makePlaybackSnapshot(), 0.25, 120.0, true, 36000).midi) == 0);
+}
+
 TEST_CASE ("bipolar cell nudges move every roll hit by a percentage of the step", "[engine][transport][realtime][nudge]")
 {
     const int nudge = GENERATE (-100, -50, -1, 0, 1, 50, 100);
@@ -941,6 +1025,7 @@ TEST_CASE ("midi playback generates refresh windows on the audio thread determin
     EngineFixture fixture;
     fixture.clearAll();
     fixture.engine.setStepCount (8);
+    fixture.engine.setGeneratedStepCount (8);
     fixture.engine.setChannelCount (1);
     fixture.engine.setRate ("16n");
     fixture.engine.setTempo (120.0);
@@ -991,6 +1076,51 @@ TEST_CASE ("midi playback generates refresh windows on the audio thread determin
         sourcesUsed.insert (source);
 
     REQUIRE (sourcesUsed == std::set<int> { 1, 2 });
+}
+
+TEST_CASE ("Generated playback wraps independently while each source keeps its own loop", "[engine][transport][generation]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    auto& engine = fixture.engine;
+    engine.setStepCount (4);
+    engine.setSourceStepCount (1, 7);
+    engine.setChannelCount (2);
+    engine.setGeneratedStepCount (11);
+    engine.setRefreshSteps (5);
+    for (int step = 0; step < 4; ++step)
+        engine.setCell (0, 0, step, Cell { .enabled = true, .velocity = 40 + step });
+    for (int step = 0; step < 7; ++step)
+        engine.setCell (1, 1, step, Cell { .enabled = true, .velocity = 80 + step });
+    engine.setGenerationMode (GENERATE (GenerationMode::stack, GenerationMode::perChannel));
+    engine.setChannelLock (0, 0);
+    engine.setChannelLock (1, 1);
+    auto snapshot = engine.makePlaybackSnapshot();
+    CHECK (snapshot.generated[0][10].velocity == 42);
+    CHECK (snapshot.generated[1][10].velocity == 83);
+
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    for (int step = 0; step < 23; ++step)
+    {
+        if (step == 6)
+        {
+            engine.setStaticSource (1);
+            snapshot = engine.makePlaybackSnapshot();
+            CHECK (snapshot.stepCount == 7);
+            CHECK (snapshot.refreshSteps == 5);
+        }
+        CAPTURE (step);
+        const int outputStep = step % 11;
+        const auto result = runPlaybackBlock (runner, snapshot, step * snapshot.beatsPerStep, 120.0, true, 512);
+        CHECK (result.currentStepOneBased == outputStep + 1);
+        CHECK (result.generatedSourcesChanged == (outputStep % 5 == 0));
+        REQUIRE (result.noteHitCount == 2);
+        CHECK (result.noteHits[0].uiGeneratedStep == outputStep + 1);
+        CHECK (result.noteHits[0].uiSourceStep == (outputStep % 4) + 1);
+        CHECK (result.noteHits[1].uiGeneratedStep == outputStep + 1);
+        CHECK (result.noteHits[1].uiSourceStep == (outputStep % 7) + 1);
+    }
 }
 
 TEST_CASE ("engine mirrors audio-thread generated sources only for its current generation", "[engine][generation]")

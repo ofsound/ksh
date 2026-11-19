@@ -11,7 +11,8 @@ namespace ksh
     public:
         virtual ~StandaloneMidiOutput() = default;
         virtual void prepare (double sampleRate, int maximumBlockSize) = 0;
-        virtual void send (const juce::MidiBuffer&, juce::Optional<juce::uint64> hostTimeNs, int numSamples) = 0;
+        virtual void send (const juce::MidiBuffer&, juce::Optional<juce::uint64> hostTimeNs, int numSamples,
+                           juce::Optional<juce::uint64> presentationTimeNs) = 0;
         virtual void stop() = 0;
     };
 }

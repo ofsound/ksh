@@ -20,6 +20,7 @@ void KickSnareHatEngine::fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const
     snapshot.generationMode = generationMode;
     snapshot.staticSource = staticSource;
     snapshot.stepCount = stepCount;
+    snapshot.generatedStepCount = generatedStepCount;
     snapshot.channelCount = channelCount;
     snapshot.refreshSteps = refreshSteps;
     snapshot.beatsPerStep = beatsPerStep();
@@ -31,10 +32,14 @@ void KickSnareHatEngine::fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const
     snapshot.timingHumanize = timingHumanize;
     snapshot.deviceActive = deviceActive;
     snapshot.hasEarlyCells = false;
+    snapshot.hasSpannedCells = false;
     for (const auto& pattern : sources)
         for (const auto& channel : pattern)
             for (const auto& cell : channel)
+            {
                 snapshot.hasEarlyCells = snapshot.hasEarlyCells || (cell.enabled && cell.nudge < 0);
+                snapshot.hasSpannedCells = snapshot.hasSpannedCells || (cell.enabled && cell.span > 1);
+            }
 }
 
 } // namespace ksh

@@ -2,6 +2,10 @@
 #include <juce_audio_plugin_client/detail/juce_IncludeSystemHeaders.h>
 #include "StandalonePreferences.h"
 #include "StandaloneMidiRouting.h"
+#include "../source/ui/KshFooterMenu.h"
+#if defined (KSH_STANDALONE_LINK)
+ #include "StandaloneLink.h"
+#endif
 #include <juce_audio_plugin_client/detail/juce_IncludeModuleHeaders.h>
 #include <juce_audio_plugin_client/detail/juce_PluginUtilities.h>
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -74,6 +78,12 @@ public:
             updateMidiOutput();
         });
         refreshMidiInputs();
+       #if defined (KSH_STANDALONE_LINK)
+        if (ksh::StandaloneCoreMidiOutput::isAvailable())
+            if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+                link = ksh::StandaloneLink::create (plugin->getStandaloneTempoBpm(), settings);
+        updateLinkOutputLatency (deviceManager.getCurrentAudioDevice());
+       #endif
         installStandaloneServices();
     }
 
@@ -105,14 +115,33 @@ public:
         StandalonePluginHolder::deletePlugin();
     }
 
+#if defined (KSH_STANDALONE_LINK)
+    void setLinkForeground (bool foreground)
+    {
+        if (link != nullptr)
+            link->setForeground (foreground);
+    }
+#endif
+
 private:
-   #if JUCE_IOS
+   #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
     void audioDeviceAboutToStart (AudioIODevice* device) override
     {
         emptyBuffer.setSize (device->getActiveInputChannels().countNumberOfSetBits(), device->getCurrentBufferSizeSamples());
         emptyBuffer.clear();
         player.audioDeviceAboutToStart (device);
         player.setMidiOutput (nullptr);
+       #if defined (KSH_STANDALONE_LINK)
+        updateLinkOutputLatency (device);
+       #endif
+    }
+   #endif
+
+   #if defined (KSH_STANDALONE_LINK)
+    void updateLinkOutputLatency (AudioIODevice* device)
+    {
+        if (link != nullptr && device != nullptr && device->getCurrentSampleRate() > 0.0)
+            link->setOutputLatency (device->getOutputLatencyInSamples() / device->getCurrentSampleRate());
     }
    #endif
 
@@ -124,7 +153,15 @@ private:
             plugin->showStandaloneAudioSettings = [this] { showAudioSettingsDialog(); };
            #endif
             plugin->setTimestampedStandaloneMidiInput (true);
-           #if JUCE_IOS
+           #if defined (KSH_STANDALONE_LINK)
+            if (link != nullptr)
+            {
+                plugin->setStandaloneSync (link.get());
+                plugin->standaloneLinkStatus = [this] { return link->status(); };
+                plugin->showStandaloneLinkSettings = [this] (Component& target) { link->showSettings (target); };
+            }
+           #endif
+           #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
             updateMidiOutput();
            #endif
             plugin->showStandaloneMidiOutputMenu = [this] (Component& target) { showMidiOutputMenu (target); };
@@ -146,6 +183,9 @@ private:
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
         {
             plugin->setStandaloneMidiOutput (nullptr);
+            plugin->setStandaloneSync (nullptr);
+            plugin->showStandaloneLinkSettings = {};
+            plugin->standaloneLinkStatus = {};
             plugin->showStandaloneMidiOutputMenu = {};
             plugin->showStandaloneAudioSettings = {};
             plugin->standaloneMidiOutputName = {};
@@ -182,11 +222,7 @@ private:
         const Component::SafePointer<Component> menuTarget (&target);
        #endif
         const WeakReference<KshStandalonePluginHolder> weak (this);
-        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&target)
-                               .withParentComponent (target.getTopLevelComponent())
-                               .withStandardItemHeight (44)
-                               .withMinimumWidth (260)
-                               .withMaximumNumColumns (1), [weak, destinations
+        menu.showMenuAsync (ksh::ui::footerMenuOptions (target), [weak, destinations
                               #if JUCE_IOS
                                , menuTarget
                               #endif
@@ -220,7 +256,7 @@ private:
     {
         // Detach and flush the old route before the manager closes it.
         player.setMidiOutput (nullptr);
-       #if JUCE_IOS
+       #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
             plugin->setStandaloneMidiOutput (nullptr);
        #endif
@@ -266,6 +302,9 @@ private:
 
     void changeListenerCallback (ChangeBroadcaster*) override
     {
+       #if defined (KSH_STANDALONE_LINK)
+        updateLinkOutputLatency (deviceManager.getCurrentAudioDevice());
+       #endif
         refreshMidiInputs();
         updateMidiOutput();
     }
@@ -300,7 +339,14 @@ private:
         // priority over the local virtual source. JUCE persists this selection.
         auto* selected = deviceManager.getDefaultMidiOutput();
         auto* output = selected != nullptr ? selected : virtualMidiOutput.get();
-       #if JUCE_IOS
+       #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
+        if (!ksh::StandaloneCoreMidiOutput::isAvailable())
+        {
+            if (output != nullptr && !output->isBackgroundThreadRunning())
+                output->startBackgroundThread();
+            player.setMidiOutput (output);
+            return;
+        }
         // CoreMIDI receives audio-clock timestamps directly. Never let the
         // AudioProcessorPlayer also send the same block via its timer queue.
         player.setMidiOutput (nullptr);
@@ -313,6 +359,9 @@ private:
                 const auto error = nativeMidiOutput.open (info, selected == nullptr);
                 if (error.isNotEmpty())
                 {
+                    if (!output->isBackgroundThreadRunning())
+                        output->startBackgroundThread();
+                    player.setMidiOutput (output);
                     AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output", error);
                     return;
                 }
@@ -346,8 +395,13 @@ private:
     MidiDeviceInfo virtualOutputInfo { virtualMidiOutputName, {} };
     MidiDeviceListConnection midiDeviceChanges;
     const bool autoOpenExternalMidiDevices;
+   #if defined (KSH_STANDALONE_LINK)
+    std::unique_ptr<ksh::StandaloneLink> link;
+   #endif
+   #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
+    ksh::StandaloneCoreMidiOutput nativeMidiOutput;
+   #endif
    #if JUCE_IOS
-    ksh::StandaloneIOSMidiOutput nativeMidiOutput;
     ksh::StandaloneNetworkMidiForwarder networkForwarder;
     bool networkOutputSelected = false;
     String networkForwardingError;
@@ -477,11 +531,17 @@ public:
    #if JUCE_IOS
     void resumed() override
     {
+       #if defined (KSH_STANDALONE_LINK)
+        setLinkForeground (true);
+       #endif
         updateFullscreenSystemGestures();
     }
 
     void suspended() override
     {
+       #if defined (KSH_STANDALONE_LINK)
+        setLinkForeground (false);
+       #endif
         // iOS may terminate a backgrounded app without calling shutdown().
         saveCurrentPluginState();
         appProperties.saveIfNeeded();
@@ -511,6 +571,15 @@ protected:
 
 private:
    #if JUCE_IOS
+   #if defined (KSH_STANDALONE_LINK)
+    void setLinkForeground (bool foreground)
+    {
+        auto* holder = mainWindow != nullptr ? mainWindow->getPluginHolder() : pluginHolder.get();
+        if (auto* standalone = dynamic_cast<KshStandalonePluginHolder*> (holder))
+            standalone->setLinkForeground (foreground);
+    }
+   #endif
+
     void updateFullscreenSystemGestures()
     {
         auto* peer = mainWindow != nullptr ? mainWindow->getPeer() : nullptr;

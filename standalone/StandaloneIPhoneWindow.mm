@@ -45,17 +45,22 @@ void kshDeferIPhoneEdgeGestures (void* nativeView)
     if (content == nil || [content isKindOfClass: [KshStandaloneIPhoneController class]])
         return;
 
-    // Keep JUCE's controller in the hierarchy for rotation, layout and input.
+    // UIKit requires the old controller to leave the window before it can become a child.
     auto* wrapper = [[KshStandaloneIPhoneController alloc] init];
+   #if ! __has_feature(objc_arc)
+    [content retain];
+   #endif
+    window.rootViewController = nil;
     [wrapper addChildViewController: content];
-    window.rootViewController = wrapper;
     content.view.frame = wrapper.view.bounds;
     content.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [wrapper.view addSubview: content.view];
     [content didMoveToParentViewController: wrapper];
+    window.rootViewController = wrapper;
     [wrapper setNeedsUpdateOfScreenEdgesDeferringSystemGestures];
 
    #if ! __has_feature(objc_arc)
+    [content release];
     [wrapper release];
    #endif
 }

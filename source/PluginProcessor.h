@@ -3,6 +3,7 @@
 #include "KshUiBridge.h"
 #include "platform/KshIOSProjectLibrary.h"
 #include "platform/StandaloneMidiOutput.h"
+#include "platform/StandaloneSync.h"
 #include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
 #include "engine/KshMidiPlayback.h"
@@ -119,10 +120,14 @@ public:
     // Message-thread services supplied by the standalone wrapper, never used by processBlock.
     std::function<void (juce::Component&)> showStandaloneMidiOutputMenu;
     std::function<void()> showStandaloneAudioSettings;
+    std::function<void (juce::Component&)> showStandaloneLinkSettings;
+    std::function<ksh::StandaloneLinkStatus()> standaloneLinkStatus;
+    void setStandaloneSync (ksh::StandaloneSync*);
+    bool isStandaloneLaunchPending() const { return standaloneLaunchPending.load (std::memory_order_relaxed); }
     std::function<juce::String()> standaloneMidiOutputName;
     // Call only from the standalone holder, off the audio thread.
     void setStandaloneMidiOutput (ksh::StandaloneMidiOutput*);
-    void setStandaloneTransportPlaying (bool shouldPlay);
+    void setStandaloneTransportPlaying (bool shouldPlay, bool shareWithPeers = true);
     bool isStandaloneTransportPlaying() const;
     void setStandaloneTempoBpm (double bpm);
     double getStandaloneTempoBpm();
@@ -178,8 +183,8 @@ public:
 
 private:
     ksh::StandaloneMidiOutput* standaloneMidiOutput = nullptr;
-    void sendStandaloneMidiOutput (const juce::MidiBuffer&, int numSamples);
-    void renderStandaloneMetronome (juce::AudioBuffer<float>&, double ppq, double bpm, bool playing, bool reset);
+    void sendStandaloneMidiOutput (const juce::MidiBuffer&, int numSamples, juce::Optional<juce::uint64> presentationTimeNs = {});
+    void renderStandaloneMetronome (juce::AudioBuffer<float>&, double ppq, double bpm, bool playing, bool reset, int firstPlaybackSample);
     friend class PluginProcessorTestPeer;
    #if JUCE_IOS
     std::shared_ptr<ksh::IOSProjectLibrary> iosProjectLibrary;
@@ -199,6 +204,8 @@ private:
         bool playing = false;
         ksh::HostLoopRange loop;
         uint64_t documentEpoch = 0, transportGeneration = 0;
+        double linkStartMs = 0.0;
+        bool containsTime (double timestampMs) const;
     };
     struct StandaloneRecordInput
     {
@@ -243,7 +250,8 @@ private:
                            bool isPlaying,
                            ksh::MidiPatternSelectionBlock& selections, ksh::HostLoopRange loop);
     juce::MidiBuffer& reservedMidiOutputBuffer();
-    void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying, ksh::HostLoopRange loop);
+    void publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying, ksh::HostLoopRange loop,
+                                               juce::Optional<juce::uint64> presentationTimeNs, int firstPlaybackSample);
     void consumeStandaloneRecording (const ksh::PlaybackSnapshot&);
     void applyRecordingMonitors (double ppq, double bpm, ksh::HostLoopRange loop);
     void drainPendingMidiPatternSelectionsLocked();
@@ -267,7 +275,8 @@ private:
     std::atomic<bool> suppressEngineCallbacks { false };
 
     // Message thread builds the engine + snapshot; the audio thread only reads the published snapshot.
-    RealtimeMailbox<ksh::PlaybackSnapshot> playbackMailbox;
+    const std::unique_ptr<RealtimeMailbox<ksh::PlaybackSnapshot>> playbackMailbox =
+        std::make_unique<RealtimeMailbox<ksh::PlaybackSnapshot>>();
     unsigned long lastPublishedSnapshotVersion = 0; // message-thread only
 
     // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
@@ -294,6 +303,8 @@ private:
     std::atomic<bool> documentModified { false };
     std::atomic<bool> hostStateChangePending { false };
     double lastHostStateChangeNotifyMs = 0.0; // message-thread only
+    ksh::StandaloneSync* standaloneSync = nullptr;
+    std::atomic<bool> standaloneLaunchPending { false };
     std::atomic<int> standaloneTransportPlaying { 0 };
     std::atomic<double> standaloneTransportPpqPosition { 0.0 };
     std::atomic<int> standaloneTransportResetRequested { 0 };
@@ -319,6 +330,7 @@ private:
     size_t recordingClockHistoryIndex = 0; // audio-thread only
     uint64_t recordingTransportGeneration = 0;
     double recordingExpectedNextPpq = 0.0;
+    double linkRecordingStartMs = 0.0;
     bool recordingClockInitialized = false, recordingClockWasPlaying = false;
     double recordingSampleRate = 44100.0; // set in prepareToPlay, read by the audio thread
     std::atomic<bool> timestampedStandaloneMidiInput { false };

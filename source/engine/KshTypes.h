@@ -101,6 +101,7 @@ struct Cell
     int nudge = 0; // Signed percent of one step; negative plays early.
     int source = -1;
     int sourceStep = 0;
+    int span = 1; // Grid steps occupied by this roll.
 
     [[nodiscard]] bool operator== (const Cell&) const = default;
 };
@@ -115,6 +116,7 @@ struct CellDefaults
     static constexpr int roll = 1;
     static constexpr int nudge = 0;
     static constexpr int source = -1;
+    static constexpr int span = 1;
 };
 
 [[nodiscard]] inline Cell defaultCell()
@@ -175,6 +177,7 @@ inline constexpr int maxCycleMaskBits = 30;
     out.nudge = clampInt (cell.nudge, -100, 100);
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;
+    out.span = clampInt (cell.span, 1, Constants::maxSteps);
     return out;
 }
 
@@ -197,6 +200,19 @@ struct LoopRange
 
     [[nodiscard]] bool operator== (const LoopRange&) const = default;
 };
+
+// A span owns empty steps on its right. If a loop edit or another hit takes
+// those steps, retain the saved span and use an ordinary roll until it fits.
+[[nodiscard]] inline bool rollSpanFits (const std::array<Cell, Constants::maxSteps>& row,
+                                       LoopRange loop, int step, int span)
+{
+    if (step < loop.loopStart || step + span > loop.loopStart + loop.loopLength)
+        return false;
+    for (int next = step + 1; next < step + span; ++next)
+        if (row[static_cast<size_t> (next)].enabled)
+            return false;
+    return true;
+}
 
 [[nodiscard]] inline Channel defaultChannel (int index)
 {

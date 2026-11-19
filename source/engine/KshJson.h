@@ -19,6 +19,8 @@ inline void to_json (nlohmann::json& json, const Cell& cell)
         { "nudge", cell.nudge },
         { "source", cell.source }
     };
+    if (cell.span != CellDefaults::span)
+        json["span"] = cell.span;
 }
 
 inline void from_json (const nlohmann::json& json, Cell& cell)
@@ -61,6 +63,7 @@ inline void from_json (const nlohmann::json& json, Cell& cell)
         cell.roll = json["roll"].get<int>();
 
     cell.nudge = json.value ("nudge", 0);
+    cell.span = json.value ("span", CellDefaults::span);
 
     if (json.contains ("source"))
         cell.source = json["source"].get<int>();

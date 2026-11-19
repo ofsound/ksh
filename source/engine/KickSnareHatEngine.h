@@ -42,6 +42,7 @@ struct EngineCallbacks
 struct DocumentSettings
 {
     int stepCount = 16;
+    int generatedStepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 16;
     GenerationMode generationMode = GenerationMode::staticSource;
@@ -79,6 +80,7 @@ struct DocumentState
 struct EngineStateSnapshot
 {
     int stepCount = 16;
+    int generatedStepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 16;
     GenerationMode generationMode = GenerationMode::staticSource;
@@ -109,6 +111,7 @@ public:
 
     [[nodiscard]] EngineStateSnapshot stateSnapshot() const;
     [[nodiscard]] int getStepCount() const { return stepCount; }
+    [[nodiscard]] int getGeneratedStepCount() const { return generatedStepCount; }
     [[nodiscard]] int getChannelCount() const { return channelCount; }
     [[nodiscard]] int getRefreshSteps() const { return refreshSteps; }
     [[nodiscard]] int getSourceStepCount (int source) const;
@@ -144,6 +147,7 @@ private:
     };
 
     int stepCount = 16;
+    int generatedStepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 16;
     GenerationMode generationMode = GenerationMode::staticSource;
@@ -172,6 +176,7 @@ private:
 
 public:
     void setStepCount (int count);
+    void setGeneratedStepCount (int count);
     void setChannelCount (int count);
     void setRefreshSteps (int count);
     void setSourceStepCount (int source, int count);
@@ -214,6 +219,7 @@ public:
                   std::optional<bool> legacyInverted,
                   std::optional<int> roll);
 
+    void setCell (int source, int channel, int step, const Cell& value);
     void setCellEnabled (int source, int channel, int step, bool enabled);
     void setCellVelocity (int source, int channel, int step, int velocity);
     void setCellProbability (int source, int channel, int step, int probability);
@@ -229,7 +235,6 @@ public:
     void copySourcePattern (int source, int destination);
 
     void generateWindow (int startStep, int length, bool forceEmit = false);
-    void recomposeWindow (int startStep, int length, bool forceEmit = false);
     void reset();
     void resetPlayback (bool emitStatus = true);
 
@@ -276,6 +281,8 @@ private:
     void initChannels();
     void initSources();
     [[nodiscard]] int activeSettingsSource() const;
+    [[nodiscard]] int generatedBufferLength() const;
+    void recomposeGenerated();
     void applyActiveSourceSettings();
     double nextRandom() const;
     template <typename MakeMessage>

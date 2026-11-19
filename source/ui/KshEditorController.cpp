@@ -5,12 +5,15 @@ namespace ksh::ui
 {
     namespace
     {
-        constexpr int cellCount = Constants::sourceCount * Constants::maxChannels * Constants::maxSteps;
+        constexpr int cellCount = Constants::sourceCount * Constants::cellsPerPattern;
 
         template <typename Document>
         auto& cellAt (Document& document, int index)
         {
-            return document.sources[static_cast<size_t> (index / 256)][static_cast<size_t> (index / 32 % 8)][static_cast<size_t> (index % 32)];
+            const auto inPattern = index % Constants::cellsPerPattern;
+            return document.sources[static_cast<size_t> (index / Constants::cellsPerPattern)]
+                                   [static_cast<size_t> (inPattern / Constants::maxSteps)]
+                                   [static_cast<size_t> (inPattern % Constants::maxSteps)];
         }
 
         // Undo compares stored values exactly, so floating-point fields are compared bit-for-bit on purpose.
@@ -38,12 +41,14 @@ namespace ksh::ui
             visit (target.cycleMask, a.cycleMask, b.cycleMask);
             visit (target.roll, a.roll, b.roll);
             visit (target.nudge, a.nudge, b.nudge);
+            visit (target.span, a.span, b.span);
         }
 
         template <typename Visit>
         void visitSettings (DocumentSettings& target, const DocumentSettings& a, const DocumentSettings& b, Visit&& visit)
         {
             visit (target.stepCount, a.stepCount, b.stepCount);
+            visit (target.generatedStepCount, a.generatedStepCount, b.generatedStepCount);
             visit (target.channelCount, a.channelCount, b.channelCount);
             visit (target.refreshSteps, a.refreshSteps, b.refreshSteps);
             visit (target.generationMode, a.generationMode, b.generationMode);
@@ -98,17 +103,18 @@ namespace ksh::ui
         processor.getUiBridge().onNoteHit = [this] (const NativeHit& hit) {
             const auto until = juce::Time::getMillisecondCounterHiRes() + 200.0;
             const auto row = hit.uiChannel - 1;
-            if (row < 0 || row >= 8)
+            if (row < 0 || row >= Constants::maxChannels)
                 return;
-            if (hit.uiGeneratedStep > 0 && hit.uiGeneratedStep <= 32)
+            if (hit.uiGeneratedStep > 0 && hit.uiGeneratedStep <= Constants::maxSteps)
                 generatedFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiGeneratedStep - 1)] = until;
-            if (hit.uiSource == source() + 1 && hit.uiSourceStep > 0 && hit.uiSourceStep <= 32)
+            if (hit.uiSource == source() + 1 && hit.uiSourceStep > 0 && hit.uiSourceStep <= Constants::maxSteps)
             {
                 sourceFlashes[static_cast<size_t> (row)][static_cast<size_t> (hit.uiSourceStep - 1)] = juce::Time::getMillisecondCounterHiRes() + sourceFlashDurationMs;
             }
         };
         processor.getUiBridge().onCycleVisit = [this] (const NativeCycleVisit& visit) {
-            if (visit.source != source() + 1 || visit.channel < 1 || visit.channel > 8 || visit.step < 1 || visit.step > 32)
+            if (visit.source != source() + 1 || visit.channel < 1 || visit.channel > Constants::maxChannels
+                || visit.step < 1 || visit.step > Constants::maxSteps)
                 return;
             const auto row = static_cast<size_t> (visit.channel - 1);
             const auto step = static_cast<size_t> (visit.step - 1);
@@ -136,8 +142,11 @@ namespace ksh::ui
         std::vector<Location> result;
         for (int ch = 0; ch < state.playback.channelCount; ++ch)
             for (int step = 0; step < state.playback.stepCount; ++step)
-                if (selected.test (static_cast<size_t> (ch * 32 + step)) && (!enabledOnly || cell ({ ch, step }).enabled))
-                    result.push_back ({ ch, step });
+            {
+                const Location location { ch, step };
+                if (selected.test (static_cast<size_t> (location.key())) && (!enabledOnly || cell (location).enabled))
+                    result.push_back (location);
+            }
         return result;
     }
     void EditorController::finishParameter()
@@ -289,7 +298,7 @@ namespace ksh::ui
         recordingEntry.label = "Record pattern";
         for (const auto& edit : edits.cells)
         {
-            const int index = edit.source * 256 + edit.channel * 32 + edit.step;
+            const int index = edit.source * Constants::cellsPerPattern + Location { edit.channel, edit.step }.key();
             const auto existing = std::find_if (recordingEntry.cells.begin(), recordingEntry.cells.end(),
                                                [index] (const auto& change) { return change.index == index; });
             if (existing == recordingEntry.cells.end())
@@ -435,18 +444,37 @@ namespace ksh::ui
     }
     void EditorController::moveSelection (Location anchor, Location target, bool copy)
     {
+        if (source() < 0)
+            return;
         const auto locations = selection();
-        std::vector<Cell> values;
+        std::vector<std::pair<Location, Cell>> destinations;
         for (auto p : locations)
-            values.push_back (cell (p));
+        {
+            const Location destination { wrap (target.channel + p.channel - anchor.channel, state.playback.channelCount),
+                                         wrap (target.step + p.step - anchor.step, state.playback.stepCount) };
+            destinations.emplace_back (destination, cell (p));
+        }
+        const auto isSpanned = [] (const auto& entry) { return entry.second.enabled && entry.second.span > 1; };
+        if (std::any_of (destinations.begin(), destinations.end(), isSpanned))
+        {
+            auto pattern = state.playback.sources[static_cast<size_t> (source())];
+            if (!copy)
+                for (auto p : locations)
+                    pattern[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] = {};
+            for (const auto& [p, value] : destinations)
+                pattern[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] = value;
+            for (const auto& [p, value] : destinations)
+                if (value.enabled && value.span > 1
+                    && !rollSpanFits (pattern[static_cast<size_t> (p.channel)], loop (p.channel), p.step, value.span))
+                    return;
+        }
         if (!copy)
             for (auto p : locations)
                 editCell (p, {});
         selected.reset();
-        for (size_t i = 0; i < locations.size(); ++i)
+        for (const auto& [destination, value] : destinations)
         {
-            Location destination { wrap (target.channel + locations[i].channel - anchor.channel, state.playback.channelCount), wrap (target.step + locations[i].step - anchor.step, state.playback.stepCount) };
-            editCell (destination, values[i]);
+            editCell (destination, value);
             selected.set (static_cast<size_t> (destination.key()));
         }
     }
@@ -472,7 +500,7 @@ namespace ksh::ui
         if (source() < 0)
             return;
         begin ("Clear channel");
-        for (int i = 0; i < 32; ++i)
+        for (int i = 0; i < Constants::maxSteps; ++i)
             editCell ({ ch, i }, {});
         commit();
     }

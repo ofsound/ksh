@@ -10,11 +10,11 @@ namespace ksh::ui
     struct Location
     {
         int channel = -1, step = -1;
-        bool valid() const { return channel >= 0 && channel < 8 && step >= 0 && step < 32; }
-        int key() const { return channel * 32 + step; }
+        bool valid() const { return channel >= 0 && channel < Constants::maxChannels && step >= 0 && step < Constants::maxSteps; }
+        int key() const { return channel * Constants::maxSteps + step; }
         bool operator== (const Location&) const = default;
     };
-    using Selection = std::bitset<256>;
+    using Selection = std::bitset<Constants::cellsPerPattern>;
     inline int wrap (int value, int size) { return ((value % size) + size) % size; }
     inline int jsRound (double value) { return static_cast<int> (std::floor (value + 0.5)); }
     inline int dragOffset (float delta, float sensitivity, float deadZone = 4.0f)
@@ -100,8 +100,8 @@ namespace ksh::ui
         int copySource = -1;
         std::function<void()> changed;
         static constexpr double sourceFlashDurationMs = 80.0;
-        std::array<std::array<double, 32>, 8> sourceFlashes {}, generatedFlashes {}, sourceCycleFlashes {};
-        std::array<std::array<int, 32>, 8> sourceCycleSteps {};
+        std::array<std::array<double, Constants::maxSteps>, Constants::maxChannels> sourceFlashes {}, generatedFlashes {}, sourceCycleFlashes {};
+        std::array<std::array<int, Constants::maxSteps>, Constants::maxChannels> sourceCycleSteps {};
         int playingStep = 0;
         int playingGlobalStep = 0;
 
@@ -143,7 +143,7 @@ namespace ksh::ui
     private:
         struct CellChange
         {
-            int index = 0; // source * 256 + channel * 32 + step
+            int index = 0; // source * cellsPerPattern + Location::key()
             Cell before, after;
         };
         // Settings are small enough to keep whole; cells keep only what the gesture changed.

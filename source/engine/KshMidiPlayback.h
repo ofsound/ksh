@@ -107,7 +107,8 @@ public:
                                      const MidiPatternSelectionBlock& patternSelections = {},
                                      const HostLoopRange& hostLoop = {},
                                      double callbackTimeMs = 0.0,
-                                     std::optional<int> endGlobalStepExclusive = std::nullopt);
+                                     std::optional<int> endGlobalStepExclusive = std::nullopt,
+                                     int firstPlaybackSample = 0);
 
     /** Sources currently chosen for generative modes, tagged with the engine generation they extend. */
     [[nodiscard]] GeneratedSourcesFrame generatedSourcesFrame() const;
@@ -127,6 +128,7 @@ private:
     {
         int64_t samplePosition = 0;
         NativeHit hit {};
+        int span = 1;
     };
 
     static constexpr size_t maxPendingNoteOffs =
@@ -192,23 +194,24 @@ private:
                              MidiPlaybackResult& result,
                              int staticSourceOverride,
                              double stepDurationMs,
-                             int earliestHitSample = 0);
+                             int earliestHitSample,
+                             int spanEndSample);
     void scheduleHit (int stepSampleOffset,
                       int numSamples,
                       const NativeHit& hit,
                       juce::MidiBuffer& midiOut,
                       MidiPlaybackResult& result,
-                      int earliestHitSample);
+                      int earliestHitSample,
+                      int span);
     void emitHitAtSample (int onSample,
                           int numSamples,
                           const NativeHit& hit,
                           juce::MidiBuffer& midiOut,
                           MidiPlaybackResult& result);
-    void flushPendingNoteOns (int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result);
+    void flushPendingNoteOns (const PlaybackSnapshot&, int activeSource, int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result);
     void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
     void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi, double callbackTimeMs);
     void addPendingNoteOff (int sampleOffset, int midiChannel, int pitch);
-    void addPendingNoteOn (int sampleOffset, const NativeHit& hit);
 
     moodycamel::ReaderWriterQueue<MidiNoteEvent> pendingAuditions { 64 };
 };

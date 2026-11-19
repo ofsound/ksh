@@ -15,9 +15,13 @@ namespace ksh::ui
         std::function<void (int)> rowTriggered;
         std::function<void()> layerChanged;
         std::function<void (int, juce::Component&)> noteChooserRequested;
+        std::function<void (int, juce::Component&)> trackColourRequested;
         std::function<void (int)> scrollRows;
+        std::function<void (Location)> revealKeyboardCell;
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
         bool copySelection = false;
+        void setPresetPreferences (juce::PropertiesFile& preferences) { presetPreferences = &preferences; }
+        void showSelectedRhythmPresets();
         void sync();
         juce::Rectangle<float> loopHandleBounds (int channel, bool end, bool touch) const;
         void updatePlayback();
@@ -26,6 +30,10 @@ namespace ksh::ui
         NoteInput& rowNoteInput (int channel) { return rows[static_cast<size_t> (channel)].note; }
         juce::Component* rowTitle (int channel) { return juce::isPositiveAndBelow (channel, static_cast<int> (rows.size())) ? &rows[static_cast<size_t> (channel)].label : nullptr; }
         void paint (juce::Graphics&) override;
+        void paintOverChildren (juce::Graphics&) override;
+        void visibilityChanged() override;
+        void focusLost (FocusChangeType) override;
+        bool keyPressed (const juce::KeyPress&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
@@ -35,6 +43,7 @@ namespace ksh::ui
         void mouseExit (const juce::MouseEvent&) override;
         void modifierKeysChanged (const juce::ModifierKeys&) override;
         void cancelGesture();
+        void finishVelocityDrawing();
         bool dismissCyclePopup (bool commitPendingClick = false);
         bool handleCellPopupMouseDown (const juce::Component* clicked);
         bool hasActiveGesture() const;
@@ -46,6 +55,7 @@ namespace ksh::ui
 
     private:
         EditorController& controller;
+        juce::PropertiesFile* presetPreferences = nullptr;
         static constexpr float selectionGlowExtent = 20.0f;
         // Share the cached, position-independent blur across equal-sized cells.
         melatonin::DropShadow selectionGlow {
@@ -53,15 +63,23 @@ namespace ksh::ui
             { Palette::text.withAlpha (0.55f), 5 }
         };
         Location cellAt (juce::Point<float>) const;
+        Location coveringSpan (Location) const;
+        int displayedSpan (Location) const;
+        bool canFitSpan (Location, int span) const;
         juce::Rectangle<float> cellPaintBounds (Location) const;
         int playbackPositionForCell (Location) const;
         double displayedSwingDelay (Location, double part = 0.0) const;
+        Location keyboardCell;
+        bool handleCellKey (Location, const juce::KeyPress&);
+        void toggleCell (Location);
+        void toggleCellsFromClick (Location, bool wholeSelection);
         class AccessibleCell : public juce::Button
         {
         public:
             AccessibleCell() : juce::Button ("Cell") { setInterceptsMouseClicks (false, false); }
             std::function<bool (const juce::KeyPress&)> navigate;
-            bool keyPressed (const juce::KeyPress& key) override { return (navigate && navigate (key)) || juce::Button::keyPressed (key); }
+            bool keyPressed (const juce::KeyPress& key) override { return navigate && navigate (key); }
+            bool keyStateChanged (bool) override { return false; }
             void paintButton (juce::Graphics& g, bool, bool) override
             {
                 if (hasKeyboardFocus (false))
@@ -71,11 +89,11 @@ namespace ksh::ui
                 }
             }
         };
-        std::array<AccessibleCell, 256> accessibleCells;
+        std::array<AccessibleCell, Constants::cellsPerPattern> accessibleCells;
         struct Row
         {
-            juce::TextButton clear { juce::String::fromUTF8 ("×") }, reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") };
-            GestureButton mute { juce::String::fromUTF8 ("⏻") };
+            juce::TextButton clear { juce::String::fromUTF8 ("×") };
+            RowPlaybackButton reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") }, mute { juce::String::fromUTF8 ("⏻") };
             RowTriggerButton label;
             ClearFlash clearFlash { clear };
             NoteInput note;
@@ -99,7 +117,8 @@ namespace ksh::ui
             copy,
             loopStart,
             loopEnd,
-            velocityLine };
+            velocityLine,
+            velocityDraw };
         Drag drag = Drag::none;
         Location anchor, target;
         struct VelocityEdge
@@ -110,21 +129,56 @@ namespace ksh::ui
         };
         std::optional<VelocityEdge> hoverEdge;
         std::optional<VelocityEdge> pendingVelocityEdge;
+        struct VelocityTap
+        {
+            VelocityEdge edge;
+            Location cell;
+            juce::Time time;
+            bool touch;
+        };
+        std::optional<VelocityTap> velocityTap;
+        juce::TimedCallback velocityTapTimer { [this] { finishVelocityTap(); } };
+        std::optional<juce::Point<float>> velocityDrawPoint;
+        bool velocityDrawTouchTap = false;
         struct PresetPress
         {
             Location location;
             juce::Point<float> position;
             int source;
             uint64_t epoch;
+            bool allowEmpty = false;
         };
         std::optional<PresetPress> presetPress;
+        juce::TimedCallback presetHoldTimer { [this] { openHeldPreset(); } };
+        void cancelPresetHold();
+        void openHeldPreset();
         std::optional<PresetPress> cyclePress;
+        enum class CycleTapAction { none, toggle, select, deselect };
+        struct CycleTap
+        {
+            PresetPress press;
+            Cell cell;
+            Selection selection;
+            juce::Time time;
+            CycleTapAction singleClick;
+            bool touch;
+        };
+        std::optional<CycleTap> cycleTap;
+        juce::TimedCallback cycleTapTimer { [this] { finishCycleTap(); } };
+        bool canClickCycleStrip (const juce::ModifierKeys&) const;
+        bool cycleStripContains (Location, juce::Point<float>) const;
+        void queueCycleTap (PresetPress, const juce::MouseEvent&, CycleTapAction);
+        bool isCycleResetClick (const juce::MouseEvent&) const;
+        void cancelCycleTap();
+        void finishCycleTap (bool reset = false);
         class PresetMenu;
         std::unique_ptr<PresetMenu> presetMenu;
         class CyclePopup;
         std::unique_ptr<CyclePopup> cyclePopup;
         bool canSetPreset (const PresetPress&) const;
-        void showCellPresets (PresetPress, bool touch);
+        int spanForPreset (int id) const;
+        bool canApplyPreset (const PresetPress&, int id) const;
+        void showCellPresets (PresetPress, bool touch, bool rhythmOnly = false);
         void applyCellPreset (const PresetPress&, int result);
         juce::Point<float> hoverPosition;
         bool hoverMarkerVisible = false, pointerInGrid = false;
@@ -143,10 +197,10 @@ namespace ksh::ui
         };
         std::optional<HandleClick> lastHandleClick;
         juce::ModifierKeys modifiers;
-        std::array<std::array<bool, 32>, 8> lastFlash {};
+        std::array<std::array<bool, Constants::maxSteps>, Constants::maxChannels> lastFlash {};
         bool mutePainting = false, muteValue = false;
-        std::array<Cell, 256> displayedCells {};
-        std::array<juce::Rectangle<float>, 256> displayedPaintBounds {};
+        std::array<Cell, Constants::cellsPerPattern> displayedCells {};
+        std::array<juce::Rectangle<float>, Constants::cellsPerPattern> displayedPaintBounds {};
         std::pair<int, int> displayedSwing { -1, -1 };
         Selection displayedSelection;
         std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
@@ -178,6 +232,10 @@ namespace ksh::ui
         std::optional<VelocityEdge> nearestVelocityEdge (int channel, float x, bool start, float distance, bool touch = false) const;
         VelocityEdge velocityLineEnd() const;
         void beginVelocityLine (VelocityEdge);
+        void finishVelocityTap();
+        void beginVelocityDrawing (VelocityEdge);
+        juce::Rectangle<float> velocityDrawingBounds() const;
+        void drawVelocity (juce::Point<float>);
         void clearHoverMarker();
         void prepareProbabilityLabels (float size);
         void timerCallback() override;

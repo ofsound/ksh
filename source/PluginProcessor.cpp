@@ -274,7 +274,7 @@ void PluginProcessor::refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnaps
 
 void PluginProcessor::publishPlaybackSnapshotLocked()
 {
-    playbackMailbox.publishWith ([this] (ksh::PlaybackSnapshot& snapshot)
+    playbackMailbox->publishWith ([this] (ksh::PlaybackSnapshot& snapshot)
                                  {
                                      engine.fillPlaybackSnapshot (snapshot);
                                      refreshAuditionCacheFromSnapshot (snapshot);
@@ -397,7 +397,7 @@ void PluginProcessor::runMessageThreadWork()
             engine.flushPreview();
 
         // Keep all mailbox producer operations serialized with host state restore.
-        playbackMailbox.drainRetired();
+        playbackMailbox->drainRetired();
     }
 
     emitPendingNoteHitsForUi();
@@ -514,6 +514,7 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     midiPlayback.prepare (recordingSampleRate);
     recordingClockHistory.fill ({});
     recordingClockHistoryIndex = 0;
+    linkRecordingStartMs = 0.0;
     recordingClockInitialized = false;
     patternRecordTransport.publish ({});
 
@@ -546,7 +547,14 @@ void PluginProcessor::setStandaloneMidiOutput (ksh::StandaloneMidiOutput* output
         standaloneMidiOutput->prepare (recordingSampleRate, getBlockSize());
 }
 
-void PluginProcessor::sendStandaloneMidiOutput (const juce::MidiBuffer& midi, int numSamples)
+void PluginProcessor::setStandaloneSync (ksh::StandaloneSync* sync)
+{
+    const juce::ScopedLock lock (getCallbackLock());
+    standaloneSync = hasStandaloneTransport() ? sync : nullptr;
+}
+
+void PluginProcessor::sendStandaloneMidiOutput (const juce::MidiBuffer& midi, int numSamples,
+                                               juce::Optional<juce::uint64> presentationTimeNs)
 {
     if (hasStandaloneTransport() && !midi.isEmpty())
         standaloneMidiActivity.fetch_add (1, std::memory_order_relaxed);
@@ -556,10 +564,10 @@ void PluginProcessor::sendStandaloneMidiOutput (const juce::MidiBuffer& midi, in
     if (const auto* head = getPlayHead())
         if (const auto position = head->getPosition())
             hostTime = position->getHostTimeNs();
-    standaloneMidiOutput->send (midi, hostTime, numSamples);
+    standaloneMidiOutput->send (midi, hostTime, numSamples, presentationTimeNs);
 }
 
-void PluginProcessor::renderStandaloneMetronome (juce::AudioBuffer<float>& buffer, double ppq, double bpm, bool playing, bool reset)
+void PluginProcessor::renderStandaloneMetronome (juce::AudioBuffer<float>& buffer, double ppq, double bpm, bool playing, bool reset, int firstPlaybackSample)
 {
     const int clickLength = juce::roundToInt (recordingSampleRate * 0.018);
     const bool active = playing && isStandaloneMetronomeEnabled() && buffer.getNumChannels() > 0;
@@ -572,11 +580,11 @@ void PluginProcessor::renderStandaloneMetronome (juce::AudioBuffer<float>& buffe
     const float volume = static_cast<float> (getMetronomeVolume()) / 100.0f;
     const int numSamples = buffer.getNumSamples();
     // Assign each beat to its nearest sample, with the half-sample tie going to the next sample.
-    auto beat = static_cast<int64_t> (std::ceil (ppq - 0.5 * beatsPerSample));
-    int start = 0;
+    auto beat = static_cast<int64_t> (std::ceil (ppq + (firstPlaybackSample - 0.5) * beatsPerSample));
+    int start = firstPlaybackSample;
     while (start < numSamples)
     {
-        const int nextClick = juce::jmax (0, static_cast<int> (std::floor ((static_cast<double> (beat) - ppq) / beatsPerSample + 0.5)));
+        const int nextClick = juce::jmax (firstPlaybackSample, static_cast<int> (std::floor ((static_cast<double> (beat) - ppq) / beatsPerSample + 0.5)));
         const int end = juce::jmin (nextClick, numSamples);
         const double pitchRatio = clickPitch < 0 ? 0.75 : clickPitch > 0 ? 1.3333333333333333 : 1.0;
         const double frequency = clickSound == MetronomeSound::wood ? 830.0 : clickSound == MetronomeSound::claves ? 1630.0 : 1175.0;
@@ -612,9 +620,12 @@ bool PluginProcessor::hasStandaloneTransport() const
     return wrapperType == wrapperType_Standalone;
 }
 
-void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
+void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay, bool shareWithPeers)
 {
     if (! hasStandaloneTransport())
+        return;
+
+    if (standaloneSync != nullptr && standaloneSync->requestPlaying (shouldPlay, shareWithPeers))
         return;
 
     if (shouldPlay)
@@ -642,7 +653,7 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay)
 
 bool PluginProcessor::isStandaloneTransportPlaying() const
 {
-    return standaloneTransportPlaying.load (std::memory_order_relaxed) != 0;
+    return standaloneTransportPlaying.load (std::memory_order_relaxed) != 0 || isStandaloneLaunchPending();
 }
 
 void PluginProcessor::setStandaloneTempoBpm (double bpm)
@@ -650,10 +661,12 @@ void PluginProcessor::setStandaloneTempoBpm (double bpm)
     if (! hasStandaloneTransport())
         return;
 
+    bpm = clampStandaloneTempoBpm (bpm);
+    if (standaloneSync != nullptr && standaloneSync->requestTempo (bpm))
+        return;
+
     {
         std::scoped_lock lock { engineStateMutex };
-
-        bpm = clampStandaloneTempoBpm (bpm);
 
         if (std::abs (engine.getTempo() - bpm) > 0.01)
         {
@@ -666,6 +679,9 @@ void PluginProcessor::setStandaloneTempoBpm (double bpm)
 
 double PluginProcessor::getStandaloneTempoBpm()
 {
+    if (standaloneSync != nullptr)
+        if (const auto tempo = standaloneSync->sessionTempo(); tempo > 0.0)
+            return tempo;
     std::scoped_lock lock { engineStateMutex };
     applyPendingMacroParametersLocked();
     return clampStandaloneTempoBpm (engine.getTempo());
@@ -706,7 +722,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const auto numSamples = buffer.getNumSamples();
 
     // Read-only immutable view built on the message thread. No engine access on the audio thread.
-    const auto* snapshot = playbackMailbox.current();
+    const auto* snapshot = playbackMailbox->current();
 
     if (snapshot == nullptr)
     {
@@ -715,20 +731,46 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
 
     const bool playbackReset = playbackResetRequested.exchange (false, std::memory_order_acquire);
-    const bool standaloneReset = standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0;
-    const bool stopAllNotes = standaloneStopAllNotesRequested.exchange (0, std::memory_order_acquire) != 0;
+    bool standaloneReset = standaloneTransportResetRequested.exchange (0, std::memory_order_acquire) != 0;
+    bool stopAllNotes = standaloneStopAllNotesRequested.exchange (0, std::memory_order_acquire) != 0;
 
     double ppqPosition = 0.0;
     double bpm = snapshot->tempo;
     bool isPlaying = false;
     ksh::HostLoopRange hostLoop;
+    ksh::StandaloneSyncBlock sync;
 
     if (hasStandaloneTransport())
     {
         ppqPosition = standaloneTransportPpqPosition.load (std::memory_order_relaxed);
         bpm = clampStandaloneTempoBpm (snapshot->tempo);
-        isPlaying = isStandaloneTransportPlaying();
-        renderStandaloneMetronome (buffer, ppqPosition, bpm, isPlaying, standaloneReset);
+        isPlaying = standaloneTransportPlaying.load (std::memory_order_relaxed) != 0;
+        if (standaloneSync != nullptr)
+        {
+            juce::Optional<juce::uint64> hostTime;
+            if (const auto* head = getPlayHead())
+                if (const auto position = head->getPosition())
+                    hostTime = position->getHostTimeNs();
+            const bool wasWaiting = isStandaloneLaunchPending();
+            sync = standaloneSync->process (hostTime, recordingSampleRate, numSamples, bpm, isPlaying);
+            standaloneLaunchPending.store (sync.waiting, std::memory_order_relaxed);
+            if (sync.presentationTimeNs)
+            {
+                bpm = sync.bpm;
+                ppqPosition = sync.ppq;
+                standaloneReset = standaloneReset || sync.reset;
+                stopAllNotes = stopAllNotes || (isPlaying && !sync.playing && !sync.waiting);
+                standaloneTransportPlaying.store (sync.playing, std::memory_order_relaxed);
+                if (isPlaying != sync.playing || wasWaiting != sync.waiting)
+                    requestMessageThreadWork();
+                isPlaying = sync.playing;
+            }
+            else if (wasWaiting)
+            {
+                requestMessageThreadWork();
+            }
+        }
+        renderStandaloneMetronome (buffer, ppqPosition, bpm, isPlaying, standaloneReset, sync.firstPlaybackSample);
     }
     else if (const auto* playHead = getPlayHead())
     {
@@ -766,7 +808,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (standaloneReset || playbackReset)
         recordingClockHistory.fill ({});
     consumeStandaloneRecording (*snapshot);
-    publishPatternRecordTransportPosition (ppqPosition, bpm, isPlaying, hostLoop);
+    publishPatternRecordTransportPosition (ppqPosition, bpm, isPlaying, hostLoop, sync.presentationTimeNs, sync.firstPlaybackSample);
 
     // Consume input before adding generated MIDI so our note-offs are never mistaken for pattern selections.
     ksh::MidiPatternSelectionBlock midiPatternSelections;
@@ -815,7 +857,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                                                      midiOut,
                                                      midiPatternSelections,
                                                      hostLoop,
-                                                     recordingClockHistory[(recordingClockHistoryIndex - 1) % recordingClockHistory.size()].updatedMs);
+                                                     recordingClockHistory[(recordingClockHistoryIndex - 1) % recordingClockHistory.size()].updatedMs,
+                                                     std::nullopt, sync.firstPlaybackSample);
 
     midiMessages.swapWith (midiOut);
     midiOut.clear();
@@ -838,7 +881,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     // Defer host tempo changes to the message thread (engine mutation + UI emit are not RT-safe).
     // The engine clamps to 20-300 BPM, so compare clamped or out-of-range tempos never settle.
-    if (isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - clampStandaloneTempoBpm (bpm)) > 0.01)
+    if (!sync.presentationTimeNs && isPlaying && bpm > 0.0 && std::abs (snapshot->tempo - clampStandaloneTempoBpm (bpm)) > 0.01)
     {
         pendingHostBpm.store (bpm, std::memory_order_relaxed);
         hostBpmChangePending.store (true, std::memory_order_release);
@@ -857,7 +900,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (pushedHit || notify)
         requestMessageThreadWork();
 
-    sendStandaloneMidiOutput (midiMessages, numSamples);
+    sendStandaloneMidiOutput (midiMessages, numSamples, sync.presentationTimeNs);
 }
 
 void PluginProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -957,9 +1000,23 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
     return shouldFilter;
 }
 
-void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying, ksh::HostLoopRange loop)
+void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition, double bpm, bool isPlaying, ksh::HostLoopRange loop,
+                                                            juce::Optional<juce::uint64> presentationTimeNs, int firstPlaybackSample)
 {
-    const PatternRecordTransport anchor { ppqPosition, bpm, juce::Time::getMillisecondCounterHiRes(), isPlaying, loop, uiBridge.getDocumentEpoch(), recordingTransportGeneration };
+    double timeMs = juce::Time::getMillisecondCounterHiRes();
+    if (presentationTimeNs)
+    {
+        const auto firstSampleMs = firstPlaybackSample * 1000.0 / recordingSampleRate;
+        timeMs = static_cast<double> (*presentationTimeNs) / 1.0e6 + firstSampleMs;
+        ppqPosition += firstSampleMs * bpm / 60000.0;
+    }
+    if (!presentationTimeNs || !isPlaying)
+        linkRecordingStartMs = 0.0;
+    else if (linkRecordingStartMs <= 0.0)
+        linkRecordingStartMs = timeMs;
+
+    const PatternRecordTransport anchor { ppqPosition, bpm, timeMs, isPlaying, loop, uiBridge.getDocumentEpoch(),
+                                          recordingTransportGeneration, linkRecordingStartMs };
     recordingClockHistory[recordingClockHistoryIndex++ % recordingClockHistory.size()] = anchor;
     patternRecordTransport.publish (anchor);
 }
@@ -967,7 +1024,7 @@ void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition,
 void PluginProcessor::captureStandaloneMidiInput (const juce::MidiMessage& message)
 {
     const auto session = patternRecordingSession.load (std::memory_order_acquire);
-    if (session == 0 || !message.isNoteOn() || (hasStandaloneTransport() && !isStandaloneTransportPlaying()))
+    if (session == 0 || !message.isNoteOn() || (hasStandaloneTransport() && (!isStandaloneTransportPlaying() || isStandaloneLaunchPending())))
         return;
     const StandaloneRecordInput input { message.getTimeStamp() * 1000.0, session,
                                        patternRecordingSource.load (std::memory_order_acquire),
@@ -1077,8 +1134,7 @@ bool PluginProcessor::enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<P
 void PluginProcessor::recordPatternCellLocked (int source, int channel, int step, int velocity, int nudge)
 {
     const auto before = engine.sourceCellAt (source, channel, step);
-    engine.setCell (source, channel, step, true, velocity, 100, 1, 0, false, 1);
-    engine.setCellNudge (source, channel, step, nudge);
+    engine.setCell (source, channel, step, ksh::Cell { .enabled = true, .velocity = velocity, .nudge = nudge });
     const auto after = engine.sourceCellAt (source, channel, step);
     if (before == after)
         return;
@@ -1105,6 +1161,7 @@ void PluginProcessor::recordPatternCellLocked (int source, int channel, int step
         rebase (existing->expected.cycleMask, existing->value.cycleMask, before.cycleMask);
         rebase (existing->expected.roll, existing->value.roll, before.roll);
         rebase (existing->expected.nudge, existing->value.nudge, before.nudge);
+        rebase (existing->expected.span, existing->value.span, before.span);
         existing->value = after;
     }
 }
@@ -1240,7 +1297,7 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes)
     {
         const bool shouldPlay = playing->is_boolean() ? playing->get<bool>() : playing->get<int>() != 0;
         if (hasStandaloneTransport())
-            setStandaloneTransportPlaying (shouldPlay);
+            setStandaloneTransportPlaying (shouldPlay, false);
     }
 
     ksh::NativeHit drained;
@@ -1602,14 +1659,23 @@ void PluginProcessor::setPatternRecordingOffsetMs (int offset)
     requestMessageThreadWork();
 }
 
+bool PluginProcessor::PatternRecordTransport::containsTime (double timestampMs) const
+{
+    // The Link anchor is at hardware output, which can be ahead of a pad hit.
+    // Project backward from it only within this playback run.
+    const auto startMs = linkStartMs > 0.0 ? linkStartMs : updatedMs;
+    return updatedMs > 0.0 && timestampMs >= startMs && std::abs (timestampMs - updatedMs) <= kMaxPatternRecordTransportAgeMs;
+}
+
 float PluginProcessor::getRecordingPulseForUi() const
 {
     const auto* transport = patternRecordTransport.current();
     if (!isPatternRecordingEnabled() || transport == nullptr || !transport->playing)
         return 1.0f;
-    const auto ageMs = juce::Time::getMillisecondCounterHiRes() - transport->updatedMs;
-    if (transport->updatedMs <= 0.0 || ageMs < 0.0 || ageMs > kMaxPatternRecordTransportAgeMs)
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    if (!transport->containsTime (now))
         return 1.0f;
+    const auto ageMs = now - transport->updatedMs;
     const double beat = transport->ppq + ageMs * transport->bpm / 60000.0;
     const double phase = beat - std::floor (beat);
     return static_cast<float> (0.35 + 0.65 * std::exp (-6.0 * phase));
@@ -1620,11 +1686,12 @@ std::optional<ksh::PatternRecordingPosition> PluginProcessor::positionForUiTrigg
     const auto* transport = patternRecordTransport.current();
     const auto* grids = patternRecordGrids.current();
     if (transport == nullptr || grids == nullptr || !transport->playing || transport->documentEpoch != uiBridge.getDocumentEpoch()
-        || (hasStandaloneTransport() && !isStandaloneTransportPlaying()))
+        || (hasStandaloneTransport() && (!isStandaloneTransportPlaying() || isStandaloneLaunchPending())))
         return std::nullopt;
-    const double ageMs = (timestampMs > 0.0 ? timestampMs : juce::Time::getMillisecondCounterHiRes()) - transport->updatedMs;
-    if (transport->updatedMs <= 0.0 || ageMs < 0.0 || ageMs > kMaxPatternRecordTransportAgeMs)
+    const auto eventTime = timestampMs > 0.0 ? timestampMs : juce::Time::getMillisecondCounterHiRes();
+    if (!transport->containsTime (eventTime))
         return std::nullopt;
+    const double ageMs = eventTime - transport->updatedMs;
     if (generation != nullptr)
         *generation = transport->transportGeneration;
     const double beat = recordingBeat (transport->ppq + ageMs * transport->bpm / 60000.0,
@@ -1807,7 +1874,7 @@ void PluginProcessor::resetProject()
 
     setProjectMetadata ("Untitled Project", {}, {}, {}, juce::String {});
     setProjectFile ({});
-    standaloneTransportPlaying.store (0, std::memory_order_relaxed);
+    setStandaloneTransportPlaying (false, false);
     standaloneTransportPpqPosition.store (0.0, std::memory_order_relaxed);
     standaloneStopAllNotesRequested.store (1, std::memory_order_release);
     ksh::NativeCycleVisit drainedVisit;
@@ -1882,23 +1949,19 @@ void PluginProcessor::endUiParameterGesture (const juce::String& parameterID)
 
 bool PluginProcessor::applyNativeCellEdits (const std::vector<CellEdit>& edits, uint64_t epoch)
 {
-    if (edits.size() > 16 * 8 * 32) return false;
+    using ksh::Constants;
+    if (edits.size() > Constants::sourceCount * Constants::cellsPerPattern) return false;
     std::scoped_lock lock { engineStateMutex };
     if (epoch != uiBridge.getDocumentEpoch()) return false;
     for (const auto& edit : edits)
     {
-        if (edit.source < 0 || edit.source >= 16 || edit.channel < 0 || edit.channel >= 8
-            || edit.step < 0 || edit.step >= 32
+        if (edit.source < 0 || edit.source >= Constants::sourceCount || edit.channel < 0 || edit.channel >= Constants::maxChannels
+            || edit.step < 0 || edit.step >= Constants::maxSteps
             || engine.sourceCellAt (edit.source, edit.channel, edit.step) != edit.expected)
             return false;
     }
     for (const auto& edit : edits)
-    {
-        const auto& c = edit.value;
-        engine.setCell (edit.source, edit.channel, edit.step, c.enabled, c.velocity,
-                        c.probability, c.cycle, c.cycleMask, c.roll);
-        engine.setCellNudge (edit.source, edit.channel, edit.step, c.nudge);
-    }
+        engine.setCell (edit.source, edit.channel, edit.step, edit.value);
     publishPlaybackSnapshotIfChangedLocked();
     uiBridge.invalidate();
     markDocumentModified();

@@ -109,6 +109,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     capturePhone (editor, "iphone-16-inspector");
     auto& tempoButton = phoneButton (editor, "Set tempo");
     CHECK (tempoButton.getButtonText() == "120 BPM");
+    CHECK (tempoButton.getProperties().contains ("transport"));
     tempoButton.onClick();
     CHECK_FALSE (grid.isVisible());
     juce::Slider* fader = nullptr;
@@ -124,18 +125,30 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     phoneButton (editor, "Done").onClick();
     CHECK (grid.isVisible());
     CHECK (tempoButton.getButtonText() == "168 BPM");
-    phoneButton (editor, "Open menu").onClick();
+    auto& menu = phoneButton (editor, "Open menu");
+    const auto menuBounds = menu.getBounds();
+    CHECK (menu.getProperties().contains ("dropdown"));
+    CHECK_FALSE (menu.getToggleState());
+    menu.onClick();
     CHECK_FALSE (grid.isVisible());
-    for (const auto* tab : { "Project", "Pattern", "Feel", "Generate", "Settings", "About" })
+    for (const auto* tab : { "Project", "Feel", "Top Secret", "Super Secret", "Settings", "About" })
     {
         phoneButton (editor, tab).onClick();
+        CHECK (menu.getBounds() == menuBounds);
+        CHECK (menu.getToggleState());
+        CHECK (menu.getButtonText() == "Menu");
         for (auto* child : editor.getChildren())
             if (child->isVisible())
+            {
                 CHECK (editor.getLocalBounds().contains (child->getBounds()));
+                if (child->getY() < Layout::compactHeaderHeight)
+                    CHECK (child == &menu);
+            }
         capturePhone (editor, "iphone-panel-" + juce::String (tab).toLowerCase());
     }
-    phoneButton (editor, "Done").onClick();
+    phoneButton (editor, "Close menu").onClick();
     CHECK (grid.isVisible());
+    CHECK_FALSE (menu.getToggleState());
     grid.channelSettings (1);
     CHECK_FALSE (grid.isVisible());
     phoneButton (editor, "Reverse").onClick();
@@ -145,7 +158,14 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (phoneButton (editor, "Ping-pong").getToggleState());
     capturePhone (editor, "iphone-panel-channel");
     phoneButton (editor, "Done").onClick();
-    phoneButton (editor, "Pattern bank").onClick();
+    auto& patternBank = phoneButton (editor, "Pattern bank");
+    const auto patternBankBounds = patternBank.getBounds();
+    patternBank.onClick();
+    CHECK (patternBank.getBounds() == patternBankBounds);
+    CHECK (patternBank.getToggleState());
+    for (auto* child : editor.getChildren())
+        if (child->isVisible() && child->getY() < Layout::compactHeaderHeight)
+            CHECK (child == &patternBank);
     CHECK_FALSE (grid.isVisible());
     CHECK (phoneButton (editor, "Muted Pattern").getButtonText() == "Muted Pattern");
     auto* bank = phoneButton (editor, "Choose pattern 1").getParentComponent();
@@ -164,7 +184,11 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     }
     CHECK (padBounds.back().getRight() == bank->getWidth() - 12);
     capturePhone (editor, "iphone-pattern-bank");
+    phoneButton (editor, "Choose pattern 16").onClick();
+    CHECK (phoneButton (editor, "Pattern bank").getButtonText() == "16");
+    phoneButton (editor, "Pattern bank").onClick();
     phoneButton (editor, "Choose pattern 2").onClick();
+    CHECK (phoneButton (editor, "Pattern bank").getButtonText() == "2");
     CHECK (editor.controller.source() == 1);
     CHECK (grid.isVisible());
     editor.controller.selectLatched = true;
@@ -174,15 +198,11 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (editor.controller.copySource == -1);
     CHECK (grid.isVisible());
     phoneButton (editor, "Pattern bank").onClick();
-    phoneButton (editor, "Duplicate pattern").onClick();
-    phoneButton (editor, "Choose pattern 3").onClick();
-    CHECK (editor.controller.source() == 0);
-    CHECK (editor.controller.copySource == -1);
-    capturePhone (editor, "iphone-pattern-copy");
-    phoneButton (editor, "Duplicate pattern").onClick();
-    CHECK (editor.controller.copySource == -1);
-    CHECK (editor.controller.source() == 2);
-    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+    for (auto* child : bank->getChildren())
+        if (child->getTitle() == "Duplicate pattern" || child->getTitle() == "Close pattern picker")
+            CHECK_FALSE (child->isVisible());
+    patternBank.onClick();
+    CHECK_FALSE (patternBank.getToggleState());
     CHECK (grid.isVisible());
 
     editor.setCompactViewport (false, 1338, 900);
@@ -217,45 +237,127 @@ TEST_CASE ("iPhone Chance keeps cycle editing in the inspector", "[native-ui][ip
             CHECK_FALSE (child->isVisible());
 }
 
-TEST_CASE ("iPhone second step page edits the correct cells and cancels a resized gesture", "[native-ui][iphone]")
+TEST_CASE ("iPhone applies triplets from the selected step inspector across step pages", "[native-ui][iphone][triplets]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 32, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 15, 1, 90 }));
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 390);
+    editor.setSize (814, 390);
+    auto& grid = phoneGrid (editor);
+    const Location step { 0, 14 };
+    auto& rhythm = phoneButton (editor, "Step rhythm and triplets");
+    CHECK_FALSE (rhythm.isEnabled());
+    const auto select = [&] (Location location)
+    {
+        editor.controller.selectLatched = true;
+        const auto point = grid.layout.cell (location).getCentre();
+        grid.mouseDown (phoneEvent (grid, point, point));
+        grid.mouseUp (phoneEvent (grid, point, point, 0));
+    };
+    select (step);
+    REQUIRE (rhythm.isEnabled());
+    rhythm.onClick();
+    REQUIRE (phoneButton (editor, "Quarter triplet").isEnabled());
+    phoneButton (editor, "Quarter triplet").onClick();
+    REQUIRE (editor.controller.cell (step).span == 8);
+    CHECK (editor.controller.cell (step).roll == 3);
+    phoneButton (editor, "Switch step page").onClick();
+    REQUIRE (grid.layout.firstStep == 16);
+    editor.controller.selected.reset();
+    editor.sync();
+    select ({ 0, 17 });
+    CHECK (editor.controller.selected.test (static_cast<size_t> (step.key())));
+    REQUIRE (rhythm.isEnabled());
+    rhythm.onClick();
+    CHECK (phoneButton (editor, "Quarter triplet").getToggleState());
+}
+
+TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gesture", "[native-ui][iphone]")
+{
+    PluginProcessor processor;
+    const int steps = GENERATE (32, 60, 64);
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 409);
     editor.setSize (814, 409);
     auto& grid = phoneGrid (editor);
-    phoneButton (editor, "Switch step page").onClick();
-    REQUIRE (grid.layout.firstStep == 16);
-    REQUIRE (grid.layout.at (grid.layout.cell ({ 0, 16 }).getCentre()) == Location { 0, 16 });
-    CHECK_FALSE (grid.layout.at ({ grid.layout.gridLeft() - 1, grid.layout.cell ({ 0, 16 }).getCentreY() }).valid());
+    auto& page = phoneButton (editor, "Switch step page");
+    const auto pageCount = juce::String ((steps + 15) / 16);
+    CHECK (page.getButtonText() == "1:" + pageCount);
+    for (int start = 16; start < steps; start += 16)
+    {
+        page.onClick();
+        REQUIRE (grid.layout.firstStep == start);
+        CHECK (page.getButtonText() == juce::String (start / 16 + 1) + ":" + pageCount);
+        CHECK (grid.layout.visibleSteps() == juce::jmin (16, steps - start));
+    }
+    const int lastPage = grid.layout.firstStep;
+    page.onClick();
+    REQUIRE (grid.layout.firstStep == 0);
+    CHECK (page.getButtonText() == "1:" + pageCount);
+    for (int start = 0; start < lastPage; start += 16)
+        page.onClick();
+    REQUIRE (grid.layout.firstStep == lastPage);
+    const Location lastStep { 0, steps - 1 };
+    REQUIRE (grid.layout.at (grid.layout.cell (lastStep).getCentre()) == lastStep);
+    CHECK_FALSE (grid.layout.at ({ grid.layout.gridLeft() - 1, grid.layout.cell (lastStep).getCentreY() }).valid());
     auto tap = [&] (Location location)
     {
         const auto point = grid.layout.cell (location).getCentre();
         grid.mouseDown (phoneEvent (grid, point, point));
         grid.mouseUp (phoneEvent (grid, point, point));
     };
-    tap ({ 0, 16 });
-    CHECK (editor.controller.cell ({ 0, 16 }).enabled);
+    tap (lastStep);
+    CHECK (editor.controller.cell (lastStep).enabled);
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+    CHECK_FALSE (editor.controller.cell ({ 1, steps - 1 }).enabled);
     editor.controller.undo();
-    CHECK_FALSE (editor.controller.cell ({ 0, 16 }).enabled);
-    const auto first = grid.layout.cell ({ 0, 16 }).getCentre();
-    const auto last = grid.layout.cell ({ 0, 19 }).getCentre();
+    CHECK_FALSE (editor.controller.cell (lastStep).enabled);
+    const auto first = grid.layout.cell ({ 0, lastPage }).getCentre();
+    const auto last = grid.layout.cell ({ 0, lastPage + 3 }).getCentre();
     grid.mouseDown (phoneEvent (grid, first, first));
     grid.mouseDrag (phoneEvent (grid, last, first));
     REQUIRE (editor.controller.editing());
     editor.setCompactViewport (true, 850, 409);
     grid.mouseUp (phoneEvent (grid, last, first));
     CHECK_FALSE (editor.controller.editing());
-    CHECK_FALSE (editor.controller.cell ({ 0, 16 }).enabled);
-    CHECK_FALSE (editor.controller.cell ({ 0, 19 }).enabled);
+    CHECK_FALSE (editor.controller.cell ({ 0, lastPage }).enabled);
+    CHECK_FALSE (editor.controller.cell ({ 0, lastPage + 3 }).enabled);
     CHECK_FALSE (editor.controller.canUndo());
     editor.controller.command ("source_steps", { 1, 16 }, "Shorten");
     CHECK (grid.layout.firstStep == 0);
     for (auto* child : editor.getChildren())
         if (child->getTitle() == "Switch step page")
             CHECK_FALSE (child->isVisible());
+}
+
+TEST_CASE ("Grid arrow keys reveal pages and rows and Return toggles the focused step", "[native-ui][iphone]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 409);
+    editor.setSize (814, 409);
+    editor.setCompactVisibleRows (4);
+    editor.layout.reverseRows = true;
+    editor.sync();
+    auto& grid = phoneGrid (editor);
+    const auto point = grid.layout.cell ({ 4, 15 }).getCentre();
+    grid.mouseDown (phoneEvent (grid, point, point));
+    grid.mouseUp (phoneEvent (grid, point, point, 0));
+    REQUIRE (editor.controller.cell ({ 4, 15 }).enabled);
+    REQUIRE (grid.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (grid.layout.firstStep == 16);
+    REQUIRE (grid.keyPressed (juce::KeyPress (juce::KeyPress::downKey)));
+    CHECK (grid.layout.firstRow == 1);
+    REQUIRE (grid.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)));
+    CHECK (editor.controller.cell ({ 3, 16 }).enabled);
+    REQUIRE (grid.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)));
+    CHECK_FALSE (editor.controller.cell ({ 3, 16 }).enabled);
+    CHECK (editor.controller.cell ({ 4, 15 }).enabled);
 }
 
 TEST_CASE ("iPhone inspector relative edits undo and cancel without leaking into the next gesture", "[native-ui][iphone]")
@@ -290,7 +392,7 @@ TEST_CASE ("iPhone inspector relative edits undo and cancel without leaking into
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 80);
 }
 
-TEST_CASE ("iPhone Copy toggle duplicates selections without a keyboard modifier", "[native-ui][iphone]")
+TEST_CASE ("Compact Copy toggle stays available outside iPhone mode", "[native-ui][iphone]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 87, 75, 3, 5, 2 }));
@@ -299,6 +401,10 @@ TEST_CASE ("iPhone Copy toggle duplicates selections without a keyboard modifier
     editor.setSize (814, 409);
     editor.controller.selected.set (0);
     editor.sync();
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Copy selected cells when dragging")
+            CHECK_FALSE (child->isVisible());
+    editor.setCompactViewport (true, 814, 409, false);
     phoneButton (editor, "Copy selected cells when dragging").onClick();
     auto& grid = phoneGrid (editor);
     const auto first = grid.layout.cell ({ 0, 0 }).getCentre();
@@ -313,7 +419,7 @@ TEST_CASE ("iPhone Copy toggle duplicates selections without a keyboard modifier
     CHECK_FALSE (editor.controller.cell ({ 1, 4 }).enabled);
 }
 
-TEST_CASE ("iPhone pattern navigation never borrows selection mode and copy can be canceled or undone", "[native-ui][iphone]")
+TEST_CASE ("iPhone pattern navigation ignores selection mode and closes when the project changes", "[native-ui][iphone]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 111, 100, 1, 1, 1 }));
@@ -333,23 +439,12 @@ TEST_CASE ("iPhone pattern navigation never borrows selection mode and copy can 
     CHECK (editor.controller.copySource == -1);
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 44);
     phoneButton (editor, "Pattern bank").onClick();
-    phoneButton (editor, "Duplicate pattern").onClick();
-    phoneButton (editor, "Choose pattern 1").onClick();
+    phoneButton (editor, "Pattern bank").onClick();
     CHECK (editor.controller.source() == 2);
-    phoneButton (editor, "Close pattern picker").onClick();
-    CHECK (editor.controller.copySource == -1);
     phoneButton (editor, "Pattern bank").onClick();
     phoneButton (editor, "Choose pattern 1").onClick();
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 111);
     phoneButton (editor, "Pattern bank").onClick();
-    phoneButton (editor, "Duplicate pattern").onClick();
-    phoneButton (editor, "Choose pattern 3").onClick();
-    phoneButton (editor, "Duplicate pattern").onClick();
-    CHECK (editor.controller.cell ({ 0, 0 }).velocity == 111);
-    editor.controller.undo();
-    CHECK (editor.controller.cell ({ 0, 0 }).velocity == 44);
-    phoneButton (editor, "Pattern bank").onClick();
-    phoneButton (editor, "Duplicate pattern").onClick();
     processor.resetProject();
     editor.controller.poll();
     editor.sync();
@@ -374,9 +469,20 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 390);
     editor.setSize (814, 390);
-    CHECK (phoneButton (editor, "Arm Record").isVisible());
-    phoneButton (editor, "Open menu").onClick();
-    CHECK (phoneButton (editor, "Clear pattern").isVisible());
+    auto& recordButton = phoneButton (editor, "Arm Record");
+    auto& menuButton = phoneButton (editor, "Open menu");
+    CHECK (recordButton.isVisible());
+    auto& pattern = phoneButton (editor, "Open pattern settings");
+    const auto patternBounds = pattern.getBounds();
+    CHECK (pattern.getProperties().contains ("dropdown"));
+    pattern.onClick();
+    CHECK (pattern.getBounds() == patternBounds);
+    CHECK (pattern.getToggleState());
+    CHECK_FALSE (recordButton.isVisible());
+    CHECK_FALSE (menuButton.isVisible());
+    auto& clearButton = phoneButton (editor, "Clear pattern");
+    CHECK (clearButton.isVisible());
+    capturePhone (editor, "iphone-panel-pattern");
     phoneButton (editor, "Clear pattern").onClick();
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
     editor.controller.selectSource (1);
@@ -386,11 +492,16 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+    phoneButton (editor, "Close pattern settings").onClick();
+    CHECK (phoneButton (editor, "Arm Record").isVisible());
+    phoneButton (editor, "Open menu").onClick();
+    CHECK_FALSE (pattern.isVisible());
+    CHECK_FALSE (clearButton.isVisible());
     phoneButton (editor, "Feel").onClick();
-    phoneButton (editor, "Done").onClick();
+    phoneButton (editor, "Close menu").onClick();
     phoneButton (editor, "Open menu").onClick();
     CHECK (phoneButton (editor, "Feel").getToggleState());
-    phoneButton (editor, "Done").onClick();
+    phoneButton (editor, "Close menu").onClick();
     phoneGrid (editor).channelSettings (1);
     for (auto* child : editor.getChildren())
         if (child->getTitle() == "Open menu" || dynamic_cast<PreviewPanel*> (child) != nullptr)
@@ -405,6 +516,9 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    processor.showStandaloneMidiOutputMenu = [] (juce::Component&) {};
+    bool openedLink = false;
+    processor.showStandaloneLinkSettings = [&openedLink] (juce::Component&) { openedLink = true; };
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 390);
@@ -422,16 +536,142 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
         buttons.push_back (child->getBounds());
     }
     CHECK (phoneGrid (editor).layout.cellHeight() >= 31.0f);
+    const auto& undo = phoneButton (editor, "undo");
+    const auto& redo = phoneButton (editor, "redo");
     const auto& pads = phoneButton (editor, "Show pads");
     const auto& record = phoneButton (editor, "Arm Record");
     const auto& tempo = phoneButton (editor, "Set tempo");
     const auto& metro = phoneButton (editor, "Metronome");
-    CHECK (pads.getRight() <= record.getX());
+    const auto& play = phoneButton (editor, "Play");
+    const auto& pattern = phoneButton (editor, "Open pattern settings");
+    const auto& menu = phoneButton (editor, "Open menu");
+    const int referenceGap = phoneButton (editor, "Velocity editing layer").getX() - phoneButton (editor, "Pattern bank").getRight();
+    CHECK (undo.getRight() == redo.getX());
+    CHECK (redo.getRight() < pads.getX());
+    const int padGap = record.getX() - pads.getRight();
+    CHECK (padGap > 0);
     CHECK (record.getRight() < tempo.getX());
-    CHECK (tempo.getRight() <= metro.getX());
-    CHECK (metro.getRight() <= phoneButton (editor, "Play").getX());
-    CHECK (phoneButton (editor, "Play").getRight() < phoneButton (editor, "Open menu").getX());
+    CHECK (referenceGap > 0);
+    CHECK (metro.getX() - tempo.getRight() == referenceGap);
+    CHECK (play.getX() - metro.getRight() == referenceGap);
+    CHECK (menu.getX() - pattern.getRight() == referenceGap);
+    CHECK (play.getRight() < pattern.getX());
     capturePhone (editor, "iphone-32-minimum");
+    phoneButton (editor, "Open menu").onClick();
+    for (const auto* page : { "Project", "Feel", "Top Secret", "Super Secret", "Settings", "About" })
+    {
+        CAPTURE (page);
+        auto& tab = phoneButton (editor, page);
+        tab.onClick();
+        CHECK (tab.getToggleState());
+        CHECK (tab.getProperties().contains ("phoneMenuIcon"));
+        buttons.clear();
+        for (auto* child : editor.getChildren())
+        {
+            if (!child->isVisible())
+                continue;
+            CHECK (editor.getLocalBounds().contains (child->getBounds()));
+            for (const auto& bounds : buttons)
+                CHECK_FALSE (bounds.intersects (child->getBounds()));
+            buttons.push_back (child->getBounds());
+        }
+        capturePhone (editor, "iphone-minimum-menu-" + juce::String (page).toLowerCase());
+    }
+    auto& topSecret = phoneButton (editor, "Top Secret");
+    CHECK (topSecret.getRight() < phoneButton (editor, "Super Secret").getX());
+    topSecret.onClick();
+    juce::Viewport* generatorViewport = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* viewport = dynamic_cast<juce::Viewport*> (child); viewport != nullptr && viewport->isVisible())
+            generatorViewport = viewport;
+    REQUIRE (generatorViewport != nullptr);
+    auto* generator = dynamic_cast<PreviewPanel*> (generatorViewport->getViewedComponent());
+    REQUIRE (generator != nullptr);
+    REQUIRE (generator->isXYRandomizer());
+    PatternXYPad* pad = nullptr;
+    ValueControl* patternLength = nullptr;
+    for (auto* child : generator->getChildren())
+    {
+        if (auto* xy = dynamic_cast<PatternXYPad*> (child))
+            pad = xy;
+        if (child->getTitle() == "Randomizer pattern length")
+            patternLength = dynamic_cast<ValueControl*> (child);
+    }
+    REQUIRE (pad != nullptr);
+    REQUIRE (patternLength != nullptr);
+    CHECK_FALSE (patternLength->isVisible());
+    pattern.onClick();
+    ValueControl* gridLength = nullptr;
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Grid Length")
+            gridLength = dynamic_cast<ValueControl*> (child);
+    REQUIRE (gridLength != nullptr);
+    REQUIRE (gridLength->isVisible());
+    CHECK (gridLength->value == 32);
+    const auto setLength = [] (ValueControl& control, int count)
+    {
+        auto accessibility = control.createAccessibilityHandler();
+        accessibility->getValueInterface()->setValue (static_cast<double> (count));
+    };
+    setLength (*gridLength, 64);
+    CHECK (editor.controller.state.playback.stepCount == 64);
+    pattern.onClick();
+    phoneButton (editor, "Open menu").onClick();
+    topSecret.onClick();
+    CHECK_FALSE (patternLength->isVisible());
+    REQUIRE (pad->isVisible());
+    CHECK (pad->getX() > generator->getWidth() / 2);
+    CHECK (generator->getLocalBounds().contains (pad->getBounds()));
+    const auto centre = pad->getLocalBounds().getCentre().toFloat();
+    REQUIRE_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+    pad->mouseDown (phoneEvent (*pad, centre, centre));
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+    CHECK (editor.controller.cell ({ 0, 16 }).enabled);
+    CHECK (editor.controller.cell ({ 0, 48 }).enabled);
+    pad->mouseUp (phoneEvent (*pad, centre, centre, 0));
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+    phoneButton (editor, "Super Secret").onClick();
+    CHECK_FALSE (pad->isVisible());
+    CHECK (patternLength->isVisible());
+    CHECK (generatorViewport->getViewArea().contains (patternLength->getBounds()));
+    CHECK (patternLength->value == 16);
+    setLength (*patternLength, 36);
+    CHECK (editor.controller.state.playback.generatedStepCount == 36);
+    CHECK (editor.controller.state.playback.stepCount == 64);
+    editor.controller.undo();
+    CHECK (patternLength->value == 16);
+    editor.controller.redo();
+    CHECK (patternLength->value == 36);
+    editor.controller.command ("cell", { 1, 1, 36, 1, 96 });
+    phoneButton (editor, "Random mode").onClick();
+    CHECK (editor.controller.state.playback.generated[0][35].enabled);
+    CHECK (editor.controller.state.playback.generated[0][35].velocity == 96);
+    CHECK (phoneButton (editor, "Random mode").getX() > generator->getWidth() / 2);
+    phoneButton (editor, "Settings").onClick();
+    auto& link = phoneButton (editor, "Ableton Link settings");
+    auto& midiOutput = phoneButton (editor, "MIDI output destination");
+    CHECK (link.isVisible());
+    CHECK (midiOutput.isVisible());
+    CHECK (link.getY() >= midiOutput.getBottom());
+    link.onClick();
+    CHECK (openedLink);
+    phoneButton (editor, "Close menu").onClick();
+    editor.setCompactViewport (true, 850, 390);
+    editor.setSize (850, 390);
+    CHECK (record.getX() - pads.getRight() > padGap);
+
+    // The iPad standalone has the same Link settings action in the full editor footer.
+    openedLink = false;
+    editor.layout.touchRows = true;
+    editor.setCompactViewport (false, 0, 0);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    CHECK (link.isVisible());
+    CHECK (midiOutput.isVisible());
+    CHECK (link.getRight() <= midiOutput.getX());
+    CHECK (link.getBounds().getCentreY() == midiOutput.getBounds().getCentreY());
+    link.onClick();
+    CHECK (openedLink);
 }
 
 TEST_CASE ("iOS performance pads replace the inspector independently of record arm", "[native-ui][iphone][ipad][row-trigger][render]")
@@ -492,7 +732,31 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
     }
     else
         CHECK (grid.isVisible());
-    capturePhone (editor, compact ? "iphone-recording-pads" : "ipad-recording-pads");
+    auto& velocityMode = phoneButton (editor, "Pad velocity mode");
+    const auto velocityPreference = velocityMode.getToggleState();
+    CHECK (velocityMode.getWidth() == (compact ? 56 : 64));
+    CHECK (velocityMode.getHeight() == (compact ? 56 : phoneButton (editor, "Trigger channel 8").getHeight()));
+    CHECK (velocityMode.hitTest (1, 1));
+    const auto captureName = compact ? "iphone-recording-pads" : "ipad-recording-pads";
+    velocityMode.setToggleState (false, juce::dontSendNotification);
+    capturePhone (editor, captureName);
+    velocityMode.setToggleState (true, juce::dontSendNotification);
+    capturePhone (editor, juce::String (captureName) + "-velocity-on");
+    velocityMode.setToggleState (velocityPreference, juce::dontSendNotification);
+    if (!compact)
+    {
+        const Location location { 0, 0 };
+        const auto* padStrip = phoneButton (editor, "Trigger channel 1").getParentComponent();
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100 }));
+        editor.controller.poll();
+        editor.controller.selected.set (static_cast<size_t> (location.key()));
+        editor.sync();
+        CHECK_FALSE (padStrip->isVisible());
+        CHECK (showPads.getToggleState());
+        editor.controller.selected.reset();
+        editor.sync();
+        CHECK (padStrip->isVisible());
+    }
     REQUIRE (processor.dispatchUiEngineCommand ("channels", { 3 }));
     editor.controller.poll();
     CHECK (phoneButton (editor, "Trigger channel 3").isEnabled());
@@ -667,8 +931,17 @@ TEST_CASE ("iPhone visible rows enlarge the grid and scroll without changing the
     phoneButton (editor, "Settings").onClick();
     auto& rowsButton = phoneButton (editor, "Visible rows");
     CHECK (rowsButton.getButtonText() == "Rows: 8");
-    phoneButton (editor, "Done").onClick();
+    auto& shortcuts = phoneButton (editor, "Shift/Option shortcuts");
+    const bool shortcutsEnabled = editor.controller.keyboardModifiersEnabled;
+    CHECK (shortcuts.getToggleState() == shortcutsEnabled);
+    CHECK (editor.getLocalBounds().contains (shortcuts.getBounds()));
+    shortcuts.onClick();
+    CHECK (editor.controller.keyboardModifiersEnabled == !shortcutsEnabled);
+    CHECK (shortcuts.getToggleState() == !shortcutsEnabled);
+    shortcuts.onClick();
+    phoneButton (editor, "Close menu").onClick();
     CHECK_FALSE (rowsButton.isVisible());
+    CHECK_FALSE (shortcuts.isVisible());
     CHECK (grid.layout.cellsY() == 18.0f);
     juce::ScrollBar* scroll = nullptr;
     for (auto* child : editor.getChildren())
@@ -722,7 +995,7 @@ TEST_CASE ("iPhone visible rows enlarge the grid and scroll without changing the
     phoneButton (editor, "Open menu").onClick();
     CHECK (rowsButton.isVisible());
     CHECK (rowsButton.getButtonText() == "Rows: 4");
-    phoneButton (editor, "Done").onClick();
+    phoneButton (editor, "Close menu").onClick();
     CHECK_FALSE (rowsButton.isVisible());
     CHECK (grid.isVisible());
     phoneButton (editor, "Open menu").onClick();

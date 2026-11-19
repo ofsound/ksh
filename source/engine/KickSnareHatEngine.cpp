@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace ksh
 {
@@ -80,16 +81,10 @@ NormalizedCellParams normalizeCellParams (const std::optional<int>& probability,
 
 nlohmann::json cellToJson (const Cell& cell, bool oneBasedSource = false)
 {
-    return {
-        { "enabled", cell.enabled ? 1 : 0 },
-        { "velocity", cell.velocity },
-        { "probability", cell.probability },
-        { "cycle", cell.cycle },
-        { "cycleMask", cell.cycleMask },
-        { "roll", cell.roll },
-        { "nudge", cell.nudge },
-        { "source", oneBasedSource ? cell.source + 1 : cell.source }
-    };
+    nlohmann::json result = cell;
+    if (oneBasedSource)
+        result["source"] = cell.source + 1;
+    return result;
 }
 
 GenerationMode generationModeFromJson (const nlohmann::json& state, GenerationMode fallback)
@@ -123,13 +118,14 @@ KickSnareHatEngine::KickSnareHatEngine (EngineCallbacks callbacksIn)
     initChannels();
     initSources();
     generated = makeEmptySourcePattern();
-    generateWindow (0, stepCount, true);
+    generateWindow (0, generatedBufferLength(), true);
 }
 
 EngineStateSnapshot KickSnareHatEngine::stateSnapshot() const
 {
     EngineStateSnapshot snapshot;
     snapshot.stepCount = stepCount;
+    snapshot.generatedStepCount = generatedStepCount;
     snapshot.channelCount = channelCount;
     snapshot.refreshSteps = refreshSteps;
     snapshot.generationMode = generationMode;
@@ -208,6 +204,12 @@ int KickSnareHatEngine::activeSettingsSource() const
     return staticSource >= 0 ? clampSource (staticSource) : 0;
 }
 
+int KickSnareHatEngine::generatedBufferLength() const
+{
+    // The same buffer serves the normal grid and the Super Secret preview when generation is off.
+    return generationMode == GenerationMode::staticSource ? std::max (stepCount, generatedStepCount) : generatedStepCount;
+}
+
 void KickSnareHatEngine::applyActiveSourceSettings()
 {
     const auto activeSource = activeSettingsSource();
@@ -215,7 +217,6 @@ void KickSnareHatEngine::applyActiveSourceSettings()
     stepCount = clampInt (settings.stepCount, 1, Constants::maxSteps);
     rate = Constants::normalizeRate (settings.rate);
     currentStep = mod (currentStep, stepCount);
-    refreshSteps = clampInt (refreshSteps, 1, stepCount);
 
     for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
@@ -266,7 +267,6 @@ void KickSnareHatEngine::setStepCount (int count)
     auto& settings = sourceSettings[static_cast<size_t> (activeSource)];
     settings.stepCount = stepCount;
     currentStep = mod (currentStep, stepCount);
-    refreshSteps = clampInt (refreshSteps, 1, stepCount);
 
     for (int channelIndex = 0; channelIndex < Constants::maxChannels; ++channelIndex)
     {
@@ -278,8 +278,21 @@ void KickSnareHatEngine::setStepCount (int count)
         copyLoopRange (channels[static_cast<size_t> (channelIndex)], range);
     }
 
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "steps " + std::to_string (stepCount); });
+}
+
+void KickSnareHatEngine::setGeneratedStepCount (int count)
+{
+    count = clampInt (count, 1, Constants::maxSteps);
+    if (generatedStepCount == count)
+        return;
+
+    generatedStepCount = count;
+    refreshSteps = clampInt (refreshSteps, 1, generatedStepCount);
+    ++generationVersion_;
+    recomposeGenerated();
+    status ([&] { return "generated_steps " + std::to_string (generatedStepCount); });
 }
 
 void KickSnareHatEngine::setSourceStepCount (int source, int count)
@@ -294,23 +307,28 @@ void KickSnareHatEngine::setSourceStepCount (int source, int count)
     }
 
     auto& settings = sourceSettings[static_cast<size_t> (source)];
+    const int previousStepCount = settings.stepCount;
     settings.stepCount = clampInt (count, 1, Constants::maxSteps);
     for (auto& range : settings.loopRanges)
+    {
+        if (range.loopStart == 0 && range.loopLength == previousStepCount)
+            range.loopLength = settings.stepCount;
         clampLoopRange (range, settings.stepCount);
-    ++playbackSnapshotVersion_;
+    }
+    recomposeGenerated();
     status ([&] { return "source_steps " + std::to_string (source + 1) + " " + std::to_string (settings.stepCount); });
 }
 
 void KickSnareHatEngine::setChannelCount (int count)
 {
     channelCount = clampInt (count, 1, Constants::maxChannels);
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "channels " + std::to_string (channelCount); });
 }
 
 void KickSnareHatEngine::setRefreshSteps (int count)
 {
-    refreshSteps = clampInt (count, 1, stepCount);
+    refreshSteps = clampInt (count, 1, generatedStepCount);
     ++playbackSnapshotVersion_;
     status ([&] { return "refresh_steps " + std::to_string (refreshSteps); });
 }
@@ -318,7 +336,7 @@ void KickSnareHatEngine::setRefreshSteps (int count)
 void KickSnareHatEngine::setGenerationMode (GenerationMode mode)
 {
     generationMode = mode;
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "mode " + std::string { generationModeToString (generationMode) }; });
 }
 
@@ -332,7 +350,7 @@ void KickSnareHatEngine::setStaticSource (int source)
     ++playbackSnapshotVersion_;
 
     if (generationMode == GenerationMode::staticSource)
-        recomposeWindow (0, stepCount, true);
+        recomposeGenerated();
 
     status ([&] { return staticSource < 0 ? std::string { "static_source M" } : "static_source " + std::to_string (staticSource + 1); });
 }
@@ -426,7 +444,7 @@ void KickSnareHatEngine::setChannelLock (int channel, int lock)
 {
     channel = clampChannel (channel);
     channels[static_cast<size_t> (channel)].lock = clampInt (lock, -1, Constants::sourceCount - 1);
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
 
     const auto& locked = channels[static_cast<size_t> (channel)].lock;
     status ([&] { return "channel_lock " + std::to_string (channel + 1) + " " + (locked < 0 ? "random" : std::to_string (locked + 1)); });
@@ -441,7 +459,7 @@ void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int 
     range.loopLength = clampInt (loopLength, 1, stepCount - range.loopStart);
     auto& channelState = channels[static_cast<size_t> (channel)];
     copyLoopRange (channelState, range);
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "channel_loop_length " + std::to_string (channel + 1) + " " + std::to_string (channelState.loopLength) + " " + std::to_string (channelState.loopStart + 1); });
 }
 
@@ -498,7 +516,7 @@ Cell KickSnareHatEngine::generatedCellFromSource (int source, int channel, int s
 
 const Cell* KickSnareHatEngine::generatedCellForSourceEdit (int source, int channel, int step) const
 {
-    if (channel >= channelCount || step >= stepCount)
+    if (channel >= channelCount || step >= generatedBufferLength())
         return nullptr;
 
     const auto& generatedCell = generated[static_cast<size_t> (channel)][static_cast<size_t> (step)];
@@ -527,7 +545,8 @@ void KickSnareHatEngine::refreshGeneratedCellsForSourceEdit (int source, int cha
     if (sourceStep < loopStart || sourceStep >= loopStart + loopLength)
         return;
 
-    for (int generatedStep = 0; generatedStep < stepCount; ++generatedStep)
+    const int generatedLength = generatedBufferLength();
+    for (int generatedStep = 0; generatedStep < generatedLength; ++generatedStep)
     {
         if (loopStart + mod (generatedStep - loopStart, loopLength) != sourceStep)
             continue;
@@ -587,6 +606,20 @@ void KickSnareHatEngine::setCell (int source,
                                                        cycleLength,
                                                        legacyInverted.value_or (false));
     setCell (source, channel, step, enabled, velocity, probability, cycle, cycleMask, roll);
+}
+
+void KickSnareHatEngine::setCell (int source, int channel, int step, const Cell& value)
+{
+    source = clampSource (source);
+    channel = clampChannel (channel);
+    step = clampStep (step);
+    auto& cell = sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)];
+    const auto sourceIndex = cell.source;
+    const auto sourceStep = cell.sourceStep;
+    cell = cloneCell (value);
+    cell.source = sourceIndex;
+    cell.sourceStep = sourceStep;
+    refreshGeneratedCellsForSourceEdit (source, channel, step);
 }
 
 void KickSnareHatEngine::setCellEnabled (int source, int channel, int step, bool enabled)
@@ -670,7 +703,7 @@ void KickSnareHatEngine::setSourceChannelMute (int source, int channel, bool mut
     source = clampSource (source);
     channel = clampChannel (channel);
     sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (channel)] = muted;
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "source_channel_mute " + std::to_string (source + 1) + " " + std::to_string (channel + 1) + " " + (muted ? "1" : "0"); });
 }
 
@@ -690,7 +723,7 @@ void KickSnareHatEngine::resetSourceChannel (int source, int channel)
     clampLoopRange (range, sourceSettings[static_cast<size_t> (source)].stepCount);
     if (source == activeSettingsSource())
         copyLoopRange (channels[static_cast<size_t> (channel)], range);
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "channel_loop_length " + std::to_string (channel + 1) + " " + std::to_string (range.loopLength) + " 1"; });
     status ([&] { return "source_channel_reset " + std::to_string (source + 1) + " " + std::to_string (channel + 1); });
 }
@@ -707,7 +740,7 @@ void KickSnareHatEngine::copySourcePattern (int source, int destination)
     sourceSettings[static_cast<size_t> (destination)] = sourceSettings[static_cast<size_t> (source)];
     sourceChannelMutes[static_cast<size_t> (destination)] = sourceChannelMutes[static_cast<size_t> (source)];
 
-    recomposeWindow (0, stepCount, true);
+    recomposeGenerated();
     status ([&] { return "source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1); });
 }
 
@@ -767,8 +800,9 @@ int KickSnareHatEngine::pickRandomSource (const ActiveSourceList* active)
 
 void KickSnareHatEngine::generateWindow (int startStep, int length, bool forceEmit)
 {
-    startStep = clampInt (startStep, 0, stepCount - 1);
-    length = clampInt (length, 1, stepCount);
+    const int generatedLength = generatedBufferLength();
+    startStep = clampInt (startStep, 0, generatedLength - 1);
+    length = clampInt (length, 1, generatedLength);
 
     ActiveSourceList activeSources;
     int stackSource = -1;
@@ -783,7 +817,7 @@ void KickSnareHatEngine::generateWindow (int startStep, int length, bool forceEm
 
     for (int offset = 0; offset < length; ++offset)
     {
-        const int step = mod (startStep + offset, stepCount);
+        const int step = mod (startStep + offset, generatedLength);
 
         for (int channel = 0; channel < channelCount; ++channel)
         {
@@ -815,10 +849,9 @@ void KickSnareHatEngine::generateWindow (int startStep, int length, bool forceEm
     markPreviewDirty (forceEmit);
 }
 
-void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceEmit)
+void KickSnareHatEngine::recomposeGenerated()
 {
-    startStep = clampInt (startStep, 0, stepCount - 1);
-    length = clampInt (length, 1, stepCount);
+    const int generatedLength = generatedBufferLength();
 
     ActiveSourceList activeSources;
     int initialStackSource = -1;
@@ -827,10 +860,8 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
     if (generationMode != GenerationMode::staticSource)
         activeSources = activeSourceIndices();
 
-    for (int offset = 0; offset < length; ++offset)
+    for (int step = 0; step < generatedLength; ++step)
     {
-        const int step = mod (startStep + offset, stepCount);
-
         for (int channel = 0; channel < channelCount; ++channel)
         {
             int source = 0;
@@ -873,7 +904,7 @@ void KickSnareHatEngine::recomposeWindow (int startStep, int length, bool forceE
     if (sourcesChanged)
         ++generationVersion_;
 
-    markPreviewDirty (forceEmit);
+    markPreviewDirty (true);
 }
 
 bool KickSnareHatEngine::adoptGeneratedSources (const GeneratedSourcesFrame& frame)
@@ -885,7 +916,7 @@ bool KickSnareHatEngine::adoptGeneratedSources (const GeneratedSourcesFrame& fra
 
     for (int channel = 0; channel < channelCount; ++channel)
     {
-        for (int step = 0; step < stepCount; ++step)
+        for (int step = 0; step < generatedStepCount; ++step)
         {
             const int source = frame.sources[static_cast<size_t> (channel)][static_cast<size_t> (step)];
             auto& cell = generated[static_cast<size_t> (channel)][static_cast<size_t> (step)];
@@ -928,7 +959,7 @@ void KickSnareHatEngine::resetPlayback (bool emitStatus)
 {
     currentStep = 0;
     playingStepOneBased = 0;
-    generateWindow (0, stepCount, true);
+    generateWindow (0, generatedBufferLength(), true);
 
     if (emitStatus)
         status ([] { return std::string { "reset" }; });
@@ -993,7 +1024,8 @@ nlohmann::json KickSnareHatEngine::snapshot() const
 
         nlohmann::json row = nlohmann::json::array();
 
-        for (int step = 0; step < stepCount; ++step)
+        const int length = generationMode == GenerationMode::staticSource ? stepCount : generatedStepCount;
+        for (int step = 0; step < length; ++step)
             row.push_back (cellToJson (generated[static_cast<size_t> (channel)][static_cast<size_t> (step)], true));
 
         generatedOut.push_back (row);
@@ -1001,6 +1033,7 @@ nlohmann::json KickSnareHatEngine::snapshot() const
 
     return {
         { "stepCount", stepCount },
+        { "generatedStepCount", generatedStepCount },
         { "channelCount", channelCount },
         { "refreshSteps", refreshSteps },
         { "generationMode", std::string { generationModeToString (generationMode) } },
@@ -1024,6 +1057,7 @@ DocumentState KickSnareHatEngine::documentState() const
     DocumentState document;
     auto& settings = document.settings;
     settings.stepCount = stepCount;
+    settings.generatedStepCount = generatedStepCount;
     settings.channelCount = channelCount;
     settings.refreshSteps = refreshSteps;
     settings.generationMode = generationMode;
@@ -1052,6 +1086,7 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
     const auto& settingsIn = document.settings;
     nlohmann::json cells = nlohmann::json::array();
     nlohmann::json nudges = nlohmann::json::array();
+    nlohmann::json spans = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
@@ -1069,6 +1104,8 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
                 // ten-field cycle-offset layout. Nudge is an optional sparse extension.
                 if (cell.nudge != 0)
                     nudges.push_back ({ source, channel, step, cell.nudge });
+                if (cell.span != CellDefaults::span)
+                    spans.push_back ({ source, channel, step, cell.span });
 
                 if (! cell.enabled
                     && cell.velocity == 100
@@ -1132,9 +1169,10 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
         mutes.push_back (row);
     }
 
-    return {
+    nlohmann::json state {
         { "v", 1 },
         { "stepCount", settingsIn.stepCount },
+        { "generatedStepCount", settingsIn.generatedStepCount },
         { "channelCount", settingsIn.channelCount },
         { "refreshSteps", settingsIn.refreshSteps },
         { "generationMode", std::string { generationModeToString (settingsIn.generationMode) } },
@@ -1152,6 +1190,9 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentState& document
         { "cells", cells },
         { "cellNudges", nudges }
     };
+    if (! spans.empty())
+        state["cellSpans"] = std::move (spans);
+    return state;
 }
 
 bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
@@ -1189,6 +1230,7 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
         || ! keyIs ("sourceChannelMutes", &nlohmann::json::is_array)
         || ! keyIs ("cells", &nlohmann::json::is_array)
         || ! optionalKeyIs ("tempo", &nlohmann::json::is_number)
+        || ! optionalKeyIs ("generatedStepCount", &nlohmann::json::is_number_integer)
         || ! optionalKeyIs ("swingSubdivisionIndex", &nlohmann::json::is_number)
         || ! optionalKeyIs ("sourceSettings", &nlohmann::json::is_array))
         return false;
@@ -1217,11 +1259,14 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
             return false;
     }
 
-    if (state.contains ("cellNudges"))
+    for (const auto* key : { "cellNudges", "cellSpans" })
     {
-        if (! state["cellNudges"].is_array())
+        const auto entries = state.find (key);
+        if (entries == state.end())
+            continue;
+        if (! entries->is_array())
             return false;
-        for (const auto& entry : state["cellNudges"])
+        for (const auto& entry : *entries)
             if (! entry.is_array() || entry.size() != 4
                 || ! std::all_of (entry.begin(), entry.end(), [] (const auto& value) { return value.is_number_integer(); }))
                 return false;
@@ -1265,7 +1310,9 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
 
     stepCount = clampInt (state["stepCount"].get<int>(), 1, Constants::maxSteps);
     channelCount = clampInt (state["channelCount"].get<int>(), 1, Constants::maxChannels);
-    refreshSteps = clampInt (state["refreshSteps"].get<int>(), 1, stepCount);
+    const int previousGeneratedStepCount = generatedStepCount;
+    generatedStepCount = clampInt (state.value ("generatedStepCount", stepCount), 1, Constants::maxSteps);
+    refreshSteps = clampInt (state["refreshSteps"].get<int>(), 1, generatedStepCount);
     generationMode = generationModeFromJson (state, GenerationMode::stack);
     staticSource = clampInt (state["staticSource"].get<int>(), Constants::mutedStaticSource, Constants::sourceCount - 1);
     rate = Constants::normalizeRate (state["rate"].get<std::string>());
@@ -1466,21 +1513,30 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
             });
     }
 
-    if (state.contains ("cellNudges"))
+    for (const auto& [key, field, minimum, maximum] : {
+             std::tuple { "cellNudges", &Cell::nudge, -100, 100 },
+             std::tuple { "cellSpans", &Cell::span, 1, Constants::maxSteps } })
     {
-        for (const auto& entry : state["cellNudges"])
+        const auto entries = state.find (key);
+        if (entries == state.end())
+            continue;
+        for (const auto& entry : *entries)
         {
             const int source = entry[0].get<int>();
             const int channel = entry[1].get<int>();
             const int step = entry[2].get<int>();
             if (source >= 0 && source < Constants::sourceCount && channel >= 0 && channel < Constants::maxChannels
                 && step >= 0 && step < Constants::maxSteps)
-                sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)].nudge = clampInt (entry[3].get<int>(), -100, 100);
+                sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)].*field = clampInt (entry[3].get<int>(), minimum, maximum);
         }
     }
 
     if (keepGeneratedSources)
-        recomposeWindow (0, stepCount, true);
+    {
+        if (generatedStepCount != previousGeneratedStepCount)
+            ++generationVersion_;
+        recomposeGenerated();
+    }
     else
         resetPlayback (false);
 

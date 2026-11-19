@@ -8,7 +8,6 @@ namespace ksh::ui
     {
     public:
         std::function<void()> onChoose;
-        NoteInput() { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
         void mouseDown (const juce::MouseEvent& e) override { armed = isEnabled() && e.mods.isLeftButtonDown(); }
         void mouseDrag (const juce::MouseEvent&) override {}
         void mouseUp (const juce::MouseEvent& e) override
@@ -51,7 +50,7 @@ namespace ksh::ui
             setFocusContainerType (FocusContainerType::keyboardFocusContainer);
             addAndMakeVisible (close);
             close.setTitle ("Close note chooser");
-            close.getProperties().set ("icon", "clear");
+            close.getProperties().set ("icon", "close");
             close.onClick = [this] { dismiss(); };
             for (auto* button : { &previous, &next })
                 addAndMakeVisible (*button);
@@ -94,8 +93,9 @@ namespace ksh::ui
         }
         std::function<void (int)> onChoose, onNavigate;
         using RowNotes = std::array<int, Constants::maxChannels>;
+        enum class PresetOctave { current, fixed };
         std::function<void (int)> onTransposeAll;
-        std::function<void (const RowNotes&)> onPresetAll;
+        std::function<void (RowNotes, PresetOctave)> onPresetAll;
 
         void setRowNoteInput (int row, NoteInput& input)
         {
@@ -296,14 +296,14 @@ namespace ksh::ui
             void paintButton (juce::Graphics& g, bool hover, bool down) override
             {
                 const auto r = getLocalBounds().toFloat().reduced (0.5f);
-                auto colour = getToggleState() ? Palette::accent : black ? Palette::app : Palette::text.darker (0.12f);
+                auto colour = getToggleState() ? Palette::accent : black ? Palette::controls.app : Palette::text.darker (0.12f);
                 if (isEnabled() && (hover || down || hasKeyboardFocus (false)))
                     colour = colour.interpolatedWith (Palette::accent, 0.25f);
                 g.setColour (colour.withMultipliedAlpha (isEnabled() ? 1.0f : 0.2f));
                 g.fillRoundedRectangle (r, 4);
-                g.setColour (Palette::border.withAlpha (0.65f));
+                g.setColour (Palette::controls.border.withAlpha (0.65f));
                 g.drawRoundedRectangle (r, 4, 1);
-                ksh::ui::text (g, getButtonText(), r.withTrimmedTop (r.getHeight() - 28), 13, !isEnabled() ? Palette::faint : getToggleState() || !black ? Palette::app : Palette::text, true);
+                ksh::ui::text (g, getButtonText(), r.withTrimmedTop (r.getHeight() - 28), 13, !isEnabled() ? Palette::faint : getToggleState() || !black ? Palette::controls.app : Palette::text, true);
             }
         };
         static constexpr int keyCount = 48;
@@ -323,16 +323,7 @@ namespace ksh::ui
 
         void paintNoteInput (juce::Graphics& g, const NoteInput& input, bool active)
         {
-            auto bounds = getLocalArea (&input, input.getLocalBounds()).toFloat();
-            if (input.caption.isNotEmpty())
-            {
-                if (input.captionWidth > 0)
-                    bounds.removeFromLeft (static_cast<float> (input.captionWidth));
-                else
-                    bounds.removeFromTop (18.0f + static_cast<float> (input.captionGap));
-            }
-            if (input.valueWidth > 0)
-                bounds.setWidth (static_cast<float> (juce::jmin (input.valueWidth, input.getWidth())));
+            const auto bounds = getLocalArea (&input, input.valueFaceBounds());
             if (active)
             {
                 for (int spread = 8; spread > 0; --spread)
@@ -340,16 +331,22 @@ namespace ksh::ui
                     g.setColour (Palette::accent.withAlpha (0.018f * static_cast<float> (9 - spread)));
                     g.drawRoundedRectangle (bounds.expanded (static_cast<float> (spread)), 5.0f + static_cast<float> (spread), 2);
                 }
-                surface (g, bounds.reduced (0.5f), true, false);
+                controlSurface (g, bounds.reduced (0.5f), true, false);
             }
             const auto label = input.format ? input.format (input.value) : juce::String (input.value) + input.suffix;
             text (g, label, bounds, input.valueFontSize, juce::Colours::white, true);
         }
         void showScalePresets()
         {
-            struct Preset { const char* label; RowNotes intervals; };
+            struct Preset
+            {
+                const char* label;
+                RowNotes pitches;
+                PresetOctave octave = PresetOctave::current;
+            };
             static constexpr std::array presets {
                 Preset { "Chromatic", { 0, 1, 2, 3, 4, 5, 6, 7 } },
+                Preset { "Ruismaker", { 49, 51, 54, 56, 58, 61, 63, 66 }, PresetOctave::fixed },
                 Preset { "Major", { 0, 2, 4, 5, 7, 9, 11, 12 } },
                 Preset { "Natural minor", { 0, 2, 3, 5, 7, 8, 10, 12 } },
                 Preset { "Dorian", { 0, 2, 3, 5, 7, 9, 10, 12 } },
@@ -369,10 +366,12 @@ namespace ksh::ui
                     if (safe == nullptr || !safe->isVisible() || !safe->onPresetAll
                         || !juce::isPositiveAndBelow (result - 1, static_cast<int> (presets.size())))
                         return;
-                    auto notes = presets[static_cast<size_t> (result - 1)].intervals;
-                    for (auto& note : notes)
-                        note += Constants::defaultChannelNotes.front();
-                    safe->onPresetAll (notes);
+                    const auto& preset = presets[static_cast<size_t> (result - 1)];
+                    auto notes = preset.pitches;
+                    if (preset.octave == PresetOctave::current)
+                        for (auto& note : notes)
+                            note += Constants::defaultChannelNotes.front();
+                    safe->onPresetAll (notes, preset.octave);
                 });
         }
         void refresh()

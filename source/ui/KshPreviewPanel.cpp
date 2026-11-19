@@ -4,13 +4,49 @@ namespace ksh::ui
 {
     namespace
     {
+        constexpr auto lockHeading = "Lock Channel to Pattern";
+
+        struct RandomLabLayout
+        {
+            RandomLabLayout (juce::Rectangle<int> bounds, int rightInset)
+            {
+                auto content = bounds.reduced (0, 12).withTrimmedLeft (Layout::outerGutter).withTrimmedRight (rightInset);
+                header = content.removeFromTop (Layout::touchTarget);
+                close = header.removeFromRight (140);
+                content.removeFromTop (12);
+                controls = content.removeFromRight (468);
+                preview = content.withTrimmedRight (16);
+                auto fields = controls.reduced (22, 20);
+                auto modeRow = fields.removeFromTop (20 + Layout::touchTarget);
+                refresh = modeRow.removeFromRight (156);
+                mode = modeRow.withTrimmedRight (12).withTrimmedTop (20);
+                fields.removeFromTop (24);
+                locksHeading = fields.removeFromTop (24);
+                fields.removeFromTop (8);
+                help = fields.removeFromBottom (80);
+                fields.removeFromBottom (12);
+                lockHeight = juce::jlimit (68, 108, (fields.getHeight() - 10) / 2);
+                lockFields = fields.removeFromTop (lockHeight * 2 + 10);
+                help.setY (lockFields.getBottom() + 12);
+            }
+
+            juce::Rectangle<int> lockBounds (int channel) const
+            {
+                const int stride = (lockFields.getWidth() + 8) / 4;
+                return { lockFields.getX() + channel % 4 * stride, lockFields.getY() + channel / 4 * (lockHeight + 10), stride - 8, lockHeight };
+            }
+
+            juce::Rectangle<int> header, close, preview, controls, mode, refresh, locksHeading, lockFields, help;
+            int lockHeight = 0;
+        };
+
         const juce::Rectangle<float> wordmarkBounds { 24, 34.68f, 242.88f, 95.04f };
         const juce::Rectangle<float> makerBounds { 24, 19, 170, 20 };
-        juce::AffineTransform wordmarkTransform (juce::Rectangle<float> bounds)
+        juce::AffineTransform wordmarkTransform (juce::Rectangle<float> bounds, float artworkScale)
         {
             constexpr float margin = 16.0f;
             constexpr float wordmarkScale = 0.9f;
-            const float scale = wordmarkScale * juce::jmax (0.0f, bounds.getWidth() - 2.0f * margin) / wordmarkBounds.getWidth();
+            const float scale = wordmarkScale * artworkScale * juce::jmax (0.0f, bounds.getWidth() - 2.0f * margin) / wordmarkBounds.getWidth();
             const auto brandingBounds = wordmarkBounds.getUnion (makerBounds);
             return juce::AffineTransform::scale (scale).translated (bounds.getCentreX() - brandingBounds.getCentreX() * scale,
                                                                     bounds.getCentreY() - brandingBounds.getCentreY() * scale);
@@ -19,17 +55,171 @@ namespace ksh::ui
         {
             return inspector.toFloat().withX (0).withWidth (static_cast<float> (inspector.getX()));
         }
+
+        struct PhoneGeneratorLayout
+        {
+            explicit PhoneGeneratorLayout (juce::Rectangle<int> bounds)
+            {
+                controls = bounds.removeFromRight (bounds.getWidth() * 42 / 100);
+                preview = bounds.withTrimmedRight (12);
+            }
+
+            juce::Rectangle<int> preview, controls;
+        };
     }
 
-    void PreviewPanel::paintBranding (juce::Graphics& g, juce::Rectangle<float> bounds)
+    AccentWordmark::AccentWordmark (bool showRandomizer, float scale)
+        : artworkScale (scale)
+    {
+        setInterceptsMouseClicks (false, true);
+        addAndMakeVisible (backdrop);
+        backdrop.setTitle ("Background tone");
+        backdrop.setTooltip ("Drag up or down for brightness, left or right for tint. Double-click to reset.");
+        backdrop.setWantsKeyboardFocus (false);
+        backdrop.setMouseClickGrabsKeyboardFocus (false);
+        backdrop.setMouseCursor (juce::MouseCursor::UpDownLeftRightResizeCursor);
+        backdrop.pressed = [this] (const juce::MouseEvent& event)
+        {
+            startingTone.reset();
+            draggingBackdrop = false;
+            if (event.mods.isLeftButtonDown() && !event.mods.isPopupMenu())
+                startingTone = Palette::backgroundTone();
+        };
+        backdrop.dragged = [this] (const juce::MouseEvent& event)
+        {
+            if (startingTone && (draggingBackdrop || event.getDistanceFromDragStart() >= 3) && onBackgroundToneEdited)
+            {
+                constexpr float sensitivity = 0.7f;
+                const int brightness = -juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartY()) * sensitivity);
+                const int tint = juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartX()) * sensitivity);
+                draggingBackdrop = true;
+                onBackgroundToneEdited ({ startingTone->brightness + brightness, startingTone->tint + tint }, false);
+            }
+        };
+        backdrop.released = [this] (const juce::MouseEvent&)
+        {
+            startingTone.reset();
+            if (std::exchange (draggingBackdrop, false) && onBackgroundToneEdited)
+                onBackgroundToneEdited (Palette::backgroundTone(), true);
+        };
+        backdrop.onDoubleClick = [this]
+        {
+            startingTone.reset();
+            draggingBackdrop = false;
+            if (onBackgroundToneEdited)
+                onBackgroundToneEdited ({ 0, 0 }, true);
+        };
+        for (auto* letter : { &orangeLogo, &blueLogo })
+        {
+            addAndMakeVisible (*letter);
+            letter->setMouseCursor (juce::MouseCursor::UpDownLeftRightResizeCursor);
+        }
+        orangeLogo.setTitle ("Orange accent");
+        blueLogo.setTitle ("Blue accent");
+        for (auto* letter : { &orangeLogo, &blueLogo })
+            letter->setTooltip ("Drag left or right for hue, up or down for luminosity. Double-click to reset.");
+        orangeLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (false); };
+        blueLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (true); };
+        orangeLogo.onColourEdited = [this] (std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (false, colour, finished); };
+        blueLogo.onColourEdited = [this] (std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (true, colour, finished); };
+        if (showRandomizer)
+        {
+            addAndMakeVisible (randomizerLogo);
+            randomizerLogo.setTitle ("Cycle randomizer view");
+            randomizerLogo.setTooltip ("Cycle through Top Secret Randomizer, Super Secret Randomizer and the grid");
+            randomizerLogo.onClick = [this] { if (onRandomizerCycle) onRandomizerCycle(); };
+        }
+    }
+
+    void AccentWordmark::AccentLogoButton::mouseDown (const juce::MouseEvent& event)
+    {
+        if (!isEnabled() || !event.mods.isLeftButtonDown() || event.mods.isPopupMenu())
+            return;
+        startingColour = Palette::accentColour (blueAccent);
+        draggingAccent = false;
+        LogoButton::mouseDown (event);
+    }
+
+    void AccentWordmark::AccentLogoButton::mouseDrag (const juce::MouseEvent& event)
+    {
+        const int delta = -event.getDistanceFromDragStartY();
+        if (startingColour && (draggingAccent || event.getDistanceFromDragStart() >= 3))
+        {
+            draggingAccent = true;
+            setState (buttonNormal);
+            const float hue = startingColour->getHue() + static_cast<float> (event.getDistanceFromDragStartX()) / 200.0f;
+            const float amount = juce::jlimit (-1.0f, 1.0f, static_cast<float> (delta) / 110.0f);
+            const auto lightness = juce::jmap (std::abs (amount), startingColour->getLightness(), amount > 0 ? 0.88f : 0.20f);
+            if (onColourEdited)
+                onColourEdited (juce::Colour::fromHSL (hue - std::floor (hue), startingColour->getSaturationHSL(), lightness, 1.0f), false);
+        }
+        else
+            LogoButton::mouseDrag (event);
+    }
+
+    void AccentWordmark::AccentLogoButton::mouseUp (const juce::MouseEvent& event)
+    {
+        startingColour.reset();
+        if (!std::exchange (draggingAccent, false))
+            LogoButton::mouseUp (event);
+        else if (onColourEdited)
+            onColourEdited (Palette::accentOverride (blueAccent), true);
+    }
+
+    void AccentWordmark::AccentLogoButton::mouseDoubleClick (const juce::MouseEvent& event)
+    {
+        if (!isEnabled() || event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown() || !onColourEdited)
+            return;
+        startingColour.reset();
+        draggingAccent = false;
+        onColourEdited (std::nullopt, true);
+    }
+
+    void AccentWordmark::resized()
+    {
+        backdrop.setBounds (getLocalBounds());
+        const auto transform = wordmarkTransform (getLocalBounds().toFloat(), artworkScale);
+        const float unit = wordmarkBounds.getWidth() / 556.632813f;
+        orangeLogo.setBounds (wordmarkBounds.withWidth (197.021484f * unit).transformedBy (transform).getSmallestIntegerContainer());
+        blueLogo.setBounds (wordmarkBounds.withTrimmedLeft (358.0f * unit).transformedBy (transform).getSmallestIntegerContainer());
+        randomizerLogo.setBounds (orangeLogo.getBounds().withX (orangeLogo.getRight()).withRight (blueLogo.getX()));
+    }
+
+    void AccentWordmark::paint (juce::Graphics& g)
+    {
+        paintBranding (g, getLocalBounds().toFloat(), artworkScale);
+    }
+
+    void AccentWordmark::paintBranding (juce::Graphics& g, juce::Rectangle<float> bounds, float scale)
     {
         const juce::Graphics::ScopedSaveState savedState (g);
-        g.addTransform (wordmarkTransform (bounds));
+        g.addTransform (wordmarkTransform (bounds, scale));
         // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
         static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
         text (g, "OFSOUND", makerBounds, 13, Palette::text, true, juce::Justification::centredLeft);
         if (artwork == nullptr)
             return;
+
+        static const auto letters = []
+        {
+            std::array<juce::DrawableShape*, 2> result {};
+            for (auto* child : artwork->getChildren())
+                if (auto* shape = dynamic_cast<juce::DrawableShape*> (child))
+                {
+                    if (shape->getFill().colour == Palette::orangeAccent)
+                        result[0] = shape;
+                    else if (shape->getFill().colour == Palette::blueAccent)
+                        result[1] = shape;
+                }
+            return result;
+        }();
+        for (size_t index = 0; index < letters.size(); ++index)
+            if (auto* letter = letters[index])
+            {
+                const auto colour = Palette::accentColour (index == 1);
+                if (letter->getFill().colour != colour)
+                    letter->setFill (colour);
+            }
 
         // Switch off to draw the original flat SVG with the same placement.
         constexpr bool useRaisedWordmark = true;
@@ -58,38 +248,57 @@ namespace ksh::ui
     }
     PreviewPanel::PreviewPanel (EditorController& c, bool randomSectionIn) : controller (c), randomSection (randomSectionIn), cycle (c)
     {
-        // Observe child hover without delivering our own double-click handler
-        // a second time through Component's mouse-listener dispatch.
         addMouseListener (&childHoverListener, true);
-        if (!randomSection)
+        if (randomSection)
+        {
+            addChildComponent (close);
+            addChildComponent (xyPad);
+            close.getProperties().set ("footerControl", true);
+            close.getProperties().set ("backToGrid", true);
+            close.setTooltip ("Return to the step grid (Esc)");
+            close.onClick = [this] { if (onClose) onClose(); };
+            mode.setTitle ("Random mode");
+            mode.setTooltip ("Click to cycle through Off, Stack and Per Channel");
+            addAndMakeVisible (patternLength);
+            patternLength.setTitle ("Randomizer pattern length");
+            patternLength.setTooltip ("Drag or double-click to set the generated pattern length");
+            patternLength.caption = "Steps";
+            patternLength.captionWidth = 42;
+            patternLength.captionFontSize = 12;
+            patternLength.minimum = 1;
+            patternLength.maximum = Constants::maxSteps;
+            patternLength.resetValue = 16;
+            patternLength.onBegin = [this] { controller.begin ("Change generated pattern length"); };
+            patternLength.onChange = [this] (int value) { controller.command ("generated_steps", { value }); };
+            patternLength.onEnd = [this] { controller.commit(); };
+            patternLength.onCancel = [this] { controller.cancel(); };
+        }
+        else
         {
             getProperties().set ("hideDisabledHelp", true);
-            for (auto* button : { &orangeLogo, &blueLogo })
-            {
-                addAndMakeVisible (*button);
-                button->setMouseCursor (juce::MouseCursor::PointingHandCursor);
-            }
-            orangeLogo.setTitle ("Orange accent");
-            blueLogo.setTitle ("Blue accent");
-            orangeLogo.setTooltip ("Orange accent. Double-click for controls.");
-            blueLogo.setTooltip ("Blue accent. Double-click for controls.");
-            orangeLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (false); };
-            blueLogo.onClick = [this] { if (onAccentSelected) onAccentSelected (true); };
+            addAndMakeVisible (wordmark);
+            wordmark.onAccentSelected = [this] (bool blue) { if (onAccentSelected) onAccentSelected (blue); };
+            wordmark.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour, bool finished) { if (onAccentColourEdited) onAccentColourEdited (blue, colour, finished); };
+            wordmark.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone, bool finished) { if (onBackgroundToneEdited) onBackgroundToneEdited (tone, finished); };
+            wordmark.onRandomizerCycle = [this] { if (onRandomizerCycle) onRandomizerCycle(); };
         }
         addAndMakeVisible (mode);
         addAndMakeVisible (refresh);
         addAndMakeVisible (velocity);
         addAndMakeVisible (probability);
         addAndMakeVisible (roll);
+        addChildComponent (rhythm);
+        rhythm.setTitle ("Step rhythm and triplets");
+        rhythm.onClick = [this] { if (onRhythm) onRhythm(); };
         addAndMakeVisible (nudge);
         addAndMakeVisible (remove);
         addAndMakeVisible (cycle);
         mode.onClick = [this] { const auto m = controller.state.playback.generationMode; controller.command ("mode", { m == GenerationMode::staticSource ? "stack" : m == GenerationMode::stack ? "per_channel" : "static" }, "Generation mode"); };
-        refresh.setTitle ("Generation refresh length");
+        refresh.setTitle ("Refresh Every");
         refresh.setTooltip ("Steps between generations");
-        refresh.caption = "Length";
+        refresh.caption = "Refresh Every";
         refresh.minimum = 1;
-        refresh.maximum = 32;
+        refresh.maximum = Constants::maxSteps;
         refresh.suffix = " steps";
         refresh.onBegin = [this] { controller.begin ("Refresh length"); };
         refresh.onChange = [this] (int v) { controller.command ("refresh_steps", { v }); };
@@ -104,7 +313,7 @@ namespace ksh::ui
             lock.sensitivity = 14;
             lock.caption = juce::String (ch + 1);
             lock.setTitle ("Pattern lock channel " + juce::String (ch + 1));
-            lock.setTooltip ("Off lets generation pick a pattern");
+            lock.setTooltip ("Drag to choose a pattern. Right-click to set it to Off.");
             lock.format = [] (int v) { return v < 0 ? juce::String ("OFF") : "P" + juce::String (v + 1); };
             lock.onBegin = [this] { controller.begin ("Channel lock"); };
             lock.onChange = [this, ch] (int v) { controller.command ("channel_lock", v < 0 ? nlohmann::json::array ({ ch + 1, "random" }) : nlohmann::json::array ({ ch + 1, v + 1 })); };
@@ -211,6 +420,7 @@ namespace ksh::ui
         remove.onClick = [this] { controller.deleteSelection(); };
         cycle.locations = [this] { return controller.selection (true); };
         cycle.inlineLayout = !randomSection;
+        cycle.resetOnDoubleClickAnywhere = !randomSection;
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
             control->valueFontSize = 22;
@@ -279,12 +489,21 @@ namespace ksh::ui
         nudge.setLayerHighlighted (layer == Layer::nudge);
         roll.setLayerHighlighted (layer == Layer::roll);
     }
-    void PreviewPanel::mouseDoubleClick (const juce::MouseEvent& event)
+    void PreviewPanel::setXYRandomizer (bool enabled)
     {
-        if (!randomSection && event.mods.isLeftButtonDown()
-            && wordmarkBounds.contains (event.position.transformedBy (wordmarkTransform (brandingBoundsForInspector (inspectorBounds)).inverted()))
-            && onLogoDoubleClick)
-            onLogoDoubleClick();
+        if (xyRandomizer == enabled)
+            return;
+        cancelGesture();
+        xyRandomizer = enabled;
+        xyPad.setVisible (enabled);
+        patternLength.setVisible (!enabled);
+        mode.setVisible (!enabled);
+        refresh.setVisible (!enabled);
+        for (auto& lock : locks)
+            lock.setVisible (!enabled);
+        resized();
+        sync();
+        repaint();
     }
     void PreviewPanel::beginRelative (const juce::String& label)
     {
@@ -319,9 +538,32 @@ namespace ksh::ui
         resized();
         repaint();
     }
-    void PreviewPanel::setCompact (bool enabled)
+    void PreviewPanel::setDesktopRandomizerSize (int width, int height, int rightInset)
     {
+        const bool insetChanged = std::exchange (randomizerRightInset, rightInset) != rightInset;
+        if (getWidth() != width || getHeight() != height)
+            setSize (width, height);
+        else if (insetChanged)
+        {
+            resized();
+            repaint();
+        }
+    }
+
+    void PreviewPanel::setCompact (bool enabled, bool phone)
+    {
+        if (enabled)
+            setXYRandomizer (false);
         compact = enabled;
+        phoneGenerator = randomSection && phone;
+        rhythm.setVisible (!randomSection && phone);
+        if (randomSection)
+        {
+            if (phoneGenerator)
+                mode.getProperties().set ("phoneMenuIcon", static_cast<int> (phoneMenu::dice));
+            else
+                mode.getProperties().remove ("phoneMenuIcon");
+        }
         cycle.compact = enabled;
         for (auto* control : { &velocity, &probability, &roll, &nudge })
         {
@@ -339,8 +581,9 @@ namespace ksh::ui
     }
     void PreviewPanel::cancelGesture()
     {
+        xyPad.cancelGesture();
         setHoverLayer (std::nullopt);
-        for (auto* control : { &velocity, &probability, &roll, &nudge, &refresh })
+        for (auto* control : { &velocity, &probability, &roll, &nudge, &refresh, &patternLength })
             control->cancelGesture();
         for (auto& lock : locks)
             lock.cancelGesture();
@@ -348,19 +591,32 @@ namespace ksh::ui
     }
     void PreviewPanel::resized()
     {
-        orangeLogo.setVisible (!compact && !randomSection);
-        blueLogo.setVisible (!compact && !randomSection);
+        wordmark.setVisible (!compact && !randomSection);
+        close.setVisible (randomSection && !compact && !phoneGenerator);
         if (!compact && !randomSection)
+            wordmark.setBounds (brandingBoundsForInspector (inspectorBounds).toNearestInt());
+        if (phoneGenerator || (compact && xyRandomizer))
         {
-            const auto transform = wordmarkTransform (brandingBoundsForInspector (inspectorBounds));
-            const float unit = wordmarkBounds.getWidth() / 556.632813f;
-            orangeLogo.setBounds (wordmarkBounds.withWidth (197.021484f * unit).transformedBy (transform).getSmallestIntegerContainer());
-            blueLogo.setBounds (wordmarkBounds.withTrimmedLeft (358.0f * unit).transformedBy (transform).getSmallestIntegerContainer());
+            const PhoneGeneratorLayout phone (getLocalBounds());
+            patternLength.setBounds (phone.preview.reduced (14, 0).removeFromRight (84).withY (6).withHeight (32));
+            const auto controls = phone.controls.reduced (14, 0);
+            if (xyRandomizer)
+            {
+                xyPad.setBounds (controls.withTrimmedTop (30).withTrimmedBottom (12));
+                return;
+            }
+            mode.setBounds (controls.withY (33).withWidth (controls.getWidth() - 118).withHeight (48));
+            refresh.setBounds (controls.withTrimmedLeft (controls.getWidth() - 108).withY (14).withHeight (67));
+            const int stride = (controls.getWidth() + 8) / 4;
+            for (int ch = 0; ch < 8; ++ch)
+                locks[static_cast<size_t> (ch)].setBounds (controls.getX() + ch % 4 * stride, 112 + ch / 4 * 66, stride - 8, 62);
+            return;
         }
         if (compact)
         {
             if (randomSection)
             {
+                patternLength.setBounds (getLocalBounds().reduced (18, 0).removeFromRight (90).withY (30).withHeight (44));
                 mode.setBounds (18, 30, 180, 44);
                 refresh.setBounds (216, 10, 110, 64);
                 const int stride = (getWidth() - 36) / 8;
@@ -375,24 +631,45 @@ namespace ksh::ui
                 control->setBounds (inputX, 4, width, 40);
                 inputX += width + 10;
             }
+            if (rhythm.isVisible())
+            {
+                rhythm.setBounds (inputX, 4, 74, 40);
+                inputX += 84;
+            }
             remove.setBounds (getWidth() - 42, 4, 36, 40);
+            cycle.captionHeight = 0;
             cycle.setBounds (inputX - 4, 2, juce::jlimit (0, cycle.preferredWidth (44), remove.getX() - inputX), 44);
             return;
         }
-        mode.setBounds (378, 40, 180, 64);
-        refresh.setBounds (574, 20, 144, 84);
-        for (int ch = 0; ch < 8; ++ch)
+        if (randomSection)
+        {
+            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset);
+            close.setBounds (lab.close);
+            patternLength.setBounds (lab.preview.reduced (20, 0).removeFromRight (90).withTrimmedTop (10).withHeight (36));
+            if (xyRandomizer)
             {
-            auto& lock = locks[static_cast<size_t> (ch)];
-            lock.setBounds (378 + ch * ((getWidth() - 408) / 8), 140, (getWidth() - 408) / 8 - 8, 84);
-            lock.captionFontSize = 16;
-            lock.captionGap = 2;
-            lock.valueFontSize = 22;
+                auto area = lab.controls.reduced (16, 12);
+                area.removeFromTop (24);
+                area.removeFromBottom (44);
+                xyPad.setBounds (area);
+                return;
+            }
+            mode.setBounds (lab.mode);
+            refresh.captionFontSize = 15;
+            refresh.captionGap = 2;
+            refresh.valueFontSize = 20;
+            refresh.setBounds (lab.refresh);
+            for (int ch = 0; ch < 8; ++ch)
+            {
+                auto& lock = locks[static_cast<size_t> (ch)];
+                lock.captionFontSize = 14;
+                lock.captionGap = 2;
+                lock.valueFontSize = 20;
+                lock.setBounds (lab.lockBounds (ch));
+            }
+            return;
         }
-        refresh.captionFontSize = 16;
-        refresh.captionGap = 2;
-        refresh.valueFontSize = 22;
-        if (randomSection || inspectorBounds.isEmpty())
+        if (inspectorBounds.isEmpty())
             return;
         const int x = inspectorBounds.getX();
         constexpr int inputHeight = Layout::touchTarget;
@@ -407,19 +684,31 @@ namespace ksh::ui
             inputX += inputWidth + 10;
         }
         remove.setBounds (inspectorBounds.getRight() - 76, inputY, inputHeight, inputHeight);
-        cycle.setBounds (inputX, inputY - 4, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - inputX - 16), inputHeight + 8);
+        cycle.captionHeight = captionHeight - 4;
+        cycle.setBounds (inputX, captionY, juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), remove.getX() - inputX - 16),
+                         inputHeight + 8 + cycle.captionHeight);
     }
     void PreviewPanel::sync()
     {
         const auto& p = controller.state.playback;
+        if (randomSection && !xyRandomizer)
+            patternLength.setValue (p.generatedStepCount);
         mode.setButtonText (p.generationMode == GenerationMode::staticSource ? "Off" : p.generationMode == GenerationMode::stack ? "Stack"
                                                                                                                                  : "Per Channel");
-        refresh.maximum = p.stepCount;
+        refresh.maximum = p.generatedStepCount;
         refresh.setValue (controller.state.refreshSteps);
         for (int ch = 0; ch < 8; ++ch)
         {
-            locks[static_cast<size_t> (ch)].setValue (p.channels[static_cast<size_t> (ch)].lock);
-            locks[static_cast<size_t> (ch)].setEnabled (ch < p.channelCount);
+            auto& lock = locks[static_cast<size_t> (ch)];
+            lock.setValue (p.channels[static_cast<size_t> (ch)].lock);
+            lock.setEnabled (ch < p.channelCount);
+            if (randomSection)
+            {
+                const auto colour = Palette::channel (ch, controller.drumColors);
+                const auto caption = ch >= p.channelCount ? Palette::faint : controller.drumColors ? colour : Palette::muted;
+                if (std::exchange (lock.captionColour, caption) != caption)
+                    lock.repaint();
+            }
         }
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
@@ -432,6 +721,8 @@ namespace ksh::ui
             control->setAlpha (inspectorAlpha);
         }
         remove.setEnabled (active);
+        rhythm.setEnabled (selected.size() == 1);
+        rhythm.setAlpha (selected.size() == 1 ? 1.0f : 0.25f);
         remove.setAlpha (inspectorAlpha);
         cycle.setAlpha (inspectorAlpha);
         if (active)
@@ -453,13 +744,18 @@ namespace ksh::ui
         next.selectedCount = selected.size();
         if (randomSection)
         {
+            next.source = controller.source();
             next.channelCount = p.channelCount;
-            next.stepCount = p.stepCount;
+            next.stepCount = xyRandomizer ? p.stepCount : p.generatedStepCount;
             for (size_t ch = 0; ch < next.labels.size(); ++ch)
             {
                 next.labels[ch] = p.channels[ch].label;
-                for (size_t s = 0; s < next.generated[ch].size(); ++s)
-                    next.generated[ch][s] = p.generated[ch][s].enabled;
+                next.channelColours[ch] = Palette::channel (static_cast<int> (ch), controller.drumColors);
+                for (size_t s = 0; s < next.velocities[ch].size(); ++s)
+                {
+                    const auto& cell = xyRandomizer ? controller.cell ({ static_cast<int> (ch), static_cast<int> (s) }) : p.generated[ch][s];
+                    next.velocities[ch][s] = cell.enabled ? static_cast<uint8_t> (cell.velocity) : 0;
+                }
             }
         }
         if (painted != next)
@@ -468,33 +764,137 @@ namespace ksh::ui
             repaint();
         }
     }
+    void PreviewPanel::paintRandomizerGrid (juce::Graphics& g, juce::Rectangle<float> area,
+                                              float labelWidth, float labelSize) const
+    {
+        const auto& state = controller.state.playback;
+        if (!painted || area.isEmpty() || area.getWidth() <= labelWidth)
+            return;
+
+        auto labels = area.removeFromLeft (labelWidth);
+        const auto ruler = area.removeFromTop (16.0f);
+        labels.removeFromTop (ruler.getHeight());
+        const int stepCount = painted->stepCount;
+        const float cellWidth = area.getWidth() / static_cast<float> (stepCount);
+        const float rowHeight = area.getHeight() / static_cast<float> (Constants::maxChannels);
+        const float firstY = area.getCentreY() - rowHeight * static_cast<float> (state.channelCount) * 0.5f;
+        const float gap = juce::jmin (3.0f, cellWidth * 0.2f);
+        const float radius = juce::jmin (4.0f, cellWidth * 0.2f);
+        const auto backdrop = gridBackdropColour();
+        g.setColour (backdrop.overlaidWith (Palette::accent.withAlpha (0.05f)));
+        g.fillRoundedRectangle (area.withY (firstY).withHeight (rowHeight * static_cast<float> (state.channelCount)), radius);
+        const int rulerStride = cellWidth < 17.0f ? 8 : 4;
+        for (int step = 0; step < stepCount; ++step)
+        {
+            const float x = area.getX() + static_cast<float> (step) * cellWidth;
+            if (step == 0 || step == stepCount - 1
+                || (step % rulerStride == 0 && static_cast<float> (stepCount - 1 - step) * cellWidth >= 18.0f))
+                text (g, juce::String (step + 1), ruler.withX (x + cellWidth * 0.5f - 9.0f).withWidth (18.0f), 10, Palette::muted);
+            if (step != 0 && step % 4 == 0)
+            {
+                g.setColour (Palette::border.withAlpha (step % 16 == 0 ? 0.85f : 0.42f));
+                g.fillRect (x - 0.5f, firstY, 1.0f, rowHeight * static_cast<float> (state.channelCount));
+            }
+        }
+        for (int ch = 0; ch < state.channelCount; ++ch)
+        {
+            const auto channel = static_cast<size_t> (ch);
+            const int row = reverseRows ? state.channelCount - 1 - ch : ch;
+            const float y = firstY + static_cast<float> (row) * rowHeight;
+            const auto colour = painted->channelColours[channel];
+            text (g, state.channels[channel].label, labels.withTrimmedRight (8.0f).withY (y).withHeight (rowHeight),
+                  labelSize, controller.drumColors ? colour : Palette::muted, true, juce::Justification::centredLeft);
+            for (int step = 0; step < stepCount; ++step)
+            {
+                const auto index = static_cast<size_t> (step);
+                const float x = area.getX() + static_cast<float> (step) * cellWidth + gap * 0.5f;
+                const juce::Rectangle<float> cell (x, y + 2.0f, cellWidth - gap, juce::jmax (0.0f, rowHeight - 4.0f));
+                const int hitVelocity = painted->velocities[channel][index];
+                if (flashes[channel][index])
+                {
+                    g.setColour (Palette::text);
+                    g.fillRoundedRectangle (cell, radius);
+                }
+                else if (hitVelocity > 0)
+                {
+                    paintGridHitFill (g, cell, colour, hitVelocity, radius);
+                    g.setColour (Palette::text.withAlpha (0.14f));
+                    g.drawRoundedRectangle (cell.reduced (0.5f), radius, 1);
+                }
+                else
+                    paintGridSlot (g, cell, backdrop, step % 4 == 0, radius);
+            }
+        }
+    }
+
     void PreviewPanel::paint (juce::Graphics& g)
     {
         g.fillAll (Palette::app);
+        if (phoneGenerator || (compact && xyRandomizer))
+        {
+            const PhoneGeneratorLayout phone (getLocalBounds());
+            const auto pattern = controller.source() < 0 ? juce::String ("Muted Pattern")
+                                                        : "Pattern " + juce::String (controller.source() + 1);
+            phoneMenu::card (g, phone.preview.toFloat(), xyRandomizer ? pattern : juce::String ("Generated Pattern"));
+            phoneMenu::card (g, phone.controls.toFloat(), xyRandomizer ? juce::String ("Density / Variation") : juce::String {});
+            if (!xyRandomizer)
+            {
+                const auto heading = phone.controls.toFloat().reduced (14, 0);
+                text (g, "Random Mode", heading.withY (static_cast<float> (refresh.getY())).withHeight (18),
+                      refresh.captionFontSize, refresh.captionColour, true, juce::Justification::centredLeft);
+                text (g, lockHeading, heading.withY (94).withHeight (18), 12, Palette::muted, true, juce::Justification::centredLeft);
+                text (g, "Drag a lock to pin its channel to a pattern.", heading.withY (249).withHeight (18),
+                      12, Palette::muted, false, juce::Justification::centredLeft);
+            }
+
+            paintRandomizerGrid (g, phone.preview.toFloat().reduced (14, 12).withTrimmedTop (26), 46.0f, 11.0f);
+            return;
+        }
         if (compact)
         {
             surface (g, getLocalBounds().toFloat().reduced (1));
             if (randomSection)
             {
                 text (g, "Generation mode", { 18, 8, 180, 18 }, 12, Palette::text, true, juce::Justification::centredLeft);
-                text (g, "Channel pattern locks", { 18, 78, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
+                text (g, lockHeading, { 18, 78, 300, 18 }, 12, Palette::muted, true, juce::Justification::centredLeft);
                 text (g, "OFF lets the generator choose a pattern. Drag a lock to pin a channel to P1-P16.", { 18, 180, static_cast<float> (getWidth() - 36), 32 }, 12, Palette::muted, false, juce::Justification::centredLeft);
-                const auto& state = controller.state.playback;
-                const auto now = juce::Time::getMillisecondCounterHiRes();
-                const float cw = static_cast<float> (getWidth() - 100) / static_cast<float> (state.stepCount);
-                for (int ch = 0; ch < state.channelCount; ++ch)
-                {
-                    const int row = reverseRows ? state.channelCount - 1 - ch : ch;
-                    const float y = 224.0f + static_cast<float> (row) * 26.0f;
-                    text (g, state.channels[static_cast<size_t> (ch)].label, { 12, y, 78, 22 }, 11, Palette::muted, false, juce::Justification::centredLeft);
-                    for (int step = 0; step < state.stepCount; ++step)
-                    {
-                        const auto index = static_cast<size_t> (step);
-                        g.setColour (controller.generatedFlashes[static_cast<size_t> (ch)][index] > now ? Palette::text : state.generated[static_cast<size_t> (ch)][index].enabled ? Palette::info : Palette::surface);
-                        g.fillRoundedRectangle (92.0f + static_cast<float> (step) * cw, y, cw - 3.0f, 22, 3);
-                    }
-                }
+                paintRandomizerGrid (g, getLocalBounds().toFloat().reduced (12, 8).withTrimmedTop (210), 78.0f, 11.0f);
             }
+            return;
+        }
+        if (randomSection)
+        {
+            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset);
+            text (g, xyRandomizer ? "Top Secret Randomizer" : "Super Secret Randomizer", lab.header.toFloat(), 29, Palette::text, true, juce::Justification::centredLeft);
+            surface (g, lab.preview.toFloat());
+            surface (g, lab.controls.toFloat());
+            auto previewContent = lab.preview.toFloat().reduced (20, 16);
+            text (g, xyRandomizer ? "Pattern " + juce::String (controller.source() + 1) : juce::String ("Generated Pattern"), previewContent.removeFromTop (24), 16, Palette::text, true, juce::Justification::centredLeft);
+            previewContent.removeFromTop (12);
+
+            paintRandomizerGrid (g, previewContent, 76.0f, 15.0f);
+
+            if (xyRandomizer)
+            {
+                text (g, "Density / Variation", lab.controls.reduced (22, 12).withHeight (24).toFloat(), 17, Palette::text, true, juce::Justification::centredLeft);
+                auto help = lab.controls.reduced (22, 12).toFloat();
+                help = help.withY (help.getBottom() - 40).withHeight (40);
+                for (const auto* line : { "Rows 1–4: kick, snare, closed and open hat.",
+                                          "Rows 5–8: clap, tom, percussion and cymbal." })
+                    text (g, juce::String::fromUTF8 (line), help.removeFromTop (20), 13, Palette::muted, false, juce::Justification::centredLeft);
+                return;
+            }
+            text (g, "Random Mode", lab.mode.withY (lab.refresh.getY()).withHeight (18).toFloat(),
+                  refresh.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
+            text (g, lockHeading, lab.locksHeading.toFloat(), 17, Palette::text, true, juce::Justification::centredLeft);
+            auto help = lab.help.toFloat();
+            for (const auto* line : { "The randomizer draws from your non-empty patterns.",
+                                      "Stack picks one per refresh. Per Channel can mix them per step.",
+                                      "Refresh Every sets the number of steps between refreshes." })
+                text (g, line, help.removeFromTop (18), 13, Palette::muted, false, juce::Justification::centredLeft);
+            help.removeFromTop (4);
+            text (g, "Drag to pick a pattern. Off lets the generator choose.", help,
+                  13, Palette::muted, false, juce::Justification::centredLeft);
             return;
         }
         g.setColour (Palette::raised);
@@ -502,58 +902,23 @@ namespace ksh::ui
         // The same warm/cool branding field as the original, rendered with cached font/vector primitives.
         g.setGradientFill (juce::ColourGradient (Palette::accent.withAlpha (0.09f), 0, 180, Palette::info.withAlpha (0.04f), static_cast<float> (getWidth()), 0, false));
         g.fillAll();
-        if (!randomSection)
-        {
-            surface (g, inspectorBounds.toFloat());
-            const auto selectedCount = controller.selection (true).size();
-            const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
-            text (g, "Cycle beats", cycle.getBounds().withY (velocity.getY()).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
-            text (g, "Delete", remove.getBounds().withY (velocity.getY()).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
-        }
-        else
-        {
-            surface (g, { 360, 10, static_cast<float> (getWidth() - 372), 224 });
-            text (g, "Random Mode", { 378, 16, 180, 20 }, 16, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Channel Lock", { 378, 114, 300, 20 }, 16, Palette::text, true, juce::Justification::centredLeft);
-        }
-        const auto& state = controller.state.playback;
-        const auto now = juce::Time::getMillisecondCounterHiRes();
-        const float cw = state.stepCount > 16 ? 288.0f / static_cast<float> (state.stepCount) : 18.0f;
-        if (randomSection)
-        for (int ch = 0; ch < state.channelCount; ++ch)
-        {
-            const int row = reverseRows ? state.channelCount - 1 - ch : ch;
-            text (g, state.channels[static_cast<size_t> (ch)].label, { 8, 8 + static_cast<float> (row) * 18, 48, 15 }, 9, Palette::muted, false, juce::Justification::centredLeft);
-            for (int s = 0; s < state.stepCount; ++s)
-            {
-                const auto colour = controller.generatedFlashes[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now ? Palette::text : state.generated[static_cast<size_t> (ch)][static_cast<size_t> (s)].enabled ? Palette::info
-                                                                                                                                                                                                        : Palette::surface;
-                g.setColour (colour);
-                g.fillRoundedRectangle (60 + static_cast<float> (s) * cw, 8 + static_cast<float> (row) * 18, cw - 3, 15, 3);
-            }
-        }
-        if (randomSection)
-        {
-            const float width = static_cast<float> (getWidth() - 64);
-            surface (g, { 24, 250, width + 16, static_cast<float> (getHeight() - 274) });
-            text (g, "KSH / ofsound", { 48, 270, width, 44 }, 32, Palette::text, true, juce::Justification::centredLeft);
-            text (g, "Rhythm, with a little mischief.", { 48, 322, width, 28 }, 18, Palette::accent, false, juce::Justification::centredLeft);
-            text (g, "Made by ofsound. Built with JUCE.", { 48, 362, width, 24 }, 13, Palette::muted, false, juce::Justification::centredLeft);
-            text (g, "You found the random laboratory. Try a mode, set the length, lock a channel. Leave the rest to chance.", { 48, 400, width, 48 }, 13, Palette::text, false, juce::Justification::centredLeft);
-            text (g, "Double-click KSH again or press Escape to return.", { 48, static_cast<float> (getHeight() - 62), width, 24 }, 12, Palette::muted, false, juce::Justification::centredLeft);
-            return;
-        }
-        paintBranding (g, brandingBoundsForInspector (inspectorBounds));
+        surface (g, inspectorBounds.toFloat());
+        const auto selectedCount = controller.selection (true).size();
+        const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
+        text (g, "Cycle", cycle.getBounds().withY (velocity.getY()).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
+        text (g, "Delete", remove.getBounds().withY (velocity.getY()).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
     }
     void PreviewPanel::updatePlayback()
     {
         cycle.updatePlayback();
+        if (!randomSection)
+            return;
         const auto now = juce::Time::getMillisecondCounterHiRes();
         bool dirty = false;
-        for (int ch = 0; ch < 8; ++ch)
-            for (int s = 0; s < 32; ++s)
+        for (int ch = 0; ch < Constants::maxChannels; ++ch)
+            for (int s = 0; s < Constants::maxSteps; ++s)
             {
-                const bool next = controller.generatedFlashes[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now;
+                const bool next = (xyRandomizer ? controller.sourceFlashes : controller.generatedFlashes)[static_cast<size_t> (ch)][static_cast<size_t> (s)] > now;
                 auto& previous = flashes[static_cast<size_t> (ch)][static_cast<size_t> (s)];
                 if (next != previous)
                 {
@@ -563,10 +928,10 @@ namespace ksh::ui
             }
         if (dirty)
         {
-            if (compact)
+            if (compact || phoneGenerator)
                 repaint();
             else
-                repaint (0, 0, 350, 170);
+                repaint (RandomLabLayout (getLocalBounds(), randomizerRightInset).preview);
         }
     }
 }

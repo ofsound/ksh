@@ -87,6 +87,7 @@ namespace ksh
             return 0;
         }
 
+       #if JUCE_IOS
         MIDINetworkSession* enableSession()
         {
             // CoreMIDI owns this shared session. Keep it enabled for other MIDI apps after KSH closes.
@@ -113,6 +114,8 @@ namespace ksh
             return 0;
         }
 
+       #endif
+
         MIDIEndpointRef findSource (const juce::MidiDeviceInfo& source)
         {
             MIDIObjectRef object = 0;
@@ -128,6 +131,7 @@ namespace ksh
         }
     }
 
+   #if JUCE_IOS
     juce::MidiDeviceInfo enableStandaloneNetworkMidi()
     {
         const auto endpoint = findNetworkDestination (enableSession());
@@ -140,7 +144,9 @@ namespace ksh
         return info;
     }
 
-    struct StandaloneIOSMidiOutput::Impl
+   #endif
+
+    struct StandaloneCoreMidiOutput::Impl
     {
         juce::MidiDeviceInfo info;
         bool virtualSource = false;
@@ -160,6 +166,7 @@ namespace ksh
                 MIDIClientDispose (client);
         }
 
+        API_AVAILABLE (macos (11.0))
         void submit (const MIDIEventList* events) const
         {
             if (virtualSource)
@@ -168,6 +175,7 @@ namespace ksh
                 MIDISendEventList (port, endpoint, events);
         }
 
+        API_AVAILABLE (macos (11.0))
         void silence (MIDITimeStamp time) const
         {
             alignas (MIDIEventList) std::byte storage[1024] {};
@@ -184,16 +192,23 @@ namespace ksh
         }
     };
 
-    StandaloneIOSMidiOutput::StandaloneIOSMidiOutput() = default;
-    StandaloneIOSMidiOutput::~StandaloneIOSMidiOutput() { stop(); }
+    bool StandaloneCoreMidiOutput::isAvailable()
+    {
+        if (@available (macOS 11.0, *))
+            return true;
+        return false;
+    }
 
-    bool StandaloneIOSMidiOutput::matches (const juce::MidiDeviceInfo& info, bool virtualSource) const
+    StandaloneCoreMidiOutput::StandaloneCoreMidiOutput() = default;
+    StandaloneCoreMidiOutput::~StandaloneCoreMidiOutput() { stop(); }
+
+    bool StandaloneCoreMidiOutput::matches (const juce::MidiDeviceInfo& info, bool virtualSource) const
     {
         return impl != nullptr && impl->info == info && impl->virtualSource == virtualSource
                && impl->endpoint == (virtualSource ? findSource (info) : findDestination (info));
     }
 
-    juce::String StandaloneIOSMidiOutput::open (const juce::MidiDeviceInfo& info, bool virtualSource)
+    juce::String StandaloneCoreMidiOutput::open (const juce::MidiDeviceInfo& info, bool virtualSource)
     {
         stop();
         impl.reset();
@@ -210,7 +225,7 @@ namespace ksh
             if (MIDIClientCreateWithBlock (CFSTR ("KSH Timestamped MIDI"), &next->client, nil) != noErr
                 || MIDIOutputPortCreate (next->client, CFSTR ("KSH Timestamped Out"), &next->port) != noErr)
                 return "Could not create MIDI output port";
-            if (@available (iOS 18.0, *))
+            if (@available (macOS 15.0, iOS 18.0, *))
             {
                 SInt32 bitmap = 0;
                 if (MIDIObjectGetIntegerProperty (next->endpoint, kMIDIPropertyUMPActiveGroupBitmap, &bitmap) == noErr && bitmap != 0)
@@ -226,7 +241,7 @@ namespace ksh
         return {};
     }
 
-    void StandaloneIOSMidiOutput::prepare (double sampleRate, int maximumBlockSize)
+    void StandaloneCoreMidiOutput::prepare (double sampleRate, int maximumBlockSize)
     {
         if (impl != nullptr)
         {
@@ -235,51 +250,59 @@ namespace ksh
         }
     }
 
-    void StandaloneIOSMidiOutput::send (const juce::MidiBuffer& midi, juce::Optional<juce::uint64> hostTimeNs, int numSamples)
+    void StandaloneCoreMidiOutput::send (const juce::MidiBuffer& midi, juce::Optional<juce::uint64> hostTimeNs, int numSamples,
+                                        juce::Optional<juce::uint64> presentationTimeNs)
     {
         if (impl == nullptr)
             return;
         const auto now = mach_absolute_time();
         const auto nowNs = StandaloneMidiClock::nanosecondsToHostTicks (now, impl->timebase.denom, impl->timebase.numer);
-        const auto blockTime = impl->clock.beginBlock (hostTimeNs, nowNs, numSamples);
-        alignas (MIDIEventList) std::byte storage[4096] {};
-        auto* events = reinterpret_cast<MIDIEventList*> (storage);
-        auto* end = MIDIEventListInit (events, kMIDIProtocol_1_0);
-        forEachStandaloneMidiPacket (midi, impl->group, [&] (int offset, const juce::ump::View& view)
+        const auto scheduledTime = impl->clock.beginBlock (hostTimeNs, nowNs, numSamples);
+        const auto blockTime = presentationTimeNs.orFallback (scheduledTime);
+        if (@available (macOS 11.0, *))
         {
-            const auto time = StandaloneMidiClock::nanosecondsToHostTicks (impl->clock.eventTime (blockTime, offset),
-                                                                         impl->timebase.numer, impl->timebase.denom);
-            const auto* words = reinterpret_cast<const UInt32*> (view.data());
-            auto* added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
-            if (added == nullptr)
+            alignas (MIDIEventList) std::byte storage[4096] {};
+            auto* events = reinterpret_cast<MIDIEventList*> (storage);
+            auto* end = MIDIEventListInit (events, kMIDIProtocol_1_0);
+            forEachStandaloneMidiPacket (midi, impl->group, [&] (int offset, const juce::ump::View& view)
             {
+                const auto time = StandaloneMidiClock::nanosecondsToHostTicks (impl->clock.eventTime (blockTime, offset),
+                                                                             impl->timebase.numer, impl->timebase.denom);
+                const auto* words = reinterpret_cast<const UInt32*> (view.data());
+                auto* added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
+                if (added == nullptr)
+                {
+                    impl->submit (events);
+                    end = MIDIEventListInit (events, kMIDIProtocol_1_0);
+                    added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
+                }
+                jassert (added != nullptr); // A UMP is at most 16 bytes.
+                end = added;
+                impl->lastScheduledTime = juce::jmax (impl->lastScheduledTime, time);
+            });
+            if (events->numPackets != 0)
                 impl->submit (events);
-                end = MIDIEventListInit (events, kMIDIProtocol_1_0);
-                added = MIDIEventListAdd (events, sizeof (storage), end, time, view.size(), words);
-            }
-            jassert (added != nullptr); // A UMP is at most 16 bytes.
-            end = added;
-            impl->lastScheduledTime = juce::jmax (impl->lastScheduledTime, time);
-        });
-        if (events->numPackets != 0)
-            impl->submit (events);
+        }
     }
 
-    void StandaloneIOSMidiOutput::stop()
+    void StandaloneCoreMidiOutput::stop()
     {
         if (impl == nullptr || impl->lastScheduledTime == 0)
             return;
         const auto now = mach_absolute_time();
         if (!impl->virtualSource)
             MIDIFlushOutput (impl->endpoint);
-        impl->silence (now);
-        // Published virtual events cannot be recalled from other clients. Ensure
-        // their queued note-ons are followed by a final panic as well.
-        if (impl->lastScheduledTime > now)
-            impl->silence (impl->lastScheduledTime + 1);
+        if (@available (macOS 11.0, *))
+        {
+            impl->silence (now);
+            // Published virtual events cannot be recalled from other clients.
+            if (impl->lastScheduledTime > now)
+                impl->silence (impl->lastScheduledTime + 1);
+        }
         impl->lastScheduledTime = 0;
     }
 
+   #if JUCE_IOS
     // JUCE 8 on iOS 18+ treats the session's port as a multi-group UMP device
     // and gives it no MIDI 1.0 identifier, so MidiOutput cannot open it.
     struct StandaloneNetworkMidiForwarder::Impl
@@ -357,4 +380,5 @@ namespace ksh
     {
         return impl != nullptr;
     }
+   #endif
 }

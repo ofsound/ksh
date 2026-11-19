@@ -26,6 +26,8 @@ namespace ksh::ui
         static constexpr float fullCellInsetX = 1.0f;
         static constexpr int compactHeaderHeight = 34;
         static constexpr int compactInspectorHeight = 48;
+        static constexpr int compactStepsPerPage = 16;
+        static constexpr int maxSquareGridSteps = 32;
         int channels = 8, steps = 16;
         bool standalone = false, randomVisible = false;
         bool compact = false;
@@ -39,13 +41,27 @@ namespace ksh::ui
         JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wfloat-equal")
         bool operator== (const Layout&) const = default;
         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
-        int visibleSteps() const { return compact ? juce::jmin (16, steps - firstStep) : steps; }
+        int visibleSteps() const { return compact ? juce::jmin (compactStepsPerPage, steps - firstStep) : steps; }
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
         float toolbarY() const { return compact ? 0.0f : static_cast<float> (headerHeight); }
         float gridY() const { return compact ? static_cast<float> (compactHeaderHeight) : toolbarY() + 2 * toolbarPadding + toolbarCaptionSpace + touchTarget; }
-        float cellWidth() const { return gridWidth() / static_cast<float> (compact ? 16 : juce::jmax (16, steps)); }
+        float cellWidth() const { return gridWidth() / static_cast<float> (compact ? compactStepsPerPage : juce::jmax (16, steps)); }
         float cellInsetX() const { return compact ? cellInsetY : fullCellInsetX; }
-        float cellHeight() const { return compact ? rowHeight() - 3.0f : cellWidth() - 2.0f * (fullCellInsetX - cellInsetY); }
+        juce::Rectangle<float> cellArtwork (juce::Rectangle<float> bounds) const
+        {
+            const auto face = bounds.reduced (cellInsetX(), cellInsetY);
+            // Keep the gutter consistent for long rolls and triplets.
+            constexpr float inset = 0.025f;
+            const float stepFaceWidth = cellWidth() - 2.0f * cellInsetX();
+            return face.reduced (stepFaceWidth * inset, face.getHeight() * inset);
+        }
+        float cellHeight() const
+        {
+            if (compact)
+                return rowHeight() - 3.0f;
+            const auto squareHeight = gridWidth() / static_cast<float> (juce::jlimit (16, maxSquareGridSteps, steps));
+            return squareHeight - 2.0f * (fullCellInsetX - cellInsetY);
+        }
         float rowHeight() const
         {
             if (compact)

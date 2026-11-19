@@ -10,6 +10,25 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
    #endif
     nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
     addAndMakeVisible (*nativeView);
+   #if JUCE_IOS
+    iosFileDrop = std::make_unique<ksh::IOSFileDrop> (*this, [this]
+    {
+        const auto drop = beginSwingDrop();
+        const juce::Component::SafePointer<PluginEditor> safe (this);
+        return [safe, drop] (std::shared_ptr<juce::TemporaryFile> staged)
+        {
+            if (safe == nullptr || drop.request != safe->swingDropRequest)
+                return;
+            if (staged == nullptr)
+            {
+                safe->showSwingDropStatus ("Couldn't open the dropped file.");
+                return;
+            }
+            const auto file = staged->getFile();
+            safe->analyseSwingDrop (drop, file, std::move (staged));
+        };
+    });
+   #endif
     nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
     nativeView->zenModeChanged = [this] (bool enabled) { setZenMode (enabled); };
     nativeView->projectAction = [this] (int action) {
@@ -55,9 +74,12 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 PluginEditor::~PluginEditor()
 {
     stopTimer();
+    swingDropStatusTimer.stopTimer();
    #if JUCE_IOS
+    iosFileDrop.reset();
     iosLibrary->cancel();
    #endif
+    swingDropWorker.reset();
     nativeView.reset();
 }
 void PluginEditor::setZenMode (bool enabled)
@@ -195,6 +217,143 @@ void PluginEditor::updateNativeSize()
     resized();
 }
 void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow != nullptr ? juce::Colours::black : ksh::ui::Palette::app); }
+void PluginEditor::paintOverChildren (juce::Graphics& g)
+{
+    using namespace ksh::ui;
+    if (swingDragOver)
+    {
+        g.setColour (Palette::accent.withAlpha (0.65f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 6.0f, 2.0f);
+    }
+    if (swingDropStatus.isNotEmpty())
+    {
+        const auto fontHeight = 15.0f;
+        const auto width = juce::jmin (getWidth() - 24, 440);
+        const auto area = juce::Rectangle<int> (width, 34).withCentre ({ getWidth() / 2, 27 });
+        g.setColour (Palette::app.withAlpha (0.96f));
+        g.fillRoundedRectangle (area.toFloat(), 6.0f);
+        g.setColour (Palette::accent.withAlpha (0.65f));
+        g.drawRoundedRectangle (area.toFloat(), 6.0f, 1.0f);
+        g.setColour (juce::Colours::white);
+        g.setFont (font (fontHeight));
+        g.drawFittedText (swingDropStatus, area.reduced (10, 0), juce::Justification::centred, 1);
+    }
+}
+
+bool PluginEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    return files.size() == 1 && ksh::ui::swingFileType (juce::File (files[0])).has_value();
+}
+
+void PluginEditor::fileDragEnter (const juce::StringArray&, int, int)
+{
+    swingDragOver = true;
+    repaint();
+}
+
+void PluginEditor::fileDragExit (const juce::StringArray&)
+{
+    swingDragOver = false;
+    repaint();
+}
+
+void PluginEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    fileDragExit (files);
+    if (isInterestedInFileDrag (files))
+        analyseSwingDrop (beginSwingDrop(), juce::File (files[0]));
+}
+
+PluginEditor::SwingDrop PluginEditor::beginSwingDrop()
+{
+    if (swingDropWorker != nullptr)
+        swingDropWorker->removeAllJobs (false, 0);
+    const auto state = processorRef.nativeUiState();
+    showSwingDropStatus ("Reading groove...", true);
+    return { ++swingDropRequest, state.documentEpoch, state.playback.beatsPerStep,
+             processorRef.hasStandaloneTransport() ? processorRef.getStandaloneTempoBpm() : 120.0,
+             state.playback.swing, state.playback.swingSubdivisionIndex };
+}
+
+void PluginEditor::analyseSwingDrop (SwingDrop drop, const juce::File& file, std::shared_ptr<juce::TemporaryFile> stagedFile)
+{
+    const auto type = ksh::ui::swingFileType (file);
+    if (! type)
+    {
+        showSwingDropStatus ("Drop a MIDI or WAV file to match its groove.");
+        return;
+    }
+
+    if (swingDropWorker == nullptr)
+        swingDropWorker = std::make_unique<juce::ThreadPool> (1);
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    swingDropWorker->addJob ([safe, drop, file, fileType = *type, staged = std::move (stagedFile)]
+    {
+        const auto result = ksh::ui::analyseSwingFile (file, fileType, drop.beatsPerStep, drop.bpm);
+        juce::MessageManager::callAsync ([safe, drop, result]
+        {
+            if (safe != nullptr)
+                safe->completeSwingDrop (drop, result);
+        });
+    });
+}
+
+void PluginEditor::completeSwingDrop (SwingDrop drop, const ksh::ui::SwingImportResult& result)
+{
+    if (drop.request != swingDropRequest)
+        return;
+    if (result.error.isNotEmpty() || (! result.bpm && ! result.swing))
+    {
+        showSwingDropStatus (result.error.isNotEmpty() ? result.error : "Couldn't find a consistent swing pattern.");
+        return;
+    }
+
+    auto& controller = nativeView->controller;
+    const auto current = processorRef.nativeUiState();
+    const bool applyTempo = result.bpm.has_value() && processorRef.hasStandaloneTransport();
+    const auto tempoChange = applyTempo ? std::abs (processorRef.getStandaloneTempoBpm() - *result.bpm) : 0.0;
+    if (drop.document != current.documentEpoch || controller.editing()
+        || std::abs (drop.beatsPerStep - current.playback.beatsPerStep) > 0.00001
+        || (result.swing && (drop.swing != current.playback.swing || drop.target != current.playback.swingSubdivisionIndex))
+        || (applyTempo && std::abs (drop.bpm - processorRef.getStandaloneTempoBpm()) > 0.01))
+    {
+        showSwingDropStatus ("Groove controls changed. Drop the file again to apply it.");
+        return;
+    }
+
+    controller.begin ("Match file groove", result.swing ? juce::String ("swing") : juce::String());
+    if (result.swing)
+    {
+        if (result.swing->amount != current.playback.swing)
+            controller.command ("swing", { result.swing->amount });
+        if (result.swing->amount > 0 && result.swing->target != current.playback.swingSubdivisionIndex)
+            controller.command ("swing_subdivision", { result.swing->target });
+    }
+    if (tempoChange > 0.01)
+        controller.command ("standalone_tempo", { *result.bpm });
+    controller.commit();
+
+    auto status = result.swing ? (result.swing->amount == 0 ? juce::String ("Straight timing matched")
+                                                             : juce::String ("Swing matched") + " (" + juce::String (1 << result.swing->target) + "x)")
+                               : juce::String ("Swing unclear");
+    if (result.bpm)
+        status += juce::String::fromUTF8 ("  ·  ") + juce::String (*result.bpm, 1) + (applyTempo ? " BPM" : " BPM in file");
+    showSwingDropStatus (status);
+}
+
+void PluginEditor::showSwingDropStatus (const juce::String& message, bool pending)
+{
+    swingDropStatus = message;
+    if (pending || message.isEmpty())
+        swingDropStatusTimer.stopTimer();
+    else
+    {
+        swingDropStatusTimer.startTimer (3600);
+        juce::AccessibilityHandler::postAnnouncement (message, juce::AccessibilityHandler::AnnouncementPriority::low);
+    }
+    repaint();
+}
+
 void PluginEditor::mouseDown (const juce::MouseEvent& event)
 {
     // Include the margins around the scaled editor in standalone/mobile layouts.

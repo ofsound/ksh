@@ -19,8 +19,9 @@ struct Constants
 {
     static constexpr bool debug = false;
 
-    static constexpr int maxSteps = 32;
+    static constexpr int maxSteps = 64;
     static constexpr int maxChannels = 8;
+    static constexpr int cellsPerPattern = maxChannels * maxSteps;
     static constexpr int defaultChannelCount = 8;
     static constexpr int mutedStaticSource = -1;
     static constexpr int sourceCount = 16;

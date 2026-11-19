@@ -21,6 +21,15 @@ The build copies `KSH.component`, `KSH.vst3`, and `KSH.clap` into `~/Library/Aud
 
 The frontend uses JUCE components, custom grid painting, embedded Gantari fonts, and the fixed orange Alternative palette. The build has no web frontend: Node, npm, a browser, and a UI server are not required.
 
+### Ableton Link in standalone
+
+Open **Ableton Link** next to MIDI Output in **Menu → Settings** on iPhone, or next to **MIDI Out** in the iPad and Mac footer. Enable Link to share tempo and beat phase with peers on the local network. **Start/Stop Sync** is optional. With peers connected, play starts on the next four-beat boundary. The Stop button flashes while a launch is pending and cancels the launch when pressed.
+
+- macOS 11 or later: configure with `-DKSH_ABLETON_LINK_SOURCE_DIR=/path/to/ableton-link`. Use the official C++ SDK checkout with its Asio submodule. Proprietary releases require the appropriate license from [Ableton](https://ableton.github.io/).
+- iPhone and iPad: extract [LinkKit 4.1.3](https://github.com/Ableton/LinkKit/releases/tag/LinkKit-4.1.3) into `_deps/linkkit` before configuring a new build with CMake 3.28 or newer. To update an existing build or use another SDK location, configure with `-DKSH_LINKKIT_SDK_DIR=/path/to/extracted/LinkKit`. The standalone app's provisioning profile needs Apple's multicast networking entitlement. The user must also allow Local Network access for peer discovery.
+
+The SDKs are local build inputs. Configure with an empty SDK path for builds without Link. Hosted versions follow the DAW playhead. Link controls timing, and the MIDI output menu still controls where KSH sends notes.
+
 ## iPhone
 
 A landscape iPhone editor keeps eight channels, 16 steps and the inspector visible, with secondary controls in touch-accessible pages. The separate `ios-iphone-release` CMake preset produces an iPhone-only app with its AUv3 extension. See [iPhone build, controls and validation](docs/iphone-release.md).

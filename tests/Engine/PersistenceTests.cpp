@@ -9,6 +9,58 @@
 using namespace ksh;
 using ksh::test::EngineFixture;
 
+TEST_CASE ("Roll spans round trip as sparse v1 data", "[engine][persistence][triplets]")
+{
+    EngineFixture original, restored;
+    original.clearAll();
+    original.engine.setStepCount (64);
+    original.engine.setGeneratedStepCount (64);
+    original.engine.setRefreshSteps (64);
+    original.engine.setCell (0, 0, 2, Cell { .enabled = true, .roll = 3, .span = 4 });
+    original.engine.setCell (0, 7, 63, Cell { .enabled = true, .velocity = 93, .nudge = -21 });
+    original.engine.setCell (15, 7, 63, Cell { .span = 8 });
+    auto payload = original.engine.serializeForPersistence();
+    CHECK (payload["v"] == 1);
+    CHECK (payload["cells"][0].size() == 9);
+    CHECK (payload["cellSpans"].size() == 2);
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.getStepCount() == 64);
+    CHECK (restored.engine.getRefreshSteps() == 64);
+    CHECK (restored.engine.sourceCellAt (0, 0, 2) == original.engine.sourceCellAt (0, 0, 2));
+    CHECK (restored.engine.sourceCellAt (0, 7, 63) == original.engine.sourceCellAt (0, 7, 63));
+    CHECK (restored.engine.sourceCellAt (15, 7, 63).span == 8);
+    restored.engine.copySourcePattern (0, 1);
+    CHECK (restored.engine.sourceCellAt (1, 0, 2).span == 4);
+    const nlohmann::json cellJson = original.engine.sourceCellAt (0, 0, 2);
+    CHECK (cellJson.get<Cell>().span == 4);
+    payload.erase ("cellSpans");
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).span == 1);
+    CHECK (restored.engine.sourceCellAt (0, 0, 2).roll == 3);
+    CHECK_FALSE (restored.engine.serializeForPersistence().contains ("cellSpans"));
+    payload["cellSpans"] = { { 0, 0, 2, 2.5 } };
+    CHECK_FALSE (restored.engine.deserializeForPersistence (payload));
+}
+
+TEST_CASE ("Generated pattern length persists separately from the active grid", "[engine][persistence][generation]")
+{
+    EngineFixture original, restored;
+    original.engine.setStepCount (12);
+    original.engine.setGeneratedStepCount (36);
+    original.engine.setRefreshSteps (24);
+    auto payload = original.engine.serializeForPersistence();
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.getStepCount() == 12);
+    CHECK (restored.engine.getGeneratedStepCount() == 36);
+    CHECK (restored.engine.getRefreshSteps() == 24);
+
+    payload.erase ("generatedStepCount");
+    payload["refreshSteps"] = 8;
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.getGeneratedStepCount() == 12);
+    CHECK (restored.engine.getRefreshSteps() == 8);
+}
+
 TEST_CASE ("cell nudges round trip in v1 without confusing legacy cycle rows", "[engine][persistence][nudge]")
 {
     EngineFixture original, restored;

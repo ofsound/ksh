@@ -416,6 +416,9 @@ TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterati
     FixedPlayHead playHead;
     plugin.setPlayHead (&playHead);
     plugin.prepareToPlay (44100.0, 512);
+    const int steps = GENERATE (16, 64);
+    const double loopBeats = steps * 0.25;
+    REQUIRE (plugin.dispatchUiEngineCommand ("source_steps", { 1, steps }));
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 72, 63, 4, 5, 3 }));
     ksh::ui::EditorController controller (plugin);
     const auto original = plugin.editorDocument();
@@ -434,9 +437,11 @@ TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterati
     REQUIRE (controller.canUndo());
     REQUIRE (plugin.triggerRowFromUi (2, 91));
     (void) controller.poll();
-    midiHit (4.25, 36, 85); // Second traversal of the same loop.
+    midiHit (loopBeats - 0.25, 36, 92);
     (void) controller.poll();
-    midiHit (8.0, 36, 110); // A later overwrite belongs to the same pass.
+    midiHit (loopBeats + 0.25, 36, 85); // Second traversal of the same loop.
+    (void) controller.poll();
+    midiHit (loopBeats * 2.0, 36, 110); // A later overwrite belongs to the same pass.
     (void) controller.poll();
 
     controller.begin ("Manual edit during recording");
@@ -445,12 +450,13 @@ TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterati
     manual.probability = 42;
     controller.editCell ({ 1, 5 }, manual);
     controller.commit();
-    midiHit (8.5, 36, 80); // Still queued when Record is clicked off.
+    midiHit (loopBeats * 2.0 + 0.5, 36, 80); // Still queued when Record is clicked off.
     controller.command ("pattern_record_enabled", { 0, 1 });
     const auto recorded = plugin.editorDocument();
     CHECK (recorded.sources[0][0][0].velocity == 110);
     CHECK (recorded.sources[0][0][1].enabled);
     CHECK (recorded.sources[0][0][2].enabled);
+    CHECK (recorded.sources[0][0][static_cast<size_t> (steps - 1)].velocity == 92);
     CHECK (recorded.sources[0][2][0].enabled);
     CHECK_FALSE (plugin.isPatternRecordingEnabled());
 

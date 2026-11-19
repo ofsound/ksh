@@ -81,15 +81,16 @@ namespace
     {
         void prepare (double newRate, int size) override { rate = newRate; blockSize = size; ++prepares; }
         void stop() override { ++stops; }
-        void send (const juce::MidiBuffer& buffer, juce::Optional<juce::uint64> host, int size) override
+        void send (const juce::MidiBuffer& buffer, juce::Optional<juce::uint64> host, int size, juce::Optional<juce::uint64> outputTime) override
         {
             midi = buffer;
             hostTime = host;
+            presentationTime = outputTime;
             samples = size;
             ++sends;
         }
         juce::MidiBuffer midi;
-        juce::Optional<juce::uint64> hostTime;
+        juce::Optional<juce::uint64> hostTime, presentationTime;
         double rate = 0;
         int blockSize = 0, samples = 0, prepares = 0, stops = 0, sends = 0;
     };
@@ -196,4 +197,70 @@ TEST_CASE ("Standalone transport stop reaches the timestamped output and restart
     plugin.processBlock (audio, midi);
     CHECK (hasNoteOn());
     plugin.setStandaloneMidiOutput (nullptr);
+}
+
+TEST_CASE ("Standalone sync launches MIDI and the metronome in the same block", "[standalone-link][standalone-midi][timing]")
+{
+    struct Clock final : ksh::StandaloneSync
+    {
+        ksh::StandaloneSyncBlock block;
+        bool playingRequested = false;
+        bool requestPlaying (bool play, bool) override { playingRequested = play; return true; }
+        bool requestTempo (double) override { return true; }
+        double sessionTempo() const override { return 100.0; }
+        ksh::StandaloneSyncBlock process (juce::Optional<juce::uint64>, double, int, double, bool) override { return block; }
+    } clock;
+
+    CapturingMidiOutput output;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor plugin;
+    plugin.setRateAndBufferSizeDetails (48000, 256);
+    plugin.prepareToPlay (48000, 256);
+    plugin.setStandaloneSync (&clock);
+    plugin.setStandaloneMidiOutput (&output);
+    plugin.setStandaloneMetronomeEnabled (true);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    plugin.setStandaloneTransportPlaying (true);
+    CHECK (clock.playingRequested);
+
+    juce::AudioBuffer<float> audio (2, 256);
+    juce::MidiBuffer midi;
+    clock.block = { juce::uint64 (987654321000), -0.25, 100.0, 0, false, true, false };
+    plugin.processBlock (audio, midi);
+    CHECK (plugin.isStandaloneLaunchPending());
+    CHECK (output.midi.isEmpty());
+    CHECK (audio.getMagnitude (0, 256) == Catch::Approx (0));
+
+    const auto nowNs = static_cast<juce::uint64> (juce::Time::getMillisecondCounterHiRes() * 1.0e6);
+    constexpr int launchSample = 103;
+    clock.block = { nowNs - 10000000, -launchSample * 100.0 / (60.0 * 48000.0),
+                    100.0, launchSample, true, false, true };
+    plugin.processBlock (audio, midi);
+    CHECK_FALSE (plugin.isStandaloneLaunchPending());
+    REQUIRE_FALSE (output.midi.isEmpty());
+    CHECK ((*output.midi.begin()).getMessage().isNoteOn());
+    CHECK ((*output.midi.begin()).samplePosition == launchSample);
+    CHECK (output.presentationTime == clock.block.presentationTimeNs);
+    CHECK (audio.getMagnitude (0, launchSample) == Catch::Approx (0));
+    CHECK (audio.getMagnitude (launchSample, 256 - launchSample) > 0.0f);
+    CHECK (plugin.getStandaloneTempoBpm() == Catch::Approx (100.0));
+
+    // A touch can occur before the currently rendered block reaches output,
+    // even while an earlier block has already started playing.
+    plugin.setPatternRecordingEnabled (true, 0);
+    midi.clear();
+    clock.block = { nowNs + 50000000, 0.1, 100.0, 0, true, false, false };
+    plugin.processBlock (audio, midi);
+    REQUIRE (plugin.triggerRowFromUi (1, 91));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    CHECK (plugin.engineStateSnapshot().sources[0][1][0].velocity == 91);
+
+    clock.block = { nowNs + 55000000, 0.11, 100.0, 0, false, false, false };
+    midi.clear();
+    plugin.processBlock (audio, midi);
+    CHECK_FALSE (plugin.isStandaloneTransportPlaying());
+    REQUIRE_FALSE (output.midi.isEmpty());
+    CHECK (std::any_of (output.midi.begin(), output.midi.end(), [] (const auto item) { return item.getMessage().isNoteOff(); }));
+    plugin.setStandaloneMidiOutput (nullptr);
+    plugin.setStandaloneSync (nullptr);
 }
