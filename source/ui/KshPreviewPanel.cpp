@@ -6,16 +6,38 @@ namespace ksh::ui
     {
         constexpr auto lockHeading = "Lock Channel to Pattern";
 
+        Cell withInspectorOffset (const Cell& cell, Layer layer, int offset)
+        {
+            auto next = withValue (cell, layer, cellValue (cell, layer) + offset);
+            if (cell.roll < 2 || offset == 0)
+                return next;
+
+            for (int part = 0; part < cell.roll; ++part)
+            {
+                const auto index = static_cast<size_t> (part);
+                if (layer == Layer::chance)
+                    next.splitGates[index].setProbability (cell.splitGates[index].probability() + offset);
+                else if (layer == Layer::velocity && cell.splitVelocities[index] != 0)
+                    next.setSplitVelocity (part, juce::jlimit (1, 127, cell.splitVelocity (part) + offset));
+            }
+            return next;
+        }
+
         struct RandomLabLayout
         {
-            RandomLabLayout (juce::Rectangle<int> bounds, int rightInset)
+            RandomLabLayout (juce::Rectangle<int> bounds, int rightInset, bool xy)
             {
                 auto content = bounds.reduced (0, 12).withTrimmedLeft (Layout::outerGutter).withTrimmedRight (rightInset);
-                header = content.removeFromTop (Layout::touchTarget);
-                close = header.removeFromRight (140);
-                content.removeFromTop (12);
+                if (!xy)
+                {
+                    header = content.removeFromTop (Layout::touchTarget);
+                    close = header.removeFromRight (140);
+                    content.removeFromTop (12);
+                }
                 controls = content.removeFromRight (468);
                 preview = content.withTrimmedRight (16);
+                if (xy)
+                    return;
                 auto fields = controls.reduced (22, 20);
                 auto modeRow = fields.removeFromTop (20 + Layout::touchTarget);
                 refresh = modeRow.removeFromRight (156);
@@ -131,9 +153,9 @@ namespace ksh::ui
         if (showRandomizer)
         {
             addAndMakeVisible (randomizerLogo);
-            randomizerLogo.setTitle ("Cycle randomizer view");
-            randomizerLogo.setTooltip ("Cycle through Top Secret Randomizer, Super Secret Randomizer and the grid");
-            randomizerLogo.onClick = [this] { if (onRandomizerCycle) onRandomizerCycle(); };
+            randomizerLogo.setTitle ("Toggle Super Secret Randomizer");
+            randomizerLogo.setTooltip ("Show or hide Super Secret Randomizer");
+            randomizerLogo.onClick = [this] { if (onToggleSuperSecret) onToggleSuperSecret(); };
         }
     }
 
@@ -275,7 +297,7 @@ namespace ksh::ui
             {
                 auto& button = xySeeds[i];
                 addChildComponent (button);
-                button.setButtonText (juce::String (i + 1));
+                button.setButtonText (juce::String::charToString ('A' + static_cast<int> (i)));
                 button.setTitle ("Generator seed " + button.getButtonText());
                 button.setToggleState (i == 0, juce::dontSendNotification);
                 button.onClick = [this, i]
@@ -313,7 +335,7 @@ namespace ksh::ui
             wordmark.onThemeGesture = [this] (bool started) { if (onThemeGesture) onThemeGesture (started); };
             wordmark.onAccentColourEdited = [this] (bool blue, std::optional<juce::Colour> colour) { if (onAccentColourEdited) onAccentColourEdited (blue, colour); };
             wordmark.onBackgroundToneEdited = [this] (Palette::BackgroundTone tone) { if (onBackgroundToneEdited) onBackgroundToneEdited (tone); };
-            wordmark.onRandomizerCycle = [this] { if (onRandomizerCycle) onRandomizerCycle(); };
+            wordmark.onToggleSuperSecret = [this] { if (onToggleSuperSecret) onToggleSuperSecret(); };
         }
         addAndMakeVisible (mode);
         addAndMakeVisible (refresh);
@@ -355,8 +377,8 @@ namespace ksh::ui
         velocity.setTitle ("Selected velocity offset");
         probability.setTitle ("Selected probability offset");
         roll.setTitle ("Selected split");
-        velocity.setTooltip ("Offsets selected velocities together");
-        probability.setTooltip ("Offsets selected probabilities together");
+        velocity.setTooltip ("Offsets selected step and split velocities together");
+        probability.setTooltip ("Offsets selected step and split probabilities together");
         velocity.caption = "Velocity";
         probability.caption = "Probability";
         roll.caption = "Split";
@@ -550,7 +572,7 @@ namespace ksh::ui
     void PreviewPanel::applyRelative (Layer layer, int offset)
     {
         for (const auto& [p, c] : valueStarts)
-            controller.editCell (p, withValue (c, layer, cellValue (c, layer) + offset));
+            controller.editCell (p, withInspectorOffset (c, layer, offset));
         controller.notify();
     }
     void PreviewPanel::resetSelectedValue (const juce::String& label, int Cell::* field, int value)
@@ -559,6 +581,8 @@ namespace ksh::ui
         for (auto location : controller.selection (true))
         {
             auto cell = controller.cell (location);
+            if (field == &Cell::velocity || field == &Cell::probability)
+                cell = withInspectorOffset (cell, field == &Cell::velocity ? Layer::velocity : Layer::chance, value - cell.*field);
             cell.*field = value;
             controller.editCell (location, cell);
         }
@@ -632,13 +656,14 @@ namespace ksh::ui
         const int start = buttons.getCentreX() - (side * generatorSeedCount + gap * (generatorSeedCount - 1)) / 2;
         for (int i = 0; i < generatorSeedCount; ++i)
             xySeeds[static_cast<size_t> (i)].setBounds (start + i * (side + gap), buttons.getY(), side, buttonHeight);
-        xyPad.setBounds (bounds.withTrimmedBottom (5));
+        constexpr int seedGap = 17;
+        xyPad.setBounds (bounds.withTrimmedBottom (seedGap));
     }
 
     void PreviewPanel::resized()
     {
         wordmark.setVisible (!compact && !randomSection);
-        close.setVisible (randomSection && !compact && !phoneGenerator);
+        close.setVisible (randomSection && !compact && !xyRandomizer);
         if (!compact && !randomSection)
             wordmark.setBounds (brandingBoundsForInspector (inspectorBounds).toNearestInt());
         if (phoneGenerator || (compact && xyRandomizer))
@@ -689,7 +714,7 @@ namespace ksh::ui
         }
         if (randomSection)
         {
-            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset);
+            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset, xyRandomizer);
             close.setBounds (lab.close);
             patternLength.setBounds (lab.preview.reduced (20, 0).removeFromRight (90).withTrimmedTop (10).withHeight (36));
             if (xyRandomizer)
@@ -749,7 +774,7 @@ namespace ksh::ui
             {
                 const auto colour = Palette::channel (ch, controller.drumColors);
                 const auto caption = ch >= p.channelCount ? Palette::faint : controller.drumColors ? colour : Palette::muted;
-                if (std::exchange (lock.captionColour, caption) != caption)
+                if (std::exchange (lock.captionColour, std::optional { caption }) != caption)
                     lock.repaint();
             }
         }
@@ -884,7 +909,7 @@ namespace ksh::ui
             {
                 const auto heading = phone.controls.toFloat().reduced (14, 0);
                 text (g, "Random Mode", heading.withY (static_cast<float> (refresh.getY())).withHeight (18),
-                      refresh.captionFontSize, refresh.captionColour, true, juce::Justification::centredLeft);
+                      refresh.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
                 text (g, lockHeading, heading.withY (94).withHeight (18), 12, Palette::muted, true, juce::Justification::centredLeft);
             }
 
@@ -904,8 +929,9 @@ namespace ksh::ui
         }
         if (randomSection)
         {
-            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset);
-            text (g, xyRandomizer ? "Top Secret Randomizer" : "Super Secret Randomizer", lab.header.toFloat(), 29, Palette::text, true, juce::Justification::centredLeft);
+            const RandomLabLayout lab (getLocalBounds(), randomizerRightInset, xyRandomizer);
+            if (!xyRandomizer)
+                text (g, "Super Secret Randomizer", lab.header.toFloat(), 29, Palette::text, true, juce::Justification::centredLeft);
             surface (g, lab.preview.toFloat());
             surface (g, lab.controls.toFloat());
             auto previewContent = lab.preview.toFloat().reduced (20, 16);
@@ -960,7 +986,7 @@ namespace ksh::ui
             if (compact || phoneGenerator)
                 repaint();
             else
-                repaint (RandomLabLayout (getLocalBounds(), randomizerRightInset).preview);
+                repaint (RandomLabLayout (getLocalBounds(), randomizerRightInset, xyRandomizer).preview);
         }
     }
 }

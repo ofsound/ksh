@@ -972,6 +972,27 @@ TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift 
         CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
         CHECK_FALSE (editor.controller.cell ({ 0, 2 }).enabled);
     }
+    SECTION ("A straight first marquee movement keeps its starting step selected")
+    {
+        const bool horizontal = GENERATE (false, true);
+        const Location start { 2, 3 };
+        const Location end = horizontal ? Location { 2, 5 } : Location { 4, 3 };
+        REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, start.channel + 1, start.step + 1, 1, 90 }));
+        editor.controller.refresh();
+        press();
+        release();
+
+        const auto first = grid->layout.cell (start).getCentre();
+        const auto last = grid->layout.cell (end).getCentre();
+        grid->mouseDown (event (*grid, first));
+        REQUIRE (editor.controller.selected.test (static_cast<size_t> (start.key())));
+        grid->mouseDrag (event (*grid, last));
+        CHECK (editor.controller.selected.test (static_cast<size_t> (start.key())));
+        CHECK (editor.controller.selected.test (static_cast<size_t> (end.key())));
+        CHECK (editor.controller.selected.count() == 3);
+        grid->mouseUp (event (*grid, last));
+        CHECK (editor.controller.selected.count() == 3);
+    }
     SECTION ("Pattern switching does not borrow Shift from Select mode")
     {
         const bool latched = GENERATE (false, true);
@@ -1753,10 +1774,25 @@ TEST_CASE ("The mini Cycle editor applies the clicked pattern to the selected st
     auto* cycle = dynamic_cast<CycleEditor*> (popup->getChildComponent (0));
     REQUIRE (cycle != nullptr);
     juce::TextButton* secondBeat = nullptr;
+    juce::TextButton* firstBeat = nullptr;
     for (auto* child : cycle->getChildren())
-        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "2")
-            secondBeat = button;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText() == "1") firstBeat = button;
+            if (button->getButtonText() == "2") secondBeat = button;
+        }
+    REQUIRE (firstBeat != nullptr);
     REQUIRE (secondBeat != nullptr);
+    REQUIRE (firstBeat->getToggleState());
+    auto& beatComponent = static_cast<juce::Component&> (*firstBeat);
+    const auto beatCentre = firstBeat->getLocalBounds().toFloat().getCentre();
+    const auto beatClick = gridEvent (beatComponent, beatCentre, beatCentre, juce::ModifierKeys::leftButtonModifier);
+    beatComponent.mouseDown (beatClick);
+    beatComponent.mouseUp (beatClick);
+    CHECK_FALSE (firstBeat->getToggleState());
+    CHECK (controller.cell (step) == original);
+    cycle->cancelGesture();
+    CHECK (firstBeat->getToggleState());
     CHECK (grid.handleCellPopupMouseDown (secondBeat));
     secondBeat->onClick();
     CHECK (popup->isVisible());
@@ -2225,11 +2261,13 @@ TEST_CASE ("Freeform velocity drawing edits only active steps on the focused row
     CHECK_FALSE (controller.canUndo());
 }
 
-TEST_CASE ("Tightly packed splits can edit each hit in the Chance popup", "[native-ui][split-edits]")
+TEST_CASE ("Tightly packed splits open an independent cycle for the clicked hit", "[native-ui][split-edits]")
 {
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 64 }));
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 90, 65, 3, 5, 8 }));
+    const int steps = GENERATE (16, 64);
+    const int splits = steps == 16 ? 3 : 8;
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 90, 65, 3, 5, splits }));
     EditorController controller (processor);
     controller.layer = Layer::chance;
     PatternGrid grid (controller);
@@ -2238,40 +2276,23 @@ TEST_CASE ("Tightly packed splits can edit each hit in the Chance popup", "[nati
 
     const Location step { 0, 3 };
     const auto original = controller.cell (step);
-    const auto bounds = grid.cellBounds (step);
-    const auto point = bounds.getCentre().withY (bounds.getY() + bounds.getHeight() * 0.9f);
+    const auto bounds = grid.layout.cellArtwork (grid.cellBounds (step));
+    const auto point = juce::Point<float> (bounds.getRight() - bounds.getWidth() / (2.0f * static_cast<float> (splits)),
+                                          bounds.getY() + bounds.getHeight() * 0.9f);
     const int left = juce::ModifierKeys::leftButtonModifier;
     grid.mouseDown (gridEvent (grid, point, point, left));
     grid.mouseUp (gridEvent (grid, point, point, 0));
     juce::Component* popup = nullptr;
     for (auto* child : grid.getChildren())
-        if (child->getTitle() == "Split chance editor")
+        if (child->getTitle() == "Split cycle editor")
             popup = child;
     REQUIRE (popup != nullptr);
     REQUIRE (popup->isVisible());
     CHECK (grid.getLocalBounds().contains (popup->getBounds()));
-    juce::TextButton* eighth = nullptr;
-    ValueControl* probability = nullptr;
-    ValueControl* velocity = nullptr;
-    CycleEditor* cycle = nullptr;
-    for (auto* child : popup->getChildren())
-    {
-        if (child->getTitle() == "Edit split 8") eighth = dynamic_cast<juce::TextButton*> (child);
-        if (child->getTitle() == "Split probability") probability = dynamic_cast<ValueControl*> (child);
-        if (child->getTitle() == "Split velocity") velocity = dynamic_cast<ValueControl*> (child);
-        if (auto* editor = dynamic_cast<CycleEditor*> (child)) cycle = editor;
-    }
-    REQUIRE (eighth != nullptr);
-    REQUIRE (probability != nullptr);
-    REQUIRE (velocity != nullptr);
+    REQUIRE (popup->getNumChildComponents() == 1);
+    auto* cycle = dynamic_cast<CycleEditor*> (popup->getChildComponent (0));
     REQUIRE (cycle != nullptr);
-    CHECK (eighth->getWidth() >= 42);
-    eighth->onClick();
-    CHECK (eighth->getToggleState());
-    CHECK (probability->value == 100);
-    CHECK (velocity->value == 90);
-    probability->createAccessibilityHandler()->getValueInterface()->setValue (37);
-    velocity->createAccessibilityHandler()->getValueInterface()->setValue (51);
+    CHECK (cycle->split == splits - 1);
     juce::TextButton* beat = nullptr;
     for (auto* child : cycle->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "2")
@@ -2279,14 +2300,24 @@ TEST_CASE ("Tightly packed splits can edit each hit in the Chance popup", "[nati
     REQUIRE (beat != nullptr);
     beat->onClick();
     auto expected = original;
-    expected.splitGates[7].setProbability (37);
-    expected.splitGates[7].setCycle (2, 1);
-    expected.setSplitVelocity (7, 51);
+    expected.splitGates[static_cast<size_t> (splits - 1)].setCycle (2, 1);
     CHECK (controller.cell (step) == expected);
     CHECK (controller.selected.none());
     CHECK (grid.dismissCyclePopup());
     controller.undo();
-    controller.undo();
+    CHECK (controller.cell (step) == original);
+
+    const auto fader = point.withY (bounds.getY() + bounds.getHeight() * 0.3f);
+    const auto end = fader.translated (0, 20);
+    grid.mouseDown (gridEvent (grid, fader, fader, left));
+    grid.mouseDrag (gridEvent (grid, end, fader, left, true));
+    grid.mouseUp (gridEvent (grid, end, fader, 0, true));
+    const auto& edited = controller.cell (step);
+    const int probability = edited.splitGates[static_cast<size_t> (splits - 1)].probability();
+    CHECK (probability < 80);
+    expected = original;
+    expected.splitGates[static_cast<size_t> (splits - 1)].setProbability (probability);
+    CHECK (edited == expected);
     controller.undo();
     CHECK (controller.cell (step) == original);
 }
@@ -2332,6 +2363,83 @@ TEST_CASE ("Velocity line and freeform drawing interpolate individual split hits
     CHECK (changed.splitVelocity (0) > changed.splitVelocity (1));
     CHECK (changed.splitVelocity (1) > changed.splitVelocity (2));
     CHECK (controller.cell ({ 0, 7 }).velocity == 70);
+    REQUIRE (controller.canUndo());
+    controller.undo();
+    CHECK (controller.cell (step) == original);
+}
+
+TEST_CASE ("A lone split step accepts velocity lines and sweeps within its painted divisions", "[native-ui][split-edits][velocity-draw]")
+{
+    const int span = GENERATE (1, 3);
+    const int stepCount = GENERATE (16, 64);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, stepCount }));
+    EditorController controller (processor);
+    const Location step { 0, 5 };
+    Cell original { .enabled = true, .velocity = 84, .roll = 3, .span = span };
+    original.splitGates[1].setProbability (23);
+    controller.begin ("Set up split step");
+    controller.editCell (step, original);
+    controller.commit();
+    controller.clearHistory();
+    PatternGrid grid (controller);
+    grid.setSize (1338, 554);
+    grid.sync();
+
+    const auto body = grid.layout.cellArtwork (grid.cellBounds (step));
+    const float width = body.getWidth() / 3.0f;
+    const int left = juce::ModifierKeys::leftButtonModifier;
+    SECTION ("A line between two internal dividers edits only the segment between them")
+    {
+        const juce::Point<float> start { body.getX() + width, body.getY() + 3.0f };
+        const juce::Point<float> end { body.getX() + 2.0f * width, body.getY() + 12.0f };
+        grid.mouseMove (gridEvent (grid, start, start, 0));
+        grid.mouseDown (gridEvent (grid, start, start, left));
+        grid.mouseDrag (gridEvent (grid, end, start, left, true));
+        grid.mouseUp (gridEvent (grid, end, start, 0, true));
+        const auto changed = controller.cell (step);
+        CHECK (changed.splitVelocity (0) == original.velocity);
+        CHECK (changed.splitVelocity (1) > original.velocity);
+        CHECK (changed.splitVelocity (2) == original.velocity);
+    }
+    SECTION ("A manual drag sweeps from one split body into the next")
+    {
+        const juce::Point<float> start { body.getX() + 0.5f * width, body.getCentreY() };
+        const auto raised = start.translated (0, -12);
+        const auto end = start.translated (width, -24);
+        grid.mouseDown (gridEvent (grid, start, start, left));
+        grid.mouseDrag (gridEvent (grid, raised, start, left, true));
+        grid.mouseDrag (gridEvent (grid, end, start, left, true));
+        grid.mouseUp (gridEvent (grid, end, start, 0, true));
+        const auto changed = controller.cell (step);
+        CHECK (changed.splitVelocity (0) > original.velocity);
+        CHECK (changed.splitVelocity (1) > changed.splitVelocity (0));
+        CHECK (changed.splitVelocity (2) == original.velocity);
+    }
+    SECTION ("A double-click on a divider starts freeform drawing")
+    {
+        const juce::Point<float> divider { body.getX() + width, body.getCentreY() };
+        for (int click = 1; click <= 2; ++click)
+        {
+            grid.mouseDown (gridEvent (grid, divider, divider, left, false, click));
+            grid.mouseUp (gridEvent (grid, divider, divider, 0, false, click));
+        }
+        REQUIRE (controller.editing());
+        const auto start = divider.translated (width * 0.5f, 0);
+        const auto end = start.withY (body.getY() + 1.0f);
+        grid.mouseDown (gridEvent (grid, start, start, left));
+        grid.mouseDrag (gridEvent (grid, end, start, left, true));
+        grid.mouseUp (gridEvent (grid, end, start, 0, true));
+        grid.finishVelocityDrawing();
+        const auto changed = controller.cell (step);
+        CHECK (changed.splitVelocity (0) == original.velocity);
+        CHECK (changed.splitVelocity (1) > original.velocity);
+        CHECK (changed.splitVelocity (2) == original.velocity);
+    }
+    const auto changed = controller.cell (step);
+    CHECK (changed.velocity == original.velocity);
+    CHECK (changed.splitGates == original.splitGates);
+    CHECK_FALSE (controller.cell ({ 0, step.step + 1 }).enabled);
     REQUIRE (controller.canUndo());
     controller.undo();
     CHECK (controller.cell (step) == original);
@@ -2626,12 +2734,27 @@ TEST_CASE ("Single velocity drags draw across the row in one gesture", "[native-
     {
         auto expected = before[static_cast<size_t> (s)];
         expected.enabled = true;
-        expected.velocity = jsRound (113.0 + s * 3.5);
+        if (expected.roll == 1)
+            expected.velocity = jsRound (113.0 + s * 3.5);
+        else
+        {
+            const auto body = grid.layout.cellArtwork (grid.cellBounds ({ 0, s }));
+            const float endX = grid.layout.cell ({ 0, 4 }).getCentreX();
+            for (int part = 0; part < expected.roll; ++part)
+            {
+                const float x = body.getX() + body.getWidth() * (static_cast<float> (part) + 0.5f) / static_cast<float> (expected.roll);
+                expected.setSplitVelocity (part, jsRound (113.0f + 14.0f * (x - start.x) / (endX - start.x)));
+            }
+        }
         CHECK (controller.cell ({ 0, s }) == expected);
     }
     dragTo (1, -40);
     for (int s = 1; s <= 4; ++s)
-        CHECK (controller.cell ({ 0, s }).velocity == 127);
+    {
+        const auto cell = controller.cell ({ 0, s });
+        for (int part = 0; part < cell.roll; ++part)
+            CHECK (cell.splitVelocity (part) == 127);
+    }
     CHECK (controller.cell ({ 0, 0 }).velocity == 113);
     CHECK_FALSE (controller.cell ({ 1, 1 }).enabled);
 
@@ -2919,7 +3042,7 @@ TEST_CASE ("Clicking S opens the randomizer without resizing the editor", "[nati
     const auto gridBounds = grid->getBounds();
     auto* logoButton = dynamic_cast<juce::TextButton*> (inspector->getComponentAt (125, 80));
     REQUIRE (logoButton != nullptr);
-    REQUIRE (logoButton->getTitle() == "Cycle randomizer view");
+    REQUIRE (logoButton->getTitle() == "Toggle Super Secret Randomizer");
     REQUIRE (logoButton->onClick);
     CHECK_FALSE (panel->isVisible());
     logoButton->onClick();
@@ -3000,6 +3123,16 @@ TEST_CASE ("Inspector offsets follow vertical mouse drags in both layouts", "[na
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 70, 60 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 90, 80 }));
     EditorController controller (processor);
+    const Location splitStep { 0, 1 };
+    auto split = controller.cell (splitStep);
+    split.roll = 3;
+    split.setSplitVelocity (0, 120);
+    split.splitGates[0].setProbability (5);
+    split.splitGates[1].setProbability (96);
+    controller.begin ("Set up split hits");
+    controller.editCell (splitStep, split);
+    controller.commit();
+    controller.clearHistory();
     controller.selected.set (0);
     controller.selected.set (1);
     PreviewPanel panel (controller);
@@ -3026,7 +3159,16 @@ TEST_CASE ("Inspector offsets follow vertical mouse drags in both layouts", "[na
     const auto checkOffset = [&] (int offset)
     {
         CHECK (controller.cell ({ 0, 0 }) == withValue (first, layer, cellValue (first, layer) + offset));
-        CHECK (controller.cell ({ 0, 1 }) == withValue (second, layer, cellValue (second, layer) + offset));
+        auto expected = withValue (second, layer, cellValue (second, layer) + offset);
+        if (layer == Layer::velocity)
+            expected.setSplitVelocity (0, std::clamp (120 + offset, 1, 127));
+        else
+        {
+            expected.splitGates[0].setProbability (std::clamp (5 + offset, 0, 100));
+            expected.splitGates[1].setProbability (std::clamp (96 + offset, 0, 100));
+            expected.splitGates[2].setProbability (std::clamp (100 + offset, 0, 100));
+        }
+        CHECK (controller.cell (splitStep) == expected);
     };
     dragTo (start.translated (44, 0));
     checkOffset (0);
@@ -3276,6 +3418,67 @@ TEST_CASE ("Option can switch a selection drag between moving and copying", "[na
     CHECK_FALSE (controller.cell ({ 1, 4 }).enabled);
 }
 
+TEST_CASE ("Option tap opens Chance for the selection and Escape returns to Velocity", "[native-ui][cycle-selection]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 90, 60, 4, 5, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 70, 80, 3, 2, 2 }));
+    NativeEditor editor (processor);
+    editor.setSize (Layout::fullWidth, Layout::fullHeight);
+    PatternGrid* grid = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* candidate = dynamic_cast<PatternGrid*> (child))
+            grid = candidate;
+    REQUIRE (grid != nullptr);
+
+    auto& controller = editor.controller;
+    controller.keyboardModifiersEnabled = true;
+    controller.selected.set (2);
+    controller.selected.set (3);
+    editor.sync();
+    const auto selection = controller.selected;
+    editor.modifierKeysChanged (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+    CHECK (grid->isCopyMode());
+    CHECK (grid->displayLayer() == Layer::velocity);
+    editor.modifierKeysChanged ({});
+    CHECK_FALSE (grid->isCopyMode());
+    CHECK (grid->displayLayer() == Layer::chance);
+    CHECK (controller.selected == selection);
+
+    const auto bounds = grid->cellBounds ({ 0, 2 });
+    const auto point = bounds.getCentre().withY (bounds.getY() + bounds.getHeight() * 0.9f);
+    grid->mouseDown (gridEvent (*grid, point, point, juce::ModifierKeys::leftButtonModifier));
+    grid->mouseUp (gridEvent (*grid, point, point, 0));
+    juce::Component* popup = nullptr;
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Step cycle editor")
+            popup = child;
+    REQUIRE (popup != nullptr);
+    REQUIRE (popup->isVisible());
+    auto* cycle = dynamic_cast<CycleEditor*> (popup->getChildComponent (0));
+    REQUIRE (cycle != nullptr);
+    juce::TextButton* first = nullptr;
+    for (auto* child : cycle->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "1")
+            first = button;
+    REQUIRE (first != nullptr);
+    const auto centre = first->getLocalBounds().toFloat().getCentre();
+    const auto click = gridEvent (*first, centre, centre, juce::ModifierKeys::leftButtonModifier);
+    static_cast<juce::Component&> (*first).mouseDown (click);
+    static_cast<juce::Component&> (*first).mouseUp (click);
+    CHECK_FALSE (first->getToggleState());
+    CHECK_FALSE (static_cast<juce::Component&> (*first).keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (popup->isVisible());
+    CHECK (controller.selected.none());
+    CHECK (grid->displayLayer() == Layer::velocity);
+    for (const int step : { 2, 3 })
+    {
+        CHECK (controller.cell ({ 0, step }).cycle == 4);
+        CHECK (controller.cell ({ 0, step }).cycleMask == 4);
+    }
+}
+
 TEST_CASE ("Select drags move or duplicate cells from either grid layer", "[native-ui][grid-selection]")
 {
     const auto layer = GENERATE (Layer::chance, Layer::velocity);
@@ -3461,7 +3664,8 @@ TEST_CASE ("Chance grid paints and erases like Velocity while preserving undo an
 TEST_CASE ("Chance grid vertical drags adjust probability and preserve cycle and roll", "[native-ui][chance-gestures]")
 {
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, 3 }));
+    const bool selected = GENERATE (false, true);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 60, 4, 5, selected ? 3 : 1 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 70, 80, 3, 2, 4 }));
     EditorController controller (processor);
     PatternGrid grid (controller);
@@ -3470,7 +3674,6 @@ TEST_CASE ("Chance grid vertical drags adjust probability and preserve cycle and
     controller.layer = Layer::chance;
     const auto before = controller.cell ({ 0, 0 });
     const auto second = controller.cell ({ 0, 1 });
-    const bool selected = GENERATE (false, true);
     if (selected)
     {
         controller.selected.set (0);
@@ -3692,6 +3895,8 @@ TEST_CASE ("The note chooser applies all eight notes in one undo step", "[native
                 octaveUp = dynamic_cast<juce::TextButton*> (child);
         REQUIRE (octaveUp != nullptr);
         REQUIRE (octaveUp->isEnabled());
+        CHECK (octaveUp->getWidth() == Layout::touchTarget);
+        CHECK (octaveUp->getHeight() == Layout::touchTarget);
         octaveUp->onClick();
         auto expected = original;
         for (auto& note : expected)
@@ -4022,6 +4227,8 @@ TEST_CASE ("Inspector double-click resets one field across the selection in one 
                               : area == 3 ? handle : cycleEditor;
     }
     REQUIRE (clickTarget != nullptr);
+    const auto* cycleBeat = cycleEditor != nullptr ? dynamic_cast<juce::Button*> (clickTarget) : nullptr;
+    const bool beatWasOn = cycleBeat != nullptr && cycleBeat->getToggleState();
     const int handleX = handle != nullptr ? handle->getX() : 0;
     auto point = clickTarget->getLocalBounds().toFloat().getCentre();
     if (clickTarget == cycleEditor)
@@ -4037,7 +4244,11 @@ TEST_CASE ("Inspector double-click resets one field across the selection in one 
         clickTarget->mouseDown (event);
         clickTarget->mouseUp (event);
         if (clicks == 1)
+        {
             CHECK_FALSE (controller.canUndo());
+            if (cycleBeat != nullptr && cycleBeat->getButtonText().getIntValue() <= original.front().cycle)
+                CHECK (cycleBeat->getToggleState() != beatWasOn);
+        }
         else
             clickTarget->mouseDoubleClick (event);
     }
@@ -4765,16 +4976,16 @@ TEST_CASE ("Inactive cycle turns flash without a grid note hit", "[native-ui]")
     processor.getUiBridge().emitCycleVisit ({ 1, 1, 1, 2 });
     cycle.updatePlayback();
     const auto after = inactive->createComponentSnapshot (inactive->getLocalBounds());
-    CHECK (after.getPixelAt (4, inactive->getHeight() / 2) == Palette::text);
-    CHECK (before.getPixelAt (4, inactive->getHeight() / 2) != Palette::text);
+    const int midY = inactive->getHeight() / 2;
+    CHECK (after.getPixelAt (1, midY).getPerceivedBrightness() > before.getPixelAt (1, midY).getPerceivedBrightness());
+    CHECK (after.getPixelAt (4, midY) == before.getPixelAt (4, midY));
     CHECK_FALSE (inactive->getToggleState());
     CHECK (controller.sourceFlashes[0][0] == 0.0);
     CHECK (controller.generatedFlashes[0][0] == 0.0);
 
     controller.playingStep = 0;
     cycle.updatePlayback();
-    CHECK (inactive->createComponentSnapshot (inactive->getLocalBounds()).getPixelAt (4, inactive->getHeight() / 2)
-           == before.getPixelAt (4, inactive->getHeight() / 2));
+    CHECK (inactive->createComponentSnapshot (inactive->getLocalBounds()).getPixelAt (1, midY) == before.getPixelAt (1, midY));
 }
 
 TEST_CASE ("Transport leaves cells unchanged without note hits", "[native-ui][render]")
@@ -5404,6 +5615,17 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         auto* shortcuts = findSettingsItem ("Shift/Option shortcuts");
         REQUIRE (shortcuts != nullptr);
         CHECK (shortcuts->getCurrentState().isChecked() == editor.controller.keyboardModifiersEnabled);
+        auto* dimText = findSettingsItem ("Dim text");
+        REQUIRE (dimText != nullptr);
+        CHECK (Palette::white.isOpaque());
+        const auto initialText = Palette::text;
+        const bool initiallyDimmed = Palette::isTextDimmed();
+        clickToggle (*dimText);
+        CHECK (dimText->getCurrentState().isChecked() != initiallyDimmed);
+        CHECK (Palette::text != initialText);
+        CHECK (Palette::white.isOpaque());
+        clickToggle (*dimText);
+        CHECK (Palette::text == initialText);
         auto* zenItem = findSettingsItem ("Zen mode");
         CHECK ((zenItem != nullptr) == standalone);
         if (zenItem != nullptr)
@@ -5788,7 +6010,7 @@ TEST_CASE ("The XY randomizer edits one pattern with undo and cancels stale drag
     CHECK (*current == *switched);
 }
 
-TEST_CASE ("Each click on S advances the randomizer view", "[native-ui][super-randomizer][render]")
+TEST_CASE ("Generate toggles the XY generator while S toggles Super Secret", "[native-ui][super-randomizer][render]")
 {
     PluginProcessor processor;
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
@@ -5796,30 +6018,46 @@ TEST_CASE ("Each click on S advances the randomizer view", "[native-ui][super-ra
     REQUIRE (view != nullptr);
     PreviewPanel* inspector = nullptr;
     juce::Viewport* viewport = nullptr;
+    juce::TextButton* generate = nullptr;
+    juce::Component* pads = nullptr;
     for (auto* child : view->getChildren())
     {
         if (auto* candidate = dynamic_cast<PreviewPanel*> (child)) inspector = candidate;
         if (auto* candidate = dynamic_cast<juce::Viewport*> (child)) viewport = candidate;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "Generate")
+            generate = button;
+        if (child->getTitle() == "Show pads")
+            pads = child;
     }
     REQUIRE (inspector != nullptr);
     REQUIRE (viewport != nullptr);
     auto* logoButton = dynamic_cast<juce::TextButton*> (inspector->getComponentAt (125, 80));
     REQUIRE (logoButton != nullptr);
-    REQUIRE (logoButton->getTitle() == "Cycle randomizer view");
+    REQUIRE (logoButton->getTitle() == "Toggle Super Secret Randomizer");
     REQUIRE (logoButton->onClick);
-    logoButton->onClick();
+    REQUIRE (generate != nullptr);
+    REQUIRE (pads != nullptr);
+    CHECK (generate->isVisible());
+    CHECK (generate->getRight() <= pads->getX());
+    generate->onClick();
     REQUIRE (viewport->isVisible());
+    CHECK (generate->getToggleState());
     PatternXYPad* pad = nullptr;
     ValueControl* patternLength = nullptr;
+    juce::TextButton* back = nullptr;
     for (auto* child : viewport->getViewedComponent()->getChildren())
     {
         if (auto* candidate = dynamic_cast<PatternXYPad*> (child)) pad = candidate;
         if (child->getTitle() == "Randomizer pattern length") patternLength = dynamic_cast<ValueControl*> (child);
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == "Back to Grid") back = button;
     }
     REQUIRE (pad != nullptr);
     REQUIRE (patternLength != nullptr);
     CHECK (pad->isVisible());
     CHECK_FALSE (patternLength->isVisible());
+    REQUIRE (back != nullptr);
+    CHECK_FALSE (back->isVisible());
+    CHECK (pad->getY() < Layout::touchTarget);
     CHECK (pad->getWidth() >= 300);
     const juce::Point<float> position { pad->getWidth() * 0.65f, pad->getHeight() * 0.4f };
     const auto now = juce::Time::getCurrentTime();
@@ -5839,16 +6077,22 @@ TEST_CASE ("Each click on S advances the randomizer view", "[native-ui][super-ra
     }
     logoButton->onClick();
     CHECK (viewport->isVisible());
+    CHECK_FALSE (generate->getToggleState());
     CHECK_FALSE (pad->isVisible());
     CHECK (patternLength->isVisible());
+    CHECK (back->isVisible());
     logoButton->onClick();
     CHECK_FALSE (viewport->isVisible());
     logoButton->onClick();
     CHECK (viewport->isVisible());
+    CHECK_FALSE (pad->isVisible());
+    generate->onClick();
     CHECK (pad->isVisible());
+    generate->onClick();
+    CHECK_FALSE (viewport->isVisible());
 }
 
-TEST_CASE ("Compact controls open both randomizers in menu order", "[native-ui][compact][super-randomizer]")
+TEST_CASE ("Compact Generate is separate from the Super Secret menu", "[native-ui][compact][super-randomizer]")
 {
     PluginProcessor processor;
     NativeEditor editor (processor);
@@ -5856,7 +6100,7 @@ TEST_CASE ("Compact controls open both randomizers in menu order", "[native-ui][
     editor.setSize (814, 390);
 
     juce::TextButton* settings = nullptr;
-    juce::TextButton* topSecret = nullptr;
+    juce::TextButton* generate = nullptr;
     juce::TextButton* superSecret = nullptr;
     juce::Viewport* viewport = nullptr;
     for (auto* child : editor.getChildren())
@@ -5864,24 +6108,23 @@ TEST_CASE ("Compact controls open both randomizers in menu order", "[native-ui][
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
             if (button->getButtonText() == "Settings") settings = button;
-            if (button->getButtonText() == "Top Secret") topSecret = button;
+            if (button->getButtonText() == "Generate") generate = button;
+            CHECK (button->getButtonText() != "Top Secret");
             if (button->getButtonText() == "Super Secret") superSecret = button;
         }
         if (auto* candidate = dynamic_cast<juce::Viewport*> (child))
             viewport = candidate;
     }
     REQUIRE (settings != nullptr);
-    REQUIRE (topSecret != nullptr);
+    REQUIRE (generate != nullptr);
     REQUIRE (superSecret != nullptr);
     REQUIRE (viewport != nullptr);
     auto* randomizer = dynamic_cast<PreviewPanel*> (viewport->getViewedComponent());
     REQUIRE (randomizer != nullptr);
 
-    settings->onClick();
-    CHECK (topSecret->isVisible());
-    CHECK (superSecret->isVisible());
-    CHECK (topSecret->getRight() < superSecret->getX());
-    topSecret->onClick();
+    CHECK (generate->isVisible());
+    CHECK_FALSE (superSecret->isVisible());
+    generate->onClick();
     CHECK (viewport->isVisible());
     CHECK (randomizer->isXYRandomizer());
     PatternXYPad* pad = nullptr;
@@ -5892,6 +6135,9 @@ TEST_CASE ("Compact controls open both randomizers in menu order", "[native-ui][
     CHECK (pad->isVisible());
     CHECK_FALSE (pad->getBounds().isEmpty());
     CHECK (viewport->getViewArea().contains (pad->getBounds()));
+    settings->onClick();
+    CHECK (superSecret->isVisible());
+    CHECK_FALSE (generate->isVisible());
     superSecret->onClick();
     CHECK (viewport->isVisible());
     CHECK_FALSE (randomizer->isXYRandomizer());

@@ -50,6 +50,7 @@ namespace ksh::ui
         FooterHelp footerHelp { *this };
         juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Graphical values" };
         juce::TextButton modifierToggle { "Shift/Option shortcuts" };
+        juce::TextButton dimTextToggle { "Dim text" };
         juce::TextButton midiOutput { "MIDI Output" };
         juce::TextButton settings;
         juce::TextButton linkSettings { "Link" };
@@ -91,7 +92,7 @@ namespace ksh::ui
         uint64_t discardEpoch = 0;
         GestureButton selectMode { "Select" }, chanceLayer { "Chance" };
         juce::TextButton stop { "Stop" };
-        juce::TextButton showPads, showSwing;
+        juce::TextButton generate, showPads, showSwing;
         SettingsButton recordQuantize, metronome;
         juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "Channel colors" };
         ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
@@ -99,7 +100,7 @@ namespace ksh::ui
         int previousScale = 100;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
         bool syncing = false;
-        enum class Panel { none, project, pattern, feel, topSecret, superSecret, view, help, channel };
+        enum class Panel { none, project, pattern, feel, superSecret, view, help, channel, generate };
         Panel panel = Panel::none;
         Panel lastSettingsPanel = Panel::pattern;
         bool confirmPatternClear = false;
@@ -125,7 +126,7 @@ namespace ksh::ui
         bool tempoOpen = false;
         void setTempoOpen (bool);
         AccentWordmark phoneAboutWordmark;
-        std::array<juce::TextButton, 7> panelTabs;
+        std::array<juce::TextButton, 6> panelTabs;
         ValueControl loopStart, loopLength;
         NoteInput channelNote;
         juce::TextButton channelReverse { "Reverse" }, channelPing { "Ping-pong" }, channelSolo { "Solo" };
@@ -157,7 +158,7 @@ namespace ksh::ui
         void dragPattern (int source);
         static const std::array<juce::String, 8> rateNames;
         static int rateControlWidth();
-        void toggleAboutPanel();
+        void showDesktopRandomizer (bool visible, bool xy = false);
         bool textFocused() const;
     };
 }

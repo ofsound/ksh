@@ -4,8 +4,8 @@ namespace ksh::ui
 {
     namespace
     {
-        constexpr std::array<phoneMenu::Icon, 7> menuTabIcons {
-            phoneMenu::folder, phoneMenu::grid, phoneMenu::timing, phoneMenu::xy, phoneMenu::dice, phoneMenu::gear, phoneMenu::info
+        constexpr std::array<phoneMenu::Icon, 6> menuTabIcons {
+            phoneMenu::folder, phoneMenu::grid, phoneMenu::timing, phoneMenu::dice, phoneMenu::gear, phoneMenu::info
         };
 
         struct PhoneMenuLayout
@@ -136,10 +136,8 @@ namespace ksh::ui
         };
         controls.onClick = [this]
         {
-            const auto firstPage = layout.phoneRowControls
-                && (lastSettingsPanel == Panel::pattern || lastSettingsPanel == Panel::topSecret)
-                ? Panel::project : lastSettingsPanel;
-            showPanel (panel == Panel::none ? firstPage : Panel::none);
+            const auto firstPage = layout.phoneRowControls && lastSettingsPanel == Panel::pattern ? Panel::project : lastSettingsPanel;
+            showPanel (panel == Panel::none || panel == Panel::generate ? firstPage : Panel::none);
         };
         closePanel.onClick = [this] { showPanel (Panel::none); };
         deselect.onClick = [this]
@@ -158,7 +156,7 @@ namespace ksh::ui
             layout.firstStep = next < layout.steps ? next : 0;
             sync();
         };
-        const std::array<juce::String, 7> names { "Project", "Pattern", "Feel", "Top Secret", "Super Secret", "View", "Help" };
+        const std::array<juce::String, 6> names { "Project", "Pattern", "Feel", "Super Secret", "View", "Help" };
         for (int i = 0; i < static_cast<int> (names.size()); ++i)
         {
             auto& tab = panelTabs[static_cast<size_t> (i)];
@@ -223,8 +221,8 @@ namespace ksh::ui
         compactPattern.getProperties().set ("patternBankNumber", isPhone);
         controls.setButtonText (isPhone ? "Menu" : "Settings");
         controls.setTitle (isPhone ? "Open menu" : "Open controls");
-        panelTabs[5].setButtonText (isPhone ? "Settings" : "View");
-        panelTabs[6].setButtonText (isPhone ? "About" : "Help");
+        panelTabs[4].setButtonText (isPhone ? "Settings" : "View");
+        panelTabs[5].setButtonText (isPhone ? "About" : "Help");
         auto styleMenuButton = [isPhone] (juce::TextButton& button, phoneMenu::Icon icon, const char* label = "")
         {
             auto& properties = button.getProperties();
@@ -259,6 +257,7 @@ namespace ksh::ui
         styleMenuButton (rowOrder, phoneMenu::rows);
         styleMenuButton (compactAccent, phoneMenu::palette);
         styleMenuButton (modifierToggle, phoneMenu::keyboard);
+        styleMenuButton (dimTextToggle, phoneMenu::eye);
         styleMenuButton (visibleRows, phoneMenu::grid);
         styleMenuButton (metronomeOptions, phoneMenu::metronome, "Metronome sound");
         styleMenuButton (midiOutput, phoneMenu::midi, "MIDI");
@@ -280,6 +279,7 @@ namespace ksh::ui
         layout.compactHeight = static_cast<float> (height);
         layout.firstStep = 0;
         panel = Panel::none;
+        generate.setToggleState (false, juce::dontSendNotification);
         tempoOpen = false;
         if (compact)
             aboutViewport.setScrollBarThickness (0);
@@ -304,7 +304,7 @@ namespace ksh::ui
             patternPicker.setVisible (false);
             visibleRows.setVisible (false);
             rowScroll.setVisible (false);
-            for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate, &modifierToggle })
+            for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate, &modifierToggle, &dimTextToggle })
                 button->setVisible (false);
             for (auto& tab : panelTabs)
                 tab.setVisible (false);
@@ -387,9 +387,9 @@ namespace ksh::ui
         compactClearFlash.cancel();
         tempoOpen = false;
         panel = next;
-        if (next == Panel::topSecret || next == Panel::superSecret)
+        if (next == Panel::generate || next == Panel::superSecret)
         {
-            randomPanel.setXYRandomizer (next == Panel::topSecret);
+            randomPanel.setXYRandomizer (next == Panel::generate);
             aboutViewport.setViewPosition (0, 0);
         }
         if (next >= Panel::project && next <= Panel::help && !phonePatternPanel())
@@ -402,7 +402,7 @@ namespace ksh::ui
 
     bool NativeEditor::phonePatternPanel() const
     {
-        return layout.phoneRowControls && (panel == Panel::pattern || panel == Panel::topSecret);
+        return layout.phoneRowControls && panel == Panel::pattern;
     }
 
     void NativeEditor::TempoOverlay::paint (juce::Graphics& g)
@@ -565,11 +565,11 @@ namespace ksh::ui
         const int toolbarY = phone ? 0 : 2;
         const int toolbarHeight = Layout::compactHeaderHeight - 2 * toolbarY;
         controls.setToggleState (menuOpen, juce::dontSendNotification);
+        generate.setToggleState (panel == Panel::generate, juce::dontSendNotification);
         if (phone)
         {
             patternButton.setToggleState (patternOpen, juce::dontSendNotification);
-            patternButton.setTitle (panel == Panel::pattern ? "Close pattern settings"
-                                                            : patternOpen ? "Back to pattern settings" : "Open pattern settings");
+            patternButton.setTitle (patternOpen ? "Close pattern settings" : "Open pattern settings");
         }
         else
             patternButton.setTitle ({});
@@ -582,13 +582,13 @@ namespace ksh::ui
             stop.setBounds (play.getBounds());
             visible.push_back (controller.processor.isStandaloneTransportPlaying() ? &stop : &play);
         };
-        if (panel == Panel::none)
+        if (panel == Panel::none || panel == Panel::generate)
         {
             const bool patternBankOpen = layout.phoneRowControls && patternPicker.isVisible();
             const bool padPreview = showingCompactPadPreview();
             const bool multiplePages = layout.steps > Layout::compactStepsPerPage;
             const bool denseHeader = phone && (controller.selected.any() || multiplePages || controller.shiftDown ({}));
-            place (compactPattern, 6, toolbarY, phone ? 66 : 108, toolbarHeight);
+            place (compactPattern, 6, toolbarY, phone ? (denseHeader ? 58 : 66) : 108, toolbarHeight);
             if (patternBankOpen)
             {
                 finish();
@@ -596,26 +596,27 @@ namespace ksh::ui
             }
             if (!padPreview)
             {
-                place (velocityLayer, phone ? compactPattern.getRight() + phoneControlGap : 130, toolbarY, phone ? (denseHeader ? 36 : 46) : 54, toolbarHeight);
-                place (chanceLayer, phone ? (denseHeader ? 112 : 122) : 184, toolbarY, 54, toolbarHeight);
-                place (selectMode, phone ? (denseHeader ? 166 : 176) : 244, toolbarY, denseHeader ? 42 : 54, toolbarHeight);
+                place (velocityLayer, phone ? compactPattern.getRight() + phoneControlGap : 120, toolbarY, denseHeader ? 33 : 46, toolbarHeight);
+                place (chanceLayer, phone ? velocityLayer.getRight() : 166, toolbarY, denseHeader ? 46 : 54, toolbarHeight);
+                place (selectMode, phone ? chanceLayer.getRight() : 222, toolbarY, denseHeader ? 38 : phone ? 54 : 48, toolbarHeight);
                 if (controller.selected.any() || controller.shiftDown ({}))
                 {
-                    place (deselect, phone ? (denseHeader ? 211 : 234) : 304, toolbarY, phone ? (denseHeader ? 36 : 40) : 50, toolbarHeight);
+                    place (deselect, phone ? selectMode.getRight() + 2 : 275, toolbarY, denseHeader ? 28 : 40, toolbarHeight);
                     if (!phone && controller.selected.any())
-                        place (duplicate, 358, toolbarY, 50, toolbarHeight);
+                        place (duplicate, 319, toolbarY, 42, toolbarHeight);
                 }
                 if (multiplePages)
-                    place (page, phone ? 250 : 480, toolbarY, 36, toolbarHeight);
+                    place (page, phone ? visible.back()->getRight() + 2 : 366, toolbarY, phone ? 34 : 36, toolbarHeight);
             }
+            constexpr int generateWidth = 74;
             if (phone)
             {
                 const int tempoWidth = denseHeader ? 56 : 64;
                 constexpr int buttonWidth = 42;
                 const int historyWidth = denseHeader ? 34 : 38;
-                const int controlsWidth = menuWidth + patternWidth + 2 * buttonWidth + 2 * historyWidth
+                const int controlsWidth = menuWidth + patternWidth + 2 * buttonWidth + 2 * historyWidth + generateWidth
                                           + (layout.standalone ? tempoWidth + 2 * buttonWidth : 0);
-                const int gapCount = layout.standalone ? 5 : 4;
+                const int gapCount = layout.standalone ? 6 : 5;
                 const int fixedGaps = phoneControlGap * (layout.standalone ? 3 : 1);
                 const int gap = juce::jlimit (2, 14, (w - 6 - visible.back()->getRight() - controlsWidth - fixedGaps) / gapCount);
                 juce::Rectangle<int> header (0, toolbarY, w - 6, toolbarHeight);
@@ -641,22 +642,32 @@ namespace ksh::ui
                 header.removeFromRight (gap);
                 buttonFromRight (showPads, buttonWidth);
                 header.removeFromRight (gap);
+                buttonFromRight (generate, generateWidth);
+                header.removeFromRight (gap);
                 buttonFromRight (redoButton, historyWidth);
                 buttonFromRight (undoButton, historyWidth);
             }
             else
             {
-                place (undoButton, 412, toolbarY, 32, toolbarHeight);
-                place (redoButton, 444, toolbarY, 32, toolbarHeight);
+                place (undoButton, 404, toolbarY, 28, toolbarHeight);
+                place (redoButton, 432, toolbarY, 28, toolbarHeight);
                 place (controls, w - 74, toolbarY, 68, toolbarHeight);
                 place (record, w - 110, toolbarY, 32, toolbarHeight);
                 place (showPads, w - 146, toolbarY, 32, toolbarHeight);
+                place (generate, showPads.getX() - generateWidth - 4, toolbarY, generateWidth, toolbarHeight);
                 if (layout.standalone)
                 {
-                    placePlay (w - 270, 32);
-                    place (tempo, w - 234, toolbarY, 48, toolbarHeight);
-                    place (metronome, w - 182, toolbarY, 32, toolbarHeight);
+                    placePlay (w - 270 - generateWidth - 4, 32);
+                    place (tempo, w - 234 - generateWidth - 4, toolbarY, 48, toolbarHeight);
+                    place (metronome, generate.getX() - 36, toolbarY, 32, toolbarHeight);
                 }
+            }
+            if (panel == Panel::generate)
+            {
+                place (aboutViewport, 12, Layout::compactHeaderHeight + 8, w - 24, getHeight() - Layout::compactHeaderHeight - 16);
+                randomPanel.setSize (aboutViewport.getWidth(), aboutViewport.getHeight());
+                finish();
+                return;
             }
             if (padPreview)
             {
@@ -743,13 +754,9 @@ namespace ksh::ui
                 place (velocityHumanize, 366, 128, 176, 76);
                 place (timingHumanize, 562, 128, 176, 76);
                 break;
-            case Panel::topSecret:
             case Panel::superSecret:
                 place (aboutViewport, 12, 100, w - 24, getHeight() - 112);
-                if (panel == Panel::topSecret)
-                    randomPanel.setSize (aboutViewport.getWidth(), aboutViewport.getHeight());
-                else
-                    randomPanel.setSize (w - 36, 440);
+                randomPanel.setSize (w - 36, 440);
                 break;
             case Panel::view:
                 place (dc, 28, 130, 168, 48);
@@ -757,6 +764,7 @@ namespace ksh::ui
                 place (rowOrder, 396, 130, 168, 48);
                 place (compactAccent, 580, 130, 206, 48);
                 place (modifierToggle, 28, 224, 208, 44);
+                place (dimTextToggle, 252, 224, 168, 44);
                 if (layout.phoneRowControls)
                     place (visibleRows, 260, 224, 180, 44);
                 if (phone && layout.standalone)
@@ -777,6 +785,7 @@ namespace ksh::ui
                     place (channelSolo, 632, 226, 118, 48);
                 }
                 break;
+            case Panel::generate:
             case Panel::none:
             case Panel::help: break;
         }
@@ -807,9 +816,9 @@ namespace ksh::ui
         if (!phonePatternPanel())
         {
             if (layout.standalone && controller.processor.showStandaloneMidiOutputMenu)
-                row (menu.tabs, { &panelTabs[0], &panelTabs[2], &panelTabs[4], &midiOutput, &panelTabs[5], &panelTabs[6] });
+                row (menu.tabs, { &panelTabs[0], &panelTabs[2], &panelTabs[3], &midiOutput, &panelTabs[4], &panelTabs[5] });
             else
-                row (menu.tabs, { &panelTabs[0], &panelTabs[2], &panelTabs[4], &panelTabs[5], &panelTabs[6] });
+                row (menu.tabs, { &panelTabs[0], &panelTabs[2], &panelTabs[3], &panelTabs[4], &panelTabs[5] });
         }
         for (size_t i = 0; i < panelTabs.size(); ++i)
             panelTabs[i].setToggleState (panel == static_cast<Panel> (static_cast<int> (Panel::project) + static_cast<int> (i)), juce::dontSendNotification);
@@ -836,14 +845,12 @@ namespace ksh::ui
                 place (left, menu.body.withPosition (menu.body.getX() + 14, menu.body.getY() + 194).withSize (52, 48));
                 place (right, left.getBounds().translated (60, 0));
                 place (compactClear, { menu.body.getRight() - 204, left.getY(), 190, 48 });
-                place (panelTabs[3], menu.body.reduced (14, 0).withTrimmedTop (270).withHeight (buttonHeight));
                 break;
             case Panel::feel:
                 row (leftControls.withHeight (80), { &swing, &subdivision });
                 row (rightControls.withHeight (80), { &velocityHumanize, &timingHumanize });
                 place (showSwing, leftControls.withTrimmedTop (100).withHeight (buttonHeight));
                 break;
-            case Panel::topSecret:
             case Panel::superSecret:
                 place (aboutViewport, menu.body);
                 randomPanel.setSize (menu.body.getWidth(), menu.body.getHeight());
@@ -864,6 +871,7 @@ namespace ksh::ui
                     if (controller.processor.showStandaloneLinkSettings)
                         settingsRow (linkSettings);
                 }
+                settingsRow (dimTextToggle);
                 break;
             }
             case Panel::help:
@@ -874,6 +882,7 @@ namespace ksh::ui
                                                           .translated (static_cast<float> (-menu.body.getX()), static_cast<float> (-menu.body.getY() - 20)));
                 break;
             }
+            case Panel::generate:
             case Panel::none:
             case Panel::channel: break;
         }
@@ -944,7 +953,7 @@ namespace ksh::ui
                     }
                 break;
             }
-            case Panel::topSecret:
+            case Panel::generate:
             case Panel::superSecret:
             case Panel::none:
             case Panel::channel: break;

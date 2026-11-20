@@ -11,7 +11,7 @@ namespace ksh::ui
         std::function<void (bool)> onThemeGesture;
         std::function<void (bool, std::optional<juce::Colour>)> onAccentColourEdited;
         std::function<void (Palette::BackgroundTone)> onBackgroundToneEdited;
-        std::function<void()> onRandomizerCycle;
+        std::function<void()> onToggleSuperSecret;
         void paint (juce::Graphics&) override;
         void resized() override;
         void setArtworkBounds (juce::Rectangle<float>);
@@ -59,7 +59,7 @@ namespace ksh::ui
     public:
         explicit PreviewPanel (EditorController&, bool randomSection = false);
         ~PreviewPanel() override;
-        std::function<void()> onRandomizerCycle;
+        std::function<void()> onToggleSuperSecret;
         void setXYRandomizer (bool);
         bool isXYRandomizer() const { return xyRandomizer; }
         std::function<void()> onClose;

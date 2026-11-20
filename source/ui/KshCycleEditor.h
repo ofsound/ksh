@@ -32,6 +32,7 @@ namespace ksh::ui
         bool previewCycleLayer = true;
         bool useAnchorPatternForGroup = false;
         bool resetOnDoubleClickAnywhere = false;
+        bool forwardEscape = false;
         int split = -1;
         int captionHeight = 0;
         void setBeatAccent (juce::Colour colour)
@@ -60,7 +61,9 @@ namespace ksh::ui
         {
             const auto list = locations();
             setEnabled (!list.empty());
-            const auto c = cycleFor (list.empty() ? Cell {} : controller.cell (list.front()));
+            auto c = cycleFor (list.empty() ? Cell {} : controller.cell (list.front()));
+            if (pendingClick && clickTargetMatches (*pendingClick, list))
+                c = cycleAfterClick (c, pendingClick->index);
             updatePlayback();
             const std::tuple shown { !list.empty(), c.cycle, c.cycleMask, compact };
             if (displayed == shown)
@@ -182,15 +185,19 @@ namespace ksh::ui
         {
             controller.setCycle (length, mask, list, split);
         }
+        Cycle cycleAfterClick (Cycle first, int index) const
+        {
+            const int length = juce::jmax (first.cycle, index + 1);
+            const int mask = index >= first.cycle ? first.cycleMask : first.cycleMask ^ (1 << index);
+            return { length, split < 0 ? normalizeCycleMask (mask, length) : mask };
+        }
         void toggleBeat (int index, const std::vector<Location>& list)
         {
             if (list.empty())
                 return;
-            const auto first = cycleFor (controller.cell (list.front()));
-            const int nextLength = juce::jmax (first.cycle, index + 1);
-            const int mask = index >= first.cycle ? first.cycleMask : first.cycleMask ^ (1 << index);
+            const auto next = cycleAfterClick (cycleFor (controller.cell (list.front())), index);
             beginEdit ("Cycle pattern");
-            setCycle (nextLength, mask, list);
+            setCycle (next.cycle, next.cycleMask, list);
             endEdit();
             sync();
         }
@@ -198,31 +205,41 @@ namespace ksh::ui
         {
             pendingClick = PendingClick { index, dragSource, dragEpoch, dragLocations, dragCells };
             startTimer (juce::jmax (1, juce::MouseEvent::getDoubleClickTimeout() - event.getLengthOfMousePress()));
+            // Show the toggle immediately while the double-click can still replace the edit with a reset.
+            sync();
         }
         void cancelPendingClick()
         {
             stopTimer();
-            pendingClick.reset();
+            if (std::exchange (pendingClick, std::nullopt))
+                sync();
+        }
+        bool clickTargetMatches (const PendingClick& click, const std::vector<Location>& list) const
+        {
+            if (controller.editing() || controller.processor.getUiBridge().getDocumentEpoch() != click.epoch
+                || controller.source() != click.source || list != click.locations)
+                return false;
+            for (size_t i = 0; i < list.size(); ++i)
+                if (controller.cell (list[i]) != click.cells[i])
+                    return false;
+            return true;
         }
         void finishPendingClick (bool reset)
         {
             stopTimer();
             const auto click = std::exchange (pendingClick, std::nullopt);
-            if (!click || !isEnabled() || controller.editing()
-                || controller.processor.getUiBridge().getDocumentEpoch() != click->epoch)
+            if (!click)
                 return;
             controller.refresh();
-            if (controller.source() != click->source || locations() != click->locations)
-                return;
-            for (size_t i = 0; i < click->locations.size(); ++i)
-                if (controller.cell (click->locations[i]) != click->cells[i])
-                    return;
-            if (!reset)
+            if (!isEnabled() || !clickTargetMatches (*click, locations()))
             {
-                toggleBeat (click->index, click->locations);
+                sync();
                 return;
             }
-            resetCycle (click->locations);
+            if (reset)
+                resetCycle (click->locations);
+            else
+                toggleBeat (click->index, click->locations);
         }
         void resetCycle (const std::vector<Location>& list)
         {
@@ -401,7 +418,7 @@ namespace ksh::ui
             {
                 if (!isEnabled())
                     return false;
-                if (key == juce::KeyPress::escapeKey && dragging)
+                if (key == juce::KeyPress::escapeKey && dragging && !owner.forwardEscape)
                 {
                     cancel();
                     return true;
@@ -526,7 +543,7 @@ namespace ksh::ui
             void mouseDoubleClick (const juce::MouseEvent& event) override { owner->mouseDoubleClick (event); }
             bool keyPressed (const juce::KeyPress& key) override
             {
-                if (key == juce::KeyPress::escapeKey && (owner->dragFrom >= 0 || owner->pendingClick))
+                if (key == juce::KeyPress::escapeKey && !owner->forwardEscape && (owner->dragFrom >= 0 || owner->pendingClick))
                 {
                     suppressClick = true;
                     owner->cancelPendingClick();
@@ -545,15 +562,20 @@ namespace ksh::ui
                 const bool preview = owner != nullptr && owner->bitDragging && owner->dragTo >= 0;
                 const bool on = preview && index == owner->dragTo ? true : preview && index == owner->dragFrom ? false : getToggleState();
                 auto background = on ? owner->accent() : inCycle ? Palette::controls.surface : Palette::controls.app;
-                if (flashing)
-                    background = Palette::text;
                 if (isEnabled() && (hover || down))
                     background = background.brighter (0.12f);
                 g.setColour (background.withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
                 g.fillRoundedRectangle (r, 3);
-                const auto ink = flashing || on ? background.contrasting() : inCycle ? Palette::text : Palette::muted;
-                ksh::ui::text (g, getButtonText(), r, juce::jmin (fontHeight, r.getWidth() * 0.56f, r.getHeight() * 0.52f),
-                               ink.withMultipliedAlpha (isEnabled() ? 1.0f : 0.52f), true);
+                if (flashing)
+                {
+                    g.setColour (Palette::text.withMultipliedAlpha (isEnabled() ? 0.85f : 0.35f));
+                    g.drawRoundedRectangle (r.reduced (1.0f), 2.5f, 1.5f);
+                }
+                const float size = juce::jmin (fontHeight, r.getWidth() * 0.56f, r.getHeight() * 0.52f);
+                const float alpha = isEnabled() ? 1.0f : 0.52f;
+                if (on)
+                    ksh::ui::text (g, getButtonText(), r.translated (0, 1), size, juce::Colours::black.withAlpha (0.66f * alpha), true);
+                ksh::ui::text (g, getButtonText(), r, size, (on || inCycle ? Palette::text : Palette::muted).withMultipliedAlpha (alpha), true);
             }
         };
         std::array<CycleBit, 8> bits;

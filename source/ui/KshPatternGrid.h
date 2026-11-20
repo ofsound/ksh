@@ -52,9 +52,18 @@ namespace ksh::ui
         juce::Point<float> hitPosition (Location, int rollIndex = 0) const;
         bool isCopyMode() const;
         bool isSelectMode() const { return controller.shiftDown (modifiers); }
+        bool isSelectedChanceMode() const { return selectedChance && controller.selected.any(); }
+        void cancelOptionTap() { optionTap.reset(); }
 
     private:
         EditorController& controller;
+        struct OptionTap
+        {
+            double started;
+            Selection selection;
+        };
+        std::optional<OptionTap> optionTap;
+        bool selectedChance = false;
         static constexpr float selectionGlowExtent = 20.0f;
         // Share the cached, position-independent blur across equal-sized cells.
         melatonin::DropShadow selectionGlow {
@@ -133,6 +142,7 @@ namespace ksh::ui
         {
             int channel;
             int step;
+            int split = 0;
             bool operator== (const VelocityEdge&) const = default;
         };
         std::optional<VelocityEdge> hoverEdge;
@@ -169,7 +179,7 @@ namespace ksh::ui
             bool openEditor, scrubbing = false;
         };
         std::optional<SplitPress> splitPress;
-        bool beginSplitPress (const PresetPress&, bool touch, bool openEditor);
+        bool beginSplitPress (const PresetPress&, bool openEditor);
         void showSplitEditor (const PresetPress&, int index, bool touch);
         void setSplitValue (Location, int, Layer, int);
         void dragSplitValue (const juce::MouseEvent&);
@@ -245,8 +255,10 @@ namespace ksh::ui
         std::array<ProbabilityLabel, 201> nudgeLabels;
         float probabilityFontSize = 0.0f, probabilityBaseline = 0.0f;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
-        int boundary = 0, lineVelocity = 100;
+        VelocityEdge lineStart { 0, 0 };
+        int lineVelocity = 100;
         int valueStep = 0, valueVelocity = 100;
+        float valueX = 0;
         void updateSelection();
         int velocityAtY (float) const;
         std::optional<bool> loopHandleAt (juce::Point<float>, bool touch) const;
@@ -263,6 +275,7 @@ namespace ksh::ui
         void beginVelocityDrawing (VelocityEdge);
         juce::Rectangle<float> velocityDrawingBounds() const;
         void drawVelocity (juce::Point<float>);
+        void dragVelocityValues (float x, int step, int velocity);
         void clearHoverMarker();
         void prepareProbabilityLabels (float size);
         void timerCallback() override;

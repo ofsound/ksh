@@ -646,6 +646,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     const auto& undo = phoneButton (editor, "undo");
     const auto& redo = phoneButton (editor, "redo");
     const auto& pads = phoneButton (editor, "Show pads");
+    auto& generate = phoneButton (editor, "Generate");
     const auto& record = phoneButton (editor, "Arm Record");
     const auto& tempo = phoneButton (editor, "Set tempo");
     const auto& metro = phoneButton (editor, "Metronome");
@@ -654,7 +655,8 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     const auto& menu = phoneButton (editor, "Open menu");
     const int referenceGap = phoneButton (editor, "Velocity editing layer").getX() - phoneButton (editor, "Pattern bank").getRight();
     CHECK (undo.getRight() == redo.getX());
-    CHECK (redo.getRight() < pads.getX());
+    CHECK (redo.getRight() < generate.getX());
+    CHECK (generate.getRight() < pads.getX());
     const int padGap = record.getX() - pads.getRight();
     CHECK (padGap > 0);
     CHECK (record.getRight() < tempo.getX());
@@ -690,10 +692,8 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     midiOutput.onClick();
     CHECK (openedMidi);
     phoneButton (editor, "Close menu").onClick();
-    pattern.onClick();
-    auto& topSecret = phoneButton (editor, "Top Secret");
     CHECK_FALSE (superSecret.isVisible());
-    topSecret.onClick();
+    generate.onClick();
     juce::Viewport* generatorViewport = nullptr;
     for (auto* child : editor.getChildren())
         if (auto* viewport = dynamic_cast<juce::Viewport*> (child); viewport != nullptr && viewport->isVisible())
@@ -714,6 +714,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     REQUIRE (pad != nullptr);
     REQUIRE (patternLength != nullptr);
     CHECK_FALSE (patternLength->isVisible());
+    generate.onClick();
     pattern.onClick();
     ValueControl* gridLength = nullptr;
     for (auto* child : editor.getChildren())
@@ -730,7 +731,8 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     };
     setLength (*gridLength, 64);
     CHECK (editor.controller.state.playback.stepCount == 64);
-    topSecret.onClick();
+    pattern.onClick();
+    generate.onClick();
     CHECK_FALSE (patternLength->isVisible());
     REQUIRE (pad->isVisible());
     CHECK (pad->getX() > generator->getWidth() / 2);
@@ -743,10 +745,13 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (editor.controller.cell ({ 0, 48 }).enabled);
     pad->mouseUp (phoneEvent (*pad, centre, centre, 0));
     const auto firstSeedPattern = editor.controller.state.playback.sources[0];
-    auto& firstSeed = phoneButton (editor, "Generator seed 1");
-    auto& nextSeed = phoneButton (editor, "Generator seed 2");
+    auto& firstSeed = phoneButton (editor, "Generator seed A");
+    auto& nextSeed = phoneButton (editor, "Generator seed B");
+    CHECK (firstSeed.getButtonText() == "A");
+    CHECK (phoneButton (editor, "Generator seed E").getButtonText() == "E");
     CHECK (firstSeed.getToggleState());
-    CHECK (nextSeed.getY() >= pad->getBottom());
+    CHECK (nextSeed.getY() - pad->getBottom() >= 16);
+    capturePhone (editor, "iphone-generate");
     nextSeed.onClick();
     CHECK (nextSeed.getToggleState());
     CHECK_FALSE (firstSeed.getToggleState());
@@ -755,10 +760,9 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (editor.controller.state.playback.sources[0] == firstSeedPattern);
     editor.controller.undo();
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
-    pattern.onClick();
-    pattern.onClick();
+    generate.onClick();
     phoneButton (editor, "Open menu").onClick();
-    CHECK_FALSE (topSecret.isVisible());
+    CHECK_FALSE (generate.isVisible());
     REQUIRE (superSecret.isVisible());
     superSecret.onClick();
     CHECK_FALSE (pad->isVisible());

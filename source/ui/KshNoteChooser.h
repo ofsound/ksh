@@ -1,4 +1,5 @@
 #pragma once
+#include "KshLayout.h"
 #include "KshStyle.h"
 
 namespace ksh::ui
@@ -203,14 +204,16 @@ namespace ksh::ui
                                          : (below ? anchor.getBottom() + anchorGap : anchor.getY() - height - anchorGap);
             panel = { xPosition, juce::jlimit (12, juce::jmax (12, getHeight() - height - 12), yPosition), width, height };
             const int x = panel.getX(), y = panel.getY();
-            close.setBounds (panel.getRight() - 44, y + 12, 28, 28);
+            constexpr int target = Layout::touchTarget;
+            const int toolbarY = y + allRowsPadding;
+            close.setBounds (panel.getRight() - 16 - target, toolbarY, target, target);
             int controlX = x + 110;
             for (auto& button : transposeButtons)
             {
-                button.setBounds (controlX, y + 7, 52, 36);
-                controlX += 58;
+                button.setBounds (controlX, toolbarY, target, target);
+                controlX += target + 6;
             }
-            scalePresets.setBounds (controlX + 6, y + 7, 156, 36);
+            scalePresets.setBounds (controlX + 6, toolbarY, 156, target);
             previous.setBounds (x + 20, y + allRowsHeight + 64, 36, 30);
             next.setBounds (panel.getRight() - 56, y + allRowsHeight + 64, 36, 30);
             const float whiteWidth = static_cast<float> (width - 40) / 28.0f;
@@ -250,7 +253,7 @@ namespace ksh::ui
             g.setColour (Palette::border);
             g.drawRoundedRectangle (r.reduced (0.5f), 9, 1);
             g.drawHorizontalLine (panel.getY() + allRowsHeight, r.getX() + 16, r.getRight() - 16);
-            text (g, "All rows", { r.getX() + 20, r.getY() + 7, 86, 36 }, labelFontSize, Palette::muted, true, juce::Justification::centredLeft);
+            text (g, "All rows", { r.getX() + 20, r.getY() + allRowsPadding, 86, Layout::touchTarget }, 19, Palette::muted, true, juce::Justification::centredLeft);
             const auto noteName = juce::MidiMessage::getMidiNoteName (candidate, true, true, 4);
             const auto midiNumber = juce::String (candidate);
             const auto labelFont = font (36, true);
@@ -308,7 +311,8 @@ namespace ksh::ui
         };
         static constexpr int keyCount = 48;
         static constexpr int lastFirstNote = 84;
-        static constexpr int allRowsHeight = 50;
+        static constexpr int allRowsPadding = 8;
+        static constexpr int allRowsHeight = Layout::touchTarget + 2 * allRowsPadding;
         static constexpr std::array transposeOffsets { -12, -1, 1, 12 };
         std::array<PianoKey, keyCount> keys;
         std::array<juce::TextButton, transposeOffsets.size()> transposeButtons;
@@ -334,7 +338,7 @@ namespace ksh::ui
                 controlSurface (g, bounds.reduced (0.5f), true, false);
             }
             const auto label = input.format ? input.format (input.value) : juce::String (input.value) + input.suffix;
-            text (g, label, bounds, input.valueFontSize, juce::Colours::white, true);
+            text (g, label, bounds, input.valueFontSize, Palette::white, true);
         }
         void showScalePresets()
         {

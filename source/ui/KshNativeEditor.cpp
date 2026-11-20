@@ -8,6 +8,7 @@ namespace ksh::ui
     {
         constexpr auto backgroundBrightnessPreference = "backgroundBrightness";
         constexpr auto backgroundTintPreference = "backgroundTint";
+        constexpr auto dimTextPreference = "dimText";
         constexpr std::array accentColourKeys { "orangeAccentColour", "blueAccentColour" };
         constexpr std::array legacyAccentModeKeys { "orangeAccentColourMode", "blueAccentColourMode" };
         constexpr std::array legacyAccentShadeKeys { "orangeAccentShade", "blueAccentShade" };
@@ -243,9 +244,9 @@ namespace ksh::ui
                         g.setColour (highlight ? Palette::text : checked ? Palette::accent : Palette::muted.withAlpha (0.75f));
                         g.drawRoundedRectangle (box.reduced (0.5f), 2.5f, 1.0f);
                     }
-                    const auto labelColour = checked ? juce::Colours::white : toggle ? Palette::muted : Palette::text;
+                    const auto labelColour = checked ? Palette::white : toggle ? Palette::muted : Palette::text;
                     const auto ink = !isEnabled() ? Palette::faint
-                        : highlight ? labelColour.interpolatedWith (juce::Colours::white, 0.45f) : labelColour;
+                        : highlight ? labelColour.interpolatedWith (Palette::white, 0.45f) : labelColour;
                     ksh::ui::text (g, getButtonText(), content.withTrimmedLeft (checkboxGap), labelFontSize,
                                    ink, false, juce::Justification::centredLeft);
                     if (showKeyboardFocus && hasKeyboardFocus (false))
@@ -353,6 +354,9 @@ namespace ksh::ui
        #endif
         Palette::setBackgroundTone ({ uiPreferences->getIntValue (backgroundBrightnessPreference),
                                       uiPreferences->getIntValue (backgroundTintPreference) });
+        Palette::setTextDimmed (uiPreferences->getBoolValue (dimTextPreference));
+        look.refreshPalette();
+        footerHelp.refreshInk();
         Palette::setAccentPreferences (uiPreferences->getBoolValue ("blueAccent", true),
                                        { readAccentColour (*uiPreferences, 0), readAccentColour (*uiPreferences, 1) });
         auto trackColours = Palette::defaultTrackColours();
@@ -377,6 +381,16 @@ namespace ksh::ui
         modifierToggle.setTitle ("Shift/Option shortcuts");
         modifierToggle.setTooltip ("Toggle Shift and Option shortcuts");
         modifierToggle.onClick = [this] { toggleKeyboardModifiers(); };
+        addChildComponent (dimTextToggle);
+        dimTextToggle.setTooltip ("Dim bright text, icons and input values");
+        dimTextToggle.onClick = [this]
+        {
+            const bool dimmed = !Palette::isTextDimmed();
+            uiPreferences->setValue (dimTextPreference, dimmed);
+            uiPreferences->saveIfNeeded();
+            Palette::setTextDimmed (dimmed);
+        };
+        dimTextToggle.setToggleState (Palette::isTextDimmed(), juce::dontSendNotification);
         controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", true);
         addChildComponent (cellDisplay);
         cellDisplay.setTitle ("Show cell numbers");
@@ -514,22 +528,17 @@ namespace ksh::ui
         addChildComponent (aboutViewport);
         aboutViewport.setViewedComponent (&randomPanel, false);
         aboutViewport.setScrollBarsShown (true, false);
-        preview.onRandomizerCycle = [this]
+        preview.onToggleSuperSecret = [this]
         {
-            if (!layout.randomVisible)
-            {
-                randomPanel.setXYRandomizer (true);
-                toggleAboutPanel();
-            }
-            else if (randomPanel.isXYRandomizer())
-            {
-                randomPanel.setXYRandomizer (false);
-                aboutViewport.setViewPosition (0, 0);
-            }
-            else
-                toggleAboutPanel();
+            showDesktopRandomizer (!layout.randomVisible || randomPanel.isXYRandomizer());
         };
-        randomPanel.onClose = [this] { toggleAboutPanel(); };
+        randomPanel.onClose = [this]
+        {
+            if (layout.compact)
+                showPanel (Panel::none);
+            else
+                showDesktopRandomizer (false);
+        };
         preview.onThemeGesture = [this] (bool started)
         {
             if (started)
@@ -611,17 +620,32 @@ namespace ksh::ui
             addAndMakeVisible (*b);
         addChildComponent (dc);
         addAndMakeVisible (chanceLayer);
-        for (juce::TextButton* button : std::array<juce::TextButton*, 2> { &showPads, &metronome })
+        for (juce::TextButton* button : std::array<juce::TextButton*, 3> { &generate, &showPads, &metronome })
         {
             addAndMakeVisible (*button);
             button->setClickingTogglesState (true);
             button->getProperties().set ("outlinedIcon", true);
         }
+        generate.setButtonText ("Generate");
+        generate.getProperties().set ("icon", "computer");
+        generate.setTooltip ("Show or hide the pattern generator");
+        generate.onClick = [this]
+        {
+            if (layout.compact)
+                showPanel (panel == Panel::generate ? Panel::none : Panel::generate);
+            else
+                showDesktopRandomizer (!layout.randomVisible || !randomPanel.isXYRandomizer(), true);
+        };
         showPads.getProperties().set ("icon", "pads");
         showPads.setTitle ("Show pads");
         showPads.onClick = [this]
         {
             preview.cancelGesture();
+            if (layout.compact && panel == Panel::generate)
+            {
+                showPanel (Panel::none);
+                return;
+            }
             if (layout.phoneRowControls)
                 grid.cancelGesture();
             sync();
@@ -1157,7 +1181,7 @@ namespace ksh::ui
         for (auto* button : { &midiOutput, &linkSettings, &settings })
             button->getProperties().set ("insetFooterArtwork", !layout.compact);
         scale.getProperties().set ("insetFooterArtwork", !layout.compact);
-        for (auto* button : std::array<juce::TextButton*, 6> { &showPads, &record, &recordQuantize, &left, &right, &clear })
+        for (auto* button : std::array<juce::TextButton*, 7> { &generate, &showPads, &record, &recordQuantize, &left, &right, &clear })
             button->getProperties().set ("gridToolbarAction", !layout.compact);
         scale.setVisible (layout.standalone && !layout.compact && zenMode);
         if (layout.compact)
@@ -1221,9 +1245,14 @@ namespace ksh::ui
         clear.setBounds (steps.getX() - 78, inputY, target, target);
         right.setBounds (clear.getX() - 74, inputY, target, target);
         left.setBounds (right.getX() - 66, inputY, target, target);
-        recordQuantize.setBounds (left.getX() - 80, inputY, target, target);
-        record.setBounds (recordQuantize.getX() - 66, inputY, target, target);
-        showPads.setBounds (record.getX() - target - 20, inputY, target, target);
+        constexpr int recordGap = 2;
+        constexpr int redoClearance = 8;
+        const int actionSpace = left.getX() - redoButton.getRight() - 4 * target - recordGap - redoClearance;
+        const int actionGap = actionSpace / 4;
+        generate.setBounds (redoButton.getRight() + redoClearance + actionGap, inputY, target, target);
+        showPads.setBounds (generate.getRight() + actionGap, inputY, target, target);
+        record.setBounds (showPads.getRight() + actionGap, inputY, target, target);
+        recordQuantize.setBounds (record.getRight() + recordGap, inputY, target, target);
         const int randomY = juce::roundToInt (layout.gridY());
         const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
         constexpr int minRandomizerHeight = 540;
@@ -1267,7 +1296,7 @@ namespace ksh::ui
                 paintPhoneMenu (g);
                 return;
             }
-            if (panel != Panel::none)
+            if (panel != Panel::none && panel != Panel::generate)
             {
                 if (!layout.phoneRowControls || panel == Panel::channel)
                 {
@@ -1327,10 +1356,11 @@ namespace ksh::ui
         const auto toolbarCaption = [&] (const juce::String& label, juce::Rectangle<int> bounds)
         {
             text (g, label, bounds.withY (steps.getY()).withHeight (18).toFloat(),
-                  steps.captionFontSize, steps.captionColour, true, juce::Justification::centredLeft);
+                  steps.captionFontSize, Palette::muted, true, juce::Justification::centredLeft);
         };
         toolbarCaption ("Mode", velocityLayer.getBounds().getUnion (selectMode.getBounds()));
         toolbarCaption ("Undo", undoButton.getBounds().getUnion (redoButton.getBounds()));
+        toolbarCaption ("Generate", generate.getBounds().withRight (showPads.getX() - 4));
         toolbarCaption ("Pads", showPads.getBounds().withRight (record.getX() - 4));
         toolbarCaption ("Arm Record", record.getBounds().getUnion (recordQuantize.getBounds()));
         toolbarCaption ("Nudge", left.getBounds().getUnion (right.getBounds()));
@@ -1366,6 +1396,7 @@ namespace ksh::ui
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
+        grid.cancelOptionTap();
         if (event.originalComponent != &grid)
             grid.finishVelocityDrawing();
         if (showingCompactPadPreview() || (layout.phoneRowControls && patternPicker.isVisible())
@@ -1427,15 +1458,17 @@ namespace ksh::ui
             safe->controller.commit();
         });
     }
-    void NativeEditor::toggleAboutPanel()
+    void NativeEditor::showDesktopRandomizer (bool visible, bool xy)
     {
         randomPanel.cancelGesture();
         controller.commit();
         grid.cancelGesture();
-        layout.randomVisible = !layout.randomVisible;
+        layout.randomVisible = visible;
+        generate.setToggleState (visible && xy, juce::dontSendNotification);
         aboutViewport.setVisible (layout.randomVisible);
         if (layout.randomVisible)
         {
+            randomPanel.setXYRandomizer (xy);
             aboutViewport.setViewPosition (0, 0);
             aboutViewport.toFront (false);
         }
@@ -1452,6 +1485,7 @@ namespace ksh::ui
     }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
+        grid.cancelOptionTap();
         if (patternPicker.isVisible())
             return patternPicker.keyPressed (key);
         if (noteChooser.isVisible())
@@ -1478,6 +1512,15 @@ namespace ksh::ui
                 setTempoOpen (false);
                 return true;
             }
+            if (grid.isSelectedChanceMode())
+            {
+                grid.dismissCyclePopup (true);
+                grid.cancelGesture();
+                controller.selected.reset();
+                controller.layer = Layer::velocity;
+                controller.cancelSelect();
+                return true;
+            }
             if (grid.dismissCyclePopup())
                 return true;
             if (controller.exitSolo())
@@ -1496,7 +1539,7 @@ namespace ksh::ui
             controller.cancelSelect();
             controller.copySource = -1;
             if (layout.randomVisible)
-                toggleAboutPanel();
+                showDesktopRandomizer (false);
             grid.cancelGesture();
             return true;
         }
@@ -1576,7 +1619,7 @@ namespace ksh::ui
         const bool selecting = grid.isSelectMode() || controller.selected.any();
         const bool chance = grid.displayLayer() == Layer::chance;
         velocityLayer.setToggleState (!selecting && grid.displayLayer() == Layer::velocity, juce::dontSendNotification);
-        chanceLayer.setToggleState (!selecting && chance, juce::dontSendNotification);
+        chanceLayer.setToggleState (chance && (!selecting || grid.isSelectedChanceMode()), juce::dontSendNotification);
         selectMode.setToggleState (selecting, juce::dontSendNotification);
         // Shared seams belong to the active segment; inactive neighbors must
         // not paint over its orange edge.
@@ -1605,6 +1648,7 @@ namespace ksh::ui
     }
     void NativeEditor::metronomeMenu (juce::Component& anchor)
     {
+        anchor.getProperties().set ("mutedMenuHeader", true);
         constexpr int soundId = 1, pitchId = 10, volumeId = 100;
         const auto& current = controller.processor;
         juce::PopupMenu menu, pitch, volume;
@@ -1683,6 +1727,7 @@ namespace ksh::ui
         addToggle (&NativeEditor::cellDisplay, cellDisplay.getTitle(), !controller.graphicalCellValues);
         addToggle (&NativeEditor::dc, dc.getTitle(), controller.drumColors);
         addToggle (&NativeEditor::modifierToggle, modifierToggle.getButtonText(), controller.keyboardModifiersEnabled);
+        addToggle (&NativeEditor::dimTextToggle, dimTextToggle.getButtonText(), Palette::isTextDimmed());
        #if !JUCE_IOS
         if (layout.standalone && zenModeChanged)
             addRow (zen, "Zen mode", zenMode);
@@ -1782,8 +1827,12 @@ namespace ksh::ui
     void NativeEditor::changeListenerCallback (juce::ChangeBroadcaster*)
     {
         look.refreshPalette();
+        footerHelp.refreshInk();
+        steps.captionColour = Palette::muted;
+        dimTextToggle.setToggleState (Palette::isTextDimmed(), juce::dontSendNotification);
         layerHint.setColour (juce::Label::textColourId, Palette::accent);
         tempoFader.setColour (juce::Slider::trackColourId, Palette::accent);
+        tempoFader.setColour (juce::Slider::thumbColourId, Palette::text);
         const bool blue = Palette::blueAccentSelected();
         compactAccent.setButtonText (Palette::accentOverride (blue) ? (blue ? "Accent: H" : "Accent: K")
                                                                    : (blue ? "Accent: Blue" : "Accent: Orange"));
@@ -1933,7 +1982,7 @@ namespace ksh::ui
                 pad.updateFlash (now);
         }
         preview.updatePlayback();
-        if (layout.randomVisible || (layout.compact && (panel == Panel::topSecret || panel == Panel::superSecret)))
+        if (layout.randomVisible || (layout.compact && (panel == Panel::generate || panel == Panel::superSecret)))
             randomPanel.updatePlayback();
         keyStateChanged (false);
     }
