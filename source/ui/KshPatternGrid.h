@@ -20,7 +20,6 @@ namespace ksh::ui
         std::function<void (Location)> revealKeyboardCell;
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
         bool copySelection = false;
-        void showSelectedRhythmPresets();
         juce::Component* openPresetMenu() const;
         void sync();
         juce::Rectangle<float> loopHandleBounds (int channel, bool end, bool touch) const;
@@ -44,7 +43,6 @@ namespace ksh::ui
         void modifierKeysChanged (const juce::ModifierKeys&) override;
         void cancelGesture();
         void finishVelocityDrawing();
-        bool dismissCyclePopup (bool commitPendingClick = false);
         bool handleCellPopupMouseDown (const juce::Component* clicked);
         bool hasActiveGesture() const;
         Layer displayLayer() const;
@@ -52,18 +50,9 @@ namespace ksh::ui
         juce::Point<float> hitPosition (Location, int rollIndex = 0) const;
         bool isCopyMode() const;
         bool isSelectMode() const { return controller.shiftDown (modifiers); }
-        bool isSelectedChanceMode() const { return selectedChance && controller.selected.any(); }
-        void cancelOptionTap() { optionTap.reset(); }
 
     private:
         EditorController& controller;
-        struct OptionTap
-        {
-            double started;
-            Selection selection;
-        };
-        std::optional<OptionTap> optionTap;
-        bool selectedChance = false;
         static constexpr float selectionGlowExtent = 20.0f;
         // Share the cached, position-independent blur across equal-sized cells.
         melatonin::DropShadow selectionGlow {
@@ -73,8 +62,8 @@ namespace ksh::ui
         Location cellAt (juce::Point<float>) const;
         Location coveringSpan (Location) const;
         int displayedSpan (Location) const;
-        bool canFitSpan (Location, int span) const;
         juce::Rectangle<float> cellPaintBounds (Location) const;
+        juce::Rectangle<float> emptyStepBounds (Location) const;
         int playbackPositionForCell (Location) const;
         double displayedSwingDelay (Location, double part = 0.0) const;
         Location keyboardCell;
@@ -125,6 +114,7 @@ namespace ksh::ui
         bool directionSwipeCurrent() const;
         int displayedSource = -2;
         uint64_t displayedEpoch = 0;
+        std::optional<EditorController::SplitCycleSelection> displayedSplitCycle;
         enum class Drag { none,
             pending,
             paint,
@@ -138,6 +128,9 @@ namespace ksh::ui
             velocityDraw };
         Drag drag = Drag::none;
         Location anchor, target;
+        Location touchStepPreview;
+        void clearTouchStepPreview();
+        void cancelTouchStepPress();
         struct VelocityEdge
         {
             int channel;
@@ -176,37 +169,19 @@ namespace ksh::ui
         {
             PresetPress target;
             int index, value;
-            bool openEditor, scrubbing = false;
+            bool scrubbing = false;
         };
         std::optional<SplitPress> splitPress;
-        bool beginSplitPress (const PresetPress&, bool openEditor);
-        void showSplitEditor (const PresetPress&, int index, bool touch);
+        bool beginSplitPress (const PresetPress&);
         void setSplitValue (Location, int, Layer, int);
         void dragSplitValue (const juce::MouseEvent&);
-        enum class CycleTapAction { none, toggle, select, deselect };
-        struct CycleTap
-        {
-            PresetPress press;
-            Cell cell;
-            Selection selection;
-            juce::Time time;
-            CycleTapAction singleClick;
-            bool touch;
-        };
-        std::optional<CycleTap> cycleTap;
-        juce::TimedCallback cycleTapTimer { [this] { finishCycleTap(); } };
         bool canClickCycleStrip (const juce::ModifierKeys&) const;
         bool cycleStripContains (Location, juce::Point<float>) const;
-        void queueCycleTap (PresetPress, const juce::MouseEvent&, CycleTapAction);
-        bool isCycleResetClick (const juce::MouseEvent&) const;
-        void cancelCycleTap();
-        void finishCycleTap (bool reset = false);
+        int splitIndexAt (Location, float x) const;
         class PresetMenu;
         std::unique_ptr<PresetMenu> presetMenu;
-        class CyclePopup;
-        std::unique_ptr<CyclePopup> cyclePopup;
         bool canSetPreset (const PresetPress&) const;
-        void showCellPresets (PresetPress, bool touch, bool trackPress = true);
+        void showCellPresets (PresetPress, bool touch);
         juce::Point<float> hoverPosition;
         double hoverMarkerStarted = 0.0;
         juce::TimedCallback hoverMarkerTimer { [this]
@@ -214,11 +189,14 @@ namespace ksh::ui
             if (hoverEdge)
             {
                 const auto centre = hoverMarkerPoint();
-                repaint (juce::Rectangle<float> (30.0f, 30.0f).withCentre (centre).getSmallestIntegerContainer());
+                const auto edge = centre.withX (velocityEdgeX (*hoverEdge));
+                repaint (juce::Rectangle<float> (centre, edge).expanded (15.0f).getSmallestIntegerContainer());
             }
         } };
         bool pointerInGrid = false;
         juce::Point<float> origin, current;
+        double velocityAnchorPulseStarted = 0.0;
+        juce::TimedCallback velocityAnchorPulseTimer { [this] { updateVelocityAnchorPulse(); } };
         Cell original;
         Layer dragLayer = Layer::velocity;
         std::vector<std::pair<Location, Cell>> originals;
@@ -271,6 +249,7 @@ namespace ksh::ui
         std::optional<VelocityEdge> nearestVelocityEdge (int channel, float x, bool start, float distance, bool touch = false) const;
         VelocityEdge velocityLineEnd() const;
         void beginVelocityLine (VelocityEdge);
+        void updateVelocityAnchorPulse (bool finished = false);
         void finishVelocityTap();
         void beginVelocityDrawing (VelocityEdge);
         juce::Rectangle<float> velocityDrawingBounds() const;

@@ -82,13 +82,12 @@ namespace ksh::ui
         struct GridFit
         {
             Fit straight, supportedStraight, swung;
-            bool ambiguousSwing = false;
 
             Fit rhythm() const { return swung.score > straight.score + 0.04 ? swung : straight; }
 
             std::optional<ImportedSwing> result() const
             {
-                if (! ambiguousSwing && swung.score >= 0.46 && swung.score > straight.score + 0.065)
+                if (swung.score >= 0.46 && swung.score > straight.score + 0.065)
                     return ImportedSwing { swung.swing, swung.target };
                 if (supportedStraight.score >= 0.62 && swung.score < straight.score + 0.04)
                     return ImportedSwing {};
@@ -112,7 +111,7 @@ namespace ksh::ui
                         const auto straight = scoreFit (hits, step, phase, 0, target);
                         if (straight.score > fit.straight.score)
                             fit.straight = straight;
-                        if (target < 2 && straight.evidence && straight.score > fit.supportedStraight.score)
+                        if (straight.evidence && straight.score > fit.supportedStraight.score)
                             fit.supportedStraight = straight;
 
                         for (int swing = 10; swing <= 100; swing += 10)
@@ -137,15 +136,6 @@ namespace ksh::ui
                 }
                 if (bestForTarget.score > fit.swung.score + 0.008)
                     fit.swung = bestForTarget;
-            }
-
-            if (freePhase && fit.swung.target == 2)
-            {
-                // With 4x swing, attacks from the two groups can coincide. A fit
-                // one full step away can then explain the same audible onsets.
-                const auto alias = fit.swung.swing > 50 ? fit.swung.swing - 50 : fit.swung.swing + 50;
-                const auto alternative = scoreFit (hits, step, fit.swung.phase, alias, fit.swung.target);
-                fit.ambiguousSwing = alternative.evidence && alternative.score > fit.swung.score - 0.025;
             }
 
             return fit;
@@ -732,7 +722,7 @@ namespace ksh::ui
         const auto swing = groove.result.swing.value_or (ImportedSwing {});
         const auto fit = swing.amount > 0 ? groove.fit.swung : groove.fit.straight;
         const auto phase = fit.score >= 0.0 ? fit.phase : hits.front().time / stepSeconds;
-        const auto swingPeriod = swing.amount > 0 ? 2.0 * (1 << swing.target) : 1.0;
+        const auto swingPeriod = swing.amount > 0 ? 2.0 * swingSubdivisionValueForIndex (swing.target) : 1.0;
         const auto firstPosition = hits.front().time / stepSeconds;
         const auto origin = (phase + swingPeriod * std::floor ((firstPosition - phase + 0.22) / swingPeriod)) * stepSeconds;
 

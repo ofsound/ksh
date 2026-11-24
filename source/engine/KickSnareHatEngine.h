@@ -237,6 +237,7 @@ public:
     void setSourceChannelMute (int source, int channel, bool muted);
     void resetSourceChannel (int source, int channel);
     void copySourcePattern (int source, int destination);
+    void replaceActivePattern (const SourcePattern&, int steps, double bpm);
 
     void generateWindow (int startStep, int length, bool forceEmit = false);
     void reset();

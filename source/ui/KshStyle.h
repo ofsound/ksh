@@ -48,6 +48,9 @@ namespace ksh::ui
         };
         static constexpr float controlToneStrength = 0.30f;
         static inline const juce::Colour defaultWhite { 0xffffffff }, defaultText { 0xfff4fafb }, defaultMuted { 0xff95b4bb };
+        static inline const juce::Colour dimWhite { 0xffc7c7c7 },
+            dimText = defaultText.interpolatedWith (juce::Colour (0xff000000), 0.22f),
+            dimMuted = defaultMuted.interpolatedWith (juce::Colour (0xff000000), 0.10f);
 
     public:
         struct BackgroundTone
@@ -62,7 +65,7 @@ namespace ksh::ui
         static inline const juce::Colour& surface = backgrounds.surface;
         static inline const juce::Colour& raised = backgrounds.raised;
         static inline const juce::Colour& border = backgrounds.border;
-        static inline juce::Colour white { defaultWhite }, text { defaultText }, muted { defaultMuted };
+        static inline juce::Colour white { dimWhite }, text { dimText }, muted { dimMuted };
         static inline const juce::Colour faint { 0xff6f8f97 }, info { 0xff67e8f9 }, danger { 0xfffb7185 };
         static inline const juce::Colour orangeAccent { 0xfff1954a }, blueAccent { 0xff40add1 };
         static inline juce::Colour accent { blueAccent };
@@ -71,15 +74,22 @@ namespace ksh::ui
             static juce::ChangeBroadcaster changes;
             return changes;
         }
-        static bool isTextDimmed() { return dimmedText; }
-        static void setTextDimmed (bool dimmed)
+        static int textBrightness() { return brightness; }
+        static void setTextBrightness (int value)
         {
-            if (dimmedText == dimmed)
+            value = juce::jlimit (-40, 100, value);
+            if (brightness == value)
                 return;
-            dimmedText = dimmed;
-            white = dimmed ? juce::Colour (0xffc7c7c7) : defaultWhite;
-            text = dimmed ? defaultText.interpolatedWith (juce::Colours::black, 0.22f) : defaultText;
-            muted = dimmed ? defaultMuted.interpolatedWith (juce::Colours::black, 0.10f) : defaultMuted;
+            brightness = value;
+            const auto adjust = [value] (juce::Colour dim, juce::Colour bright)
+            {
+                const float amount = static_cast<float> (value) / 100.0f;
+                return amount < 0.0f ? dim.interpolatedWith (juce::Colours::black, -amount * 0.3f)
+                                     : dim.interpolatedWith (bright, amount);
+            };
+            white = adjust (dimWhite, defaultWhite);
+            text = adjust (dimText, defaultText);
+            muted = adjust (dimMuted, defaultMuted);
             changes().sendSynchronousChangeMessage();
         }
         static BackgroundTone backgroundTone() { return backdropTone; }
@@ -175,7 +185,7 @@ namespace ksh::ui
             return colours;
         }
         static inline bool useBlueAccent = true;
-        static inline bool dimmedText = false;
+        static inline int brightness = 0;
         static inline AccentColours accentColours {};
     };
     inline void paintLengthGrip (juce::Graphics& g, juce::Rectangle<float> grip, juce::Colour dots = Palette::text, float opacity = 1.0f)
@@ -216,6 +226,7 @@ namespace ksh::ui
         auto f = juce::Font (juce::FontOptions (bold ? heavy : regular).withHeight (height * 1.18f));
         return f;
     }
+    inline constexpr int phoneDropdownInsetReduction = 3;
     inline int dropdownWidth (const juce::String& label)
     {
         return juce::jmax (juce::GlyphArrangement::getStringWidthInt (font (13), label),
@@ -234,14 +245,20 @@ namespace ksh::ui
               Palette::text.withAlpha (0.62f * opacity), false, alignment);
     }
 
+    template <typename Tone>
+    juce::ColourGradient surfaceGradient (juce::Rectangle<float> bounds, const Palette::SurfaceColours& colours, bool hover, Tone&& tone)
+    {
+        const auto top = colours.raised.interpolatedWith (colours.surface, 0.4f);
+        const auto bottom = colours.app.interpolatedWith (colours.surface, 0.3f);
+        return { tone (hover ? top.brighter (0.08f) : top), bounds.getTopLeft(), tone (bottom), bounds.getBottomLeft(), false };
+    }
+
     /** tone maps every colour drawn, e.g. to fade the surface toward a known backdrop. */
     template <typename Tone>
     void surface (juce::Graphics& g, juce::Rectangle<float> r, bool active, bool hover, Tone&& tone, float radius = 5.0f,
                   const Palette::SurfaceColours& colours = Palette::backgrounds)
     {
-        const auto top = colours.raised.interpolatedWith (colours.surface, 0.4f);
-        const auto bottom = colours.app.interpolatedWith (colours.surface, 0.3f);
-        g.setGradientFill (juce::ColourGradient (tone (hover ? top.brighter (0.08f) : top), r.getTopLeft(), tone (bottom), r.getBottomLeft(), false));
+        g.setGradientFill (surfaceGradient (r, colours, hover, tone));
         g.fillRoundedRectangle (r, radius);
         g.setColour (tone (active ? Palette::accent : colours.border.withAlpha (0.42f)));
         g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
@@ -293,9 +310,10 @@ namespace ksh::ui
         return (active ? Palette::accent : Palette::text).withMultipliedAlpha (enabled ? 1.0f : 0.4f);
     }
     inline constexpr float footerArtworkScale = 0.85f;
+    inline constexpr int footerArtworkInset = 5;
     inline juce::Rectangle<float> footerArtworkBounds (juce::Rectangle<float> bounds)
     {
-        return bounds.reduced (5.0f);
+        return bounds.reduced (static_cast<float> (footerArtworkInset));
     }
     inline juce::Rectangle<float> rowControlFace (juce::Rectangle<float> bounds)
     {
@@ -350,7 +368,7 @@ namespace ksh::ui
     namespace phoneMenu
     {
         enum Icon { none, folder, grid, timing, dice, gear, info, add, save, saveAs, previous, next,
-                    trash, clock, lock, eye, palette, values, rows, keyboard, metronome, midi, link, xy };
+                    trash, clock, lock, eye, palette, values, rows, keyboard, metronome, midi, link, xy, twoNotes };
 
         inline void drawIcon (juce::Graphics& g, Icon icon, juce::Rectangle<float> bounds, juce::Colour ink)
         {
@@ -372,15 +390,23 @@ namespace ksh::ui
                             p.addRoundedRectangle (x, y, 6, 6, 1);
                     break;
                 case timing:
+                case twoNotes:
+                {
                     g.setColour (ink);
-                    for (float x : { 4.0f, 14.0f, 20.0f })
+                    const bool pair = icon == twoNotes;
+                    const float headWidth = pair ? 6.2f : 4.6f;
+                    const float stemOffset = pair ? 2.15f : 1.65f;
+                    const auto notes = pair ? std::initializer_list<float> { 6.5f, 17.5f }
+                                            : std::initializer_list<float> { 4.0f, 14.0f, 20.0f };
+                    for (float x : notes)
                     {
-                        g.fillEllipse (bounds.getX() + (x - 2.3f) * bounds.getWidth() / 24.0f,
+                        g.fillEllipse (bounds.getX() + (x - headWidth * 0.5f) * bounds.getWidth() / 24.0f,
                                        bounds.getY() + 14.5f * bounds.getHeight() / 24.0f,
-                                       4.6f * bounds.getWidth() / 24.0f, 3.5f * bounds.getHeight() / 24.0f);
-                        line ({ { x + 1.65f, 16 }, { x + 1.65f, 6 } });
+                                       headWidth * bounds.getWidth() / 24.0f, 3.5f * bounds.getHeight() / 24.0f);
+                        line ({ { x + stemOffset, 16 }, { x + stemOffset, 6 } });
                     }
                     break;
+                }
                 case dice: p.addRoundedRectangle (4, 4, 16, 16, 3); dot (8, 16); dot (12, 12); dot (16, 8); break;
                 case gear: p = gearGlyph(); break;
                 case info: p.addEllipse (3, 3, 18, 18); dot (12, 8); line ({ { 12, 12 }, { 12, 16 } }); break;
@@ -451,6 +477,29 @@ namespace ksh::ui
                 text (g, title, bounds.reduced (14, 0).withTrimmedTop (9).withHeight (26),
                       15, Palette::text, true, juce::Justification::centredLeft);
         }
+    }
+
+    inline void paintJamIcon (juce::Graphics& g, juce::Rectangle<float> bounds, float size, juce::Colour ink)
+    {
+        const juce::Graphics::ScopedSaveState saved (g);
+        const auto centre = bounds.getCentre();
+        g.addTransform (juce::AffineTransform::scale (size / 24.0f).translated (centre.x - size * 0.5f, centre.y - size * 0.5f));
+        g.setColour (ink);
+        g.drawEllipse (3.0f, 8.0f, 18.0f, 5.8f, 1.55f);
+        juce::Path snare;
+        snare.startNewSubPath (3, 11);
+        snare.lineTo (3, 17.8f);
+        snare.cubicTo (3, 21.9f, 21, 21.9f, 21, 17.8f);
+        snare.lineTo (21, 11);
+        for (float x : { 7.0f, 12.0f, 17.0f })
+        {
+            snare.startNewSubPath (x, 14);
+            snare.lineTo (x, 18);
+        }
+        snare.startNewSubPath (21, 2);
+        snare.lineTo (11, 9.1f);
+        g.strokePath (snare, juce::PathStrokeType (1.55f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.fillEllipse (9.1f, 8.4f, 2.6f, 2.2f);
     }
 
     class LookAndFeel final : public juce::LookAndFeel_V4
@@ -697,11 +746,14 @@ namespace ksh::ui
                 return;
             }
             const auto icon = b.getProperties()["icon"].toString();
+            // Jam changes state on press. Holding the button must not keep it lit after stopping.
+            if (icon == "jam")
+                down = false;
             if (static_cast<bool> (b.getProperties()["gridToolbarAction"]))
             {
                 juce::Path outline;
                 outline.addRoundedRectangle (r, 4);
-                const bool toggleOpen = (icon == "pads" || icon == "computer") && b.getToggleState();
+                const bool toggleOpen = (icon == "pads" || icon == "computer" || icon == "jam") && b.getToggleState();
                 paintToolbarButton (g, outline, r, hover || down, toggleOpen || down, b.isEnabled() ? 1.0f : 0.4f);
                 return;
             }
@@ -714,7 +766,7 @@ namespace ksh::ui
                     g.setGradientFill (juce::ColourGradient ((highlighted ? Palette::controls.raised.brighter (0.3f) : Palette::controls.raised).withAlpha (alpha), r.getTopLeft(),
                                                            (highlighted ? Palette::controls.surface.brighter (0.18f) : Palette::controls.app).withAlpha (alpha), r.getBottomLeft(), false));
                     g.fillRoundedRectangle (r, 4);
-                    const bool activeToggle = b.getToggleState() && (icon == "pads" || icon == "computer");
+                    const bool activeToggle = b.getToggleState() && (icon == "pads" || icon == "computer" || icon == "jam");
                     if (activeToggle)
                     {
                         g.setColour (Palette::accent.withAlpha (0.10f * alpha));
@@ -781,12 +833,13 @@ namespace ksh::ui
             {
                 const auto bounds = b.getLocalBounds().toFloat();
                 const bool patternNumber = static_cast<bool> (b.getProperties()["patternBankNumber"]);
+                const auto insetReduction = static_cast<float> (b.getProperties()["dropdownInsetReduction"]);
                 const auto label = patternNumber ? bounds.withTrimmedLeft (6).withTrimmedRight (22)
-                                                 : bounds.withTrimmedLeft (14).withTrimmedRight (26);
+                                                 : bounds.withTrimmedLeft (14 - insetReduction).withTrimmedRight (26 - insetReduction);
                 const float fontSize = patternNumber ? 20.5f : (b.getHeight() >= 60 ? 18.0f : 13.0f);
                 text (g, b.getButtonText(), label, fontSize, b.isEnabled() ? Palette::text : Palette::faint,
                       true, patternNumber ? juce::Justification::centred : juce::Justification::centredLeft);
-                const float x = bounds.getRight() - 14, y = bounds.getCentreY();
+                const float x = bounds.getRight() - 14 + insetReduction, y = bounds.getCentreY();
                 const float direction = b.getToggleState() ? -1.0f : 1.0f;
                 juce::Path chevron;
                 chevron.startNewSubPath (x - 4, y - direction * 2);
@@ -828,12 +881,25 @@ namespace ksh::ui
                 if (footerControl)
                     g.setColour (footerInk (b.getToggleState(), b.isEnabled()));
                 auto r = b.getLocalBounds().toFloat();
+                if (icon == "jam")
+                {
+                    const auto waitPulse = static_cast<float> (b.getProperties()["jamWaitPulse"]);
+                    const auto ink = !b.isEnabled() ? Palette::faint.withAlpha (0.4f)
+                        : b.getToggleState() ? Palette::accent.withAlpha (waitPulse > 0.0f ? waitPulse : 1.0f)
+                                             : Palette::text;
+                    const bool compact = b.getHeight() < 60;
+                    if (compact && !static_cast<bool> (b.getProperties()["hideJamLabel"]))
+                        text (g, "Jam", r.removeFromBottom (11.0f), 9.0f, ink, true);
+                    paintJamIcon (g, r, compact ? 22.0f : 38.0f, ink);
+                    return;
+                }
                 if (icon == "computer")
                 {
                     const bool compact = b.getHeight() < 60;
-                    const float size = compact ? 20.0f : 34.0f;
-                    const auto iconBounds = compact ? r.removeFromLeft (26) : r;
-                    if (compact)
+                    const bool labelled = compact && b.getButtonText().isNotEmpty();
+                    const float size = labelled ? 20.0f : compact ? 24.0f : 34.0f;
+                    const auto iconBounds = labelled ? r.removeFromLeft (26) : r;
+                    if (labelled)
                         text (g, b.getButtonText(), r.withTrimmedRight (3), 10.0f, highlighted ? Palette::accent : Palette::text, true,
                               juce::Justification::centredLeft);
                     const juce::Graphics::ScopedSaveState saved (g);
@@ -872,8 +938,7 @@ namespace ksh::ui
                                   : historyIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.65f)
                                                 : juce::jmin (30.0f, r.getWidth() * 0.84f);
                 const float size = insetFooterArtwork ? iconSize * footerArtworkScale : iconSize;
-                const float clearOffset = rowClear && r.getWidth() >= 40.0f ? 2.0f : 0.0f;
-                g.addTransform (juce::AffineTransform::scale (size / 24).translated (r.getCentreX() - size / 2 + clearOffset, r.getCentreY() - size / 2));
+                g.addTransform (juce::AffineTransform::scale (size / 24).translated (r.getCentreX() - size / 2, r.getCentreY() - size / 2));
                 juce::Path path;
                 if (icon == "eye")
                 {
@@ -1041,7 +1106,8 @@ namespace ksh::ui
                 return;
             }
             const auto bounds = b.getLocalBounds().toFloat();
-            const float fontSize = b.getButtonText() == "M" ? 30.0f : b.getHeight() >= 60 ? 18.0f : b.getWidth() < 32 ? 10.0f : 12.0f;
+            const float fontSize = b.getButtonText() == "M" ? 30.0f
+                : b.getProperties().contains ("tempoStepper") ? 24.0f : b.getHeight() >= 60 ? 18.0f : b.getWidth() < 32 ? 10.0f : 12.0f;
             text (g, b.getButtonText(), bounds, fontSize,
                   !b.isEnabled() ? Palette::faint : (b.getToggleState() || down ? Palette::controls.app : Palette::text), true);
         }
@@ -1362,9 +1428,16 @@ namespace ksh::ui
         melatonin::DropShadow glyphGlow { juce::Colours::transparentBlack, 3 };
     };
 
+    inline juce::Rectangle<float> phonePadArtworkBounds (juce::Rectangle<float> bounds)
+    {
+        return bounds.withSizeKeepingCentre (juce::jmin (bounds.getWidth(), bounds.getHeight()), bounds.getHeight()).reduced (2.0f);
+    }
+
     class PadVelocitySwitch : public juce::TextButton
     {
     public:
+        bool phonePadStyle = false;
+
         PadVelocitySwitch() : juce::TextButton ("VEL")
         {
             setClickingTogglesState (true);
@@ -1379,12 +1452,13 @@ namespace ksh::ui
 
         void paintButton (juce::Graphics& g, bool hover, bool down) override
         {
-            const auto bounds = getLocalBounds().toFloat().reduced (4.0f);
+            const auto area = getLocalBounds().toFloat();
+            const auto bounds = phonePadStyle ? phonePadArtworkBounds (area).reduced (0.5f) : area.reduced (4.0f);
             if (bounds.isEmpty())
                 return;
 
-            const float scale = juce::jmin (1.0f, bounds.getWidth() / 38.0f, bounds.getHeight() / 62.0f);
-            const auto bezel = bounds.withSizeKeepingCentre (38.0f * scale, 62.0f * scale);
+            const float scale = juce::jmin (phonePadStyle ? 1.6f : 1.0f, bounds.getWidth() / 38.0f, bounds.getHeight() / 62.0f);
+            const auto bezel = phonePadStyle ? bounds : bounds.withSizeKeepingCentre (38.0f * scale, 62.0f * scale);
             const auto face = bezel.reduced (3.0f * scale);
             const bool enabled = isEnabled();
             const bool lit = enabled && getToggleState();
@@ -1410,8 +1484,10 @@ namespace ksh::ui
             g.setGradientFill (juce::ColourGradient (lensColour.brighter (lit ? 0.45f : 0.15f).withAlpha (alpha), lamp.getTopLeft(),
                                                      lensColour.withAlpha (alpha), lamp.getBottomRight(), false));
             g.fillEllipse (lamp);
-            const auto label = face.withTop (face.getCentreY() + 2.0f * scale).withTrimmedBottom (3.0f * scale);
-            ksh::ui::text (g, getButtonText(), label, juce::jmax (8.0f, 12.0f * scale), Palette::muted.withAlpha (alpha), true);
+            const auto label = face.withSizeKeepingCentre (face.getWidth(), 56.0f * scale)
+                                   .withTop (face.getCentreY() + 2.0f * scale).withTrimmedBottom (3.0f * scale);
+            const float labelSize = juce::jmax (8.0f, (phonePadStyle ? 9.0f : 12.0f) * scale);
+            ksh::ui::text (g, getButtonText(), label, labelSize, Palette::muted.withAlpha (alpha), true);
         }
 
     private:
@@ -1430,6 +1506,12 @@ namespace ksh::ui
         bool allowColourPickerHold = false;
         std::function<void()> showColourPicker;
         int pressedVelocity() const { return velocity; }
+        std::optional<juce::Time> pressedTouchTime() const { return touchTime; }
+        void mouseEnter (const juce::MouseEvent& event) override
+        {
+            touchFeedback = !event.source.isMouse();
+            juce::TextButton::mouseEnter (event);
+        }
         void mouseDown (const juce::MouseEvent& event) override
         {
             cancelColourHold();
@@ -1452,6 +1534,8 @@ namespace ksh::ui
             const float height = static_cast<float> (juce::jmax (1, getHeight() - 1));
             const int hitVelocity = positionSensitive ? 1 + juce::roundToInt (126.0f * juce::jlimit (0.0f, 1.0f, 1.0f - event.position.y / height)) : CellDefaults::velocity;
             const juce::ScopedValueSetter<int> pressed (velocity, hitVelocity);
+            touchFeedback = !event.source.isMouse();
+            const juce::ScopedValueSetter<std::optional<juce::Time>> touched (touchTime, touchFeedback ? std::optional { event.eventTime } : std::nullopt);
             juce::TextButton::mouseDown (event);
         }
         void mouseDrag (const juce::MouseEvent& event) override
@@ -1492,10 +1576,10 @@ namespace ksh::ui
             noteLabel = note;
             repaint();
         }
-        void flash (int hitVelocity)
+        void flash (int hitVelocity, double timestampMs = juce::Time::getMillisecondCounterHiRes())
         {
             intensity = static_cast<float> (hitVelocity) / 127.0f;
-            flashUntilMs = juce::Time::getMillisecondCounterHiRes() + 100.0;
+            flashUntilMs = timestampMs + 100.0;
             flashing = true;
             repaint();
         }
@@ -1514,14 +1598,17 @@ namespace ksh::ui
                 juce::TextButton::paintButton (g, hover, down);
                 return;
             }
-            const auto bounds = getLocalBounds().toFloat().reduced (2.0f);
+            const bool stopJam = static_cast<bool> (getProperties()["jamStopPad"]);
+            const auto area = getLocalBounds().toFloat();
+            const auto bounds = stopJam ? phonePadArtworkBounds (area) : area.reduced (2.0f);
             if (bounds.isEmpty())
                 return;
             const bool hit = isEnabled() && flashing;
             const float light = hit ? intensity : 0.0f;
             const float alpha = isEnabled() ? 1.0f : 0.34f;
             const float radius = juce::jmin (10.0f, bounds.getWidth() * 0.13f);
-            const auto face = bounds.reduced (2).withTrimmedBottom (3).translated (0, hit || down ? 2.0f : 0.0f);
+            const bool pressed = hit || (down && !touchFeedback);
+            const auto face = bounds.reduced (2).withTrimmedBottom (3).translated (0, pressed ? 2.0f : 0.0f);
             juce::Path silhouette;
             silhouette.addRoundedRectangle (face, radius);
             g.setColour (Palette::shadeControl (juce::Colours::black).withAlpha (alpha * 0.85f));
@@ -1538,7 +1625,7 @@ namespace ksh::ui
             };
             juce::ColourGradient finish (tint (0.32f, 0.25f + 0.61f * light), face.getTopLeft(),
                                          tint (0.06f, 0.16f + 0.60f * light), face.getBottomLeft(), false);
-            finish.addColour (0.17, tint (hover || hit ? 0.26f : 0.20f, 0.18f + 0.78f * light));
+            finish.addColour (0.17, tint ((hover && !touchFeedback) || hit ? 0.26f : 0.20f, 0.18f + 0.78f * light));
             finish.addColour (0.85, tint (0.11f, 0.12f + 0.73f * light));
             g.setGradientFill (finish);
             g.fillPath (silhouette);
@@ -1546,8 +1633,13 @@ namespace ksh::ui
             g.strokePath (silhouette, juce::PathStrokeType (1));
             g.setColour (juce::Colours::white.withAlpha (alpha * (0.12f + 0.2f * light)));
             g.drawHorizontalLine (juce::roundToInt (face.getY() + 2), face.getX() + radius, face.getRight() - radius);
-            drawShortcutHint (g, keyLabel + "  " + noteLabel, face.withTrimmedBottom (7),
-                              getHeight(), juce::Justification::centredBottom, alpha);
+            if (stopJam)
+                paintJamIcon (g, face, juce::jmin (64.0f, juce::jmin (face.getWidth(), face.getHeight()) * 0.70f), colour.withMultipliedAlpha (alpha));
+            else if (getButtonText().isNotEmpty())
+                ksh::ui::text (g, getButtonText(), face, 18.0f, Palette::text.withMultipliedAlpha (alpha), true);
+            else
+                drawShortcutHint (g, keyLabel + "  " + noteLabel, face.withTrimmedBottom (7),
+                                  getHeight(), juce::Justification::centredBottom, alpha);
         }
 
     private:
@@ -1564,6 +1656,8 @@ namespace ksh::ui
                 showColourPicker();
         } };
         int velocity = CellDefaults::velocity;
+        std::optional<juce::Time> touchTime;
+        bool touchFeedback = false;
         float intensity = 0.0f;
         juce::Colour colour { Palette::accent };
         juce::String keyLabel, noteLabel;
@@ -1587,7 +1681,7 @@ namespace ksh::ui
             addChildComponent (input);
         }
         int value = 0, minimum = 0, maximum = 100, resetValue = 0;
-        float sensitivity = 4;
+        float sensitivity = 4, horizontalDragMultiplier = 1.0f;
         float valueFontSize = 14, captionFontSize = 10;
         float suffixFontScale = 1.0f;
         std::optional<juce::Colour> captionColour;
@@ -1595,12 +1689,19 @@ namespace ksh::ui
         int captionWidth = 0;
         int valueWidth = 0;
         juce::String suffix, caption;
+        bool reserveDigitSlots = true;
         bool mixed = false, showAdjustmentHintAtZero = false, horizontalAdjustment = false, gestureOnly = false;
         bool horizontalDragOnTouch = false, insetRowArtwork = false;
+        bool alwaysShowHorizontalArrows = false;
         std::function<juce::String (int)> format;
         double displayScale = 1.0, displayOffset = 0.0;
         int displayDecimalPlaces = 0;
-        double displayedValue (int v) const { return static_cast<double> (v) * displayScale + displayOffset; }
+        bool limitDisplayedValue = false;
+        double displayedValue (int v) const
+        {
+            const int display = limitDisplayedValue ? juce::jlimit (minimum, maximum, v) : v;
+            return static_cast<double> (display) * displayScale + displayOffset;
+        }
         int valueFromDisplay (double v) const { return juce::roundToInt ((v - displayOffset) / displayScale); }
         juce::String valueText (int v) const
         {
@@ -1626,6 +1727,11 @@ namespace ksh::ui
         void setLayerHighlighted (bool highlighted)
         {
             if (std::exchange (layerHighlighted, highlighted) != highlighted)
+                repaint();
+        }
+        void setHighlightAccent (std::optional<juce::Colour> colour)
+        {
+            if (std::exchange (highlightAccent, colour) != colour)
                 repaint();
         }
         void setValue (int v)
@@ -1672,11 +1778,12 @@ namespace ksh::ui
             else if (layerHighlighted && isEnabled())
             {
                 const auto bounds = r.reduced (0.5f);
-                const auto top = Palette::controls.raised.interpolatedWith (Palette::accent, 0.27f);
-                const auto bottom = Palette::controls.surface.interpolatedWith (Palette::accent, 0.12f);
+                const auto accent = highlightAccent.value_or (Palette::accent);
+                const auto top = Palette::controls.raised.interpolatedWith (accent, 0.27f);
+                const auto bottom = Palette::controls.surface.interpolatedWith (accent, 0.12f);
                 g.setGradientFill (juce::ColourGradient (top, bounds.getTopLeft(), bottom, bounds.getBottomLeft(), false));
                 g.fillRoundedRectangle (bounds, 5.0f);
-                g.setColour (Palette::accent.withAlpha (0.85f));
+                g.setColour (accent.withAlpha (0.85f));
                 g.drawRoundedRectangle (bounds.reduced (0.5f), 5.0f, 1.0f);
             }
             else
@@ -1686,7 +1793,7 @@ namespace ksh::ui
                 g.setColour (Palette::accent.withAlpha (pulse * 0.20f));
                 g.fillRoundedRectangle (r.reduced (0.5f), 5);
             }
-            if (gestureOnly || (showAdjustmentHintAtZero && value == 0 && !mixed))
+            if (gestureOnly || alwaysShowHorizontalArrows || (showAdjustmentHintAtZero && value == 0 && !mixed))
             {
                 const auto centre = r.getCentre();
                 const float halfHeight = juce::jmin (9.0f, r.getHeight() * 0.25f);
@@ -1702,7 +1809,7 @@ namespace ksh::ui
                     arrows.lineTo (centre.x, tip);
                     arrows.lineTo (centre.x + wing, base);
                 }
-                if (horizontalAdjustment || (horizontalDragOnTouch && draggingHorizontally))
+                if (alwaysShowHorizontalArrows || horizontalAdjustment || (horizontalDragOnTouch && draggingHorizontally))
                     arrows.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::halfPi, centre.x, centre.y));
                 g.setColour (isEnabled() ? Palette::text : Palette::faint);
                 g.strokePath (arrows, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
@@ -1712,7 +1819,8 @@ namespace ksh::ui
             // Reserve the whole numeric range for plain values, so suffixes stay
             // anchored even across 9/10 and 99/100. Formatted labels also use
             // equal-width digits without changing their nonnumeric text.
-            const int slots = !mixed && !format && displayDecimalPlaces == 0 ? juce::jmax (2, juce::String (minimum).length(), juce::String (maximum).length()) : 0;
+            const int slots = reserveDigitSlots && !mixed && !format && displayDecimalPlaces == 0
+                ? juce::jmax (2, juce::String (minimum).length(), juce::String (maximum).length()) : 0;
             const float displayFontSize = insetFooterArtwork ? valueFontSize * footerArtworkScale : valueFontSize;
             const float displaySuffixScale = slots > 0 && suffix.isNotEmpty() ? suffixFontScale : 1.0f;
             if (numericText != label || numericSlots != slots || std::abs (numericSuffixScale - displaySuffixScale) > 0.001f
@@ -1809,7 +1917,12 @@ namespace ksh::ui
                     stopTimer();
                 const auto delta = draggingHorizontally ? e.getDistanceFromDragStartX() : -e.getDistanceFromDragStartY();
                 if (std::abs (delta) > 4)
-                    update (start + (delta < 0 ? -1 : 1) * static_cast<int> (std::floor ((static_cast<float> (std::abs (delta)) - 4) / sensitivity + 0.5f)));
+                {
+                    const float distance = static_cast<float> (std::abs (delta)) - 4.0f;
+                    const float multiplier = draggingHorizontally ? horizontalDragMultiplier : 1.0f;
+                    const int offset = static_cast<int> (std::floor (distance * multiplier / sensitivity + 0.5f));
+                    update (start + (delta < 0 ? -offset : offset));
+                }
                 else if (draggingHorizontally || horizontalDragOnTouch)
                     update (start);
             }
@@ -1900,7 +2013,7 @@ namespace ksh::ui
                         control.endWheelGesture();
                         if (control.onBegin)
                             control.onBegin();
-                        control.update (control.valueFromDisplay (v));
+                        control.update (control.valueFromDisplay (v), true);
                         if (control.onEnd)
                             control.onEnd();
                     }
@@ -1947,6 +2060,7 @@ namespace ksh::ui
         float numericFontSize = 0, numericWidth = 0, numericBaseline = 0;
         float numericSuffixScale = 1.0f;
         bool layerHighlighted = false;
+        std::optional<juce::Colour> highlightAccent;
         bool dragging = false, wheeling = false;
        #if JUCE_IOS
         bool draggingHorizontally = true;
@@ -1970,10 +2084,10 @@ namespace ksh::ui
             repaint();
             onContextMenu();
         }
-        void update (int next)
+        void update (int next, bool explicitEntry = false)
         {
             next = juce::jlimit (minimum, maximum, next);
-            if (value != next)
+            if (value != next || (explicitEntry && mixed))
             {
                 value = next;
                 mixed = false;
@@ -1989,7 +2103,7 @@ namespace ksh::ui
             endWheelGesture();
             if (onBegin)
                 onBegin();
-            update (next);
+            update (next, true);
             if (onEnd)
                 onEnd();
         }

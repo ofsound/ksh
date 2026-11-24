@@ -7,6 +7,7 @@ namespace ksh::ui
     enum class Layer { velocity,
         chance, nudge, roll, cycle };
     inline bool overviewLayer (Layer layer) { return layer == Layer::nudge || layer == Layer::roll || layer == Layer::cycle; }
+    inline Layer visibleGridLayer (Layer layer) { return layer == Layer::cycle ? Layer::chance : layer; }
     struct Location
     {
         int channel = -1, step = -1;
@@ -112,6 +113,7 @@ namespace ksh::ui
         int source() const { return state.playback.staticSource; }
         const Cell& cell (Location p) const;
         LoopRange loop (int channel) const;
+        bool canFitSpan (Location, int span) const;
         std::vector<Location> selection (bool enabledOnly = false) const;
         void selectSource (int sourceIndex, bool copy = false);
         void command (std::string_view, const nlohmann::json&, const juce::String& label = {});
@@ -134,18 +136,32 @@ namespace ksh::ui
         void shift (int channel, int delta);
         void clearRow (int channel);
         void clearPattern();
+        bool applyJamTake (const JamTake&, int source, uint64_t documentEpoch);
         void toggleMute (int channel);
         void toggleSolo (int channel);
         int soloedChannel() const;
         bool exitSolo();
-        void setCycle (int length, int mask, const std::vector<Location>& cells, int split = -1);
+        struct SplitCycleSelection
+        {
+            Location location;
+            int index;
+            bool operator== (const SplitCycleSelection&) const = default;
+        };
+        void selectSplitCycle (Location, int index);
+        void clearSplitCycleSelection() { splitCycleSelection.reset(); }
+        std::optional<SplitCycleSelection> selectedSplitCycle() const;
+        void setCycle (int length, int mask, const std::vector<Location>& cells, bool editAllSplits = false);
         void notify()
         {
+            if (splitCycleSelection && !selectedSplitCycle())
+                clearSplitCycleSelection();
             if (changed)
                 changed();
         }
 
     private:
+        std::optional<SplitCycleSelection> splitCycleSelection;
+        int splitCycleSource = -1;
         struct CellChange
         {
             int index = 0; // source * cellsPerPattern + Location::key()

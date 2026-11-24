@@ -1729,7 +1729,7 @@ TEST_CASE ("Timestamped keyboard monitoring keeps phase with a consistent block 
 
 TEST_CASE ("Swing targets follow the displayed multiples of the current grid division", "[engine][transport][swing]")
 {
-    const int target = GENERATE (0, 1, 2);
+    const int target = GENERATE (0, 1);
     const auto rate = GENERATE ("4n", "8n", "16n", "16nt");
     EngineFixture fixture;
     fixture.clearAll();

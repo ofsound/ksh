@@ -22,6 +22,7 @@ class PluginEditorTestPeer
 public:
     static bool load (PluginEditor& editor, const juce::File& file, juce::String& error) { return editor.loadProjectFile (file, error); }
     static bool loadData (PluginEditor& editor, const juce::File& file, const juce::MemoryBlock& data, juce::String& error) { return editor.loadProjectData (file, data, error); }
+    static void layoutPhoneViewport (PluginEditor& editor, juce::Rectangle<float> available) { editor.layoutNativeView (available, true); }
 };
 
 namespace
@@ -388,6 +389,29 @@ TEST_CASE ("structurally invalid cells cannot wipe the current pattern", "[plugi
     const auto state = plugin.engineStateSnapshot();
     REQUIRE (state.sources[0][1][4].enabled);
     REQUIRE (state.sources[0][1][4].velocity == 90);
+}
+
+TEST_CASE ("iPhone balances its vertical margins inside the safe area", "[native-ui][iphone]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    PluginEditor editor (processor, true);
+    editor.setSize (932, 430);
+    auto* view = dynamic_cast<ksh::ui::NativeEditor*> (editor.getChildComponent (0));
+    REQUIRE (view != nullptr);
+    for (const auto available : { juce::Rectangle<float> (59.0f, 0.0f, 814.0f, 430.0f),
+                                  juce::Rectangle<float> (59.0f, 0.0f, 814.0f, 409.0f),
+                                  juce::Rectangle<float> (59.0f, 24.0f, 814.0f, 406.0f),
+                                  juce::Rectangle<float> (101.0f, 0.0f, 730.0f, 430.0f) })
+    {
+        PluginEditorTestPeer::layoutPhoneViewport (editor, available);
+        REQUIRE (view->layout.compactOnPhone);
+        const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform());
+        CHECK (available.withTrimmedTop (10.0f).expanded (0.01f).contains (content));
+        const float bottomMargin = static_cast<float> (editor.getHeight()) - content.getBottom();
+        CHECK (std::abs (content.getY() - bottomMargin) < 0.01f);
+    }
 }
 
 TEST_CASE ("UI scale is independent of saved and legacy projects", "[plugin][persistence]")

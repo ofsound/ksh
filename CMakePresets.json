@@ -19,6 +19,15 @@
       "cacheVariables": {
         "KSH_IOS_IPHONE_ONLY": "ON"
       }
+    },
+    {
+      "name": "macos-testflight",
+      "displayName": "macOS standalone for TestFlight (Xcode)",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/Builds-native-macos-testflight",
+      "cacheVariables": {
+        "KSH_MACOS_TESTFLIGHT": "ON"
+      }
     }
   ],
   "buildPresets": [

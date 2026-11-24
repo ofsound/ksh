@@ -82,7 +82,7 @@ Channel note fields open a modal piano chooser beside the field, including the c
 
 Inspector hover previews include Nudge, Roll and Cycle. These temporary, read-only grid overviews show signed timing offsets, repeat counts and cycle masks for enabled steps across every channel. Hovering works without a selection; editing remains selection-based in the inspector. Inspector gestures retain the matching overview until release/cancellation, then restore the chosen Velocity/Chance layer. Overview rendering anchors each value in its own step slot so shifted hits remain easy to compare.
 
-Swing targets are multiples of the current step division: `1x` delays alternating steps, `2x` delays alternating two-step groups, and `4x` delays alternating four-step groups. At 100% swing, the delay is half the target group length. Playback, grid positions, MIDI export, and recording quantization share this timing calculation.
+Swing targets are multiples of the current step division. `1x` delays alternating steps and `2x` delays alternating pairs. At 100% swing, the delay is half the target group length. Playback, grid positions, MIDI export, and recording quantization share this timing calculation. Projects saved with the former `4x` target load with `2x` at the same swing amount.
 
 The desktop logo exposes two accent selectors: K selects orange and H selects blue. The choice is stored in local UI preferences (`blueAccent`), outside project and host state. A message-thread palette notification refreshes all open editors in the process, including cached label and LookAndFeel colors. Logo double-click still opens the auxiliary panel.
 

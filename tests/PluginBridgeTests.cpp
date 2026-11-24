@@ -37,11 +37,177 @@ public:
         return { processor.pendingMidiPatternRecordEvents.size_approx(), processor.pendingUiPatternRecordEvents.size_approx() };
     }
     static uint64_t recordingSession (const PluginProcessor& processor) { return processor.patternRecordingSession.load(); }
+    static double jamFirstHitTime (const PluginProcessor& processor) { return processor.jamHits.front().timestampMs; }
     static bool enqueueLateRecord (PluginProcessor& processor, uint64_t session)
     {
         return PluginProcessor::enqueuePatternRecordEvent (processor.pendingMidiPatternRecordEvents, 0, 0, 7, 99, session);
     }
 };
+
+TEST_CASE ("Jam infers one to four bars of a free performance", "[plugin][jam]")
+{
+    const int bars = GENERATE (1, 2, 3, 4);
+    constexpr double start = 1000.0, quarter = 480.0;
+    std::vector<ksh::JamHit> hits;
+    for (int beat = 0; beat < 4 * bars; ++beat)
+    {
+        hits.push_back ({ start + beat * quarter, beat % 2, 102 });
+        hits.push_back ({ start + (beat + 0.5) * quarter + 8.0, 2, 70 });
+    }
+    const auto take = ksh::transcribeJam (hits, start + 4 * bars * quarter, 120.0, 0, 0);
+    REQUIRE (take);
+    CHECK (take->bpm == Catch::Approx (125.0));
+    CHECK (take->steps == 16 * bars);
+    CHECK (take->droppedHits == 0);
+    CHECK (take->pattern[0][0].enabled);
+    CHECK (take->pattern[1][4].velocity == 102);
+    CHECK (take->pattern[2][2].velocity == 70);
+    CHECK (take->pattern[2][2].nudge == 7);
+}
+
+TEST_CASE ("Jam reads steady single-row taps as quarter notes", "[plugin][jam]")
+{
+    const int bars = GENERATE (1, 2, 3, 4);
+    constexpr double start = 1000.0, quarter = 750.0;
+    std::vector<ksh::JamHit> hits;
+    for (int beat = 0; beat < 4 * bars; ++beat)
+        hits.push_back ({ start + beat * quarter + (beat % 2) * 11.0, 2, 40 + beat });
+    const double end = start + 4 * bars * quarter;
+    const auto take = ksh::transcribeJam (hits, end, 145.0, 0, 0);
+    REQUIRE (take);
+    CHECK (take->bpm == Catch::Approx (80.0));
+    CHECK (take->steps == 16 * bars);
+    CHECK (take->droppedHits == 0);
+    for (int beat = 0; beat < 4 * bars; ++beat)
+        CHECK (take->pattern[2][static_cast<size_t> (beat * 4)].velocity == 40 + beat);
+    CHECK_FALSE (ksh::transcribeJam ({}, end, 120.0, 0, 0));
+    const auto sparse = ksh::transcribeJam ({ hits.front() }, start + 2000.0, 120.0, 0, 0);
+    REQUIRE (sparse);
+    CHECK (sparse->steps == 16);
+    CHECK (sparse->pattern[2][0].enabled);
+}
+
+TEST_CASE ("Jam prefers two or four bars when a three-bar grid also fits", "[plugin][jam]")
+{
+    const int bars = GENERATE (2, 4);
+    const double bpm = bars == 2 ? 85.0 : 160.0;
+    const double quarter = 60000.0 / bpm;
+    constexpr double start = 1000.0;
+    std::vector<ksh::JamHit> hits;
+    for (int beat = 0; beat < 4 * bars; ++beat)
+        hits.push_back ({ start + beat * quarter, beat % 2, 100 });
+
+    const auto take = ksh::transcribeJam (hits, start + 4 * bars * quarter, 120.0, 0, 0, 100);
+    REQUIRE (take);
+    CHECK (take->bpm == Catch::Approx (bpm));
+    REQUIRE (take->steps == 16 * bars);
+    CHECK (take->droppedHits == 0);
+    for (int beat = 0; beat < 4 * bars; ++beat)
+        CHECK (take->pattern[static_cast<size_t> (beat % 2)][static_cast<size_t> (beat * 4)].enabled);
+}
+
+TEST_CASE ("Jam transcribes fast hits as a roll with individual velocities", "[plugin][jam]")
+{
+    const auto take = ksh::transcribeJam ({ { 1000.0, 0, 100 }, { 1000.0 + 125.0 / 3.0, 0, 78 },
+                                          { 1000.0 + 250.0 / 3.0, 0, 108 }, { 1500.0, 1, 80 } },
+                                        3000.0, 120.0, 0, 0);
+    REQUIRE (take);
+    CHECK (take->bpm == Catch::Approx (120.0));
+    const auto& roll = take->pattern[0][0];
+    CHECK (roll.roll == 3);
+    CHECK (roll.nudge == 0);
+    CHECK (roll.splitVelocity (0) == 100);
+    CHECK (roll.splitVelocity (1) == 78);
+    CHECK (roll.splitVelocity (2) == 108);
+}
+
+TEST_CASE ("Jam uses the recording quantization strength for timing offsets", "[plugin][jam]")
+{
+    const int strength = GENERATE (0, 50, 100);
+    const auto take = ksh::transcribeJam ({ { 1000.0, 0, 100 }, { 1515.0, 2, 77 }, { 2000.0, 0, 82 } },
+                                         3000.0, 120.0, 0, 0, strength);
+    REQUIRE (take);
+    CHECK (take->bpm == Catch::Approx (120.0));
+    CHECK_FALSE (take->swing);
+    CHECK (take->pattern[2][4].velocity == 77);
+    CHECK (take->pattern[2][4].nudge == 12 * (100 - strength) / 100);
+}
+
+TEST_CASE ("Jam captures pad and MIDI hits while stopped and replaces one pattern with undo", "[plugin][jam]")
+{
+    const int playedSwing = GENERATE (0, 60, 100);
+    const bool swung = playedSwing > 0;
+    const int expectedSwing = swung ? 20 : 0;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    REQUIRE (processor.dispatchUiEngineCommand ("static_source", { 2 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("source_rate", { 2, "8n" }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 77 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 2, 1, 8, 1, 96 }));
+    processor.setStandaloneTempoBpm (105.0);
+    processor.setStandaloneTransportPlaying (true);
+    processor.setPatternRecordingEnabled (true, 1);
+    processor.setPatternRecordingQuantizeStrength (100);
+    processor.setTimestampedStandaloneMidiInput (true);
+    processor.prepareToPlay (48000.0, 128);
+
+    auto controller = std::make_unique<ksh::ui::EditorController> (processor);
+    const auto before = std::make_unique<ksh::DocumentState> (processor.editorDocument());
+    const auto epoch = processor.getUiBridge().getDocumentEpoch();
+    REQUIRE (processor.startJamCapture());
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    CHECK_FALSE (processor.isPatternRecordingEnabled());
+    CHECK_FALSE (processor.pollJamCapture());
+    processor.setStandaloneTransportPlaying (true);
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    REQUIRE (processor.triggerRowFromUi (0, 113));
+    const double t = PluginProcessorTestPeer::jamFirstHitTime (processor);
+    const auto channels = processor.engineStateSnapshot().channels;
+    const auto hit = [&] (int row, double time, int velocity)
+    {
+        auto midi = juce::MidiMessage::noteOn (1, channels[static_cast<size_t> (row)].note, static_cast<juce::uint8> (velocity));
+        midi.setTimeStamp ((t + time) / 1000.0);
+        processor.captureStandaloneMidiInput (midi);
+    };
+    for (int beat : { 1, 2, 3 })
+        hit (2, beat * 500.0 + (swung ? 125.0 + 62.5 * playedSwing / 100.0 : 12.5), 60 + beat);
+    if (swung)
+        hit (1, 1000.0, 88);
+    hit (2, 2005.0, 90);
+    REQUIRE (processor.pollJamCapture());
+    const auto take = processor.finishJamCapture (t + 2000.0);
+    REQUIRE (take);
+    if (swung)
+    {
+        REQUIRE (take->swing);
+        CHECK (take->swing->amount == expectedSwing);
+        CHECK (take->swing->subdivision == 0);
+    }
+    else
+        CHECK_FALSE (take->swing);
+    REQUIRE (controller->applyJamTake (*take, 1, epoch));
+    CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (120.0).margin (1.0));
+    CHECK (controller->state.playback.sourceSettings[1].rate == "16n");
+    CHECK (controller->cell ({ 0, 0 }).velocity == 113);
+    CHECK_FALSE (controller->cell ({ 0, 7 }).enabled);
+    CHECK (controller->cell ({ 2, swung ? 5 : 4 }).velocity == 61);
+    CHECK (controller->cell ({ 2, swung ? 5 : 4 }).nudge == 0);
+    CHECK (controller->cell ({ 2, swung ? 13 : 12 }).velocity == 63);
+    CHECK (controller->state.playback.swing == expectedSwing);
+    CHECK (controller->state.playback.sources[0][0][3] == before->sources[0][0][3]);
+    REQUIRE (controller->canUndo());
+    controller->undo();
+    CHECK (controller->state.playback.swing == 0);
+    CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (105.0));
+    CHECK (controller->state.playback.sourceSettings[1].rate == "8n");
+    CHECK (controller->cell ({ 0, 7 }) == before->sources[1][0][7]);
+    CHECK_FALSE (controller->canUndo());
+    controller->redo();
+    CHECK (controller->state.playback.swing == expectedSwing);
+    CHECK (controller->cell ({ 0, 0 }).velocity == 113);
+    CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (120.0).margin (1.0));
+}
 
 namespace
 {
@@ -360,8 +526,9 @@ TEST_CASE ("ui swing subdivision command updates engine state", "[plugin][bridge
 {
     PluginProcessor plugin;
 
-    REQUIRE (plugin.dispatchUiEngineCommand ("swing_subdivision", { 2 }));
-    REQUIRE (plugin.engineStateSnapshot().swingSubdivisionIndex == 2);
+    const int target = GENERATE (0, 1, 2);
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing_subdivision", { target }));
+    REQUIRE (plugin.engineStateSnapshot().swingSubdivisionIndex == std::min (target, 1));
 }
 
 TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
@@ -372,7 +539,7 @@ TEST_CASE ("host macro parameter changes update engine", "[plugin][bridge]")
     REQUIRE (swing != nullptr);
 
     swing->setValueNotifyingHost (swing->convertTo0to1 (41.0f));
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
 
     REQUIRE (plugin.engineStateSnapshot().swing == 41);
 }
@@ -589,6 +756,7 @@ TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][br
 {
     PluginProcessor plugin;
     FixedPlayHead playHead;
+    playHead.setBpm (20.0);
     plugin.setPlayHead (&playHead);
     plugin.prepareToPlay (44100.0, 512);
 
@@ -599,12 +767,13 @@ TEST_CASE ("triggerRowFromUi records while auditioning when armed", "[plugin][br
     plugin.processBlock (buffer, midi);
 
     REQUIRE (plugin.triggerRowFromUi (2, 91));
+    REQUIRE (PluginProcessorTestPeer::pendingRecordCounts (plugin) == std::array<size_t, 2> { 0, 1 });
 
     midi.clear();
     plugin.processBlock (buffer, midi);
     REQUIRE (containsNoteOnWithVelocity (midi, 38, 91));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
 
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.sources[1][2][0].enabled);
@@ -706,7 +875,8 @@ TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][br
 
     REQUIRE_FALSE (containsNoteOn (midi, 0));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (PluginProcessorTestPeer::messageThreadWorkPending (plugin));
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 0);
 
     midi.clear();
@@ -716,7 +886,7 @@ TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][br
 
     REQUIRE_FALSE (containsNoteOn (midi, 7));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 7);
 
     midi.clear();
@@ -726,7 +896,7 @@ TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][br
 
     REQUIRE_FALSE (containsNoteOn (midi, 15));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 15);
 
     midi.clear();
@@ -736,7 +906,7 @@ TEST_CASE ("incoming MIDI notes 0-16 select source patterns and M", "[plugin][br
 
     REQUIRE_FALSE (containsNoteOn (midi, 16));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == ksh::Constants::mutedStaticSource);
 }
 
@@ -759,7 +929,7 @@ TEST_CASE ("incoming MIDI source selector affects beat one playback immediately"
     REQUIRE_FALSE (containsNoteOn (midi, 0));
     REQUIRE (containsNoteOn (midi, 36));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 0);
 }
 
@@ -779,7 +949,7 @@ TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve ot
     REQUIRE_FALSE (containsNoteOff (midi, 16));
     REQUIRE (containsNoteOn (midi, 64));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 3);
 }
 
@@ -943,7 +1113,7 @@ TEST_CASE ("armed pattern recording captures incoming row MIDI notes", "[plugin]
 
     REQUIRE (containsNoteOnWithVelocity (midi, 38, 91));
 
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    PluginProcessorTestPeer::tick (plugin);
 
     const auto engine = plugin.engineStateSnapshot();
     REQUIRE (engine.sources[1][2][0].enabled);

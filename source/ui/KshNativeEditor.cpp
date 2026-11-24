@@ -1,6 +1,7 @@
 #include "KshNativeEditor.h"
 #include "KshFooterMenu.h"
 #include "KshUiScale.h"
+#include "../engine/KshMath.h"
 #include "../engine/KshMidiExport.h"
 namespace ksh::ui
 {
@@ -8,7 +9,8 @@ namespace ksh::ui
     {
         constexpr auto backgroundBrightnessPreference = "backgroundBrightness";
         constexpr auto backgroundTintPreference = "backgroundTint";
-        constexpr auto dimTextPreference = "dimText";
+        constexpr auto textBrightnessPreference = "textBrightness";
+        constexpr int maxFeelPercent = 99;
         constexpr std::array accentColourKeys { "orangeAccentColour", "blueAccentColour" };
         constexpr std::array legacyAccentModeKeys { "orangeAccentColourMode", "blueAccentColourMode" };
         constexpr std::array legacyAccentShadeKeys { "orangeAccentShade", "blueAccentShade" };
@@ -354,7 +356,7 @@ namespace ksh::ui
        #endif
         Palette::setBackgroundTone ({ uiPreferences->getIntValue (backgroundBrightnessPreference),
                                       uiPreferences->getIntValue (backgroundTintPreference) });
-        Palette::setTextDimmed (uiPreferences->getBoolValue (dimTextPreference));
+        Palette::setTextBrightness (uiPreferences->getIntValue (textBrightnessPreference));
         look.refreshPalette();
         footerHelp.refreshInk();
         Palette::setAccentPreferences (uiPreferences->getBoolValue ("blueAccent", true),
@@ -381,16 +383,6 @@ namespace ksh::ui
         modifierToggle.setTitle ("Shift/Option shortcuts");
         modifierToggle.setTooltip ("Toggle Shift and Option shortcuts");
         modifierToggle.onClick = [this] { toggleKeyboardModifiers(); };
-        addChildComponent (dimTextToggle);
-        dimTextToggle.setTooltip ("Dim bright text, icons and input values");
-        dimTextToggle.onClick = [this]
-        {
-            const bool dimmed = !Palette::isTextDimmed();
-            uiPreferences->setValue (dimTextPreference, dimmed);
-            uiPreferences->saveIfNeeded();
-            Palette::setTextDimmed (dimmed);
-        };
-        dimTextToggle.setToggleState (Palette::isTextDimmed(), juce::dontSendNotification);
         controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", true);
         addChildComponent (cellDisplay);
         cellDisplay.setTitle ("Show cell numbers");
@@ -524,20 +516,14 @@ namespace ksh::ui
             applyNoteChooserPreset (notes, "Apply scale preset");
         };
         addAndMakeVisible (preview);
-        preview.onRhythm = [this] { grid.showSelectedRhythmPresets(); };
         addChildComponent (aboutViewport);
         aboutViewport.setViewedComponent (&randomPanel, false);
         aboutViewport.setScrollBarsShown (true, false);
-        preview.onToggleSuperSecret = [this]
+        preview.onTextBrightnessEdited = [this] (int value)
         {
-            showDesktopRandomizer (!layout.randomVisible || randomPanel.isXYRandomizer());
-        };
-        randomPanel.onClose = [this]
-        {
-            if (layout.compact)
-                showPanel (Panel::none);
-            else
-                showDesktopRandomizer (false);
+            auto theme = currentTheme();
+            theme.textBrightness = value;
+            editTheme (theme);
         };
         preview.onThemeGesture = [this] (bool started)
         {
@@ -594,11 +580,27 @@ namespace ksh::ui
             if (recordingStrip.isVisible() && juce::isPositiveAndBelow (channel, static_cast<int> (recordingPads.size())))
                 recordingPads[static_cast<size_t> (channel)].flash (velocity);
         };
+        controller.processor.getUiBridge().onMidiInputNote = [this] (int note, int velocity, double timestampMs)
+        {
+            if (!recordingStrip.isVisible())
+                return;
+            const auto& playback = controller.state.playback;
+            for (int channel = 0; channel < playback.channelCount; ++channel)
+            {
+                const auto index = static_cast<size_t> (channel);
+                if (playback.channels[index].note == note && recordingPads[index].isEnabled())
+                    recordingPads[index].flash (velocity, timestampMs);
+            }
+        };
         for (int channel = 0; channel < static_cast<int> (recordingPads.size()); ++channel)
         {
             auto& pad = recordingPads[static_cast<size_t> (channel)];
             recordingStrip.addAndMakeVisible (pad);
-            pad.onClick = [this, channel] { triggerPad (channel, recordingPads[static_cast<size_t> (channel)].pressedVelocity()); };
+            pad.onClick = [this, channel]
+            {
+                const auto& pressedPad = recordingPads[static_cast<size_t> (channel)];
+                triggerPad (channel, pressedPad.pressedVelocity(), pressedPad.pressedTouchTime());
+            };
         }
         recordingStrip.addAndMakeVisible (padVelocityMode);
         padVelocityMode.setTitle ("Pad velocity mode");
@@ -620,22 +622,45 @@ namespace ksh::ui
             addAndMakeVisible (*b);
         addChildComponent (dc);
         addAndMakeVisible (chanceLayer);
-        for (juce::TextButton* button : std::array<juce::TextButton*, 3> { &generate, &showPads, &metronome })
+        for (juce::TextButton* button : std::array<juce::TextButton*, 4> { &generate, &jamButton, &showPads, &metronome })
         {
             addAndMakeVisible (*button);
             button->setClickingTogglesState (true);
             button->getProperties().set ("outlinedIcon", true);
         }
         generate.setButtonText ("Generate");
+        generate.setTitle ("Generate");
         generate.getProperties().set ("icon", "computer");
         generate.setTooltip ("Show or hide the pattern generator");
         generate.onClick = [this]
         {
             if (layout.compact)
+            {
+                if (showingCompactPadPreview())
+                    showPads.setToggleState (false, juce::dontSendNotification);
                 showPanel (panel == Panel::generate ? Panel::none : Panel::generate);
+            }
             else
-                showDesktopRandomizer (!layout.randomVisible || !randomPanel.isXYRandomizer(), true);
+                showDesktopRandomizer (!layout.randomVisible);
         };
+        jamButton.setButtonText ("Jam");
+        jamButton.setTitle ("Jam");
+        jamButton.getProperties().set ("icon", "jam");
+        jamButton.setClickingTogglesState (false);
+        jamButton.setTriggeredOnMouseDown (true);
+        jamButton.onClick = [this] { toggleJam(); };
+        recordingStrip.addChildComponent (finishJamButton);
+        finishJamButton.setTitle ("Finish Jam");
+        finishJamButton.setTooltip ("Tap on the next downbeat to close the loop");
+        finishJamButton.getProperties().set ("jamStopPad", true);
+        finishJamButton.setAppearance (Palette::recording, {}, {});
+        finishJamButton.onClick = [this] { if (jamTarget) toggleJam(); };
+        addChildComponent (footerJamPad);
+        footerJamPad.setButtonText ("STOP");
+        footerJamPad.setTitle (finishJamButton.getTitle());
+        footerJamPad.setTooltip (finishJamButton.getTooltip());
+        footerJamPad.setAppearance (Palette::recording, {}, {});
+        footerJamPad.onClick = finishJamButton.onClick;
         showPads.getProperties().set ("icon", "pads");
         showPads.setTitle ("Show pads");
         showPads.onClick = [this]
@@ -674,17 +699,8 @@ namespace ksh::ui
         }
         selectMode.getProperties().set ("selectMode", true);
         selectMode.setTitle ("Select modifier");
-        selectMode.setTooltip ("Hold for temporary Select");
-        selectMode.pressed = [this] (const juce::MouseEvent& e)
-        {
-            if (e.mods.isLeftButtonDown())
-                controller.beginSelect();
-        };
-        selectMode.released = [this] (const juce::MouseEvent& e)
-        {
-            controller.endSelect (e.getLengthOfMousePress() >= 300, selectMode.getLocalBounds().contains (e.getPosition()));
-        };
         selectMode.onClick = [this] { controller.selectLatched = !controller.selectLatched; controller.notify(); };
+        configureSelectButton();
         for (int i = 0; i < 16; ++i)
         {
             auto& b = patterns[static_cast<size_t> (i)];
@@ -798,12 +814,16 @@ namespace ksh::ui
         rate.setTitle ("Pattern rate");
         rate.onClick = [this] { rateMenu(); };
         play.onClick = [this] { controller.command ("standalone_transport_playing", { true }); };
-        stop.onClick = [this] { controller.command ("standalone_transport_playing", { false }); };
+        stop.onClick = [this]
+        {
+            jamPlayback = JamPlayback::stopped;
+            globalFocusChanged (getCurrentlyFocusedComponent());
+            controller.command ("standalone_transport_playing", { false });
+        };
         dc.onClick = [this] { controller.drumColors = ! controller.drumColors; sync(); };
-        configureValue (swing, "Amount", 0, 100, "swing");
-        configureValue (subdivision, "Target", 0, 2, "swing_subdivision");
+        configureValue (swing, "Amount", 0, maxFeelPercent, "swing");
+        configureValue (subdivision, "Target", 0, Constants::swingSubdivisionCount - 1, "swing_subdivision");
         swing.setTitle ("Swing amount");
-        swing.suffix = "%";
         swing.setTooltip (juce::String::fromUTF8 ("Double-click to type • Right-click or touch and hold to choose Regular or MPC scale"));
         swing.onContextMenu = [this] { swingMenu(); };
         updateSwingScale();
@@ -821,16 +841,21 @@ namespace ksh::ui
             sync();
         };
         subdivision.setTitle ("Swing target");
-        subdivision.setTooltip ("Swing groups of 1, 2, or 4 steps");
-        subdivision.format = [] (int v) { return juce::String (1 << v) + "x"; };
+        subdivision.setTooltip ("Swing groups of 1 or 2 steps");
+        subdivision.format = [] (int v) { return juce::String (static_cast<int> (swingSubdivisionValueForIndex (v))) + "x"; };
         subdivision.resetValue = Constants::defaultSwingSubdivisionIndex;
-        configureValue (velocityHumanize, "Velocity", 0, 100, "velocity_humanize");
-        configureValue (timingHumanize, "Timing", 0, 100, "timing_humanize");
+        configureValue (velocityHumanize, "Velocity", 0, maxFeelPercent, "velocity_humanize");
+        configureValue (timingHumanize, "Timing", 0, maxFeelPercent, "timing_humanize");
         velocityHumanize.setTitle ("Velocity humanization");
         timingHumanize.setTitle ("Timing humanization");
         velocityHumanize.setTooltip ("Random velocity variation per hit");
-        timingHumanize.setTooltip ("At 100%, hits vary by up to 1/5 step");
-        velocityHumanize.suffix = timingHumanize.suffix = "%";
+        timingHumanize.setTooltip ("Random timing variation up to 1/5 of a step");
+        for (auto* control : { &swing, &velocityHumanize, &timingHumanize })
+        {
+            control->suffix = "%";
+            control->reserveDigitSlots = false;
+            control->limitDisplayedValue = true;
+        }
         configureValue (steps, "Grid Length", 1, Constants::maxSteps, "source_steps");
         steps.captionFontSize = 12;
         steps.captionColour = Palette::muted;
@@ -871,11 +896,20 @@ namespace ksh::ui
         Palette::changes().addChangeListener (this);
         changeListenerCallback (&Palette::changes());
         sync();
+        if (layout.standalone)
+            juce::Desktop::getInstance().addFocusChangeListener (this);
         startTimerHz (60);
     }
     NativeEditor::~NativeEditor()
     {
         stopTimer();
+        juce::Desktop::getInstance().removeFocusChangeListener (this);
+        if (jamTarget)
+            controller.processor.cancelJamCapture();
+        jamTarget.reset();
+        jamPlayback = JamPlayback::stopped;
+        heldJamStopKey.reset();
+        globalFocusChanged (nullptr);
         Palette::changes().removeChangeListener (this);
         removeMouseListener (this);
         juce::PopupMenu::dismissAllActiveMenus();
@@ -883,12 +917,13 @@ namespace ksh::ui
         trackColourContent.reset();
         controller.changed = {};
         controller.onPlaybackHit = {};
+        controller.processor.getUiBridge().onMidiInputNote = {};
         setLookAndFeel (nullptr);
     }
     NativeEditor::Theme NativeEditor::currentTheme()
     {
         return { Palette::blueAccentSelected(), { Palette::accentOverride (false), Palette::accentOverride (true) },
-                 Palette::backgroundTone() };
+                 Palette::backgroundTone(), Palette::textBrightness() };
     }
     void NativeEditor::applyTheme (const Theme& theme, juce::PropertiesFile& preferences)
     {
@@ -908,6 +943,9 @@ namespace ksh::ui
         }
         Palette::setAccentPreferences (theme.blue, theme.colours);
         Palette::setBackgroundTone (theme.backdrop);
+        Palette::setTextBrightness (theme.textBrightness);
+        if (previous.textBrightness != Palette::textBrightness())
+            preferences.setValue (textBrightnessPreference, Palette::textBrightness());
         const auto appliedTone = Palette::backgroundTone();
         if (previous.backdrop.brightness != appliedTone.brightness)
             preferences.setValue (backgroundBrightnessPreference, appliedTone.brightness);
@@ -945,6 +983,7 @@ namespace ksh::ui
                 merge (theme.colours[i], from.colours[i], to.colours[i]);
             merge (theme.backdrop.brightness, from.backdrop.brightness, to.backdrop.brightness);
             merge (theme.backdrop.tint, from.backdrop.tint, to.backdrop.tint);
+            merge (theme.textBrightness, from.textBrightness, to.textBrightness);
             applyTheme (theme, *prefs);
             prefs->saveIfNeeded();
         });
@@ -1028,6 +1067,11 @@ namespace ksh::ui
         if (layout.firstStep >= layout.steps)
             layout.firstStep = 0;
         layout.standalone = controller.processor.hasStandaloneTransport();
+        if (jamTarget && (jamTarget->source != controller.source() || jamTarget->epoch != controller.state.documentEpoch))
+            cancelJam();
+        syncJamButton();
+        record.setEnabled (controller.source() >= 0 && !jamTarget);
+        record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         syncMidiOutput();
         midiOutput.setVisible (layout.standalone && controller.processor.showStandaloneMidiOutputMenu && !layout.compact);
         linkSettings.setVisible (layout.standalone && controller.processor.showStandaloneLinkSettings && !layout.compact);
@@ -1046,7 +1090,7 @@ namespace ksh::ui
         const int source = controller.source();
         const auto slot = juce::String (source + 1);
         const auto patternLabel = layout.phoneRowControls
-            ? (source < 0 ? juce::String::fromUTF8 (u8"–") : slot)
+            ? (source < 0 ? juce::String::fromUTF8 (layout.compactOnPhone ? u8"M" : u8"–") : slot)
             : (source < 0 ? juce::String ("Muted  v") : "Pattern " + slot + "  v");
         compactPattern.setButtonText (patternLabel);
         compactPattern.setToggleState (patternPicker.isVisible(), juce::dontSendNotification);
@@ -1069,8 +1113,9 @@ namespace ksh::ui
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
         updatePatternButtons();
         updateLayerHeading();
-        for (auto* b : { &clear, &record, &left, &right, &rate, static_cast<juce::TextButton*> (&recordQuantize) })
+        for (auto* b : { &clear, &left, &right, &rate, static_cast<juce::TextButton*> (&recordQuantize) })
             b->setEnabled (controller.source() >= 0);
+        play.setEnabled (!jamTarget);
         steps.setEnabled (controller.source() >= 0);
         undoButton.setEnabled (controller.canUndo());
         redoButton.setEnabled (controller.canRedo());
@@ -1080,32 +1125,37 @@ namespace ksh::ui
         velocityHumanize.setValue (p.velocityHumanize);
         timingHumanize.setValue (p.timingHumanize);
         steps.setValue (p.stepCount);
-        const int bpm = juce::roundToInt (controller.processor.getStandaloneTempoBpm());
-        tempo.setValue (bpm);
-        if (layout.phoneRowControls)
-        {
-            phoneTempo.setButtonText (juce::String (bpm) + " BPM");
-            tempoFader.setValue (bpm, juce::dontSendNotification);
-        }
+        syncTempo();
         scale.setValue (zenMode ? juce::jmin (controller.processor.getProjectUiScalePercent(), scale.maximum) : controller.processor.getProjectUiScalePercent());
         static const std::array<std::string, 8> rates { "4n", "4nt", "8n", "8nt", "16n", "16nt", "32n", "32nt" };
         auto value = p.sourceSettings[static_cast<size_t> (juce::jmax (0, controller.source()))].rate;
         auto found = std::find (rates.begin(), rates.end(), value);
         rate.setButtonText (found == rates.end() ? "16th" : rateNames[static_cast<size_t> (found - rates.begin())]);
         const bool playing = controller.processor.isStandaloneTransportPlaying();
+        if (jamPlayback != JamPlayback::stopped && (playing || jamPlayback == JamPlayback::playing))
+        {
+            jamPlayback = playing ? JamPlayback::playing : JamPlayback::stopped;
+            if (!playing)
+                globalFocusChanged (getCurrentlyFocusedComponent());
+        }
         lastStandalonePlaying = playing;
         lastStandaloneLaunchPending = controller.processor.isStandaloneLaunchPending();
         stop.getProperties().set ("launchPending", lastStandaloneLaunchPending);
         stop.setTitle (lastStandaloneLaunchPending ? "Cancel Link launch" : "Stop");
         play.setVisible (layout.standalone && !playing);
         stop.setVisible (layout.standalone && playing);
-        stop.setTooltip (lastStandaloneLaunchPending ? "Waiting for the next Link bar. Click to cancel." : "Space to stop");
-        tempo.setVisible (layout.standalone && !layout.phoneRowControls);
-        metronome.setVisible (layout.standalone);
+        stop.setTooltip (lastStandaloneLaunchPending ? "Waiting for the next Link bar. Click to cancel."
+                                                    : jamPlayback != JamPlayback::stopped ? "Space or Esc to stop" : "Space to stop");
+        if (!layout.compact)
+        {
+            tempo.setVisible (layout.standalone && !usesTempoPopup());
+            tempoButton.setVisible (layout.standalone && usesTempoPopup());
+        }
+        if (!layout.compact)
+            metronome.setVisible (layout.standalone);
         metronome.setToggleState (controller.processor.isStandaloneMetronomeEnabled(), juce::dontSendNotification);
         play.setToggleState (playing, juce::dontSendNotification);
         stop.setToggleState (!playing, juce::dontSendNotification);
-        record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         if (!layout.phoneRowControls)
         {
             const bool padsVisible = showingRecordingPads();
@@ -1156,7 +1206,8 @@ namespace ksh::ui
         }
         if (!layout.compact)
             repaint (getWidth() / 2, juce::roundToInt (layout.toolbarY()), getWidth() - getWidth() / 2, 68);
-        repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
+        if (!layout.settingsInHeader)
+            repaint (0, getHeight() - Layout::footerHeight, getWidth(), Layout::footerHeight);
         syncing = false;
         if ((scaleChanged || std::abs (oldHeight - layout.height()) > 0.01f || std::abs (oldWidth - layout.width()) > 0.01f) && preferredSizeChanged)
             preferredSizeChanged();
@@ -1178,10 +1229,12 @@ namespace ksh::ui
             value->valueFontSize = layout.compact && !phoneMenu ? 12.0f : 18.0f;
             value->captionInset = 3;
         }
-        for (auto* button : { &midiOutput, &linkSettings, &settings })
+        for (auto* button : { &midiOutput, &linkSettings })
             button->getProperties().set ("insetFooterArtwork", !layout.compact);
+        settings.getProperties().set ("footerControl", !layout.settingsInHeader);
+        settings.getProperties().set ("insetFooterArtwork", !layout.compact && !layout.settingsInHeader);
         scale.getProperties().set ("insetFooterArtwork", !layout.compact);
-        for (auto* button : std::array<juce::TextButton*, 7> { &generate, &showPads, &record, &recordQuantize, &left, &right, &clear })
+        for (auto* button : std::array<juce::TextButton*, 8> { &generate, &jamButton, &showPads, &record, &recordQuantize, &left, &right, &clear })
             button->getProperties().set ("gridToolbarAction", !layout.compact);
         scale.setVisible (layout.standalone && !layout.compact && zenMode);
         if (layout.compact)
@@ -1202,7 +1255,8 @@ namespace ksh::ui
         projectButtons[4].setBounds (projectButtons[5].getRight() - target, secondRowY, target, target);
         projectHeader.setBounds (82, secondRowY, projectButtons[4].getX() - 88, target);
         constexpr int macroBottomPadding = 8;
-        constexpr int macroHeight = target + 20;
+        constexpr int macroCaptionGap = 6;
+        constexpr int macroHeight = target + 18 + macroCaptionGap;
         constexpr int macroY = secondRowY + target - macroBottomPadding - macroHeight;
         swing.setBounds (366, macroY, 72, macroHeight);
         subdivision.setBounds (444, macroY, 72, macroHeight);
@@ -1212,22 +1266,27 @@ namespace ksh::ui
         for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize })
         {
             value->captionFontSize = labelFontSize;
-            value->captionGap = 2;
+            value->captionGap = macroCaptionGap;
         }
         constexpr int patternGap = Layout::headerRowGap;
-        const int muteX = rightEdge - target - (layout.standalone ? target + patternGap : 0);
+        const int muteX = rightEdge - target - (layout.standalone || layout.settingsInHeader ? target + patternGap : 0);
         const int patternRight = muteX - patternGap;
         const int patternLeft = patternRight - (8 * target + 7 * patternGap);
         for (int i = 0; i < 16; ++i)
             patterns[static_cast<size_t> (i)].setBounds (patternLeft + (i % 8) * (target + patternGap), headerTop + (i / 8) * (target + Layout::headerRowGap), target, target);
         mutePattern.setBounds (muteX, layout.standalone ? secondRowY : (headerTop + secondRowY) / 2, target, target);
+        if (layout.settingsInHeader)
+            settings.setBounds (rightEdge - target, mutePattern.getY(), target, target);
         if (layout.standalone)
         {
             play.setBounds (rightEdge - target, headerTop, target, target);
             stop.setBounds (play.getBounds());
-            tempo.setBounds (muteX, headerTop, target, target);
+            auto& tempoControl = usesTempoPopup() ? static_cast<juce::Component&> (tempoButton) : static_cast<juce::Component&> (tempo);
+            tempoControl.setBounds (muteX, headerTop, target, target);
             tempo.valueFontSize = 13;
             metronome.setBounds (rightEdge - target, secondRowY, target, target);
+            if (tempoOpen)
+                layoutTempoPopup();
         }
         const int inputY = juce::roundToInt (layout.toolbarY()) + Layout::toolbarPadding + Layout::toolbarCaptionSpace;
         velocityLayer.setBounds (12, inputY, 104, target);
@@ -1247,12 +1306,14 @@ namespace ksh::ui
         left.setBounds (right.getX() - 66, inputY, target, target);
         constexpr int recordGap = 2;
         constexpr int redoClearance = 8;
-        const int actionSpace = left.getX() - redoButton.getRight() - 4 * target - recordGap - redoClearance;
-        const int actionGap = actionSpace / 4;
-        generate.setBounds (redoButton.getRight() + redoClearance + actionGap, inputY, target, target);
-        showPads.setBounds (generate.getRight() + actionGap, inputY, target, target);
-        record.setBounds (showPads.getRight() + actionGap, inputY, target, target);
-        recordQuantize.setBounds (record.getRight() + recordGap, inputY, target, target);
+        const int actionCount = layout.standalone ? 5 : 4;
+        const int actionSpace = left.getX() - redoButton.getRight() - actionCount * target - recordGap - redoClearance;
+        const int actionGap = juce::jmax (0, actionSpace / (actionCount + 1));
+        recordQuantize.setBounds (left.getX() - actionGap - target, inputY, target, target);
+        record.setBounds (recordQuantize.getX() - recordGap - target, inputY, target, target);
+        showPads.setBounds (record.getX() - actionGap - target, inputY, target, target);
+        jamButton.setBounds (showPads.getX() - actionGap - target, inputY, target, target);
+        generate.setBounds ((layout.standalone ? jamButton : showPads).getX() - actionGap - target, inputY, target, target);
         const int randomY = juce::roundToInt (layout.gridY());
         const int aboutHeight = juce::roundToInt (layout.previewY()) - randomY;
         constexpr int minRandomizerHeight = 540;
@@ -1268,8 +1329,11 @@ namespace ksh::ui
         preview.setInspectorBounds ({ inspectorLeft, 8, inspectorRight - inspectorLeft, Layout::previewHeight - 16 });
         recordingStrip.setBounds (preview.getBounds());
         layoutRecordingPads();
+        if (layout.settingsInHeader)
+            return;
         const int footerControlY = getHeight() - Layout::footerHeight + Layout::footerPadding;
-        int footerRight = rightEdge;
+        // Align the inset footer faces with the header while keeping full-size hit targets.
+        int footerRight = rightEdge + footerArtworkInset;
         const auto placeFooter = [&] (juce::Component& control, int width = Layout::touchTarget)
         {
             control.setBounds (footerRight - width, footerControlY, width, target);
@@ -1283,6 +1347,7 @@ namespace ksh::ui
             placeFooter (linkSettings);
         placeFooter (settings);
         footerHelp.setBounds (Layout::outerGutter, footerControlY, settings.getX() - 2 * Layout::outerGutter, target);
+        footerJamPad.setBounds (footerHelp.getBounds());
     }
     void NativeEditor::paint (juce::Graphics& g)
     {
@@ -1343,7 +1408,7 @@ namespace ksh::ui
                         "Drag Velocity or Chance sideways to adjust selected steps.",
                         "Hold the row power button to solo." };
                     for (int i = 0; i < static_cast<int> (lines.size()); ++i)
-                        text (g, lines[static_cast<size_t> (i)], { 20, 100.0f + static_cast<float> (i) * 38, static_cast<float> (getWidth() - 40), 34 }, labelFontSize, Palette::text, false, juce::Justification::centredLeft);
+                        text (g, lines[static_cast<size_t> (i)], { 20, 100.0f + static_cast<float> (i) * 38, static_cast<float> (getWidth() - 284), 34 }, labelFontSize, Palette::text, false, juce::Justification::centredLeft);
                 }
             }
             return;
@@ -1360,16 +1425,19 @@ namespace ksh::ui
         };
         toolbarCaption ("Mode", velocityLayer.getBounds().getUnion (selectMode.getBounds()));
         toolbarCaption ("Undo", undoButton.getBounds().getUnion (redoButton.getBounds()));
-        toolbarCaption ("Generate", generate.getBounds().withRight (showPads.getX() - 4));
+        toolbarCaption ("Generate", generate.getBounds().withRight ((layout.standalone ? jamButton : showPads).getX()));
+        if (layout.standalone)
+            toolbarCaption ("Jam", jamButton.getBounds());
         toolbarCaption ("Pads", showPads.getBounds().withRight (record.getX() - 4));
         toolbarCaption ("Arm Record", record.getBounds().getUnion (recordQuantize.getBounds()));
-        toolbarCaption ("Nudge", left.getBounds().getUnion (right.getBounds()));
+        toolbarCaption ("Shift", left.getBounds().getUnion (right.getBounds()));
         toolbarCaption ("Clear", clear.getBounds());
         toolbarCaption ("Grid Division", rate.getBounds());
         g.setColour (Palette::border.withAlpha (0.5f));
         g.drawHorizontalLine (juce::roundToInt (layout.toolbarY()), 0, static_cast<float> (getWidth()));
-        for (auto y : { layout.gridY(), layout.height() - Layout::footerHeight })
-            g.drawHorizontalLine (static_cast<int> (y), 0, static_cast<float> (getWidth()));
+        g.drawHorizontalLine (static_cast<int> (layout.gridY()), 0, static_cast<float> (getWidth()));
+        if (!layout.settingsInHeader)
+            g.drawHorizontalLine (static_cast<int> (layout.height()) - Layout::footerHeight, 0, static_cast<float> (getWidth()));
         const auto patternRows = patterns.front().getBounds().getUnion (patterns.back().getBounds());
         const auto groupY = static_cast<float> (patternRows.getY()) + 0.5f;
         const auto groupHeight = static_cast<float> (patternRows.getHeight()) - 1.0f;
@@ -1396,7 +1464,15 @@ namespace ksh::ui
     }
     void NativeEditor::mouseDown (const juce::MouseEvent& event)
     {
-        grid.cancelOptionTap();
+        if (jamTarget || jamPlayback != JamPlayback::stopped || heldJamStopKey)
+            globalFocusChanged (getCurrentlyFocusedComponent());
+        if (tempoOpen && event.originalComponent != this && !isParentOf (event.originalComponent))
+        {
+            setTempoOpen (false);
+            return;
+        }
+        if (event.originalComponent == &grid && event.mods.isLeftButtonDown())
+            preview.commitPendingCycleEdit();
         if (event.originalComponent != &grid)
             grid.finishVelocityDrawing();
         if (showingCompactPadPreview() || (layout.phoneRowControls && patternPicker.isVisible())
@@ -1458,17 +1534,16 @@ namespace ksh::ui
             safe->controller.commit();
         });
     }
-    void NativeEditor::showDesktopRandomizer (bool visible, bool xy)
+    void NativeEditor::showDesktopRandomizer (bool visible)
     {
         randomPanel.cancelGesture();
         controller.commit();
         grid.cancelGesture();
         layout.randomVisible = visible;
-        generate.setToggleState (visible && xy, juce::dontSendNotification);
+        generate.setToggleState (visible, juce::dontSendNotification);
         aboutViewport.setVisible (layout.randomVisible);
         if (layout.randomVisible)
         {
-            randomPanel.setXYRandomizer (xy);
             aboutViewport.setViewPosition (0, 0);
             aboutViewport.toFront (false);
         }
@@ -1485,7 +1560,8 @@ namespace ksh::ui
     }
     bool NativeEditor::keyPressed (const juce::KeyPress& key)
     {
-        grid.cancelOptionTap();
+        if (handleJamStopKey (key))
+            return true;
         if (patternPicker.isVisible())
             return patternPicker.keyPressed (key);
         if (noteChooser.isVisible())
@@ -1512,17 +1588,6 @@ namespace ksh::ui
                 setTempoOpen (false);
                 return true;
             }
-            if (grid.isSelectedChanceMode())
-            {
-                grid.dismissCyclePopup (true);
-                grid.cancelGesture();
-                controller.selected.reset();
-                controller.layer = Layer::velocity;
-                controller.cancelSelect();
-                return true;
-            }
-            if (grid.dismissCyclePopup())
-                return true;
             if (controller.exitSolo())
                 return true;
             const bool exitZen = zenMode && zenModeChanged;
@@ -1570,6 +1635,11 @@ namespace ksh::ui
     {
         if (!down)
         {
+            if (heldJamStopKey && !juce::KeyPress::isKeyCurrentlyDown (*heldJamStopKey))
+            {
+                heldJamStopKey.reset();
+                globalFocusChanged (getCurrentlyFocusedComponent());
+            }
             const juce::String keys ("ASDFGHJK");
             for (int i = 0; i < 8; ++i)
                 if (!juce::KeyPress::isKeyCurrentlyDown (keys[i]))
@@ -1612,14 +1682,14 @@ namespace ksh::ui
     }
     void NativeEditor::updateLayerHeading()
     {
-        const auto layer = grid.displayLayer();
+        const auto layer = visibleGridLayer (grid.displayLayer());
         preview.setDisplayedLayer (layer);
         layerHint.setVisible (!layout.compact && overviewLayer (layer));
-        layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : layer == Layer::roll ? "Split" : "Cycle") + " / overview" : juce::String(), juce::dontSendNotification);
+        layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : "Split") + " / overview" : juce::String(), juce::dontSendNotification);
         const bool selecting = grid.isSelectMode() || controller.selected.any();
-        const bool chance = grid.displayLayer() == Layer::chance;
-        velocityLayer.setToggleState (!selecting && grid.displayLayer() == Layer::velocity, juce::dontSendNotification);
-        chanceLayer.setToggleState (chance && (!selecting || grid.isSelectedChanceMode()), juce::dontSendNotification);
+        const bool chance = layer == Layer::chance;
+        velocityLayer.setToggleState (!selecting && layer == Layer::velocity, juce::dontSendNotification);
+        chanceLayer.setToggleState (!selecting && chance, juce::dontSendNotification);
         selectMode.setToggleState (selecting, juce::dontSendNotification);
         // Shared seams belong to the active segment; inactive neighbors must
         // not paint over its orange edge.
@@ -1630,7 +1700,7 @@ namespace ksh::ui
         else
             velocityLayer.toFront (false);
         velocityLayer.setTitle ("Velocity editing layer");
-        chanceLayer.setTitle ("Chance editing layer");
+        chanceLayer.setTitle (layout.phoneRowControls ? "Prob editing layer" : "Chance editing layer");
         const auto setShortcutHint = [this] (juce::TextButton& button, const char* hint)
         {
             const juce::String label = controller.keyboardModifiersEnabled && !layout.phoneRowControls ? hint : "";
@@ -1705,29 +1775,32 @@ namespace ksh::ui
             menu.addCustomItem (id, std::move (row), nullptr, label);
             return result;
         };
-        auto* first = addRow (keepOpen, "Footer tooltips", footerHelp.isHelpEnabled(), [safe]
-        {
-            if (safe == nullptr)
-                return;
-            auto& help = safe->footerHelp;
-            help.setHelpEnabled (!help.isHelpEnabled());
-            help.refresh();
-            safe->uiPreferences->setValue ("footerTooltips", help.isHelpEnabled());
-            safe->uiPreferences->saveIfNeeded();
-        });
+        SettingsMenuRow* first = nullptr;
+        if (!layout.settingsInHeader)
+            first = addRow (keepOpen, "Footer tooltips", footerHelp.isHelpEnabled(), [safe]
+            {
+                if (safe == nullptr)
+                    return;
+                auto& help = safe->footerHelp;
+                help.setHelpEnabled (!help.isHelpEnabled());
+                help.refresh();
+                safe->uiPreferences->setValue ("footerTooltips", help.isHelpEnabled());
+                safe->uiPreferences->saveIfNeeded();
+            });
         const auto addToggle = [&] (juce::TextButton NativeEditor::* control, const juce::String& label, bool checked)
         {
-            addRow (keepOpen, label, checked, [safe, control]
+            auto* item = addRow (keepOpen, label, checked, [safe, control]
             {
                 if (auto* editor = safe.getComponent())
                     (editor->*control).onClick();
             });
+            if (first == nullptr)
+                first = item;
         };
         addToggle (&NativeEditor::rowOrder, rowOrder.getTitle(), layout.reverseRows);
         addToggle (&NativeEditor::cellDisplay, cellDisplay.getTitle(), !controller.graphicalCellValues);
         addToggle (&NativeEditor::dc, dc.getTitle(), controller.drumColors);
         addToggle (&NativeEditor::modifierToggle, modifierToggle.getButtonText(), controller.keyboardModifiersEnabled);
-        addToggle (&NativeEditor::dimTextToggle, dimTextToggle.getButtonText(), Palette::isTextDimmed());
        #if !JUCE_IOS
         if (layout.standalone && zenModeChanged)
             addRow (zen, "Zen mode", zenMode);
@@ -1737,7 +1810,10 @@ namespace ksh::ui
             menu.addSeparator();
             addRow (audioMidi, juce::String::fromUTF8 (u8"Audio/MIDI Settings…"), std::nullopt);
         }
-        menu.showMenuAsync (footerMenuOptions (settings), [safe] (int result)
+        auto options = footerMenuOptions (settings);
+        if (layout.settingsInHeader)
+            options = options.withPreferredPopupDirection (juce::PopupMenu::Options::PopupDirection::downwards);
+        menu.showMenuAsync (options, [safe] (int result)
         {
             if (safe == nullptr)
                 return;
@@ -1763,6 +1839,7 @@ namespace ksh::ui
     void NativeEditor::updateSwingScale()
     {
         const bool mpc = uiPreferences->getBoolValue ("mpcSwingScale", false);
+        swing.maximum = mpc ? 100 : maxFeelPercent;
         swing.displayScale = mpc ? 0.25 : 1.0;
         swing.displayOffset = mpc ? 50.0 : 0.0;
         swing.displayDecimalPlaces = mpc ? 2 : 0;
@@ -1829,7 +1906,6 @@ namespace ksh::ui
         look.refreshPalette();
         footerHelp.refreshInk();
         steps.captionColour = Palette::muted;
-        dimTextToggle.setToggleState (Palette::isTextDimmed(), juce::dontSendNotification);
         layerHint.setColour (juce::Label::textColourId, Palette::accent);
         tempoFader.setColour (juce::Slider::trackColourId, Palette::accent);
         tempoFader.setColour (juce::Slider::thumbColourId, Palette::text);
@@ -1837,15 +1913,207 @@ namespace ksh::ui
         compactAccent.setButtonText (Palette::accentOverride (blue) ? (blue ? "Accent: H" : "Accent: K")
                                                                    : (blue ? "Accent: Blue" : "Accent: Orange"));
         grid.refreshAccent();
+        preview.sync();
         randomPanel.sync();
         syncRecordingPads();
         sendLookAndFeelChange();
         repaint();
     }
-    void NativeEditor::triggerPad (int channel, int velocity)
+    void NativeEditor::triggerPad (int channel, int velocity, std::optional<juce::Time> touchTime)
     {
-        if (controller.processor.triggerRowFromUi (channel, velocity) && recordingStrip.isVisible())
-            recordingPads[static_cast<size_t> (channel)].flash (velocity);
+        auto timestampMs = juce::Time::getMillisecondCounterHiRes();
+        if (touchTime)
+        {
+            // JUCE dispatches each finger in the same iOS touch event separately.
+            if (!lastPadTouch || lastPadTouch->first != *touchTime)
+                lastPadTouch.emplace (*touchTime, timestampMs);
+            timestampMs = lastPadTouch->second;
+        }
+        if (controller.processor.triggerRowFromUi (channel, velocity, timestampMs) && recordingStrip.isVisible())
+            recordingPads[static_cast<size_t> (channel)].flash (velocity, timestampMs);
+    }
+
+    void NativeEditor::globalFocusChanged (juce::Component* focused)
+    {
+        // A focused control can consume these keys before they bubble to the editor.
+        juce::Component* target = nullptr;
+        if (jamTarget || jamPlayback != JamPlayback::stopped || heldJamStopKey)
+        {
+            auto* root = getTopLevelComponent();
+            auto* recipient = focused != nullptr ? focused : root;
+            if (recipient->getTopLevelComponent() == root)
+            {
+                // JUCE sends keys to a blocking popup even when focus stays in the editor.
+                if (recipient->isCurrentlyBlockedByAnotherModalComponent())
+                    target = getCurrentlyModalComponent();
+                else if (recipient != this)
+                    target = recipient;
+            }
+        }
+        if (jamKeyComponent != target)
+        {
+            if (jamKeyComponent != nullptr)
+            {
+                jamKeyComponent->removeKeyListener (this);
+                if (restoreJamTextInput)
+                    static_cast<juce::TextEditor*> (jamKeyComponent.getComponent())->setReadOnly (false);
+            }
+            restoreJamTextInput = false;
+            jamKeyComponent = target;
+            if (target != nullptr)
+                target->addKeyListener (this);
+        }
+        // Native text input can consume Space before JUCE dispatches a key press.
+        if (auto* field = dynamic_cast<juce::TextEditor*> (target))
+        {
+            if ((jamTarget || heldJamStopKey) && !field->isReadOnly())
+            {
+                restoreJamTextInput = true;
+                field->setReadOnly (true);
+            }
+            else if (!jamTarget && !heldJamStopKey && std::exchange (restoreJamTextInput, false))
+                field->setReadOnly (false);
+        }
+    }
+
+    bool NativeEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
+    {
+        return handleJamStopKey (key);
+    }
+
+    bool NativeEditor::keyStateChanged (bool down, juce::Component*)
+    {
+        return keyStateChanged (down);
+    }
+
+    bool NativeEditor::handleJamStopKey (const juce::KeyPress& key)
+    {
+        const int code = key.getKeyCode();
+        if (heldJamStopKey == code)
+            return true;
+        const bool stopKey = code == juce::KeyPress::spaceKey || code == juce::KeyPress::escapeKey || code == juce::KeyPress::stopKey;
+        const bool finish = jamTarget && (stopKey || code == juce::KeyPress::returnKey);
+        const bool stopPlayback = stopKey && jamPlayback != JamPlayback::stopped;
+        if (!finish && !stopPlayback)
+            return false;
+        // A held Space must not toggle transport again after finishing or stopping Jam.
+        if (juce::KeyPress::isKeyCurrentlyDown (code))
+            heldJamStopKey = code;
+        if (finish)
+            toggleJam();
+        else
+            stop.onClick();
+        return true;
+    }
+
+    void NativeEditor::configureSelectButton()
+    {
+        if (layout.compactOnPhone)
+        {
+            selectMode.setTooltip ("Tap to toggle Select");
+            selectMode.pressed = {};
+            selectMode.released = {};
+        }
+        else
+        {
+            selectMode.setTooltip ("Hold for temporary Select");
+            selectMode.pressed = [this] (const juce::MouseEvent& e)
+            {
+                if (e.mods.isLeftButtonDown())
+                    controller.beginSelect();
+            };
+            selectMode.released = [this] (const juce::MouseEvent& e)
+            {
+                controller.endSelect (e.getLengthOfMousePress() >= 300, selectMode.getLocalBounds().contains (e.getPosition()));
+            };
+        }
+    }
+
+    void NativeEditor::toggleJam()
+    {
+        auto& processor = controller.processor;
+        const double boundary = juce::Time::getMillisecondCounterHiRes();
+        if (const auto target = std::exchange (jamTarget, std::nullopt))
+        {
+            showPads.setToggleState (target->padsOpen, juce::dontSendNotification);
+            globalFocusChanged (getCurrentlyFocusedComponent());
+            auto take = processor.finishJamCapture (boundary);
+            if (take && target->source == controller.source() && target->epoch == processor.getUiBridge().getDocumentEpoch())
+            {
+                layout.firstStep = 0;
+                if (controller.applyJamTake (*take, target->source, target->epoch))
+                {
+                    // Link can start playback asynchronously on the audio thread.
+                    jamPlayback = JamPlayback::starting;
+                    processor.setStandaloneTransportPlaying (true);
+                    globalFocusChanged (getCurrentlyFocusedComponent());
+                    if (take->droppedHits > 0)
+                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Jam",
+                            juce::String (take->droppedHits) + " hits could not fit in the pattern.");
+                }
+            }
+            sync();
+            return;
+        }
+
+        if (controller.source() < 0 || !processor.hasStandaloneTransport())
+            return;
+        cancelCompactGestures();
+        controller.commit();
+        if (layout.compact && panel != Panel::none)
+            showPanel (Panel::none);
+        if (layout.randomVisible)
+            showDesktopRandomizer (false);
+        if (!processor.startJamCapture())
+            return;
+        jamPlayback = JamPlayback::stopped;
+        jamTarget = JamTarget { controller.source(), processor.getUiBridge().getDocumentEpoch(), showPads.getToggleState(),
+                                juce::Time::getMillisecondCounterHiRes() };
+        controller.selected.reset();
+        heldPads.reset();
+        showPads.setToggleState (true, juce::dontSendNotification);
+        if (isShowing())
+            grabKeyboardFocus();
+        globalFocusChanged (getCurrentlyFocusedComponent());
+        sync();
+    }
+
+    void NativeEditor::cancelJam()
+    {
+        if (const auto target = std::exchange (jamTarget, std::nullopt))
+        {
+            globalFocusChanged (getCurrentlyFocusedComponent());
+            controller.processor.cancelJamCapture();
+            showPads.setToggleState (target->padsOpen, juce::dontSendNotification);
+        }
+    }
+
+    void NativeEditor::syncJamButton()
+    {
+        const bool active = jamTarget.has_value();
+        const bool capturing = active && controller.processor.pollJamCapture();
+        jamButton.setEnabled (layout.standalone && (active || controller.source() >= 0));
+        if (!layout.compact)
+            jamButton.setVisible (layout.standalone);
+        jamButton.setToggleState (active, juce::dontSendNotification);
+        float waitPulse = 0.0f;
+        if (jamTarget && !capturing)
+        {
+            constexpr double periodMs = 1100.0;
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - jamTarget->armedAtMs;
+            waitPulse = 0.675f + 0.325f * static_cast<float> (std::cos (juce::MathConstants<double>::twoPi * elapsed / periodMs));
+        }
+        if (jamButton.getProperties().set ("jamWaitPulse", waitPulse))
+            jamButton.repaint();
+        jamButton.setTitle (capturing ? "Jam recording" : active ? "Jam waiting for first hit" : "Jam");
+        jamButton.setTooltip (capturing ? "Press Jam, Space, Enter or Esc on the next downbeat to close the loop"
+                                       : active ? "Play a pad, MIDI note or drum key to start"
+                                                : "Stop playback and capture a new drum loop");
+        finishJamButton.setVisible (layout.compactOnPhone && capturing);
+        const bool hasFooter = !layout.compact && !layout.settingsInHeader;
+        const bool showFooterPad = hasFooter && capturing;
+        footerJamPad.setVisible (showFooterPad);
+        footerHelp.setVisible (hasFooter && !showFooterPad);
     }
 
     void NativeEditor::syncRecordingPads()
@@ -1868,16 +2136,28 @@ namespace ksh::ui
     {
         if (layout.phoneRowControls)
         {
-            constexpr int columns = 4, gap = 8, switchWidth = 56;
+            constexpr int columns = 4, gap = 8, switchWidth = 56, controlWidth = 68;
             const auto bounds = recordingStrip.getLocalBounds().reduced (12, 6);
-            const int side = juce::jmax (0, juce::jmin ((bounds.getWidth() - switchWidth - columns * gap) / columns,
-                                                       (bounds.getHeight() - gap) / 2));
-            const int totalWidth = columns * (side + gap) + switchWidth;
+            const int widthLimitedSide = (bounds.getWidth() - columns * gap - controlWidth) / columns;
+            const int side = juce::jmax (0, juce::jmin (widthLimitedSide, (bounds.getHeight() - gap) / 2));
+            const int totalWidth = columns * (side + gap) + controlWidth;
             const int x = bounds.getCentreX() - totalWidth / 2;
             const int y = bounds.getCentreY() - side - gap / 2;
             for (int index = 0; index < static_cast<int> (recordingPads.size()); ++index)
-                recordingPads[static_cast<size_t> (index)].setBounds (x + (index % columns) * (side + gap), y + (index / columns) * (side + gap), side, side);
-            padVelocityMode.setBounds (x + columns * (side + gap), bounds.getCentreY() - switchWidth / 2, switchWidth, switchWidth);
+            {
+                const int row = index / columns;
+                const int displayRow = layout.compactOnPhone ? 1 - row : row;
+                recordingPads[static_cast<size_t> (index)].setBounds (x + (index % columns) * (side + gap), y + displayRow * (side + gap), side, side);
+            }
+            const int controlX = x + columns * (side + gap);
+            if (layout.compactOnPhone)
+            {
+                const juce::Rectangle<int> topControl { controlX, y, bounds.getRight() - controlX, side };
+                padVelocityMode.setBounds (topControl);
+                finishJamButton.setBounds (topControl.translated (0, side + gap));
+            }
+            else
+                padVelocityMode.setBounds (controlX + (controlWidth - switchWidth) / 2, bounds.getCentreY() - switchWidth / 2, switchWidth, switchWidth);
             return;
         }
         constexpr int gap = 6;
@@ -1904,6 +2184,10 @@ namespace ksh::ui
     {
         if (!isShowing())
             return;
+        if (jamTarget || jamPlayback != JamPlayback::stopped || heldJamStopKey)
+            globalFocusChanged (getCurrentlyFocusedComponent());
+        if (jamTarget)
+            syncJamButton();
         footerHelp.refresh();
         syncMidiOutput();
         if (controller.processor.standaloneLinkStatus)
@@ -1922,14 +2206,7 @@ namespace ksh::ui
                     linkSettings.setButtonText (state);
                 linkSettings.setToggleState (enabled, juce::dontSendNotification);
             }
-            const int bpm = juce::roundToInt (controller.processor.getStandaloneTempoBpm());
-            tempo.setValue (bpm);
-            if (layout.phoneRowControls)
-            {
-                phoneTempo.setButtonText (juce::String (bpm) + " BPM");
-                if (!tempoFader.isMouseButtonDown())
-                    tempoFader.setValue (bpm, juce::dontSendNotification);
-            }
+            syncTempo();
             if (lastStandaloneLaunchPending && stop.isVisible())
                 stop.repaint();
         }
@@ -1956,7 +2233,7 @@ namespace ksh::ui
                 const double beatAgeMs = (position - std::floor (position)) * 60000.0 / juce::jmax (1, tempo.value);
                 pulse = juce::jmax (0.0f, static_cast<float> (1.0 - beatAgeMs / 150.0));
             }
-            for (auto* control : std::array<juce::Component*, 2> { &tempo, &phoneTempo })
+            for (auto* control : std::array<juce::Component*, 2> { &tempo, &tempoButton })
                 if (control->getProperties().set ("tempoPulse", pulse * pulse))
                     control->repaint();
         }
@@ -1982,7 +2259,7 @@ namespace ksh::ui
                 pad.updateFlash (now);
         }
         preview.updatePlayback();
-        if (layout.randomVisible || (layout.compact && (panel == Panel::generate || panel == Panel::superSecret)))
+        if (layout.randomVisible || (layout.compact && panel == Panel::generate))
             randomPanel.updatePlayback();
         keyStateChanged (false);
     }

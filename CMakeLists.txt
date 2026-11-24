@@ -8,8 +8,7 @@ include (PamplejuceVersion)
 include (CPM)
 
 # The shared Pamplejuce helper forces a macOS deployment target, which is not
-# valid when cross-compiling for iOS. Keep that helper unchanged and configure
-# the iOS minimum here so a clean checkout remains reproducible.
+# valid when cross-compiling for iOS. Configure the iOS minimum separately.
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
         set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum supported iOS version")
@@ -43,8 +42,24 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
         set(KSH_TARGETED_DEVICE_FAMILY "1,2")
     endif()
 else()
-    set(FORMATS Standalone AU VST3 AUv3)
     option(KSH_COPY_PLUGIN_AFTER_BUILD "Install desktop plugins after building" ON)
+    option(KSH_MACOS_TESTFLIGHT "Build a sandboxed Mac standalone for TestFlight" OFF)
+    if (KSH_MACOS_TESTFLIGHT)
+        set(FORMATS Standalone)
+        set(KSH_COPY_PLUGIN_AFTER_BUILD FALSE)
+        set(KSH_MACOS_APP_OPTIONS
+            COMPANY_COPYRIGHT "Copyright ofsound"
+            PLIST_TO_MERGE [=[<plist version="1.0"><dict>
+                <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
+            </dict></plist>]=]
+            APP_SANDBOX_ENABLED TRUE
+            APP_SANDBOX_OPTIONS
+                com.apple.security.files.user-selected.read-write
+                com.apple.security.network.client
+                com.apple.security.network.server)
+    else()
+        set(FORMATS Standalone AU VST3 AUv3)
+    endif()
     set(KSH_BACKGROUND_AUDIO_ENABLED FALSE)
     set(KSH_TARGETED_DEVICE_FAMILY "1,2")
 endif()
@@ -66,8 +81,8 @@ include(PamplejuceLog)
 # On Github Actions, this is done as a part of actions/checkout
 add_subdirectory(JUCE)
 
-# CLAP is a desktop format and its wrapper is not part of the iOS app.
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+# Only the regular desktop build uses the CLAP wrapper.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KSH_MACOS_TESTFLIGHT)
     add_subdirectory(modules/clap-juce-extensions EXCLUDE_FROM_ALL)
 endif()
 
@@ -106,6 +121,7 @@ endif()
 
 juce_add_plugin("${PROJECT_NAME}"
     ${KSH_IOS_PROJECT_OPTIONS}
+    ${KSH_MACOS_APP_OPTIONS}
     # Icons for the standalone app
     ICON_BIG "${KSH_APP_ICON}"
 
@@ -147,7 +163,7 @@ juce_add_plugin("${PROJECT_NAME}"
 # Without running into ODR violations
 add_library(SharedCode INTERFACE)
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KSH_MACOS_TESTFLIGHT)
     clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
         CLAP_ID "${BUNDLE_ID}"
         CLAP_FEATURES midi-effect)
@@ -266,6 +282,11 @@ endif()
 
 if (TARGET "${PROJECT_NAME}_Standalone")
     ksh_configure_standalone_link("${PROJECT_NAME}_Standalone")
+    if (KSH_MACOS_TESTFLIGHT)
+        set_target_properties("${PROJECT_NAME}" "${PROJECT_NAME}_Standalone" PROPERTIES
+            XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS YES
+            XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
+    endif()
     target_compile_features("${PROJECT_NAME}_Standalone" PRIVATE cxx_std_23)
     target_compile_definitions("${PROJECT_NAME}_Standalone"
         PRIVATE

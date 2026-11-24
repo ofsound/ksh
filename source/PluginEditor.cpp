@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "engine/KshMath.h"
 #include "engine/KshPersistence.h"
 #include "ui/KshDrumComputerImport.h"
 #include "ui/KshUiScale.h"
@@ -34,13 +35,15 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
     nativeView->zenModeChanged = [this] (bool enabled) { setZenMode (enabled); };
     nativeView->projectAction = [this] (int action) {
         const juce::Component::SafePointer<PluginEditor> safe (this);
-        auto completed = [safe] (juce::var result) {
+        auto completed = [safe, action] (juce::var result) {
             if (safe == nullptr)
                 return;
             const auto error = result["error"].toString();
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "KSH project", error);
             safe->nativeView->controller.refresh();
+            if (action == 0 && static_cast<bool> (result["success"]))
+                safe->nativeView->returnToPhoneGrid();
             safe->updateNativeSize();
         };
        #if JUCE_IOS
@@ -69,11 +72,23 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
                 safe->cycleProject (action == 3 ? -1 : 1, completed);
         });
     };
-    setResizable (!fitViewport, !fitViewport);
-    updateNativeSize();
+    const bool hostedTablet = usesHostedTabletViewport();
+    setResizable (!fitViewport, !fitViewport && !hostedTablet);
+    if (hostedTablet)
+    {
+        // JUCE reads this initial size as the preferred AUv3 window size.
+        using ksh::ui::Layout;
+        constexpr float scale = ksh::ui::UiScale::baseline;
+        setSize (juce::roundToInt (Layout::fullWidth * scale),
+                 juce::roundToInt ((Layout::fullHeight - Layout::footerHeight) * scale));
+    }
+    else
+        updateNativeSize();
+    ksh::ui::Palette::changes().addChangeListener (this);
 }
 PluginEditor::~PluginEditor()
 {
+    ksh::ui::Palette::changes().removeChangeListener (this);
     stopTimer();
     fileDropStatusTimer.stopTimer();
    #if JUCE_IOS
@@ -179,6 +194,12 @@ bool PluginEditor::keyPressed (const juce::KeyPress& key)
     }
     return false;
 }
+bool PluginEditor::usesHostedTabletViewport() const
+{
+    return nativeView->layout.touchRows && processorRef.wrapperType == juce::AudioProcessor::wrapperType_AudioUnitv3
+        && !juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone");
+}
+
 void PluginEditor::updateNativeSize()
 {
     if (zenMode || zenWindow != nullptr)
@@ -186,6 +207,12 @@ void PluginEditor::updateNativeSize()
         setResizeLimits (1, 1, 100000, 100000);
         if (auto* limits = getConstrainer())
             limits->setFixedAspectRatio (0);
+        resized();
+        return;
+    }
+    if (usesHostedTabletViewport())
+    {
+        // Fit the content inside the host's viewport, including on project changes.
         resized();
         return;
     }
@@ -218,6 +245,11 @@ void PluginEditor::updateNativeSize()
     resized();
 }
 void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow != nullptr ? juce::Colours::black : ksh::ui::Palette::app); }
+void PluginEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // The scaled child editor only repaints inside its own bounds.
+    repaint();
+}
 void PluginEditor::paintOverChildren (juce::Graphics& g)
 {
     using namespace ksh::ui;
@@ -430,9 +462,12 @@ void PluginEditor::completeSwingDrop (FileDrop drop, const ksh::ui::SwingImportR
         controller.command ("standalone_tempo", { *result.bpm });
     controller.commit();
 
-    auto status = result.swing ? (result.swing->amount == 0 ? juce::String ("Straight timing matched")
-                                                             : juce::String ("Swing matched") + " (" + juce::String (1 << result.swing->target) + "x)")
-                               : juce::String ("Swing unclear");
+    juce::String status = "Swing unclear";
+    if (result.swing)
+    {
+        const int target = static_cast<int> (ksh::swingSubdivisionValueForIndex (result.swing->target));
+        status = result.swing->amount == 0 ? juce::String ("Straight timing matched") : "Swing matched (" + juce::String (target) + "x)";
+    }
     if (result.bpm)
         status += juce::String::fromUTF8 ("  ·  ") + juce::String (*result.bpm, 1) + (applyTempo ? " BPM" : " BPM in file");
     showFileDropStatus (status);
@@ -470,14 +505,29 @@ void PluginEditor::resized()
         }
     if (available.isEmpty())
         return;
+    layoutNativeView (available, juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"));
+}
+
+void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPhone)
+{
+    const bool hostedTablet = usesHostedTabletViewport();
    #if JUCE_IOS
     constexpr bool mobile = true;
    #else
-    const bool mobile = fitViewport;
+    const bool mobile = fitViewport || hostedTablet;
    #endif
     const bool compact = mobile && available.getWidth() >= available.getHeight() && available.getHeight() <= 500.0f && available.getWidth() <= 1100.0f;
+    if (compact && onPhone)
+    {
+        available.removeFromTop (juce::jmin (10.0f, available.getHeight() * 0.05f));
+        // Centre within the full viewport without crossing either edge of the safe area.
+        const float centreY = getLocalBounds().toFloat().getCentreY();
+        const float halfHeight = juce::jmin (centreY - available.getY(), available.getBottom() - centreY);
+        if (halfHeight > 0.0f)
+            available = available.withY (centreY - halfHeight).withHeight (2.0f * halfHeight);
+    }
     nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())),
-                                   juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"));
+                                   onPhone);
     const auto& layout = nativeView->layout;
     const float fitScale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
     const bool centered = zenMode || zenWindow != nullptr;
@@ -485,11 +535,9 @@ void PluginEditor::resized()
     if (zenMode)
         nativeView->setZenScaleLimit (static_cast<int> (std::floor (fitScale / ksh::ui::UiScale::baseline * 100.0f)));
     const int percent = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
-    if (!centered && !fitViewport && !compact && percent != processorRef.getProjectUiScalePercent())
+    if (!centered && !fitViewport && !compact && !hostedTablet && percent != processorRef.getProjectUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
-    if (layout.phoneRowControls)
-        offset.y = available.getY();
+    const auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }

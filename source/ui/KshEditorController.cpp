@@ -160,6 +160,13 @@ namespace ksh::ui
     {
         return state.playback.sourceSettings[static_cast<size_t> (juce::jmax (0, source()))].loopRanges[static_cast<size_t> (channel)];
     }
+    bool EditorController::canFitSpan (Location location, int span) const
+    {
+        const int pattern = source();
+        return pattern >= 0 && location.valid() && span >= 1 && span <= Constants::maxSteps
+            && rollSpanFits (state.playback.sources[static_cast<size_t> (pattern)][static_cast<size_t> (location.channel)],
+                             loop (location.channel), location.step, span);
+    }
     std::vector<Location> EditorController::selection (bool enabledOnly) const
     {
         std::vector<Location> result;
@@ -262,10 +269,13 @@ namespace ksh::ui
         // Conditional merge: a field is written only while it still holds the value this entry left behind.
         auto& current = documents->scratch;
         processor.copyEditorDocument (current);
+        const double previousTempo = current.settings.tempo;
         visitSettings (current.settings, redoing ? entry.before : entry.after, redoing ? entry.after : entry.before, mergeField);
         for (const auto& change : entry.cells)
             visitCell (cellAt (current, change.index), redoing ? change.before : change.after, redoing ? change.after : change.before, mergeField);
         applyDocument (current);
+        if (std::abs (current.settings.tempo - previousTempo) > 0.01)
+            processor.setStandaloneTempoBpm (current.settings.tempo);
     }
     void EditorController::applyDocument (const DocumentState& document)
     {
@@ -299,6 +309,7 @@ namespace ksh::ui
         recordingEntry = {};
         recordingSession = 0;
         selected.reset();
+        clearSplitCycleSelection();
         copySource = -1;
         soloChannel = -1;
     }
@@ -560,6 +571,22 @@ namespace ksh::ui
         }
         commit();
     }
+    bool EditorController::applyJamTake (const JamTake& take, int source, uint64_t documentEpoch)
+    {
+        commit();
+        collectRecordingEdits();
+        begin ("Jam recording");
+        const bool applied = processor.applyJamTake (take, source, documentEpoch);
+        if (applied)
+        {
+            processor.copyEditorDocument (documents->lastOwn);
+            selected.reset();
+            soloChannel = -1;
+        }
+        refresh();
+        commit();
+        return applied;
+    }
     void EditorController::toggleMute (int ch)
     {
         const int pattern = source();
@@ -613,18 +640,44 @@ namespace ksh::ui
         commit();
         notify();
     }
-    void EditorController::setCycle (int length, int mask, const std::vector<Location>& locations, int split)
+    void EditorController::selectSplitCycle (Location location, int index)
     {
+        selected.reset();
+        selected.set (static_cast<size_t> (location.key()));
+        splitCycleSelection = SplitCycleSelection { location, index };
+        splitCycleSource = source();
+    }
+
+    std::optional<EditorController::SplitCycleSelection> EditorController::selectedSplitCycle() const
+    {
+        if (!splitCycleSelection || source() != splitCycleSource || selected.count() != 1)
+            return {};
+        const auto [location, index] = *splitCycleSelection;
+        if (location.channel >= state.playback.channelCount || location.step >= state.playback.stepCount
+            || !selected.test (static_cast<size_t> (location.key())))
+            return {};
+        const auto& step = cell (location);
+        return step.enabled && step.roll > 1 && juce::isPositiveAndBelow (index, step.roll) ? splitCycleSelection : std::nullopt;
+    }
+
+    void EditorController::setCycle (int length, int mask, const std::vector<Location>& locations, bool editAllSplits)
+    {
+        const auto split = editAllSplits ? selectedSplitCycle() : std::nullopt;
         for (auto p : locations)
         {
             auto c = cell (p);
-            if (split < 0)
+            if (split && split->location == p)
+                c.splitGates[static_cast<size_t> (split->index)].setCycle (length, mask);
+            else if (editAllSplits && c.roll > 1)
+            {
+                for (int part = 0; part < c.roll; ++part)
+                    c.splitGates[static_cast<size_t> (part)].setCycle (length, mask);
+            }
+            else
             {
                 c.cycle = juce::jlimit (1, 64, length);
                 c.cycleMask = normalizeCycleMask (mask, c.cycle);
             }
-            else if (split < c.roll)
-                c.splitGates[static_cast<size_t> (split)].setCycle (length, mask);
             editCell (p, c);
         }
         notify();

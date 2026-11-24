@@ -374,6 +374,17 @@ int PluginProcessor::emitPendingNoteHitsForUi()
         ++emitted;
     }
 
+    if (midiInputNotesPending.exchange (false, std::memory_order_acq_rel))
+    {
+        const auto timestampMs = juce::Time::getMillisecondCounterHiRes();
+        for (size_t note = 0; note < midiInputNotesForUi.size(); ++note)
+            if (const int velocity = midiInputNotesForUi[note].exchange (0, std::memory_order_relaxed); velocity > 0)
+            {
+                uiBridge.emitMidiInputNote (static_cast<int> (note), velocity, timestampMs);
+                ++emitted;
+            }
+    }
+
     return emitted;
 }
 
@@ -437,6 +448,8 @@ void PluginProcessor::timerCallback()
 {
     if (messageThreadWorkPending.exchange (false, std::memory_order_acquire))
         runMessageThreadWork();
+    else if (midiInputNotesPending.load (std::memory_order_relaxed))
+        emitPendingNoteHitsForUi();
 }
 
 //==============================================================================
@@ -622,7 +635,7 @@ bool PluginProcessor::hasStandaloneTransport() const
 
 void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay, bool shareWithPeers)
 {
-    if (! hasStandaloneTransport())
+    if (! hasStandaloneTransport() || (shouldPlay && jamSession.load (std::memory_order_acquire) != 0))
         return;
 
     if (standaloneSync != nullptr && standaloneSync->requestPlaying (shouldPlay, shareWithPeers))
@@ -653,6 +666,8 @@ void PluginProcessor::setStandaloneTransportPlaying (bool shouldPlay, bool share
 
 bool PluginProcessor::isStandaloneTransportPlaying() const
 {
+    if (jamSession.load (std::memory_order_acquire) != 0)
+        return false;
     return standaloneTransportPlaying.load (std::memory_order_relaxed) != 0 || isStandaloneLaunchPending();
 }
 
@@ -770,6 +785,8 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                 requestMessageThreadWork();
             }
         }
+        if (jamSession.load (std::memory_order_acquire) != 0)
+            isPlaying = false;
         renderStandaloneMetronome (buffer, ppqPosition, bpm, isPlaying, standaloneReset, sync.firstPlaybackSample);
     }
     else if (const auto* playHead = getPlayHead())
@@ -936,6 +953,9 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
     bool shouldFilter = false;
     bool recordQueued = false;
     const auto recordSession = patternRecordingSession.load (std::memory_order_acquire);
+    const auto activeJam = jamSession.load (std::memory_order_acquire);
+    const bool timestamped = timestampedStandaloneMidiInput.load (std::memory_order_acquire);
+    const double blockTime = activeJam != 0 && !timestamped ? juce::Time::getMillisecondCounterHiRes() : 0.0;
     const bool recordEnabled = recordSession != 0;
     const int strength = getPatternRecordingQuantizeStrength();
     const double recordOffsetBeats = getPatternRecordingOffsetMs() * bpm / 60000.0;
@@ -967,9 +987,15 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
             continue;
 
         const int noteNumber = metadata.data[1];
+        if (noteOn && !timestamped)
+            flagMidiInputNoteForUi (noteNumber, metadata.data[2]);
+
+        if (activeJam != 0 && !timestamped && noteOn)
+            if (const int row = rowForNote (noteNumber); row >= 0)
+                enqueueJamEvent (jamAudioEvents, { { blockTime + 1000.0 * metadata.samplePosition / sampleRate, row, metadata.data[2] }, activeJam });
 
         if (recordEnabled && noteOn && isPlaying && quartersPerSample > 0.0
-            && !timestampedStandaloneMidiInput.load (std::memory_order_acquire))
+            && !timestamped)
         {
             if (const int row = rowForNote (noteNumber); row >= 0)
             {
@@ -986,7 +1012,7 @@ bool PluginProcessor::consumeMidiInput (const juce::MidiBuffer& midiMessages,
 
         shouldFilter = true;
 
-        if (noteOn)
+        if (noteOn && activeJam == 0)
         {
             const int source = sourceForMidiPatternSelectionNoteNumber (noteNumber);
             [[maybe_unused]] const bool queued = pendingMidiPatternSelections.try_enqueue (source);
@@ -1021,10 +1047,37 @@ void PluginProcessor::publishPatternRecordTransportPosition (double ppqPosition,
     patternRecordTransport.publish (anchor);
 }
 
+void PluginProcessor::flagMidiInputNoteForUi (int note, int velocity)
+{
+    if (!juce::isPositiveAndBelow (note, static_cast<int> (midiInputNotesForUi.size())))
+        return;
+    midiInputNotesForUi[static_cast<size_t> (note)].store (ksh::clampInt (velocity, 1, 127), std::memory_order_relaxed);
+    midiInputNotesPending.exchange (true, std::memory_order_acq_rel);
+}
+
 void PluginProcessor::captureStandaloneMidiInput (const juce::MidiMessage& message)
 {
+    if (!message.isNoteOn())
+        return;
+    flagMidiInputNoteForUi (message.getNoteNumber(), message.getVelocity());
+    if (const auto session = jamSession.load (std::memory_order_acquire); session != 0)
+    {
+        std::scoped_lock lock { standaloneMidiProducerMutex };
+        if (jamSession.load (std::memory_order_acquire) != session)
+            return;
+        const int channels = auditionChannelCount.load (std::memory_order_acquire);
+        for (int row = 0; row < channels; ++row)
+        {
+            if (auditionChannelNotes[static_cast<size_t> (row)].load (std::memory_order_relaxed) != message.getNoteNumber())
+                continue;
+            const double timestamp = message.getTimeStamp() > 0.0 ? message.getTimeStamp() * 1000.0 : juce::Time::getMillisecondCounterHiRes();
+            enqueueJamEvent (jamDriverEvents, { { timestamp, row, message.getVelocity() }, session });
+            break;
+        }
+        return;
+    }
     const auto session = patternRecordingSession.load (std::memory_order_acquire);
-    if (session == 0 || !message.isNoteOn() || (hasStandaloneTransport() && (!isStandaloneTransportPlaying() || isStandaloneLaunchPending())))
+    if (session == 0 || (hasStandaloneTransport() && (!isStandaloneTransportPlaying() || isStandaloneLaunchPending())))
         return;
     const StandaloneRecordInput input { message.getTimeStamp() * 1000.0, session,
                                        patternRecordingSource.load (std::memory_order_acquire),
@@ -1034,6 +1087,106 @@ void PluginProcessor::captureStandaloneMidiInput (const juce::MidiMessage& messa
     // producers here, never in processBlock, to preserve the queue's single producer contract.
     std::scoped_lock lock { standaloneMidiProducerMutex };
     [[maybe_unused]] const bool queued = standaloneRecordInput.try_enqueue (input);
+}
+
+bool PluginProcessor::startJamCapture()
+{
+    if (!hasStandaloneTransport() || jamSession.load (std::memory_order_acquire) != 0)
+        return false;
+    setStandaloneTransportPlaying (false);
+    setPatternRecordingEnabled (false, 0);
+    jamHits.clear();
+    jamHits.reserve (ksh::JamTake::maxHits);
+    jamArmedMs = juce::Time::getMillisecondCounterHiRes();
+    jamSession.store (++nextJamSession, std::memory_order_release);
+    drainJamEvents (nextJamSession);
+    return true;
+}
+
+void PluginProcessor::enqueueJamEvent (moodycamel::ReaderWriterQueue<JamEvent>& queue, JamEvent event)
+{
+    if (!queue.try_enqueue (event))
+        jamOverflowSession.store (event.session, std::memory_order_release);
+}
+
+void PluginProcessor::appendJamHit (ksh::JamHit hit, uint64_t session)
+{
+    if (!std::isfinite (hit.timestampMs) || hit.timestampMs < jamArmedMs)
+        return;
+    if (jamHits.size() >= ksh::JamTake::maxHits)
+        jamOverflowSession.store (session, std::memory_order_release);
+    else
+        jamHits.push_back (hit);
+}
+
+void PluginProcessor::drainJamEvents (uint64_t session)
+{
+    for (auto* queue : { &jamDriverEvents, &jamAudioEvents })
+    {
+        JamEvent event;
+        while (queue->try_dequeue (event))
+            if (session != 0 && event.session == session)
+                appendJamHit (event.hit, session);
+    }
+}
+
+bool PluginProcessor::pollJamCapture()
+{
+    drainJamEvents (jamSession.load (std::memory_order_acquire));
+    return !jamHits.empty();
+}
+
+void PluginProcessor::cancelJamCapture()
+{
+    jamSession.store (0, std::memory_order_release);
+    drainJamEvents (0);
+    jamHits.clear();
+}
+
+std::optional<ksh::JamTake> PluginProcessor::finishJamCapture (double endMs)
+{
+    uint64_t session = 0;
+    {
+        std::scoped_lock lock { standaloneMidiProducerMutex };
+        session = jamSession.exchange (0, std::memory_order_acq_rel);
+        drainJamEvents (session);
+    }
+    auto hits = std::exchange (jamHits, {});
+    if (session == 0 || jamOverflowSession.load (std::memory_order_acquire) == session || hits.empty())
+        return std::nullopt;
+    const auto tempo = getStandaloneTempoBpm();
+    int swing = 0;
+    int subdivision = 0;
+    {
+        std::scoped_lock lock { engineStateMutex };
+        applyPendingMacroParametersLocked();
+        swing = engine.getSwing();
+        subdivision = engine.getSwingSubdivisionIndex();
+    }
+    return ksh::transcribeJam (std::move (hits), endMs, tempo, swing, subdivision, getPatternRecordingQuantizeStrength());
+}
+
+bool PluginProcessor::applyJamTake (const ksh::JamTake& take, int source, uint64_t documentEpoch)
+{
+    if (!hasStandaloneTransport() || source < 0)
+        return false;
+    {
+        std::scoped_lock lock { engineStateMutex };
+        if (documentEpoch != uiBridge.getDocumentEpoch() || source != engine.getStaticSource())
+            return false;
+        applyPendingMacroParametersLocked();
+        engine.replaceActivePattern (take.pattern, take.steps, take.bpm);
+        if (take.swing)
+        {
+            engine.setSwing (take.swing->amount);
+            engine.setSwingSubdivisionIndex (take.swing->subdivision);
+        }
+        syncMacroParametersFromEngineLocked (true);
+        publishPlaybackSnapshotIfChangedLocked();
+        markDocumentModified();
+    }
+    setStandaloneTempoBpm (take.bpm);
+    return true;
 }
 
 void PluginProcessor::consumeStandaloneRecording (const ksh::PlaybackSnapshot& snapshot)
@@ -1586,6 +1739,8 @@ void PluginProcessor::setProjectUiScalePercent (const int uiScalePercent)
 
 void PluginProcessor::setPatternRecordingEnabled (bool shouldRecord, int source)
 {
+    if (shouldRecord && jamSession.load (std::memory_order_acquire) != 0)
+        return;
     std::scoped_lock lock { engineStateMutex };
     if (!shouldRecord)
     {
@@ -1618,7 +1773,7 @@ bool PluginProcessor::isPatternRecordingEnabled() const
     return patternRecordingEnabled.load (std::memory_order_acquire) != 0;
 }
 
-bool PluginProcessor::queueRowAudition (int channelZeroBased, int velocity)
+bool PluginProcessor::queueRowAudition (int channelZeroBased, int velocity, double timestampMs)
 {
     if (auditionDeviceActive.load (std::memory_order_acquire) == 0)
         return false;
@@ -1633,7 +1788,7 @@ bool PluginProcessor::queueRowAudition (int channelZeroBased, int velocity)
                                       ksh::clampInt (velocity, 1, 127),
                                       ksh::Constants::defaultMidiChannel,
                                       ksh::Constants::defaultNoteDurationMs,
-                                      0.0, juce::Time::getMillisecondCounterHiRes() });
+                                      0.0, timestampMs > 0.0 ? timestampMs : juce::Time::getMillisecondCounterHiRes() });
     return true;
 }
 
@@ -1702,17 +1857,23 @@ std::optional<ksh::PatternRecordingPosition> PluginProcessor::positionForUiTrigg
     return ksh::patternRecordingPosition ((*grids)[static_cast<size_t> (source)], channel, beat, getPatternRecordingQuantizeStrength());
 }
 
-bool PluginProcessor::triggerRowFromUi (int channelZeroBased, int velocity)
+bool PluginProcessor::triggerRowFromUi (int channelZeroBased, int velocity, double timestampMs)
 {
     const int vel = ksh::clampInt (velocity, 1, 127);
-    const bool auditioned = queueRowAudition (channelZeroBased, vel);
-
-    if (! isPatternRecordingEnabled())
+    if (timestampMs <= 0.0)
+        timestampMs = juce::Time::getMillisecondCounterHiRes();
+    const bool auditioned = queueRowAudition (channelZeroBased, vel, timestampMs);
+    const int channelCount = auditionChannelCount.load (std::memory_order_acquire);
+    if (channelZeroBased < 0 || channelZeroBased >= channelCount)
         return auditioned;
 
-    const int channelCount = auditionChannelCount.load (std::memory_order_acquire);
+    if (const auto session = jamSession.load (std::memory_order_acquire); session != 0)
+    {
+        appendJamHit ({ timestampMs, channelZeroBased, vel }, session);
+        return true;
+    }
 
-    if (channelZeroBased < 0 || channelZeroBased >= channelCount)
+    if (! isPatternRecordingEnabled())
         return auditioned;
 
     const int source = ksh::clampInt (patternRecordingSource.load (std::memory_order_acquire),

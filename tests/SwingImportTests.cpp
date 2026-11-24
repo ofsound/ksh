@@ -38,7 +38,7 @@ namespace
         REQUIRE (midi.writeTo (*stream, 1));
     }
 
-    void writeWave (const juce::File& file, double bpm, int amount, int target, int steps, int stride = 1, bool tagTempo = false)
+    void writeWave (const juce::File& file, double bpm, int amount, int group, int steps, int stride = 1, bool tagTempo = false)
     {
         constexpr double sampleRate = 22050.0;
         constexpr double leadIn = 0.071;
@@ -47,7 +47,8 @@ namespace
         audio.clear();
         for (int step = 0; step < steps; step += stride)
         {
-            const auto time = leadIn + (step + swingDelayStepsForPosition (step, amount, target)) * stepSeconds;
+            const auto delay = (step / group) % 2 == 1 ? group * amount / 200.0 : 0.0;
+            const auto time = leadIn + (step + delay) * stepSeconds;
             const auto start = juce::roundToInt (time * sampleRate);
             const auto frequency = step % 4 == 0 ? 120.0 : (step % 2 == 0 ? 260.0 : 1800.0);
             const auto amplitude = step % 4 == 0 ? 0.85 : 0.38;
@@ -118,7 +119,7 @@ namespace
 
 TEST_CASE ("MIDI swing import fits KSH's grouping in beat space across tracks", "[swing-import]")
 {
-    const auto target = GENERATE (0, 1, 2);
+    const auto target = GENERATE (0, 1);
     const auto amount = GENERATE (0, 46, 73);
     const juce::TemporaryFile file (".MIDI");
     writeMidi (file.getFile(), amount, target);
@@ -135,11 +136,11 @@ TEST_CASE ("MIDI swing import fits KSH's grouping in beat space across tracks", 
 TEST_CASE ("WAV groove import finds tempo and swing from stereo hits after a lead-in", "[swing-import]")
 {
     const auto bpm = GENERATE (91.0, 137.5);
-    const auto target = GENERATE (0, 1, 2);
-    const auto amount = target == 2 ? 34 : 56;
+    const auto target = GENERATE (0, 1);
+    constexpr int amount = 56;
     CAPTURE (bpm, target);
     const juce::TemporaryFile file (".wave");
-    writeWave (file.getFile(), bpm, amount, target, 32);
+    writeWave (file.getFile(), bpm, amount, 1 << target, 32);
     REQUIRE (swingFileType (file.getFile()) == SwingFileType::wave);
     const auto result = analyseSwingFile (file.getFile(), SwingFileType::wave, 0.25, 120);
     CHECK (result.error.isEmpty());
@@ -153,7 +154,7 @@ TEST_CASE ("WAV groove import finds tempo and swing from stereo hits after a lea
 TEST_CASE ("WAV tempo stays tied to the file when the project grid is coarser", "[swing-import]")
 {
     const juce::TemporaryFile file (".wav");
-    writeWave (file.getFile(), 127, 60, 0, 16);
+    writeWave (file.getFile(), 127, 60, 1, 16);
     const auto result = analyseSwingFile (file.getFile(), SwingFileType::wave, 0.5, 120);
     REQUIRE (result.bpm.has_value());
     CHECK (*result.bpm == Catch::Approx (127).margin (1));
@@ -162,14 +163,18 @@ TEST_CASE ("WAV tempo stays tied to the file when the project grid is coarser", 
     CHECK (result.swing->amount == Catch::Approx (60).margin (6));
 }
 
-TEST_CASE ("Overlapping WAV attacks can leave swing ambiguous even with a reliable tempo", "[swing-import]")
+TEST_CASE ("A WAV with a former 4x groove retains detectable tempo and uses supported targets", "[swing-import]")
 {
     const juce::TemporaryFile file (".wav");
-    writeWave (file.getFile(), 137.5, 56, 2, 32);
+    writeWave (file.getFile(), 137.5, 56, 4, 32);
     const auto result = analyseSwingFile (file.getFile(), SwingFileType::wave, 0.25, 120);
     REQUIRE (result.bpm.has_value());
     CHECK (*result.bpm == Catch::Approx (137.5).margin (1));
-    CHECK_FALSE (result.swing.has_value());
+    if (result.swing)
+    {
+        CHECK (result.swing->target >= 0);
+        CHECK (result.swing->target <= 1);
+    }
 }
 
 TEST_CASE ("Quarter-note-only files do not provide swing evidence", "[swing-import]")
@@ -180,7 +185,7 @@ TEST_CASE ("Quarter-note-only files do not provide swing evidence", "[swing-impo
     CHECK_FALSE (midiResult.swing.has_value());
 
     const juce::TemporaryFile wave (".wav");
-    writeWave (wave.getFile(), 113, 0, 0, 32, 4);
+    writeWave (wave.getFile(), 113, 0, 1, 32, 4);
     const auto waveResult = analyseSwingFile (wave.getFile(), SwingFileType::wave, 0.25, 120);
     CHECK_FALSE (waveResult.swing.has_value());
     REQUIRE (waveResult.bpm.has_value());
@@ -190,7 +195,7 @@ TEST_CASE ("Quarter-note-only files do not provide swing evidence", "[swing-impo
 TEST_CASE ("WAV loop metadata gives a tempo for a clip with too few attacks", "[swing-import]")
 {
     const juce::TemporaryFile file (".wav");
-    writeWave (file.getFile(), 177.5, 0, 0, 16, 16, true);
+    writeWave (file.getFile(), 177.5, 0, 1, 16, 16, true);
     const auto result = analyseSwingFile (file.getFile(), SwingFileType::wave, 0.25, 120);
     REQUIRE (result.bpm.has_value());
     CHECK (*result.bpm == Catch::Approx (177.5));

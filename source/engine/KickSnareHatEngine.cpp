@@ -216,7 +216,7 @@ int KickSnareHatEngine::activeSettingsSource() const
 
 int KickSnareHatEngine::generatedBufferLength() const
 {
-    // The same buffer serves the normal grid and the Super Secret preview when generation is off.
+    // In static mode the generated cache can cover both the source grid and the saved generation length.
     return generationMode == GenerationMode::staticSource ? std::max (stepCount, generatedStepCount) : generatedStepCount;
 }
 
@@ -757,6 +757,26 @@ void KickSnareHatEngine::copySourcePattern (int source, int destination)
 
     recomposeGenerated();
     status ([&] { return "source_pattern_copy " + std::to_string (source + 1) + " " + std::to_string (destination + 1); });
+}
+
+void KickSnareHatEngine::replaceActivePattern (const SourcePattern& pattern, int steps, double bpm)
+{
+    const auto source = static_cast<size_t> (activeSettingsSource());
+    auto& settings = sourceSettings[source];
+    settings.stepCount = clampInt (steps, 1, Constants::maxSteps);
+    settings.rate = "16n";
+    for (int channel = 0; channel < channelCount; ++channel)
+    {
+        const auto row = static_cast<size_t> (channel);
+        sources[source][row] = pattern[row];
+        settings.loopRanges[row] = { 0, settings.stepCount };
+        settings.playbackModes[row] = PlaybackMode::normal;
+        sourceChannelMutes[source][row] = false;
+    }
+    generationMode = GenerationMode::staticSource;
+    setTempo (bpm);
+    applyActiveSourceSettings();
+    recomposeGenerated();
 }
 
 bool KickSnareHatEngine::isSourceEmpty (int sourceIndex) const

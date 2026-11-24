@@ -19,6 +19,11 @@ public:
         if (onCycleVisit)
             onCycleVisit (visit);
     }
+    void emitMidiInputNote (int note, int velocity, double timestampMs)
+    {
+        if (onMidiInputNote)
+            onMidiInputNote (note, velocity, timestampMs);
+    }
     void invalidate() { revision.fetch_add (1, std::memory_order_release); }
     void documentReplaced()
     {
@@ -29,6 +34,7 @@ public:
     uint64_t getDocumentEpoch() const { return documentEpoch.load (std::memory_order_acquire); }
     std::function<void (const ksh::NativeHit&)> onNoteHit;
     std::function<void (const ksh::NativeCycleVisit&)> onCycleVisit;
+    std::function<void (int note, int velocity, double timestampMs)> onMidiInputNote;
 
 private:
     std::atomic<uint64_t> revision { 1 }, documentEpoch { 1 };

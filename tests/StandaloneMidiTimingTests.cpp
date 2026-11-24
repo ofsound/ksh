@@ -252,7 +252,7 @@ TEST_CASE ("Standalone sync launches MIDI and the metronome in the same block", 
     clock.block = { nowNs + 50000000, 0.1, 100.0, 0, true, false, false };
     plugin.processBlock (audio, midi);
     REQUIRE (plugin.triggerRowFromUi (1, 91));
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    REQUIRE (plugin.takePatternRecordingEdits().cells.size() == 1);
     CHECK (plugin.engineStateSnapshot().sources[0][1][0].velocity == 91);
 
     clock.block = { nowNs + 55000000, 0.11, 100.0, 0, false, false, false };

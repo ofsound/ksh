@@ -7,6 +7,13 @@
 namespace ksh
 {
 
+[[nodiscard]] inline int gridSpanForBeats (double beats, double beatsPerStep)
+{
+    const double steps = beats / beatsPerStep;
+    const auto nearest = static_cast<int> (std::lround (steps));
+    return std::abs (steps - nearest) < 1.0e-9 ? nearest : 0;
+}
+
 [[nodiscard]] inline int clampSwingSubdivisionIndex (int subdivisionIndex)
 {
     return clampInt (subdivisionIndex, 0, Constants::swingSubdivisionCount - 1);
@@ -17,7 +24,7 @@ namespace ksh
     return Constants::swingSubdivisionValues[static_cast<size_t> (clampSwingSubdivisionIndex (subdivisionIndex))];
 }
 
-/** Swing delay in step units: 1x alternates steps, 2x alternates pairs, and 4x alternates four-step groups. */
+/** Swing delay in step units. The target alternates single steps or pairs. */
 [[nodiscard]] inline double swingDelayStepsForPosition (double stepPosition,
                                                         int swingPercent,
                                                         int subdivisionIndex)

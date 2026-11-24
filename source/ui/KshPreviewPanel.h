@@ -6,12 +6,12 @@ namespace ksh::ui
     class AccentWordmark : public juce::Component
     {
     public:
-        explicit AccentWordmark (bool showRandomizer = false, float artworkScale = 1.0f);
+        explicit AccentWordmark (float artworkScale = 1.0f);
         std::function<void (bool)> onAccentSelected;
         std::function<void (bool)> onThemeGesture;
         std::function<void (bool, std::optional<juce::Colour>)> onAccentColourEdited;
         std::function<void (Palette::BackgroundTone)> onBackgroundToneEdited;
-        std::function<void()> onToggleSuperSecret;
+        std::function<void (int)> onTextBrightnessEdited;
         void paint (juce::Graphics&) override;
         void resized() override;
         void setArtworkBounds (juce::Rectangle<float>);
@@ -51,7 +51,8 @@ namespace ksh::ui
         std::optional<Palette::BackgroundTone> startingTone;
         bool draggingBackdrop = false;
         AccentLogoButton orangeLogo { false }, blueLogo { true };
-        LogoButton randomizerLogo;
+        LogoButton textBrightnessLogo;
+        std::optional<int> startingTextBrightness;
     };
 
     class PreviewPanel : public juce::Component
@@ -59,11 +60,7 @@ namespace ksh::ui
     public:
         explicit PreviewPanel (EditorController&, bool randomSection = false);
         ~PreviewPanel() override;
-        std::function<void()> onToggleSuperSecret;
-        void setXYRandomizer (bool);
-        bool isXYRandomizer() const { return xyRandomizer; }
-        std::function<void()> onClose;
-        std::function<void()> onRhythm;
+        std::function<void (int)> onTextBrightnessEdited;
         std::function<void (bool)> onAccentSelected;
         std::function<void (bool)> onThemeGesture;
         std::function<void (bool, std::optional<juce::Colour>)> onAccentColourEdited;
@@ -78,9 +75,10 @@ namespace ksh::ui
         void resized() override;
         void setInspectorBounds (juce::Rectangle<int>);
         void setDesktopRandomizerSize (int width, int height, int rightInset);
-        void setCompact (bool, bool phone = false);
+        void setCompact (bool, bool usePhoneLayout = false, bool onPhone = false);
         void setDisplayedLayer (Layer);
         void cancelGesture();
+        void commitPendingCycleEdit() { cycle.commitPendingBeatClick(); }
         bool reverseRows = false;
 
     private:
@@ -92,34 +90,37 @@ namespace ksh::ui
             void mouseExit (const juce::MouseEvent& event) override { owner.mouseExit (event); }
             PreviewPanel& owner;
         };
-        AccentWordmark wordmark { true, 0.92f };
+        AccentWordmark wordmark { 0.92f };
         ChildHoverListener childHoverListener { *this };
         EditorController& controller;
         const bool randomSection;
         bool compact = false;
-        bool phoneGenerator = false;
-        bool xyRandomizer = false;
         int randomizerRightInset = 0;
         PatternXYPad xyPad { controller };
         std::array<juce::TextButton, generatorSeedCount> xySeeds;
         juce::Rectangle<int> inspectorBounds;
-        juce::TextButton close { "Back to Grid" }, mode, remove { juce::String::fromUTF8 ("×") };
-        juce::TextButton rhythm { "Triplets" };
-        ValueControl patternLength, refresh, velocity, probability, roll, nudge;
-        std::array<ValueControl, 8> locks;
+        juce::TextButton remove { juce::String::fromUTF8 ("×") };
+        ValueControl velocity, probability, nudge, span, roll;
         CycleEditor cycle;
+        std::optional<juce::Colour> rowAccent;
         std::vector<std::pair<Location, Cell>> valueStarts;
         std::optional<Layer> previousLayer;
         std::array<std::array<bool, Constants::maxSteps>, Constants::maxChannels> flashes {};
+        struct GridHit
+        {
+            uint8_t velocity = 0, roll = 1, span = 1;
+            std::array<uint8_t, Constants::maxRoll> splitVelocities {};
+            bool operator== (const GridHit&) const = default;
+        };
         // Everything paint() reads from the controller; sync() repaints only when it changes.
         struct Painted
         {
             size_t selectedCount = 0;
             int channelCount = 0, stepCount = 0, source = -1;
-            bool reverseRows = false;
+            bool reverseRows = false, drumColors = true;
             std::array<juce::Colour, 8> channelColours {};
             std::array<std::string, 8> labels {};
-            std::array<std::array<uint8_t, Constants::maxSteps>, Constants::maxChannels> velocities {};
+            std::array<std::array<GridHit, Constants::maxSteps>, Constants::maxChannels> hits {};
             bool operator== (const Painted&) const = default;
         };
         std::optional<Painted> painted;

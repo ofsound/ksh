@@ -27,7 +27,6 @@ namespace ksh::ui
         static constexpr int compactHeaderHeight = 34;
         static constexpr int compactInspectorHeight = 48;
         static constexpr int compactStepsPerPage = 16;
-        static constexpr int maxSquareGridSteps = 32;
         int channels = 8, steps = 16;
         bool standalone = false, randomVisible = false;
         bool compact = false;
@@ -36,7 +35,9 @@ namespace ksh::ui
         bool reverseRows = false;
         float compactWidth = 814.0f, compactHeight = 409.0f;
         int firstStep = 0;
-        bool phoneRowControls = false;
+        bool phoneRowControls = false, compactOnPhone = false;
+        int compactHeaderTopInset = 0;
+        bool settingsInHeader = false;
         int compactVisibleRows = 8, firstRow = 0;
         JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wfloat-equal")
         bool operator== (const Layout&) const = default;
@@ -44,7 +45,8 @@ namespace ksh::ui
         int visibleSteps() const { return compact ? juce::jmin (compactStepsPerPage, steps - firstStep) : steps; }
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
         float toolbarY() const { return compact ? 0.0f : static_cast<float> (headerHeight); }
-        float gridY() const { return compact ? static_cast<float> (compactHeaderHeight) : toolbarY() + 2 * toolbarPadding + toolbarCaptionSpace + touchTarget; }
+        int compactHeaderBottom() const { return compactHeaderHeight + compactHeaderTopInset; }
+        float gridY() const { return compact ? static_cast<float> (compactHeaderBottom()) : toolbarY() + 2 * toolbarPadding + toolbarCaptionSpace + touchTarget; }
         float cellWidth() const { return gridWidth() / static_cast<float> (compact ? compactStepsPerPage : juce::jmax (16, steps)); }
         float cellInsetX() const { return compact ? cellInsetY : fullCellInsetX; }
         juce::Rectangle<float> cellArtwork (juce::Rectangle<float> bounds) const
@@ -55,13 +57,7 @@ namespace ksh::ui
             const float stepFaceWidth = cellWidth() - 2.0f * cellInsetX();
             return face.reduced (stepFaceWidth * inset, face.getHeight() * inset);
         }
-        float cellHeight() const
-        {
-            if (compact)
-                return rowHeight() - 3.0f;
-            const auto squareHeight = gridWidth() / static_cast<float> (juce::jlimit (16, maxSquareGridSteps, steps));
-            return squareHeight - 2.0f * (fullCellInsetX - cellInsetY);
-        }
+        float cellHeight() const { return rowHeight() - (compact ? 3.0f : 0.0f); }
         float rowHeight() const
         {
             if (compact)
@@ -79,7 +75,7 @@ namespace ksh::ui
             return fullHeight - gridY() - previewHeight - footerHeight - static_cast<float> (Constants::maxChannels - channels) * rowHeight();
         }
         float previewY() const { return gridY() + gridHeight(); }
-        float height() const { return compact ? compactHeight : previewY() + previewHeight + footerHeight; }
+        float height() const { return compact ? compactHeight : previewY() + previewHeight + (settingsInHeader ? 0 : footerHeight); }
         int displayRow (int channel) const { return reverseRows ? channels - 1 - channel : channel; }
         int channelForRow (int row) const { return reverseRows ? channels - 1 - row : row; }
         bool channelVisible (int channel) const
@@ -95,8 +91,7 @@ namespace ksh::ui
         juce::Rectangle<float> cell (Location p) const
         {
             const float y = cellsY() + static_cast<float> (displayRow (p.channel) - (compact ? firstRow : 0)) * rowHeight();
-            const float inset = compact ? 0.0f : (rowHeight() - cellHeight()) * 0.5f;
-            return { gridLeft() + static_cast<float> (p.step - firstStep) * cellWidth(), y + inset, cellWidth(), cellHeight() };
+            return { gridLeft() + static_cast<float> (p.step - firstStep) * cellWidth(), y, cellWidth(), cellHeight() };
         }
         Location at (juce::Point<float> point) const
         {

@@ -27,7 +27,6 @@ struct Constants
     static constexpr int sourceCount = 16;
     static constexpr int maxRoll = 8;
 
-    static constexpr int swingSubdivisionCount = 3;
     static constexpr int defaultSwingSubdivisionIndex = 0;
 
     static constexpr int defaultMidiChannel = 1;
@@ -48,9 +47,8 @@ struct Constants
         "4n", "4nt", "8n", "8nt", "16n", "16nt", "32n", "32nt"
     };
 
-    static constexpr std::array<double, swingSubdivisionCount> swingSubdivisionValues {
-        1.0, 2.0, 4.0
-    };
+    static constexpr std::array swingSubdivisionValues { 1.0, 2.0 };
+    static constexpr int swingSubdivisionCount = static_cast<int> (swingSubdivisionValues.size());
 
     static constexpr std::string_view defaultRate = "16n";
     static constexpr std::string_view defaultGenerationMode = "static";

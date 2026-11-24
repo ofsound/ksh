@@ -6,6 +6,7 @@
 #include "platform/StandaloneSync.h"
 #include "RealtimeMailbox.h"
 #include "engine/KickSnareHatEngine.h"
+#include "engine/KshJam.h"
 #include "engine/KshMidiPlayback.h"
 #include "engine/KshPatternRecording.h"
 
@@ -110,7 +111,7 @@ public:
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
         When pattern recording is armed, also enqueues a cell write with captured timing. */
     [[nodiscard]] bool auditionRowFromUi (int channelZeroBased, int velocity = 100) { return queueRowAudition (channelZeroBased, velocity); }
-    [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100);
+    [[nodiscard]] bool triggerRowFromUi (int channelZeroBased, int velocity = 100, double timestampMs = 0.0);
 
     /** Latest playing step (1-based, 0 = stopped). Published by the audio thread. */
     int getCurrentStepForUi() const { return currentStepForUi.load (std::memory_order_relaxed); }
@@ -158,6 +159,11 @@ public:
         Producer calls are serialized off the audio thread. Playback still uses JUCE's collector. */
     void setTimestampedStandaloneMidiInput (bool active) { timestampedStandaloneMidiInput.store (active, std::memory_order_release); }
     void captureStandaloneMidiInput (const juce::MidiMessage&);
+    bool startJamCapture();
+    bool pollJamCapture();
+    void cancelJamCapture();
+    std::optional<ksh::JamTake> finishJamCapture (double endMs);
+    bool applyJamTake (const ksh::JamTake&, int source, uint64_t documentEpoch);
     /** Message-thread recording indicator, following the published host/standalone beat. */
     [[nodiscard]] float getRecordingPulseForUi() const;
 
@@ -215,6 +221,14 @@ private:
         uint64_t session = 0;
         int source = 0, strength = 100, offsetMs = 0, note = 0, velocity = 100;
     };
+    struct JamEvent
+    {
+        ksh::JamHit hit;
+        uint64_t session = 0;
+    };
+    void enqueueJamEvent (moodycamel::ReaderWriterQueue<JamEvent>&, JamEvent);
+    void drainJamEvents (uint64_t session);
+    void appendJamHit (ksh::JamHit, uint64_t session);
     struct RecordingMonitor
     {
         uint64_t session = 0;
@@ -244,6 +258,7 @@ private:
     void markDocumentModified();
     void notifyHostOfStateChangeIfDue();
     void applyPendingHostTempoLocked();
+    void flagMidiInputNoteForUi (int note, int velocity);
     /** Reads pattern selections and record hits; returns whether selection notes must be filtered. */
     bool consumeMidiInput (const juce::MidiBuffer& midiMessages,
                            const ksh::PlaybackSnapshot& snapshot,
@@ -262,7 +277,7 @@ private:
     [[nodiscard]] static bool enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
                                                          int source, int channel, int step, int velocity, uint64_t session, int nudge = 0);
     [[nodiscard]] bool recordPatternRowAtCurrentStep (int channel, int velocity);
-    [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity);
+    [[nodiscard]] bool queueRowAudition (int channelZeroBased, int velocity, double timestampMs = 0.0);
     [[nodiscard]] std::optional<ksh::PatternRecordingPosition> positionForUiTrigger (int source, int channel, double timestampMs = 0.0, uint64_t* generation = nullptr) const;
     void refreshAuditionCacheFromSnapshot (const ksh::PlaybackSnapshot& snapshot);
     void applyProjectMetadataFromState (const nlohmann::json& state);
@@ -284,6 +299,9 @@ private:
     // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
     moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
     moodycamel::ReaderWriterQueue<ksh::NativeCycleVisit> cycleVisitsForUi { 1024 };
+    // Audio and MIDI driver threads can both publish. Only the latest velocity per pitch is needed each UI frame.
+    std::array<std::atomic<int>, 128> midiInputNotesForUi {};
+    std::atomic<bool> midiInputNotesPending { false };
     moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
     // Each queue has exactly one producer; only the message thread drains them.
     moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingMidiPatternRecordEvents { 256 }; // audio -> message
@@ -338,6 +356,13 @@ private:
     std::atomic<bool> timestampedStandaloneMidiInput { false };
     std::mutex standaloneMidiProducerMutex; // MIDI driver producers only; never acquired by audio/UI
     moodycamel::ReaderWriterQueue<StandaloneRecordInput> standaloneRecordInput { 512 };
+    // Separate producers keep driver callbacks and the audio thread independent.
+    moodycamel::ReaderWriterQueue<JamEvent> jamDriverEvents { ksh::JamTake::maxHits };
+    moodycamel::ReaderWriterQueue<JamEvent> jamAudioEvents { ksh::JamTake::maxHits };
+    std::atomic<uint64_t> jamSession { 0 }, jamOverflowSession { 0 };
+    uint64_t nextJamSession = 0; // message thread
+    double jamArmedMs = 0.0;
+    std::vector<ksh::JamHit> jamHits;
     moodycamel::ReaderWriterQueue<RecordingMonitor> midiRecordingMonitors { 512 }; // audio -> audio
     moodycamel::ReaderWriterQueue<RecordingMonitor> uiRecordingMonitors { 256 }; // message -> audio
     // Engine-lock-serialized producers -> message consumer, independent of the audio snapshot mailbox.

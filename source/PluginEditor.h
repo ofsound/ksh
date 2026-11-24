@@ -10,7 +10,7 @@
 #endif
 
 //==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor, private juce::Timer, public juce::FileDragAndDropTarget
+class PluginEditor : public juce::AudioProcessorEditor, private juce::Timer, private juce::ChangeListener, public juce::FileDragAndDropTarget
 {
 public:
     explicit PluginEditor (PluginProcessor&, bool fitStandaloneToViewport =
@@ -60,6 +60,7 @@ private:
     int titleBarHeightBeforeZen = 0;
     bool nativeTitleBarBeforeZen = false;
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void finishZenExit();
 
     void confirmDiscardingChanges (std::function<void()> proceed);
@@ -72,6 +73,8 @@ private:
         const juce::String& errorMessage = {}) const;
 
     std::unique_ptr<ksh::ui::NativeEditor> nativeView;
+    bool usesHostedTabletViewport() const;
+    void layoutNativeView (juce::Rectangle<float>, bool onPhone);
     void updateNativeSize();
     std::unique_ptr<juce::FileChooser> projectFileChooser;
 

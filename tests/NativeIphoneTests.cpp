@@ -122,6 +122,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     REQUIRE (fader != nullptr);
     CHECK (fader->isVisible());
     CHECK (fader->getWidth() < editor.getWidth() / 2);
+    CHECK (fader->getSliderSnapsToMousePosition());
     fader->setValue (168, juce::sendNotificationSync);
     CHECK (processor.getStandaloneTempoBpm() == 168.0);
     phoneButton (editor, "Increase tempo by 1 BPM").onClick();
@@ -155,6 +156,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
         capturePhone (editor, "iphone-panel-" + juce::String (tab).toLowerCase());
     }
     auto& backdrop = phoneButton (editor, "Background tone");
+    CHECK (phoneButton (editor, "Text brightness").isVisible());
     const juce::Point<int> motifCentre { editor.getWidth() * 3 / 4, editor.getHeight() / 2 };
     CHECK (backdrop.getScreenBounds().contains (editor.localPointToGlobal (motifCentre)));
     phoneButton (editor, "Close menu").onClick();
@@ -195,6 +197,12 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     }
     CHECK (padBounds.back().getRight() == bank->getWidth() - 12);
     capturePhone (editor, "iphone-pattern-bank");
+    phoneButton (editor, "Muted Pattern").onClick();
+    CHECK (editor.controller.source() == -1);
+    CHECK (grid.isVisible());
+    CHECK (patternBank.getButtonText() == "M");
+    CHECK (patternBank.getBounds() == patternBankBounds);
+    patternBank.onClick();
     phoneButton (editor, "Choose pattern 16").onClick();
     CHECK (phoneButton (editor, "Pattern bank").getButtonText() == "16");
     phoneButton (editor, "Pattern bank").onClick();
@@ -240,14 +248,331 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (grid.layout.gridLeft() == Catch::Approx (Layout {}.gridLeft()));
 }
 
-TEST_CASE ("iPhone Chance keeps cycle editing in the inspector", "[native-ui][iphone]")
+TEST_CASE ("iPhone Jam opens the pads and exposes a larger target to finish the take", "[native-ui][iphone][jam]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 390);
+    editor.setSize (814, 390);
+    auto& generate = phoneButton (editor, "Generate");
+    auto& jam = phoneButton (editor, "Jam");
+    auto& pads = phoneButton (editor, "Show pads");
+    const auto waitPulse = [&jam] { return static_cast<float> (jam.getProperties()["jamWaitPulse"]); };
+    CHECK (jam.isVisible());
+    CHECK (jam.getButtonText().isEmpty());
+    CHECK (jam.getX() > generate.getRight());
+    CHECK (pads.getX() > jam.getRight());
+    processor.setStandaloneTransportPlaying (true);
+    jam.onClick();
+    CHECK (jam.getTitle() == "Jam waiting for first hit");
+    const float initialPulse = waitPulse();
+    CHECK (initialPulse > 0.0f);
+    juce::Thread::sleep (120);
+    editor.sync();
+    CHECK (waitPulse() > 0.0f);
+    CHECK (std::abs (waitPulse() - initialPulse) > 0.01f);
+    CHECK (pads.getToggleState());
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    jam.onClick();
+    CHECK (jam.getTitle() == "Jam");
+    CHECK (waitPulse() == Catch::Approx (0.0f));
+    CHECK_FALSE (pads.getToggleState());
+    CHECK_FALSE (editor.controller.canUndo());
+
+    jam.onClick();
+    CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK (jam.getTitle() == "Jam");
+    CHECK_FALSE (pads.getToggleState());
+    CHECK_FALSE (editor.controller.canUndo());
+
+    pads.setToggleState (true, juce::sendNotificationSync);
+    auto& velocity = phoneButton (editor, "Pad velocity mode");
+    auto* strip = velocity.getParentComponent();
+    const auto& controls = strip->getChildren();
+    const auto finishControl = std::find_if (controls.begin(), controls.end(), [] (auto* child) { return child->getTitle() == "Finish Jam"; });
+    REQUIRE (finishControl != controls.end());
+    auto* finish = dynamic_cast<RowTriggerButton*> (*finishControl);
+    REQUIRE (finish != nullptr);
+    const auto performanceBounds = [&]
+    {
+        std::array<juce::Rectangle<int>, 9> bounds;
+        for (int ch = 0; ch < 8; ++ch)
+        {
+            const auto& pad = phoneButton (editor, "Trigger channel " + juce::String (ch + 1));
+            bounds[static_cast<size_t> (ch)] = editor.getLocalArea (&pad, pad.getLocalBounds());
+        }
+        bounds.back() = editor.getLocalArea (&velocity, velocity.getLocalBounds());
+        return bounds;
+    };
+    const auto idleBounds = performanceBounds();
+    CHECK_FALSE (finish->isVisible());
+    jam.onClick();
+    CHECK_FALSE (finish->isVisible());
+    CHECK (performanceBounds() == idleBounds);
+    const auto& upperPad = phoneButton (editor, "Trigger channel 8");
+    const auto& lowerPad = phoneButton (editor, "Trigger channel 4");
+    REQUIRE (editor.keyPressed (juce::KeyPress ('a', {}, 'a')));
+    editor.sync();
+    REQUIRE (finish->isVisible());
+    CHECK (waitPulse() == Catch::Approx (0.0f));
+    CHECK (jam.getTitle() == "Jam recording");
+    CHECK (performanceBounds() == idleBounds);
+    CHECK (velocity.getY() == upperPad.getY());
+    CHECK (velocity.getHeight() == upperPad.getHeight());
+    CHECK (finish->getY() == lowerPad.getY());
+    CHECK (finish->getHeight() == lowerPad.getHeight());
+    CHECK (finish->getX() == velocity.getX());
+    CHECK (finish->getWidth() == velocity.getWidth());
+    CHECK (velocity.getWidth() > 56);
+    const auto artworkWidth = [] (juce::TextButton& button)
+    {
+        const auto image = button.createComponentSnapshot (button.getLocalBounds());
+        int width = 0;
+        for (int x = 0; x < image.getWidth(); ++x)
+            if (image.getPixelAt (x, image.getHeight() / 2).getAlpha() > 128)
+                ++width;
+        return width;
+    };
+    const int velocityWidth = artworkWidth (velocity), stopWidth = artworkWidth (*finish);
+    CHECK (velocityWidth <= stopWidth);
+    CHECK (velocityWidth >= stopWidth - 2);
+    for (auto* button : std::array<juce::TextButton*, 2> { &velocity, finish })
+    {
+        CHECK (button->getX() > upperPad.getRight());
+        CHECK (strip->getLocalBounds().contains (button->getBounds()));
+        CHECK (strip->getComponentAt (button->getBounds().reduced (1).getTopLeft()) == button);
+        CHECK (strip->getComponentAt (button->getBounds().getBottomRight().translated (-2, -2)) == button);
+    }
+    CHECK (jam.isVisible());
+    capturePhone (editor, "iphone-jam-stop-pad");
+    juce::Thread::sleep (850);
+    finish->onClick();
+    CHECK_FALSE (finish->isVisible());
+    CHECK (performanceBounds() == idleBounds);
+    CHECK (processor.isStandaloneTransportPlaying());
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+}
+
+TEST_CASE ("Jam, Pads and Arm Record settle on the Jam stop press", "[native-ui][jam][render]")
+{
+    const bool compact = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    if (compact)
+        editor.setCompactViewport (true, 814, 390);
+    editor.setSize (compact ? 814 : Layout::fullWidth, compact ? 390 : Layout::fullHeight);
+    editor.sync();
+
+    auto& jam = phoneButton (editor, "Jam");
+    auto& pads = phoneButton (editor, "Show pads");
+    auto& record = phoneButton (editor, "Arm Record");
+    jam.onClick();
+    REQUIRE (jam.getToggleState());
+    REQUIRE (pads.getToggleState());
+    REQUIRE_FALSE (record.isEnabled());
+    auto* strip = phoneButton (editor, "Pad velocity mode").getParentComponent();
+
+    juce::Component& jamTarget = jam;
+    const auto point = jam.getLocalBounds().toFloat().getCentre();
+    jamTarget.mouseDown (phoneEvent (jam, point, point));
+    REQUIRE (jam.isDown());
+    CHECK_FALSE (jam.getToggleState());
+    CHECK_FALSE (pads.getToggleState());
+    CHECK_FALSE (strip->isVisible());
+    CHECK (record.isEnabled());
+    CHECK_FALSE (record.getToggleState());
+    const auto held = jam.createComponentSnapshot (jam.getLocalBounds());
+
+    jamTarget.mouseUp (phoneEvent (jam, point, point, 0));
+    jam.setState (juce::Button::buttonOver); // Compare with the pointer still over the button.
+    const auto released = jam.createComponentSnapshot (jam.getLocalBounds());
+    bool unchanged = true;
+    for (int y = 0; y < held.getHeight() && unchanged; ++y)
+        for (int x = 0; x < held.getWidth() && unchanged; ++x)
+            unchanged = held.getPixelAt (x, y) == released.getPixelAt (x, y);
+    CHECK (unchanged);
+}
+
+TEST_CASE ("The desktop and iPad footer pad finishes Jam on press", "[native-ui][jam]")
+{
+    const bool touch = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    processor.showStandaloneMidiOutputMenu = [] (juce::Component&) {};
+    processor.showStandaloneLinkSettings = [] (juce::Component&) {};
+    NativeEditor editor (processor);
+    editor.layout.touchRows = touch;
+    editor.setSize (Layout::fullWidth, Layout::fullHeight);
+    editor.sync();
+
+    juce::Component* help = nullptr;
+    RowTriggerButton* finish = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (child->getTitle() == "Control help")
+            help = child;
+        if (child->getTitle() == "Finish Jam")
+            finish = dynamic_cast<RowTriggerButton*> (child);
+    }
+    REQUIRE (help != nullptr);
+    REQUIRE (finish != nullptr);
+    const auto footer = help->getBounds();
+    const auto& settings = phoneButton (editor, "Settings");
+    CHECK (finish->getButtonText() == "STOP");
+    CHECK (help->isVisible());
+    CHECK_FALSE (finish->isVisible());
+    auto& jam = phoneButton (editor, "Jam");
+    jam.onClick();
+    CHECK_FALSE (finish->isVisible());
+    CHECK (static_cast<float> (jam.getProperties()["jamWaitPulse"]) > 0.0f);
+    REQUIRE (editor.keyPressed (juce::KeyPress ('a', {}, 'a')));
+    editor.sync();
+    REQUIRE (finish->isVisible());
+    CHECK (static_cast<float> (jam.getProperties()["jamWaitPulse"]) == Catch::Approx (0.0f));
+    CHECK_FALSE (help->isVisible());
+    CHECK (finish->getBounds() == footer);
+    CHECK (finish->getRight() < settings.getX());
+    CHECK (phoneButton (editor, "Ableton Link settings").isVisible());
+    CHECK (phoneButton (editor, "MIDI Out").isVisible());
+    capturePhone (editor, touch ? "ipad-jam-footer" : "desktop-jam-footer");
+    juce::Thread::sleep (850);
+
+    const auto point = finish->getLocalBounds().toFloat().getCentre();
+    finish->mouseDown (phoneEvent (*finish, point, point));
+    CHECK_FALSE (finish->isVisible());
+    CHECK (help->isVisible());
+    CHECK (processor.isStandaloneTransportPlaying());
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+}
+
+TEST_CASE ("Jam shortcuts finish capture and stop loop playback", "[native-ui][jam]")
+{
+    using juce::KeyPress;
+    const auto [finishKey, stopKey] = GENERATE (std::pair (KeyPress::spaceKey, KeyPress::escapeKey),
+                                              std::pair (KeyPress::returnKey, KeyPress::spaceKey),
+                                              std::pair (KeyPress::escapeKey, KeyPress::stopKey),
+                                              std::pair (KeyPress::stopKey, KeyPress::escapeKey));
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    auto& jam = phoneButton (editor, "Jam");
+    auto& pads = phoneButton (editor, "Show pads");
+    jam.onClick();
+    REQUIRE (editor.keyPressed (juce::KeyPress ('a', {}, 'a')));
+    editor.sync();
+    REQUIRE (jam.getTitle() == "Jam recording");
+    juce::Thread::sleep (850); // A one-bar take at the maximum tempo needs at least 800 ms.
+
+    REQUIRE (editor.keyPressed (KeyPress (finishKey)));
+    CHECK (jam.getTitle() == "Jam");
+    CHECK_FALSE (pads.getToggleState());
+    CHECK (processor.isStandaloneTransportPlaying());
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+    REQUIRE (editor.keyPressed (KeyPress (stopKey)));
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+    REQUIRE (editor.controller.canUndo());
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+}
+
+TEST_CASE ("Jam shortcuts take precedence over focused controls", "[native-ui][jam]")
+{
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr)
+        SKIP ("Keyboard focus requires a display.");
+
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.setSize (814, 390);
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    editor.setVisible (true);
+    auto& jam = phoneButton (editor, "Jam");
+    juce::TextEditor field;
+    editor.addAndMakeVisible (field);
+    field.setBounds (20, 20, 120, 30);
+    bool submitted = false;
+    bool escaped = false;
+    field.onReturnKey = [&] { submitted = true; };
+    field.onEscapeKey = [&] { escaped = true; };
+
+    jam.onClick();
+    REQUIRE (editor.keyPressed (juce::KeyPress ('a', {}, 'a')));
+    field.grabKeyboardFocus();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (850);
+    REQUIRE (field.hasKeyboardFocus (false));
+    CHECK (field.isReadOnly());
+    REQUIRE (editor.getPeer()->handleKeyPress (juce::KeyPress (juce::KeyPress::returnKey)));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+    CHECK (jam.getTitle() == "Jam");
+    CHECK_FALSE (submitted);
+    CHECK_FALSE (field.isReadOnly());
+    REQUIRE (processor.isStandaloneTransportPlaying());
+    REQUIRE (editor.getPeer()->handleKeyPress (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK_FALSE (processor.isStandaloneTransportPlaying());
+    CHECK_FALSE (escaped);
+}
+
+TEST_CASE ("iPad standalone opens a touch tempo fader with one-BPM steppers", "[native-ui][tempo][touch]")
+{
+    const bool compact = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    if (compact)
+        editor.setCompactViewport (true, 1024, 480, false);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+
+    auto& button = phoneButton (editor, "Set tempo");
+    CHECK (button.getButtonText() == "120 BPM");
+    button.onClick();
+    auto& plus = phoneButton (editor, "Increase tempo by 1 BPM");
+    auto& minus = phoneButton (editor, "Decrease tempo by 1 BPM");
+    auto* popup = plus.getParentComponent();
+    REQUIRE (popup != nullptr);
+    CHECK (popup->isVisible());
+    CHECK (plus.getWidth() >= 44);
+    CHECK (plus.getWidth() == plus.getHeight());
+    CHECK (minus.getWidth() == plus.getWidth());
+    CHECK (minus.getHeight() == plus.getHeight());
+    juce::Slider* fader = nullptr;
+    for (auto* child : popup->getChildren())
+        if (child->getTitle() == "Tempo BPM fader")
+            fader = dynamic_cast<juce::Slider*> (child);
+    REQUIRE (fader != nullptr);
+    CHECK (fader->getSliderSnapsToMousePosition());
+    fader->setValue (299, juce::sendNotificationSync);
+    plus.onClick();
+    CHECK (processor.getStandaloneTempoBpm() == 300.0);
+    CHECK_FALSE (plus.isEnabled());
+    minus.onClick();
+    CHECK (processor.getStandaloneTempoBpm() == 299.0);
+    CHECK (plus.isEnabled());
+    CHECK (popup->isVisible());
+    popup->mouseDown (phoneEvent (*popup, { 0, 0 }, { 0, 0 }));
+    CHECK_FALSE (popup->isVisible());
+    CHECK (button.getButtonText() == "299 BPM");
+}
+
+TEST_CASE ("iPhone Prob keeps cycle editing in the inspector", "[native-ui][iphone]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 90, 50, 4, 5, 1 }));
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 390);
     editor.setSize (814, 390);
-    auto& chance = phoneButton (editor, "Chance editing layer");
+    auto& chance = phoneButton (editor, "Prob editing layer");
+    CHECK (chance.getButtonText() == "Prob");
     chance.onClick();
     CHECK (chance.getProperties()["shortcutHint"].toString().isEmpty());
     CHECK (phoneButton (editor, "Select modifier").getProperties()["shortcutHint"].toString().isEmpty());
@@ -258,74 +583,168 @@ TEST_CASE ("iPhone Chance keeps cycle editing in the inspector", "[native-ui][ip
     grid.mouseUp (phoneEvent (grid, point, point, 0));
     grid.mouseDown (phoneEvent (grid, point, point));
     grid.mouseUp (phoneEvent (grid, point, point, 0));
+    CHECK (editor.controller.selection() == std::vector<Location> { { 0, 2 } });
+    CHECK_FALSE (editor.controller.canUndo());
+    CHECK_FALSE (grid.hasActiveGesture());
+    bool inspectorEnabled = false;
+    for (auto* child : editor.getChildren())
+        if (auto* inspector = dynamic_cast<PreviewPanel*> (child); inspector != nullptr && inspector->isVisible())
+            for (auto* control : inspector->getChildren())
+                if (auto* cycle = dynamic_cast<CycleEditor*> (control); cycle != nullptr && cycle->isVisible())
+                    inspectorEnabled = cycle->isEnabled();
+    CHECK (inspectorEnabled);
     for (auto* child : grid.getChildren())
-        if (child->getTitle() == "Step presets" || child->getTitle() == "Step cycle editor")
+        if (child->getTitle() == "Step presets")
             CHECK_FALSE (child->isVisible());
 }
 
-TEST_CASE ("iPhone applies triplets from the selected step inspector across step pages", "[native-ui][iphone][triplets]")
+TEST_CASE ("iPhone reaches triplet presets by holding a step across page boundaries", "[native-ui][iphone][triplets]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
     REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 32, 1 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 15, 1, 90 }));
     NativeEditor editor (processor);
+    editor.layout.touchRows = true;
     editor.setCompactViewport (true, 814, 390);
     editor.setSize (814, 390);
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, juce::Time::getCurrentTime().toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+    const auto pointer = *source;
     auto& grid = phoneGrid (editor);
     const Location step { 0, 14 };
-    auto& rhythm = phoneButton (editor, "Step rhythm and triplets");
-    CHECK_FALSE (rhythm.isEnabled());
-    const auto select = [&] (Location location)
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    const auto hold = [&] (Location location)
     {
-        editor.controller.selectLatched = true;
         const auto point = grid.layout.cell (location).getCentre();
-        grid.mouseDown (phoneEvent (grid, point, point));
-        grid.mouseUp (phoneEvent (grid, point, point, 0));
+        const auto start = juce::Time::getCurrentTime();
+        const auto event = [&] (int modifiers)
+        {
+            return juce::MouseEvent (pointer, point, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                     juce::Time::getCurrentTime(), point, start, 1, false);
+        };
+        grid.mouseDown (event (pressed));
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2500.0;
+        while (grid.openPresetMenu() == nullptr && juce::Time::getMillisecondCounterHiRes() < deadline)
+        {
+            juce::Thread::sleep (10);
+            juce::Timer::callPendingTimersSynchronously();
+        }
+        REQUIRE (grid.openPresetMenu() != nullptr);
+        grid.mouseUp (event (0));
     };
-    select (step);
-    REQUIRE (rhythm.isEnabled());
-    rhythm.onClick();
+    hold (step);
     REQUIRE (phoneButton (editor, "Quarter triplet").isEnabled());
     editor.sync();
     REQUIRE (phoneButton (editor, "Quarter triplet").isEnabled());
     phoneButton (editor, "Quarter triplet").onClick();
-    CHECK (grid.openPresetMenu() == nullptr);
+    CHECK (grid.openPresetMenu() != nullptr);
     REQUIRE (editor.controller.cell (step).span == 8);
     CHECK (editor.controller.cell (step).roll == 3);
     phoneButton (editor, "Switch step page").onClick();
     REQUIRE (grid.layout.firstStep == 16);
     editor.controller.selected.reset();
     editor.sync();
-    select ({ 0, 17 });
-    CHECK (editor.controller.selected.test (static_cast<size_t> (step.key())));
-    REQUIRE (rhythm.isEnabled());
-    rhythm.onClick();
+    hold ({ 0, 17 });
     CHECK (phoneButton (editor, "Quarter triplet").getToggleState());
     CHECK (phoneButton (editor, "Quarter triplet").getHeight() == 42);
     REQUIRE (grid.openPresetMenu() != nullptr);
+    capturePhone (editor, "iphone-step-presets");
+    CHECK (grid.openPresetMenu()->getNumChildComponents() == 6);
+    editor.controller.selected.set (static_cast<size_t> (step.key()));
+    editor.sync();
     ValueControl* span = nullptr;
-    for (auto* child : grid.openPresetMenu()->getChildren())
-        if (child->getTitle() == "Step span")
-            span = dynamic_cast<ValueControl*> (child);
+    for (auto* child : editor.getChildren())
+        if (auto* preview = dynamic_cast<PreviewPanel*> (child))
+            for (auto* control : preview->getChildren())
+                if (control->getTitle() == "Selected span")
+                    span = dynamic_cast<ValueControl*> (control);
     REQUIRE (span != nullptr);
+    CHECK_FALSE (grid.handleCellPopupMouseDown (span));
+    CHECK (grid.openPresetMenu() == nullptr);
     CHECK (span->value == 8);
-    const auto origin = span->getLocalBounds().getCentre().toFloat();
+    const auto origin = span->valueFaceBounds().getCentre();
     span->mouseDown (phoneEvent (*span, origin, origin));
     span->mouseUp (phoneEvent (*span, origin, origin, 0));
-    REQUIRE (grid.openPresetMenu() != nullptr);
+    CHECK (editor.controller.cell (step).span == 8);
 
-    const auto target = origin.translated (0.0f, 8.0f);
+    const auto target = origin.translated (-24.0f, 0.0f);
     span->mouseDown (phoneEvent (*span, origin, origin));
     span->mouseDrag (phoneEvent (*span, target, origin));
     CHECK (span->value == 7);
-    CHECK (editor.controller.cell (step).span == 8);
+    CHECK (editor.controller.cell (step).span == 7);
     span->mouseUp (phoneEvent (*span, target, origin, 0));
-    CHECK (grid.openPresetMenu() == nullptr);
     CHECK (editor.controller.cell (step).span == 7);
     CHECK (editor.controller.cell (step).roll == 3);
     editor.controller.undo();
     CHECK (editor.controller.cell (step).span == 8);
+}
+
+TEST_CASE ("Touch on an empty step draws immediately and a swipe paints across the next step", "[native-ui][touch]")
+{
+    const int viewport = GENERATE (0, 1, 2);
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    if (viewport != 0)
+        editor.setCompactViewport (true, 814, 390, viewport == 2);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto pointer = std::find_if (sources.begin(), sources.end(), [] (const auto& source) { return source.isPen(); });
+    REQUIRE (pointer != sources.end());
+
+    auto& grid = phoneGrid (editor);
+    const Location first { 0, 3 }, second { 0, 4 };
+    const auto cell = grid.layout.cell (first);
+    const auto centre = cell.getCentre();
+    const auto event = [&] (juce::Point<float> position, juce::Point<float> origin, int modifiers)
+    {
+        return juce::MouseEvent (*pointer, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                 juce::Time::getCurrentTime(), origin, time, 1, position != origin);
+    };
+    const auto pixel = [&]
+    {
+        return grid.createComponentSnapshot ({ juce::roundToInt (centre.x), juce::roundToInt (centre.y), 1, 1 }).getPixelAt (0, 0);
+    };
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    const auto empty = pixel();
+    grid.mouseDown (event (centre, centre, pressed));
+    const auto preview = pixel();
+    CHECK (preview != empty);
+    CHECK_FALSE (editor.controller.cell (first).enabled);
+    grid.cancelGesture();
+    CHECK (pixel() == empty);
+    grid.mouseUp (event (centre, centre, 0));
+    CHECK_FALSE (editor.controller.cell (first).enabled);
+
+    grid.mouseDown (event (centre, centre, pressed));
+    grid.mouseUp (event (centre, centre, 0));
+    CHECK (editor.controller.cell (first).enabled);
+    CHECK (pixel() == preview);
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell (first).enabled);
+
+    const juce::Point<float> origin { cell.getRight() - 3.0f, centre.y };
+    const auto next = origin.translated (6.0f, 0.0f);
+    grid.mouseDown (event (origin, origin, pressed));
+    grid.mouseDrag (event (next, origin, pressed));
+    CHECK (editor.controller.cell (first).enabled);
+    CHECK (editor.controller.cell (second).enabled);
+    grid.mouseUp (event (next, origin, 0));
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.cell (first).enabled);
+    CHECK_FALSE (editor.controller.cell (second).enabled);
 }
 
 TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases onto a preset", "[native-ui][step-presets][touch]")
@@ -333,9 +752,11 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
     const bool phone = GENERATE (false, true);
     PluginProcessor processor;
     NativeEditor editor (processor);
+    editor.layout.touchRows = true;
     if (phone)
         editor.setCompactViewport (true, 814, 390);
     editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
     editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
     auto* peer = editor.getPeer();
     REQUIRE (peer != nullptr);
@@ -366,6 +787,8 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
         juce::Timer::callPendingTimersSynchronously();
     }
     REQUIRE (grid.openPresetMenu() != nullptr);
+    if (phone)
+        CHECK (juce::Time::getCurrentTime() - time >= juce::RelativeTime::milliseconds (1500));
     CHECK_FALSE (editor.controller.cell (cell).enabled);
     auto& preset = phoneButton (editor, "8th triplet");
     const auto target = grid.getLocalPoint (&preset, preset.getLocalBounds().getCentre().toFloat());
@@ -373,12 +796,138 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
     CHECK (grid.openPresetMenu() != nullptr);
     CHECK_FALSE (editor.controller.cell (cell).enabled);
     grid.mouseUp (event (target, 0));
-    CHECK (grid.openPresetMenu() == nullptr);
+    auto* menu = grid.openPresetMenu();
+    REQUIRE (menu != nullptr);
     CHECK (editor.controller.cell (cell).enabled);
     CHECK (editor.controller.cell (cell).span == 4);
     CHECK (editor.controller.cell (cell).roll == 3);
+    CHECK (preset.getToggleState());
+    menu->mouseExit (phoneEvent (*menu, { -5, 0 }, {}, 0));
+    CHECK (grid.openPresetMenu() == menu);
+    const Location outside { 0, 12 };
+    const auto outsidePoint = grid.cellBounds (outside).getCentre();
+    grid.mouseDown (event (outsidePoint, pressed));
+    CHECK (grid.openPresetMenu() == nullptr);
+    grid.mouseUp (event (outsidePoint, 0));
+    CHECK_FALSE (editor.controller.cell (outside).enabled);
     editor.controller.undo();
     CHECK_FALSE (editor.controller.cell (cell).enabled);
+}
+
+TEST_CASE ("iPad can scrub velocity and open a roll near the last step's handle", "[native-ui][touch][step-presets]")
+{
+    const int steps = GENERATE (16, 64);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, steps, 1, 90 }));
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+
+    auto& grid = phoneGrid (editor);
+    const Location step { 0, steps - 1 };
+    const auto cell = grid.cellBounds (step);
+    const auto origin = cell.getCentre().withX (cell.getRight() - juce::jmin (17.0f, cell.getWidth() * 0.34f));
+    const auto event = [&] (juce::Point<float> position, int modifiers)
+    {
+        return juce::MouseEvent (*source, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                 juce::Time::getCurrentTime(), origin, time, 1, position != origin);
+    };
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    auto& controller = editor.controller;
+    grid.mouseDown (event (origin, pressed));
+    CHECK_FALSE (controller.editing());
+    const auto raised = origin.translated (0, -25.0f);
+    grid.mouseDrag (event (raised, pressed));
+    grid.mouseUp (event (raised, 0));
+    CHECK (controller.cell (step).velocity > 90);
+    CHECK (controller.loop (0).loopLength == steps);
+
+    grid.mouseDown (event (origin, pressed));
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    while (grid.openPresetMenu() == nullptr && juce::Time::getMillisecondCounterHiRes() < deadline)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    REQUIRE (grid.openPresetMenu() != nullptr);
+    auto& roll = phoneButton (editor, "3-hit roll");
+    const auto target = grid.getLocalPoint (&roll, roll.getLocalBounds().getCentre().toFloat());
+    grid.mouseDrag (event (target, pressed));
+    grid.mouseUp (event (target, 0));
+    CHECK (controller.cell (step).roll == 3);
+    CHECK (controller.loop (0).loopLength == steps);
+}
+
+TEST_CASE ("iPad velocity anchor hold pulses outside the touch point and stays armed", "[native-ui][touch][velocity-draw]")
+{
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 7, 1, 90 }));
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+
+    // A pen source exercises the touch gesture path on macOS.
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+
+    auto& grid = phoneGrid (editor);
+    const auto cell = grid.cellBounds ({ 0, 3 });
+    const auto origin = juce::Point<float> { cell.getX(), cell.getCentreY() };
+    const auto event = [&] (juce::Point<float> position, int modifiers)
+    {
+        return juce::MouseEvent (*source, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                 juce::Time::getCurrentTime(), origin, time, 1, position != origin);
+    };
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    const auto beganAt = juce::Time::getMillisecondCounterHiRes();
+    grid.mouseDown (event (origin, pressed));
+    CHECK_FALSE (editor.controller.editing());
+    const auto area = juce::Rectangle<int> (120, 120).withCentre (origin.roundToInt());
+    const auto before = grid.createComponentSnapshot (area);
+    while (!editor.controller.editing() && juce::Time::getMillisecondCounterHiRes() < beganAt + 2000.0)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    REQUIRE (editor.controller.editing());
+    juce::Thread::sleep (280);
+    const auto ripple = grid.createComponentSnapshot (area);
+    bool rippleOutsideTouch = false;
+    for (int x = 60 + 30; x < 60 + 55; ++x)
+        rippleOutsideTouch |= ripple.getPixelAt (x, 60) != before.getPixelAt (x, 60);
+    CHECK (rippleOutsideTouch);
+
+    // The rhythm-menu timeout should no longer compete with the armed drag.
+    while (juce::Time::getMillisecondCounterHiRes() < beganAt + 1450.0)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    CHECK (grid.openPresetMenu() == nullptr);
+    REQUIRE (editor.controller.editing());
+    const auto destination = grid.cellBounds ({ 0, 7 }).getTopLeft().translated (0, 2);
+    grid.mouseDrag (event (destination, pressed));
+    grid.mouseUp (event (destination, 0));
+    CHECK (editor.controller.cell ({ 0, 3 }).velocity == 64);
 }
 
 TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gesture", "[native-ui][iphone]")
@@ -466,22 +1015,41 @@ TEST_CASE ("Grid arrow keys reveal pages and rows and Return toggles the focused
     CHECK (editor.controller.cell ({ 4, 15 }).enabled);
 }
 
-TEST_CASE ("iPhone inspector relative edits undo and cancel without leaking into the next gesture", "[native-ui][iphone]")
+TEST_CASE ("iPhone inspector value edits respect drag speed, undo, and viewport changes", "[native-ui][iphone]")
 {
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 80, 100, 1, 1, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 80, 75, 1, 1, 1 }));
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 409);
     editor.setSize (814, 409);
     editor.controller.selected.set (0);
     editor.sync();
     ValueControl* velocity = nullptr;
+    ValueControl* probability = nullptr;
+    ValueControl* nudge = nullptr;
+    ValueControl* span = nullptr;
+    ValueControl* split = nullptr;
     for (auto* child : editor.getChildren())
         if (auto* preview = dynamic_cast<PreviewPanel*> (child))
             for (auto* control : preview->getChildren())
+            {
                 if (control->getTitle() == "Selected velocity offset")
                     velocity = dynamic_cast<ValueControl*> (control);
+                else if (control->getTitle() == "Selected probability offset")
+                    probability = dynamic_cast<ValueControl*> (control);
+                else if (control->getTitle() == "Selected timing nudge")
+                    nudge = dynamic_cast<ValueControl*> (control);
+                else if (control->getTitle() == "Selected span")
+                    span = dynamic_cast<ValueControl*> (control);
+                else if (control->getTitle() == "Selected split")
+                    split = dynamic_cast<ValueControl*> (control);
+            }
     REQUIRE (velocity != nullptr);
+    REQUIRE (probability != nullptr);
+    REQUIRE (nudge != nullptr);
+    REQUIRE (span != nullptr);
+    REQUIRE (split != nullptr);
+    CHECK (span->getRight() < split->getX());
     const juce::Point<float> origin { 30, 42 };
     velocity->mouseDown (phoneEvent (*velocity, origin, origin));
     velocity->mouseDrag (phoneEvent (*velocity, origin.translated (0, -44), origin));
@@ -496,6 +1064,188 @@ TEST_CASE ("iPhone inspector relative edits undo and cancel without leaking into
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 90);
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 80);
+
+    const auto dragRight = [&] (ValueControl& control, bool phone)
+    {
+        // Exercise the horizontal gesture with a synthetic desktop mouse source.
+        control.horizontalAdjustment = true;
+        const auto end = origin.translated (44, 0);
+        control.mouseDown (phoneEvent (control, origin, origin));
+        control.mouseDrag (phoneEvent (control, end, origin));
+        int formatted = 0;
+        auto previousFormat = std::exchange (control.format, [&] (int value)
+        {
+            ++formatted;
+            return juce::String (value);
+        });
+        CHECK_FALSE (control.createComponentSnapshot (control.getLocalBounds()).isNull());
+        CHECK (formatted == (phone ? 0 : 1));
+        control.format = std::move (previousFormat);
+        control.mouseUp (phoneEvent (control, end, origin, 0));
+    };
+    for (const bool phone : { true, false })
+    {
+        editor.setCompactViewport (true, 850, 409, phone);
+        CHECK (probability->caption == (phone ? "Prob" : "Chance"));
+        CHECK (split->alwaysShowHorizontalArrows == phone);
+        CHECK (split->horizontalAdjustment == phone);
+        if (phone)
+            for (const auto* control : { velocity, probability, nudge, span, split })
+            {
+                const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font (control->captionFontSize, true), control->caption);
+                CHECK (control->captionWidth - captionWidth == 7);
+                CHECK (control->valueFaceBounds().getWidth() == 42.0f);
+                CHECK (control->valueFaceBounds().getHeight() == 42.0f);
+            }
+        dragRight (*velocity, phone);
+        CHECK (editor.controller.cell ({ 0, 0 }).velocity == (phone ? 95 : 90));
+        editor.controller.undo();
+        dragRight (*probability, phone);
+        CHECK (editor.controller.cell ({ 0, 0 }).probability == (phone ? 90 : 85));
+        editor.controller.undo();
+    }
+
+    editor.setCompactViewport (true, 850, 409);
+    split->mouseDown (phoneEvent (*split, origin, origin));
+    split->mouseDrag (phoneEvent (*split, origin.translated (0, -80), origin));
+    CHECK (editor.controller.cell ({ 0, 0 }).roll == 1);
+    for (const auto [distance, count] : { std::pair { 12, 1 }, { 24, 2 }, { 48, 3 }, { 72, 4 }, { 200, 8 }, { 72, 4 } })
+    {
+        split->mouseDrag (phoneEvent (*split, origin.translated (distance, 0), origin));
+        CHECK (editor.controller.cell ({ 0, 0 }).roll == count);
+    }
+    split->mouseUp (phoneEvent (*split, origin.translated (72, 0), origin, 0));
+    CHECK (editor.controller.cell ({ 0, 0 }).roll == 4);
+    editor.controller.undo();
+    CHECK (editor.controller.cell ({ 0, 0 }).roll == 1);
+}
+
+TEST_CASE ("Compact iPad AUv3 uses the phone layout with iPad touch behavior", "[native-ui][iphone][ipad][auv3][render]")
+{
+    const bool phone = GENERATE (false, true);
+    const bool standalone = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (standalone ? juce::AudioProcessor::wrapperType_Standalone
+                                                           : juce::AudioProcessor::wrapperType_AudioUnitv3);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setCompactViewport (true, 814, 390, phone);
+    editor.setSize (814, 390);
+
+    const bool usePhoneLayout = phone || !standalone;
+    CHECK (editor.layout.phoneRowControls == usePhoneLayout);
+    CHECK (editor.layout.compactOnPhone == phone);
+    CHECK (phoneButton (editor, "Pattern bank").getButtonText() == (usePhoneLayout ? "1" : "Pattern 1  v"));
+    CHECK (phoneButton (editor, "Select modifier").getTooltip() == (phone ? "Tap to toggle Select" : "Hold for temporary Select"));
+    const auto visible = [&editor] (const juce::String& title)
+    {
+        const auto& children = editor.getChildren();
+        return std::any_of (children.begin(), children.end(), [&title] (auto* child) { return child->isVisible() && child->getTitle() == title; });
+    };
+    CHECK (visible ("Play") == standalone);
+    const ValueControl* probability = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* inspector = dynamic_cast<PreviewPanel*> (child))
+            for (auto* control : inspector->getChildren())
+                if (auto* value = dynamic_cast<ValueControl*> (control); value && value->caption == (usePhoneLayout ? "Prob" : "Chance"))
+                    probability = value;
+    REQUIRE (probability != nullptr);
+    CHECK (probability->horizontalDragMultiplier == Catch::Approx (phone ? 1.5f : 1.0f));
+
+    if (!usePhoneLayout)
+    {
+        CHECK (phoneButton (editor, "Open controls").getButtonText() == "Settings");
+        return;
+    }
+
+    if (!phone)
+        capturePhone (editor, "ipad-auv3-compact-grid");
+    auto& grid = phoneGrid (editor);
+    const int headerY = standalone ? 0 : 4;
+    CHECK (grid.getY() == Layout::compactHeaderHeight + headerY);
+    CHECK (phoneButton (editor, "Pattern bank").getX() == 0);
+    CHECK (phoneButton (editor, "Pattern bank").getY() == headerY);
+    CHECK (phoneButton (editor, "Pattern bank").getHeight() == Layout::compactHeaderHeight);
+    CHECK (phoneButton (editor, "Open menu").getRight() == editor.getWidth());
+    if (!standalone)
+    {
+        const auto& bank = phoneButton (editor, "Pattern bank");
+        const auto& velocity = phoneButton (editor, "Velocity editing layer");
+        const auto& select = phoneButton (editor, "Select modifier");
+        const auto& undo = phoneButton (editor, "undo");
+        const auto& redo = phoneButton (editor, "redo");
+        const auto& generate = phoneButton (editor, "Generate");
+        const auto& pads = phoneButton (editor, "Show pads");
+        const auto& record = phoneButton (editor, "Arm Record");
+        const auto& pattern = phoneButton (editor, "Open pattern settings");
+        const auto& menu = phoneButton (editor, "Open menu");
+        const int gap = velocity.getX() - bank.getRight();
+        CHECK (gap == 10);
+        CHECK (undo.getX() - select.getRight() == gap);
+        CHECK (redo.getX() == undo.getRight());
+        CHECK (pads.getX() - generate.getRight() == gap);
+        CHECK (record.getX() - pads.getRight() == gap);
+        CHECK (menu.getX() - pattern.getRight() == gap);
+        CHECK (pattern.getX() - record.getRight() == 2 * gap);
+        CHECK (generate.getX() > redo.getRight());
+    }
+    phoneButton (editor, "Open menu").onClick();
+    CHECK (phoneButton (editor, "Close menu").getRight() == editor.getWidth());
+    CHECK (phoneButton (editor, "Close menu").getY() == headerY);
+    CHECK_FALSE (grid.isVisible());
+    phoneButton (editor, "Settings").onClick();
+    CHECK (visible ("Visible rows") == phone);
+    if (!phone)
+        capturePhone (editor, "ipad-auv3-compact-settings");
+    phoneButton (editor, "Close menu").onClick();
+    CHECK (grid.isVisible());
+    phoneButton (editor, "Pattern bank").onClick();
+    CHECK_FALSE (grid.isVisible());
+    phoneButton (editor, "Choose pattern 3").onClick();
+    CHECK (editor.controller.source() == 2);
+    CHECK (grid.isVisible());
+
+    auto& padsToggle = phoneButton (editor, "Show pads");
+    auto& generateToggle = phoneButton (editor, "Generate");
+    padsToggle.setToggleState (true, juce::sendNotificationSync);
+    const auto& performancePad = phoneButton (editor, "Trigger channel 1");
+    REQUIRE (performancePad.isVisible());
+    generateToggle.onClick();
+    CHECK (generateToggle.getToggleState());
+    CHECK_FALSE (padsToggle.getToggleState());
+    CHECK_FALSE (performancePad.getParentComponent()->isVisible());
+    generateToggle.onClick();
+    CHECK (grid.isVisible());
+    CHECK_FALSE (performancePad.getParentComponent()->isVisible());
+
+    editor.setCompactViewport (false, 1200, 700, phone);
+    CHECK_FALSE (editor.layout.phoneRowControls);
+    CHECK_FALSE (editor.layout.compactOnPhone);
+    CHECK (editor.layout.settingsInHeader == (!phone && !standalone));
+    if (editor.layout.settingsInHeader)
+    {
+        editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+        const auto& settings = phoneButton (editor, "Settings");
+        const auto& mute = phoneButton (editor, "M");
+        const PatternButton* lastPattern = nullptr;
+        for (auto* child : editor.getChildren())
+            if (auto* button = dynamic_cast<PatternButton*> (child); button && button->getButtonText() == "8")
+                lastPattern = button;
+        REQUIRE (lastPattern != nullptr);
+        CHECK (settings.getY() == mute.getY());
+        CHECK (settings.getX() == mute.getRight() + Layout::headerRowGap);
+        CHECK (lastPattern->getRight() == mute.getX() - Layout::headerRowGap);
+        CHECK (settings.getRight() == editor.getWidth() - Layout::outerGutter);
+        CHECK (editor.getHeight() == Layout::fullHeight - Layout::footerHeight);
+        CHECK (editor.getHeight() == juce::roundToInt (editor.layout.previewY()) + Layout::previewHeight);
+        CHECK_FALSE (visible ("Control help"));
+        capturePhone (editor, "ipad-auv3-full");
+
+        editor.setCompactViewport (true, 814, 390, phone);
+        CHECK_FALSE (editor.layout.settingsInHeader);
+        CHECK (phoneButton (editor, "Open menu").getButtonText() == "Menu");
+    }
 }
 
 TEST_CASE ("Compact Copy toggle stays available outside iPhone mode", "[native-ui][iphone]")
@@ -577,10 +1327,26 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     editor.setSize (814, 390);
     auto& recordButton = phoneButton (editor, "Arm Record");
     auto& menuButton = phoneButton (editor, "Open menu");
+    auto& select = dynamic_cast<GestureButton&> (phoneButton (editor, "Select modifier"));
+    const auto tapSelect = [&]
+    {
+        const auto bounds = select.getBounds();
+        const auto point = juce::Point<float> { static_cast<float> (bounds.getWidth() - 4), 18 };
+        select.mouseDown (phoneEvent (select, point, point));
+        CHECK (select.getBounds() == bounds);
+        select.mouseUp (phoneEvent (select, point, point, 0));
+    };
+    tapSelect();
+    CHECK (editor.controller.selectLatched);
+    CHECK (select.getToggleState());
+    tapSelect();
+    CHECK_FALSE (editor.controller.selectLatched);
     CHECK (recordButton.isVisible());
     auto& pattern = phoneButton (editor, "Open pattern settings");
     const auto patternBounds = pattern.getBounds();
     CHECK (pattern.getProperties().contains ("dropdown"));
+    CHECK (pattern.getWidth() < dropdownWidth (pattern.getButtonText()));
+    CHECK (menuButton.getWidth() < dropdownWidth (menuButton.getButtonText()));
     pattern.onClick();
     CHECK (pattern.getBounds() == patternBounds);
     CHECK (pattern.getToggleState());
@@ -596,14 +1362,27 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
     phoneButton (editor, "Clear pattern").onClick();
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
+    CHECK (phoneGrid (editor).isVisible());
+    CHECK_FALSE (clearButton.isVisible());
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
-    phoneButton (editor, "Close pattern settings").onClick();
     CHECK (phoneButton (editor, "Arm Record").isVisible());
     phoneButton (editor, "Open menu").onClick();
     CHECK_FALSE (pattern.isVisible());
     CHECK_FALSE (clearButton.isVisible());
     phoneButton (editor, "Feel").onClick();
+    ValueControl* swingTarget = nullptr;
+    for (auto* child : editor.getChildren())
+        if (child->isVisible() && child->getTitle() == "Swing target")
+            swingTarget = dynamic_cast<ValueControl*> (child);
+    REQUIRE (swingTarget != nullptr);
+    CHECK (swingTarget->minimum == 0);
+    CHECK (swingTarget->maximum == 1);
+    CHECK (swingTarget->format (0) == "1x");
+    REQUIRE (processor.dispatchUiEngineCommand ("swing_subdivision", { 2 }));
+    editor.controller.refresh();
+    CHECK (swingTarget->value == 1);
+    CHECK (swingTarget->format (swingTarget->value) == "2x");
     phoneButton (editor, "Close menu").onClick();
     phoneButton (editor, "Open menu").onClick();
     CHECK (phoneButton (editor, "Feel").getToggleState());
@@ -615,6 +1394,59 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     phoneButton (editor, "Done").onClick();
     phoneButton (editor, "Open menu").onClick();
     CHECK (phoneButton (editor, "Feel").getToggleState());
+}
+
+TEST_CASE ("iPhone clears step selection without changing the mode controls' bounds", "[native-ui][iphone]")
+{
+    const int steps = GENERATE (16, 32);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, steps }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 100 }));
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 390);
+    editor.setSize (814, 390);
+
+    auto& grid = phoneGrid (editor);
+    auto& velocity = phoneButton (editor, "Velocity editing layer");
+    auto& probability = phoneButton (editor, "Prob editing layer");
+    auto& select = phoneButton (editor, "Select modifier");
+    const auto modeBounds = [&] { return std::array { velocity.getBounds(), probability.getBounds(), select.getBounds() }; };
+    const auto idleBounds = modeBounds();
+    const auto tap = [] (juce::Component& component, juce::Point<float> point)
+    {
+        component.mouseDown (phoneEvent (component, point, point));
+        component.mouseUp (phoneEvent (component, point, point, 0));
+    };
+    const auto active = grid.layout.cell ({ 0, 2 }).getCentre();
+    const auto empty = grid.layout.cell ({ 0, 3 }).getCentre();
+
+    tap (select, select.getLocalBounds().toFloat().getCentre());
+    REQUIRE (editor.controller.selectLatched);
+    tap (grid, active);
+    REQUIRE (editor.controller.selected.count() == 1);
+    CHECK (modeBounds() == idleBounds);
+    for (auto* child : editor.getChildren())
+        if (child->getTitle() == "Deselect cells")
+            CHECK_FALSE (child->isVisible());
+
+    tap (grid, empty);
+    CHECK (editor.controller.selected.none());
+    CHECK (editor.controller.selectLatched);
+
+    for (auto* layer : { &probability, &velocity })
+    {
+        if (!editor.controller.selectLatched)
+            tap (select, select.getLocalBounds().toFloat().getCentre());
+        tap (grid, active);
+        REQUIRE (editor.controller.selected.count() == 1);
+        tap (*layer, layer->getLocalBounds().toFloat().getCentre());
+        CHECK (editor.controller.selected.none());
+        CHECK_FALSE (editor.controller.selectLatched);
+        CHECK (layer->getToggleState());
+        CHECK (modeBounds() == idleBounds);
+    }
 }
 
 TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection controls at its minimum size", "[native-ui][iphone][render]")
@@ -649,25 +1481,38 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     auto& generate = phoneButton (editor, "Generate");
     const auto& record = phoneButton (editor, "Arm Record");
     const auto& tempo = phoneButton (editor, "Set tempo");
-    const auto& metro = phoneButton (editor, "Metronome");
+    const auto& children = editor.getChildren();
+    const auto metro = std::find_if (children.begin(), children.end(),
+                                     [] (auto* child) { return child->getTitle() == "Metronome"; });
+    REQUIRE (metro != children.end());
+    CHECK_FALSE ((*metro)->isVisible());
     const auto& play = phoneButton (editor, "Play");
     const auto& pattern = phoneButton (editor, "Open pattern settings");
     const auto& menu = phoneButton (editor, "Open menu");
-    const int referenceGap = phoneButton (editor, "Velocity editing layer").getX() - phoneButton (editor, "Pattern bank").getRight();
+    CHECK (phoneButton (editor, "Pattern bank").getX() == 0);
+    CHECK (menu.getRight() == editor.getWidth());
+    std::sort (buttons.begin(), buttons.end(), [] (const auto& a, const auto& b) { return a.getX() < b.getX(); });
+    std::vector<int> gaps;
+    for (size_t i = 1; i < buttons.size(); ++i)
+        if (const int gap = buttons[i].getX() - buttons[i - 1].getRight(); gap > 0)
+            gaps.push_back (gap);
+    REQUIRE_FALSE (gaps.empty());
+    const auto [smallestGap, largestGap] = std::minmax_element (gaps.begin(), gaps.end());
+    CHECK (*largestGap - *smallestGap <= 1);
     CHECK (undo.getRight() == redo.getX());
     CHECK (redo.getRight() < generate.getX());
     CHECK (generate.getRight() < pads.getX());
+    CHECK (generate.getButtonText().isEmpty());
+    CHECK (generate.getBounds().withZeroOrigin() == pads.getBounds().withZeroOrigin());
     const int padGap = record.getX() - pads.getRight();
     CHECK (padGap > 0);
     CHECK (record.getRight() < tempo.getX());
-    CHECK (referenceGap > 0);
-    CHECK (metro.getX() - tempo.getRight() == referenceGap);
-    CHECK (play.getX() - metro.getRight() == referenceGap);
-    CHECK (menu.getX() - pattern.getRight() == referenceGap);
+    CHECK (tempo.getRight() < play.getX());
+    CHECK (pattern.getRight() < menu.getX());
     CHECK (play.getRight() < pattern.getX());
     capturePhone (editor, "iphone-32-minimum");
     phoneButton (editor, "Open menu").onClick();
-    for (const auto* page : { "Project", "Feel", "Super Secret", "Settings", "About" })
+    for (const auto* page : { "Project", "Feel", "Settings", "About" })
     {
         CAPTURE (page);
         auto& tab = phoneButton (editor, page);
@@ -687,12 +1532,10 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
         capturePhone (editor, "iphone-minimum-menu-" + juce::String (page).toLowerCase());
     }
     auto& midiOutput = phoneButton (editor, "MIDI output destination");
-    auto& superSecret = phoneButton (editor, "Super Secret");
     CHECK (midiOutput.getY() == phoneButton (editor, "About").getY());
     midiOutput.onClick();
     CHECK (openedMidi);
     phoneButton (editor, "Close menu").onClick();
-    CHECK_FALSE (superSecret.isVisible());
     generate.onClick();
     juce::Viewport* generatorViewport = nullptr;
     for (auto* child : editor.getChildren())
@@ -701,19 +1544,13 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     REQUIRE (generatorViewport != nullptr);
     auto* generator = dynamic_cast<PreviewPanel*> (generatorViewport->getViewedComponent());
     REQUIRE (generator != nullptr);
-    REQUIRE (generator->isXYRandomizer());
     PatternXYPad* pad = nullptr;
-    ValueControl* patternLength = nullptr;
     for (auto* child : generator->getChildren())
     {
         if (auto* xy = dynamic_cast<PatternXYPad*> (child))
             pad = xy;
-        if (child->getTitle() == "Randomizer pattern length")
-            patternLength = dynamic_cast<ValueControl*> (child);
     }
     REQUIRE (pad != nullptr);
-    REQUIRE (patternLength != nullptr);
-    CHECK_FALSE (patternLength->isVisible());
     generate.onClick();
     pattern.onClick();
     ValueControl* gridLength = nullptr;
@@ -733,7 +1570,6 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (editor.controller.state.playback.stepCount == 64);
     pattern.onClick();
     generate.onClick();
-    CHECK_FALSE (patternLength->isVisible());
     REQUIRE (pad->isVisible());
     CHECK (pad->getX() > generator->getWidth() / 2);
     CHECK (generator->getLocalBounds().contains (pad->getBounds()));
@@ -763,25 +1599,13 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     generate.onClick();
     phoneButton (editor, "Open menu").onClick();
     CHECK_FALSE (generate.isVisible());
-    REQUIRE (superSecret.isVisible());
-    superSecret.onClick();
-    CHECK_FALSE (pad->isVisible());
-    CHECK (patternLength->isVisible());
-    CHECK (generatorViewport->getViewArea().contains (patternLength->getBounds()));
-    CHECK (patternLength->value == 16);
-    setLength (*patternLength, 36);
-    CHECK (editor.controller.state.playback.generatedStepCount == 36);
-    CHECK (editor.controller.state.playback.stepCount == 64);
-    editor.controller.undo();
-    CHECK (patternLength->value == 16);
-    editor.controller.redo();
-    CHECK (patternLength->value == 36);
-    editor.controller.command ("cell", { 1, 1, 36, 1, 96 });
-    phoneButton (editor, "Random mode").onClick();
-    CHECK (editor.controller.state.playback.generated[0][35].enabled);
-    CHECK (editor.controller.state.playback.generated[0][35].velocity == 96);
-    CHECK (phoneButton (editor, "Random mode").getX() > generator->getWidth() / 2);
     phoneButton (editor, "Settings").onClick();
+    auto& metronome = phoneButton (editor, "Metronome");
+    const auto& metronomeSound = phoneButton (editor, "Metronome sound...");
+    CHECK (metronome.getRight() < metronomeSound.getX());
+    CHECK (metronome.getY() == metronomeSound.getY());
+    metronome.setToggleState (true, juce::sendNotificationSync);
+    CHECK (processor.isStandaloneMetronomeEnabled());
     auto& link = phoneButton (editor, "Ableton Link settings");
     for (auto* child : editor.getChildren())
         if (child->getTitle() == "Switch accent")
@@ -794,7 +1618,7 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     phoneButton (editor, "Close menu").onClick();
     editor.setCompactViewport (true, 850, 390);
     editor.setSize (850, 390);
-    CHECK (record.getX() - pads.getRight() > padGap);
+    CHECK (record.getX() - pads.getRight() >= padGap);
 
     // The iPad standalone has the same Link settings action in the full editor footer.
     openedLink = false;
@@ -839,6 +1663,8 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
         CHECK (title->getTriggeredOnMouseDown());
     }
     auto& showPads = phoneButton (editor, "Show pads");
+    const auto& select = phoneButton (editor, "Select modifier");
+    const auto selectBounds = select.getBounds();
     CHECK (showPads.getRight() <= phoneButton (editor, "Arm Record").getX());
     showPads.setToggleState (true, juce::sendNotificationSync);
     CHECK_FALSE (processor.isPatternRecordingEnabled());
@@ -868,6 +1694,15 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
     CHECK (quietBrightness > idleBrightness);
     if (compact)
     {
+        for (int ch = 1; ch <= 4; ++ch)
+        {
+            const auto& lower = phoneButton (editor, "Trigger channel " + juce::String (ch));
+            const auto& higher = phoneButton (editor, "Trigger channel " + juce::String (ch + 4));
+            CHECK (lower.getX() == higher.getX());
+            CHECK (lower.getY() > higher.getBottom());
+        }
+        CHECK (select.isVisible());
+        CHECK (select.getBounds() == selectBounds);
         CHECK_FALSE (grid.isVisible());
         const juce::Point<int> previewPoint { editor.getWidth() / 2, Layout::compactHeaderHeight + 30 };
         CHECK (editor.getComponentAt (previewPoint) == nullptr);
@@ -881,8 +1716,11 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
         CHECK (grid.isVisible());
     auto& velocityMode = phoneButton (editor, "Pad velocity mode");
     const auto velocityPreference = velocityMode.getToggleState();
-    CHECK (velocityMode.getWidth() == (compact ? 56 : 64));
-    CHECK (velocityMode.getHeight() == (compact ? 56 : phoneButton (editor, "Trigger channel 8").getHeight()));
+    if (compact)
+        CHECK (velocityMode.getWidth() > 56);
+    else
+        CHECK (velocityMode.getWidth() == 64);
+    CHECK (velocityMode.getHeight() == phoneButton (editor, "Trigger channel 8").getHeight());
     CHECK (velocityMode.hitTest (1, 1));
     const auto captureName = compact ? "iphone-recording-pads" : "ipad-recording-pads";
     velocityMode.setToggleState (false, juce::dontSendNotification);
@@ -914,6 +1752,128 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
     CHECK_FALSE (strip->isVisible());
     CHECK (grid.isVisible());
     CHECK (processor.isPatternRecordingEnabled());
+}
+
+TEST_CASE ("Incoming MIDI flashes pads assigned to the note with transport stopped", "[native-ui][iphone][ipad][row-trigger][midi-input]")
+{
+    const bool compact = GENERATE (false, true);
+    const bool standalone = GENERATE (false, true);
+    if (standalone)
+        juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    processor.setTimestampedStandaloneMidiInput (standalone);
+    processor.prepareToPlay (48000.0, 64);
+    REQUIRE (processor.dispatchUiEngineCommand ("channels", { 8 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_note", { 1, 60 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_note", { 2, 60 }));
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setCompactViewport (compact, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+    phoneButton (editor, "Show pads").setToggleState (true, juce::sendNotificationSync);
+
+    auto& first = phoneButton (editor, "Trigger channel 1");
+    auto& second = phoneButton (editor, "Trigger channel 2");
+    auto& third = phoneButton (editor, "Trigger channel 3");
+    const auto centrePixel = [] (juce::Component& pad)
+    {
+        const auto centre = pad.getLocalBounds().getCentre();
+        return pad.createComponentSnapshot ({ centre.x, centre.y, 1, 1 }).getPixelAt (0, 0);
+    };
+    const auto firstIdle = centrePixel (first), secondIdle = centrePixel (second), thirdIdle = centrePixel (third);
+    const int thirdNote = editor.controller.state.playback.channels[2].note;
+    juce::AudioBuffer<float> audio (2, 64);
+    juce::MidiBuffer midi;
+    for (const auto& message : { juce::MidiMessage::noteOn (6, 60, juce::uint8 (95)),
+                                 juce::MidiMessage::noteOn (6, thirdNote, juce::uint8 (0)) })
+    {
+        if (standalone)
+            processor.captureStandaloneMidiInput (message);
+        midi.addEvent (message, 0);
+    }
+    if (standalone)
+        REQUIRE (processor.emitPendingNoteHitsForUi() == 1);
+    processor.processBlock (audio, midi);
+    REQUIRE (processor.emitPendingNoteHitsForUi() == (standalone ? 0 : 1));
+    CHECK (centrePixel (first) != firstIdle);
+    CHECK (centrePixel (second) != secondIdle);
+    CHECK (centrePixel (third) == thirdIdle);
+    int noteOns = 0;
+    for (const auto event : midi)
+        if (event.getMessage().isNoteOn())
+        {
+            ++noteOns;
+            CHECK (event.getMessage().getNoteNumber() == 60);
+            CHECK (event.getMessage().getVelocity() == 95);
+        }
+    CHECK (noteOns == 1);
+}
+
+TEST_CASE ("Pads triggered by the same touch event share their MIDI timing", "[native-ui][iphone][ipad][row-trigger][latency]")
+{
+    const bool compact = GENERATE (false, true);
+    constexpr int blockSize = 8192;
+    PluginProcessor processor;
+    processor.prepareToPlay (48000.0, blockSize);
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    if (compact)
+        editor.setCompactViewport (true, 814, 409);
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    editor.sync();
+    phoneButton (editor, "Show pads").setToggleState (true, juce::sendNotificationSync);
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+
+    // The macOS runner uses a pen source to exercise the non-mouse pad path.
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+    const auto pointer = *source;
+    const auto event = [&] (juce::Component& pad, juce::ModifierKeys mods)
+    {
+        const auto centre = pad.getLocalBounds().getCentre().toFloat();
+        return juce::MouseEvent (pointer, centre, mods, 1, 0, 0, 0, 0, &pad, &pad, time, centre, time, 1, false);
+    };
+    auto& first = dynamic_cast<RowTriggerButton&> (phoneButton (editor, "Trigger channel 1"));
+    auto& second = dynamic_cast<RowTriggerButton&> (phoneButton (editor, "Trigger channel 2"));
+    const auto centrePixel = [] (RowTriggerButton& pad)
+    {
+        const auto centre = pad.getLocalBounds().getCentre();
+        return pad.createComponentSnapshot ({ centre.x, centre.y, 1, 1 }).getPixelAt (0, 0);
+    };
+    const auto firstIdle = centrePixel (first), secondIdle = centrePixel (second);
+    const juce::ModifierKeys pressed (juce::ModifierKeys::leftButtonModifier);
+    first.mouseDown (event (first, pressed));
+    juce::Thread::sleep (6); // Simulate a slow main thread between dispatches of the same event.
+    second.mouseDown (event (second, pressed));
+
+    juce::AudioBuffer<float> audio (2, blockSize);
+    juce::MidiBuffer midi;
+    processor.processBlock (audio, midi);
+    std::vector<std::pair<int, int>> hits;
+    for (const auto& message : midi)
+        if (message.getMessage().isNoteOn())
+            hits.emplace_back (message.getMessage().getNoteNumber(), message.samplePosition);
+    REQUIRE (hits.size() == 2);
+    CHECK (hits[0].first == 36);
+    CHECK (hits[1].first == 37);
+    CHECK (hits[0].second > 0);
+    CHECK (hits[0].second == hits[1].second);
+    CHECK (centrePixel (first) != firstIdle);
+    CHECK (centrePixel (second) != secondIdle);
+    first.mouseUp (event (first, {}));
+    const auto afterFlash = juce::Time::getMillisecondCounterHiRes() + 101.0;
+    first.updateFlash (afterFlash);
+    second.updateFlash (afterFlash);
+    CHECK (centrePixel (first) == firstIdle);
+    CHECK (centrePixel (second) == secondIdle);
+    second.mouseUp (event (second, {}));
 }
 
 TEST_CASE ("iOS row pads audition on touch down and record into the armed pattern with undo", "[native-ui][iphone][ipad][row-trigger][record]")

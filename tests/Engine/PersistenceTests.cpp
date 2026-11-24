@@ -280,7 +280,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     original.engine.setStepCount (8);
     original.engine.setChannelCount (2);
     original.engine.setSwing (25);
-    original.engine.setSwingSubdivisionIndex (2);
+    original.engine.setSwingSubdivisionIndex (1);
     original.engine.setCell (0, 0, 0, true, 64, 30, 1, 0, false, 3);
     original.engine.setChannelLabel (0, "Sub");
     original.engine.setChannelNote (1, 50);
@@ -290,7 +290,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (payload["stepCount"] == 8);
     REQUIRE (payload["channelCount"] == 2);
     REQUIRE (payload["swing"] == 25);
-    REQUIRE (payload["swingSubdivisionIndex"] == 2);
+    REQUIRE (payload["swingSubdivisionIndex"] == 1);
     REQUIRE (payload["sourceSettings"].size() == Constants::sourceCount);
     REQUIRE_FALSE (payload.contains ("nativeTiming"));
     REQUIRE (payload["cells"].size() >= 1);
@@ -304,7 +304,7 @@ TEST_CASE ("serializeForPersistence roundtrips sparse pattern", "[engine][persis
     REQUIRE (restored.engine.getStepCount() == 8);
     REQUIRE (restored.engine.getChannelCount() == 2);
     REQUIRE (restored.engine.getSwing() == 25);
-    REQUIRE (restored.engine.getSwingSubdivisionIndex() == 2);
+    REQUIRE (restored.engine.getSwingSubdivisionIndex() == 1);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).enabled);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).velocity == 64);
     REQUIRE (restored.engine.sourceCellAt (0, 0, 0).roll == 3);
@@ -347,15 +347,19 @@ TEST_CASE ("engine change notifications do not need status messages", "[engine][
     CHECK (changes > afterSwing);
 }
 
-TEST_CASE ("legacy persistence defaults swing target to 2x", "[engine][persistence]")
+TEST_CASE ("Legacy projects with a missing or 4x swing target load at 2x", "[engine][persistence]")
 {
     EngineFixture fixture;
     auto payload = fixture.engine.serializeForPersistence();
     REQUIRE (fixture.engine.getSwingSubdivisionIndex() == 0);
-    payload.erase ("swingSubdivisionIndex");
+    payload["swing"] = 37;
+    SECTION ("Missing target") { payload.erase ("swingSubdivisionIndex"); }
+    SECTION ("Former 4x target") { payload["swingSubdivisionIndex"] = 2; }
 
     REQUIRE (fixture.engine.deserializeForPersistence (payload));
     REQUIRE (fixture.engine.getSwingSubdivisionIndex() == 1);
+    CHECK (fixture.engine.getSwing() == 37);
+    CHECK (fixture.engine.serializeForPersistence()["swingSubdivisionIndex"] == 1);
 }
 
 TEST_CASE ("serializeForPersistence includes channel settings", "[engine][persistence]")
