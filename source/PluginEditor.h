@@ -36,6 +36,7 @@ public:
 
     void showSaveProjectDialog (const juce::Array<juce::var>& args,
         std::function<void (juce::var)> complete);
+    void saveCurrentProject();
     void saveProject (std::function<void (juce::var)> complete);
     void showLoadProjectDialog (std::function<void (juce::var)> complete);
     void createNewProject (std::function<void (juce::var)> complete);
@@ -49,8 +50,7 @@ private:
     std::shared_ptr<ksh::IOSProjectLibrary> iosLibrary;
     std::unique_ptr<ksh::IOSFileDrop> iosFileDrop;
     uint64_t iosOperationEpoch = 0;
-    void iosProjectAction (int action, std::function<void (juce::var)>, juce::File target = {},
-                           juce::String name = {}, juce::String description = {});
+    void iosProjectAction (int action, std::function<void (juce::var)>, juce::File target = {});
    #endif
     PluginProcessor& processorRef;
     const bool fitViewport;
@@ -65,10 +65,14 @@ private:
 
     void confirmDiscardingChanges (std::function<void()> proceed);
     juce::File getDefaultProjectsDirectory() const;
+    juce::Array<juce::File> getProjectFiles (const juce::File&) const;
     juce::Array<juce::File> getSiblingProjectFiles() const;
+    void showExternalProjectDialog (std::function<void (juce::var)>);
+    void saveProjectTo (const juce::File&, const ksh::ui::ProjectBrowser::Details&, bool createOnly,
+                        std::function<void (juce::var)>);
     bool loadProjectData (const juce::File&, const juce::MemoryBlock&, juce::String& errorMessage);
     bool loadProjectFile (const juce::File& file, juce::String& errorMessage);
-    bool saveProjectFile (const juce::File& file, juce::String& errorMessage);
+    bool writeProjectFile (const juce::File&, const juce::MemoryBlock&, bool createOnly, juce::String& errorMessage);
     juce::var projectOperationResult (bool success,
         const juce::String& errorMessage = {}) const;
 

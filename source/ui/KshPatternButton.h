@@ -10,10 +10,23 @@ namespace ksh::ui
     public:
         std::function<void()> onDrag;
         bool copyDestination = false;
+        void setOccupied (bool value)
+        {
+            if (std::exchange (occupied, value) != value)
+                repaint();
+        }
         bool showsCopyDestination() const { return copyDestination && isEnabled() && isOver(); }
         void paintButton (juce::Graphics& g, bool hover, bool down) override
         {
             juce::TextButton::paintButton (g, hover, down);
+            const float diameter = occupied ? 4.0f : 3.0f;
+            const auto led = juce::Rectangle<float> (diameter, diameter).withCentre ({ getWidth() * 0.5f, getHeight() - 9.0f });
+            const auto ink = getToggleState() ? Palette::text : Palette::accent;
+            g.setColour (ink.withAlpha (occupied ? 0.85f : 0.32f));
+            if (occupied)
+                g.fillEllipse (led);
+            else
+                g.drawEllipse (led, 0.8f);
             if (showsCopyDestination())
                 paintPatternCopyOutline (g, getLocalBounds().toFloat());
         }
@@ -48,6 +61,6 @@ namespace ksh::ui
         }
 
     private:
-        bool armed = false, dragged = false;
+        bool armed = false, dragged = false, occupied = false;
     };
 }

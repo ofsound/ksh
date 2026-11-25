@@ -1,4 +1,5 @@
 #include "KshNativeEditor.h"
+#include <numeric>
 
 namespace ksh::ui
 {
@@ -35,7 +36,7 @@ namespace ksh::ui
     void NativeEditor::setupCompactControls()
     {
         for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
-                              &tempoButton, &metronomeOptions, &channelReverse, &channelPing, &channelSolo })
+                              static_cast<juce::TextButton*> (&tempoButton), &metronomeOptions, &channelReverse, &channelPing, &channelSolo })
             addChildComponent (*button);
         addChildComponent (phoneAboutWordmark);
         phoneAboutWordmark.onAccentSelected = preview.onAccentSelected;
@@ -45,27 +46,78 @@ namespace ksh::ui
         phoneAboutWordmark.onTextBrightnessEdited = preview.onTextBrightnessEdited;
         tempoButton.setTitle ("Set tempo");
         tempoButton.getProperties().set ("transport", true);
+        tempoButton.getProperties().set ("tempoReadout", true);
+        tempoButton.setTooltip ("Click to open tempo controls. Drag up or down to change BPM.");
         tempoButton.onClick = [this] { setTempoOpen (!tempoOpen); };
+        tempoButton.pressed = [this] (const juce::MouseEvent& e)
+        {
+            if (tempoScrub || !e.mods.isLeftButtonDown() || e.mods.isPopupMenu())
+                return;
+            const int bpm = juce::roundToInt (controller.processor.getStandaloneTempoBpm());
+            tempoScrub = TempoScrub { e.source, bpm, bpm };
+            tempoButton.setState (juce::Button::buttonDown);
+        };
+        tempoButton.dragged = [this] (const juce::MouseEvent& e)
+        {
+            if (!tempoScrub || tempoScrub->pointer != e.source)
+                return;
+            const float delta = e.position.y - e.mouseDownPosition.y;
+            if (!tempoScrub->dragging)
+            {
+                if (std::abs (delta) < 4.0f)
+                    return;
+                tempoScrub->dragging = true;
+                tempoTaps = {};
+                controller.begin ("Change tempo");
+            }
+            const int bpm = juce::jlimit (minimumTempoBpm, maximumTempoBpm, tempoScrub->start - juce::roundToInt (delta * 0.5f));
+            if (std::exchange (tempoScrub->requested, bpm) != bpm)
+                controller.command ("standalone_tempo", { bpm });
+        };
+        tempoButton.released = [this] (const juce::MouseEvent& e)
+        {
+            if (!tempoScrub || tempoScrub->pointer != e.source)
+                return;
+            if (tempoScrub->dragging || e.getDistanceFromDragStart() >= 4)
+                finishTempoScrub();
+            else
+            {
+                tempoScrub.reset();
+                const bool inside = tempoButton.getLocalBounds().contains (e.getPosition());
+                tempoButton.setState (inside && e.source.canHover() ? juce::Button::buttonOver : juce::Button::buttonNormal);
+                if (inside && tempoButton.isEnabled())
+                    tempoButton.onClick();
+            }
+        };
         addChildComponent (tempoOverlay);
         tempoOverlay.dismiss = [this] { setTempoOpen (false); };
         tempoOverlay.setTitle ("Tempo");
         tempoOverlay.setWantsKeyboardFocus (true);
-        for (auto* component : std::array<juce::Component*, 3> { &tempoFader, &tempoDown, &tempoUp })
+        for (auto* component : std::array<juce::Component*, 4> { &tempoFader, &tempoDown, &tempoUp, &tapTempo })
             tempoOverlay.addAndMakeVisible (*component);
         tempoFader.setTitle ("Tempo BPM fader");
-        tempoFader.setRange (tempo.minimum, tempo.maximum, 1);
+        tempoFader.getProperties().set ("tempoReadout", true);
+        tempoFader.setRange (minimumTempoBpm, maximumTempoBpm, 1);
         tempoFader.setTextValueSuffix (" BPM");
         tempoFader.setColour (juce::Slider::thumbColourId, Palette::text);
-        tempoFader.onValueChange = [this] { tempo.onChange (juce::roundToInt (tempoFader.getValue())); };
+        tempoFader.onDragStart = [this] { controller.begin ("Change tempo"); };
+        tempoFader.onDragEnd = [this] { controller.commit(); };
+        tempoFader.onValueChange = [this]
+        {
+            tempoTaps = {};
+            controller.command ("standalone_tempo", { juce::roundToInt (tempoFader.getValue()) }, "Change tempo");
+        };
         tempoDown.setTitle ("Decrease tempo by 1 BPM");
         tempoUp.setTitle ("Increase tempo by 1 BPM");
         for (auto* stepper : { &tempoDown, &tempoUp })
         {
-            stepper->getProperties().set ("tempoStepper", true);
+            stepper->getProperties().set ("tempoStepper", false);
             stepper->setRepeatSpeed (400, 120, 60);
         }
         tempoDown.onClick = [this] { tempoFader.setValue (tempoFader.getValue() - 1, juce::sendNotificationSync); };
         tempoUp.onClick = [this] { tempoFader.setValue (tempoFader.getValue() + 1, juce::sendNotificationSync); };
+        tapTempo.setTooltip ("Tap once per beat. Tempo updates after three taps.");
+        tapTempo.onClick = [this] { registerTempoTap(); };
         metronomeOptions.onClick = [this] { metronomeMenu (metronomeOptions); };
         addChildComponent (visibleRows);
         visibleRows.setTitle ("Visible rows");
@@ -272,7 +324,7 @@ namespace ksh::ui
         styleMenuButton (recordOptions, phoneMenu::clock, "Timing options");
         styleMenuButton (showSwing, phoneMenu::eye, "Show swing on grid");
         styleMenuButton (dc, phoneMenu::palette);
-        styleMenuButton (cellDisplay, phoneMenu::values, "Cell numbers");
+        styleMenuButton (cellDisplay, phoneMenu::values, "Show values");
         styleMenuButton (rowOrder, phoneMenu::rows);
         styleMenuButton (compactAccent, phoneMenu::palette);
         styleMenuButton (modifierToggle, phoneMenu::keyboard);
@@ -310,7 +362,6 @@ namespace ksh::ui
             aboutViewport.setScrollBarThickness (0);
         preview.setCompact (compact, usePhoneLayout, onPhone);
         randomPanel.setCompact (compact, usePhoneLayout, onPhone);
-        tempo.suffix = compact ? "" : " BPM";
         velocityLayer.setButtonText (compact ? "Vel" : "Velocity");
         const std::array<juce::String, 6> compactLabels { "New", "Open", "Save", "Previous project", "Next project", "Save as" };
         const std::array<juce::String, 6> desktopLabels { "NEW", "LOAD", "SAVE", juce::String::fromUTF8 ("◀"), juce::String::fromUTF8 ("▶"), "SAVE AS" };
@@ -323,9 +374,11 @@ namespace ksh::ui
         if (!compact)
         {
             const bool detailsVisible = projectDetails.isVisible();
+            const bool browserVisible = projectBrowser.isVisible();
             for (auto* child : getChildren())
                 child->setVisible (true);
             projectDetails.setVisible (detailsVisible);
+            projectBrowser.setVisible (browserVisible);
             patternPicker.setVisible (false);
             visibleRows.setVisible (false);
             rowScroll.setVisible (false);
@@ -395,9 +448,10 @@ namespace ksh::ui
 
     void NativeEditor::cancelCompactGestures()
     {
+        finishTempoScrub();
         preview.cancelGesture();
         randomPanel.cancelGesture();
-        for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize, &steps, &tempo, &loopStart, &loopLength })
+        for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize, &steps, &loopStart, &loopLength })
             value->cancelGesture();
         grid.cancelGesture();
     }
@@ -439,10 +493,11 @@ namespace ksh::ui
     void NativeEditor::TempoOverlay::paint (juce::Graphics& g)
     {
         g.fillAll (juce::Colours::black.withAlpha (0.28f));
+        const float radius = wideStyle ? 10.0f : 8.0f;
         g.setColour (Palette::shell);
-        g.fillRoundedRectangle (card.toFloat(), 8);
-        g.setColour (Palette::border);
-        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 8, 1);
+        g.fillRoundedRectangle (card.toFloat(), radius);
+        g.setColour (wideStyle ? Palette::controls.border : Palette::border);
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), radius, 1.0f);
     }
 
     void NativeEditor::TempoOverlay::mouseDown (const juce::MouseEvent& event)
@@ -460,6 +515,7 @@ namespace ksh::ui
             cancelCompactGestures();
             syncTempo();
         }
+        tempoTaps = {};
         tempoOpen = open;
         tempoOverlay.setVisible (open);
         if (open)
@@ -473,33 +529,77 @@ namespace ksh::ui
 
     void NativeEditor::layoutTempoPopup()
     {
+        const bool wide = !layout.compactOnPhone;
         const int target = layout.compact ? 52 : Layout::touchTarget;
-        const int inset = layout.compact ? 12 : 16;
-        const int readoutHeight = layout.compact ? 28 : 34;
-        const int width = layout.compact ? 340 : 452;
-        const int height = target + readoutHeight + 2 * inset;
+        const int inset = wide ? 20 : 12;
+        const int readoutHeight = wide ? 46 : 28;
+        const int width = wide ? 460 : 340;
+        const int gap = 8;
+        const int height = 2 * target + readoutHeight + gap + 2 * inset;
         tempoOverlay.setBounds (getLocalBounds());
+        tempoOverlay.wideStyle = wide;
         tempoOverlay.card = juce::Rectangle<int> (tempoButton.getBounds().getCentreX() - width / 2,
                                                   tempoButton.getBottom() + 8, width, height)
                                 .constrainedWithin (getLocalBounds().reduced (8));
         auto controlsRow = tempoOverlay.card.reduced (inset);
+        const auto tapRow = controlsRow.removeFromBottom (target);
+        tapTempo.setBounds (tapRow.withSizeKeepingCentre (juce::jmin (tapRow.getWidth(), 148), target));
+        controlsRow.removeFromBottom (gap);
+        for (auto* stepper : { &tempoDown, &tempoUp })
+            stepper->getProperties().set ("tempoStepper", wide);
         tempoDown.setBounds (controlsRow.removeFromLeft (target).withTrimmedTop (readoutHeight));
         tempoUp.setBounds (controlsRow.removeFromRight (target).withTrimmedTop (readoutHeight));
-        tempoFader.setTextBoxStyle (juce::Slider::TextBoxAbove, false, 104, readoutHeight);
+        tempoFader.getProperties().set ("wideTempoFader", wide);
+        tempoFader.setTextBoxStyle (juce::Slider::TextBoxAbove, false, wide ? 144 : 104, readoutHeight);
         tempoFader.setBounds (controlsRow.reduced (10, 0));
+        tempoOverlay.repaint();
     }
 
     void NativeEditor::syncTempo()
     {
-        const int bpm = juce::roundToInt (controller.processor.getStandaloneTempoBpm());
-        tempo.setValue (bpm);
-        if (!usesTempoPopup())
-            return;
+        const int bpm = tempoScrub && tempoScrub->dragging ? tempoScrub->requested
+            : juce::roundToInt (controller.processor.getStandaloneTempoBpm());
         tempoButton.setButtonText (juce::String (bpm) + " BPM");
         if (!tempoFader.isMouseButtonDown())
             tempoFader.setValue (bpm, juce::dontSendNotification);
-        tempoDown.setEnabled (bpm > tempo.minimum);
-        tempoUp.setEnabled (bpm < tempo.maximum);
+        tempoDown.setEnabled (bpm > minimumTempoBpm);
+        tempoUp.setEnabled (bpm < maximumTempoBpm);
+    }
+
+    void NativeEditor::finishTempoScrub()
+    {
+        if (const auto scrub = std::exchange (tempoScrub, std::nullopt))
+        {
+            tempoButton.setState (juce::Button::buttonNormal);
+            if (scrub->dragging)
+                controller.commit();
+        }
+    }
+
+    void NativeEditor::registerTempoTap()
+    {
+        constexpr double msPerMinute = 60000.0;
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        const double interval = now - tempoTaps.lastMs.value_or (now);
+        if (!tempoTaps.lastMs || interval > msPerMinute / minimumTempoBpm)
+        {
+            tempoTaps = {};
+            tempoTaps.lastMs = now;
+            return;
+        }
+        if (interval < msPerMinute / maximumTempoBpm)
+            return;
+
+        tempoTaps.lastMs = now;
+        tempoTaps.intervals[tempoTaps.next] = interval;
+        tempoTaps.next = (tempoTaps.next + 1) % tempoTaps.intervals.size();
+        tempoTaps.count = juce::jmin (tempoTaps.count + 1, tempoTaps.intervals.size());
+        if (tempoTaps.count >= 2)
+        {
+            const double total = std::accumulate (tempoTaps.intervals.begin(), tempoTaps.intervals.end(), 0.0);
+            const int bpm = juce::roundToInt (msPerMinute * static_cast<double> (tempoTaps.count) / total);
+            controller.command ("standalone_tempo", { bpm });
+        }
     }
 
     void NativeEditor::syncChannel()
@@ -516,7 +616,7 @@ namespace ksh::ui
         loopLength.setEnabled (controller.source() >= 0);
         channelReverse.setToggleState (channel.playbackMode == PlaybackMode::reverse || channel.playbackMode == PlaybackMode::reverse_ping_pong, juce::dontSendNotification);
         channelPing.setToggleState (channel.playbackMode == PlaybackMode::ping_pong || channel.playbackMode == PlaybackMode::reverse_ping_pong, juce::dontSendNotification);
-        const bool solo = controller.soloedChannel() == selectedChannel;
+        const bool solo = controller.soloedChannels().test (static_cast<size_t> (selectedChannel));
         channelSolo.setButtonText (solo ? "Exit solo" : "Solo");
         channelSolo.setToggleState (solo, juce::dontSendNotification);
         for (auto* button : { &channelReverse, &channelPing, &channelSolo })
@@ -598,6 +698,8 @@ namespace ksh::ui
             }
             if (projectDetails.isVisible())
                 visible.push_back (&projectDetails);
+            if (projectBrowser.isVisible())
+                visible.push_back (&projectBrowser);
             if (noteChooser.isVisible())
                 visible.push_back (&noteChooser);
             if (discardChanges.isVisible())
@@ -610,6 +712,8 @@ namespace ksh::ui
                 tempoOverlay.toFront (false);
             if (patternPicker.isVisible())
                 patternPicker.toFront (false);
+            if (projectBrowser.isVisible())
+                projectBrowser.toFront (false);
         };
         auto place = [&visible] (juce::Component& component, int x, int y, int w, int h)
         {
@@ -618,7 +722,6 @@ namespace ksh::ui
         };
         const int w = getWidth();
         const bool phone = layout.phoneRowControls;
-        auto& tempoControl = usesTempoPopup() ? static_cast<juce::Component&> (tempoButton) : static_cast<juce::Component&> (tempo);
         const bool gridHeader = panel == Panel::none || panel == Panel::generate;
         const bool patternOpen = phonePatternPanel();
         const bool menuOpen = phone && !patternOpen && panel >= Panel::project && panel <= Panel::help;
@@ -763,7 +866,7 @@ namespace ksh::ui
                     fromRight (jamButton, 32);
                     fromRight (generate, 68);
                     fromRight (metronome, 32);
-                    fromRight (tempoControl, 44);
+                    fromRight (tempoButton, 58);
                     placePlay (edge - 32, 32);
                 }
                 else
@@ -820,7 +923,7 @@ namespace ksh::ui
             if (layout.standalone)
             {
                 placePlay (w - 220, 36);
-                place (tempoControl, w - 180, toolbarY, 86, toolbarHeight);
+                place (tempoButton, w - 180, toolbarY, 86, toolbarHeight);
             }
             place (closePanel, w - 84, toolbarY, 78, toolbarHeight);
         }

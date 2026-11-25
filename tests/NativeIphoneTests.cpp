@@ -129,6 +129,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (processor.getStandaloneTempoBpm() == 169.0);
     phoneButton (editor, "Decrease tempo by 1 BPM").onClick();
     CHECK (processor.getStandaloneTempoBpm() == 168.0);
+    CHECK (phoneButton (editor, "Tap Tempo").getHeight() >= 44);
     capturePhone (editor, "iphone-tempo");
     CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
     CHECK_FALSE (fader->getParentComponent()->isVisible());
@@ -520,14 +521,16 @@ TEST_CASE ("Jam shortcuts take precedence over focused controls", "[native-ui][j
     CHECK_FALSE (escaped);
 }
 
-TEST_CASE ("iPad standalone opens a touch tempo fader with one-BPM steppers", "[native-ui][tempo][touch]")
+TEST_CASE ("Desktop and iPad standalone share a tempo popup", "[native-ui][tempo][touch]")
 {
-    const bool compact = GENERATE (false, true);
+    const std::string_view viewport = GENERATE ("desktop", "ipad", "compact-ipad");
+    const bool desktop = viewport == "desktop";
+    const bool compact = viewport == "compact-ipad";
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
     NativeEditor editor (processor);
-    editor.layout.touchRows = true;
+    editor.layout.touchRows = !desktop;
     if (compact)
         editor.setCompactViewport (true, 1024, 480, false);
     editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
@@ -538,6 +541,7 @@ TEST_CASE ("iPad standalone opens a touch tempo fader with one-BPM steppers", "[
     button.onClick();
     auto& plus = phoneButton (editor, "Increase tempo by 1 BPM");
     auto& minus = phoneButton (editor, "Decrease tempo by 1 BPM");
+    auto& tap = phoneButton (editor, "Tap Tempo");
     auto* popup = plus.getParentComponent();
     REQUIRE (popup != nullptr);
     CHECK (popup->isVisible());
@@ -545,6 +549,7 @@ TEST_CASE ("iPad standalone opens a touch tempo fader with one-BPM steppers", "[
     CHECK (plus.getWidth() == plus.getHeight());
     CHECK (minus.getWidth() == plus.getWidth());
     CHECK (minus.getHeight() == plus.getHeight());
+    CHECK (tap.getHeight() == plus.getHeight());
     juce::Slider* fader = nullptr;
     for (auto* child : popup->getChildren())
         if (child->getTitle() == "Tempo BPM fader")
@@ -559,9 +564,54 @@ TEST_CASE ("iPad standalone opens a touch tempo fader with one-BPM steppers", "[
     CHECK (processor.getStandaloneTempoBpm() == 299.0);
     CHECK (plus.isEnabled());
     CHECK (popup->isVisible());
+    if (desktop)
+    {
+        const auto hit = [&]
+        {
+            const double now = juce::Time::getMillisecondCounterHiRes();
+            tap.onClick();
+            return now;
+        };
+        const auto first = hit();
+        juce::Thread::sleep (320);
+        hit();
+        CHECK (processor.getStandaloneTempoBpm() == 299.0);
+        juce::Thread::sleep (320);
+        const auto third = hit();
+        CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (120000.0 / (third - first)).margin (2.0));
+        juce::Thread::sleep (560);
+        const auto fourth = hit();
+        CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (180000.0 / (fourth - first)).margin (2.0));
+        juce::Thread::sleep (3050);
+        const double beforeNewTaps = processor.getStandaloneTempoBpm();
+        hit();
+        juce::Thread::sleep (300);
+        hit();
+        CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (beforeNewTaps));
+        fader->setValue (299, juce::sendNotificationSync);
+        juce::Thread::sleep (300);
+        hit();
+        CHECK (processor.getStandaloneTempoBpm() == 299.0);
+    }
+    if (!compact)
+        capturePhone (editor, desktop ? "desktop-tempo" : "ipad-tempo");
     popup->mouseDown (phoneEvent (*popup, { 0, 0 }, { 0, 0 }));
     CHECK_FALSE (popup->isVisible());
     CHECK (button.getButtonText() == "299 BPM");
+    const auto centre = button.getLocalBounds().toFloat().getCentre();
+    const auto lower = centre.translated (0, 40);
+    const auto upper = centre.translated (0, -20);
+    auto& scrub = dynamic_cast<GestureButton&> (button);
+    scrub.mouseDown (phoneEvent (scrub, centre, centre));
+    scrub.mouseDrag (phoneEvent (scrub, lower, centre));
+    CHECK (processor.getStandaloneTempoBpm() == 279.0);
+    scrub.mouseDrag (phoneEvent (scrub, upper, centre));
+    scrub.mouseUp (phoneEvent (scrub, upper, centre, 0));
+    CHECK (processor.getStandaloneTempoBpm() == 300.0);
+    CHECK_FALSE (popup->isVisible());
+    scrub.mouseDown (phoneEvent (scrub, centre, centre));
+    scrub.mouseUp (phoneEvent (scrub, centre, centre, 0));
+    CHECK (popup->isVisible());
 }
 
 TEST_CASE ("iPhone Prob keeps cycle editing in the inspector", "[native-ui][iphone]")
@@ -652,7 +702,7 @@ TEST_CASE ("iPhone reaches triplet presets by holding a step across page boundar
     editor.sync();
     hold ({ 0, 17 });
     CHECK (phoneButton (editor, "Quarter triplet").getToggleState());
-    CHECK (phoneButton (editor, "Quarter triplet").getHeight() == 42);
+    CHECK (phoneButton (editor, "Quarter triplet").getHeight() == 52);
     REQUIRE (grid.openPresetMenu() != nullptr);
     capturePhone (editor, "iphone-step-presets");
     CHECK (grid.openPresetMenu()->getNumChildComponents() == 6);
@@ -683,6 +733,57 @@ TEST_CASE ("iPhone reaches triplet presets by holding a step across page boundar
     CHECK (editor.controller.cell (step).roll == 3);
     editor.controller.undo();
     CHECK (editor.controller.cell (step).span == 8);
+}
+
+TEST_CASE ("A second pointer cannot change or end an active grid edit", "[native-ui][iphone][gesture]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.setCompactViewport (true, 814, 390);
+    editor.setSize (814, 390);
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+    const auto now = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, now.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto pen = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (pen != sources.end());
+    const auto mouse = juce::Desktop::getInstance().getMainMouseSource();
+    auto& grid = phoneGrid (editor);
+    const auto start = grid.layout.cell ({ 0, 2 }).getCentre();
+    const auto middle = grid.layout.cell ({ 0, 4 }).getCentre();
+    const auto end = grid.layout.cell ({ 0, 6 }).getCentre();
+    const auto otherCell = grid.layout.cell ({ 1, 3 }).getCentre();
+    const auto secondPoint = GENERATE_COPY (juce::Point<float> (0, 0), otherCell);
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    const auto event = [&] (juce::MouseInputSource pointer, juce::Point<float> point, juce::Point<float> origin, int mods)
+    {
+        return juce::MouseEvent (pointer, point, juce::ModifierKeys (mods), 1, 0, 0, 0, 0,
+                                 &grid, &grid, now, origin, now, 1, point != origin);
+    };
+
+    grid.mouseDown (event (*pen, start, start, pressed));
+    grid.mouseDrag (event (*pen, middle, start, pressed));
+    REQUIRE (editor.controller.editing());
+    grid.mouseDown (event (mouse, secondPoint, secondPoint, pressed));
+    grid.mouseDrag (event (mouse, otherCell, secondPoint, pressed));
+    grid.mouseUp (event (mouse, otherCell, secondPoint, 0));
+    REQUIRE (editor.controller.editing());
+    grid.mouseDrag (event (*pen, end, start, pressed));
+    grid.mouseUp (event (*pen, end, start, 0));
+
+    for (int step = 2; step <= 6; ++step)
+        CHECK (editor.controller.cell ({ 0, step }).enabled);
+    CHECK_FALSE (editor.controller.cell ({ 1, 3 }).enabled);
+    CHECK_FALSE (editor.controller.editing());
+    editor.controller.undo();
+    for (int step = 2; step <= 6; ++step)
+        CHECK_FALSE (editor.controller.cell ({ 0, step }).enabled);
+
+    grid.mouseDown (event (mouse, otherCell, otherCell, pressed));
+    grid.mouseUp (event (mouse, otherCell, otherCell, 0));
+    CHECK (editor.controller.cell ({ 1, 3 }).enabled);
 }
 
 TEST_CASE ("Touch on an empty step draws immediately and a swipe paints across the next step", "[native-ui][touch]")
@@ -778,9 +879,10 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
                                  juce::Time::getCurrentTime(), origin, time, 1, position != origin);
     };
     const int pressed = juce::ModifierKeys::leftButtonModifier;
+    const auto beganAt = juce::Time::getMillisecondCounterHiRes();
     grid.mouseDown (event (origin, pressed));
     CHECK (grid.openPresetMenu() == nullptr);
-    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    const auto deadline = beganAt + (phone ? 2000.0 : 1250.0);
     while (grid.openPresetMenu() == nullptr && juce::Time::getMillisecondCounterHiRes() < deadline)
     {
         juce::Thread::sleep (10);
@@ -788,9 +890,12 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
     }
     REQUIRE (grid.openPresetMenu() != nullptr);
     if (phone)
-        CHECK (juce::Time::getCurrentTime() - time >= juce::RelativeTime::milliseconds (1500));
+        CHECK (juce::Time::getMillisecondCounterHiRes() - beganAt >= 1500.0);
     CHECK_FALSE (editor.controller.cell (cell).enabled);
     auto& preset = phoneButton (editor, "8th triplet");
+    CHECK (preset.getHeight() == (phone ? 52 : Layout::touchTarget));
+    if (!phone)
+        capturePhone (editor, "ipad-step-presets");
     const auto target = grid.getLocalPoint (&preset, preset.getLocalBounds().getCentre().toFloat());
     grid.mouseDrag (event (target, pressed));
     CHECK (grid.openPresetMenu() != nullptr);
@@ -871,8 +976,9 @@ TEST_CASE ("iPad can scrub velocity and open a roll near the last step's handle"
 
 TEST_CASE ("iPad velocity anchor hold pulses outside the touch point and stays armed", "[native-ui][touch][velocity-draw]")
 {
+    const int firstStep = GENERATE (0, 3);
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 4, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, firstStep + 1, 1, 90 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 7, 1, 90 }));
     NativeEditor editor (processor);
     editor.layout.touchRows = true;
@@ -890,7 +996,7 @@ TEST_CASE ("iPad velocity anchor hold pulses outside the touch point and stays a
     REQUIRE (source != sources.end());
 
     auto& grid = phoneGrid (editor);
-    const auto cell = grid.cellBounds ({ 0, 3 });
+    const auto cell = grid.cellBounds ({ 0, firstStep });
     const auto origin = juce::Point<float> { cell.getX(), cell.getCentreY() };
     const auto event = [&] (juce::Point<float> position, int modifiers)
     {
@@ -903,7 +1009,7 @@ TEST_CASE ("iPad velocity anchor hold pulses outside the touch point and stays a
     CHECK_FALSE (editor.controller.editing());
     const auto area = juce::Rectangle<int> (120, 120).withCentre (origin.roundToInt());
     const auto before = grid.createComponentSnapshot (area);
-    while (!editor.controller.editing() && juce::Time::getMillisecondCounterHiRes() < beganAt + 2000.0)
+    while (!editor.controller.editing() && juce::Time::getMillisecondCounterHiRes() < beganAt + 700.0)
     {
         juce::Thread::sleep (10);
         juce::Timer::callPendingTimersSynchronously();
@@ -924,10 +1030,117 @@ TEST_CASE ("iPad velocity anchor hold pulses outside the touch point and stays a
     }
     CHECK (grid.openPresetMenu() == nullptr);
     REQUIRE (editor.controller.editing());
+
+    const auto sameEdge = origin.translated (0, 18.0f);
+    const auto markerArea = juce::Rectangle<int> (16, 16).withCentre (sameEdge.roundToInt());
+    const auto beforeDrag = grid.createComponentSnapshot (markerArea);
+    grid.mouseDrag (event (sameEdge, pressed));
+    const auto afterDrag = grid.createComponentSnapshot (markerArea);
+    bool secondMarkerAppeared = false;
+    for (int y = 0; y < markerArea.getHeight(); ++y)
+        for (int x = 0; x < markerArea.getWidth(); ++x)
+            secondMarkerAppeared |= beforeDrag.getPixelAt (x, y) != afterDrag.getPixelAt (x, y);
+    CHECK_FALSE (secondMarkerAppeared);
+
     const auto destination = grid.cellBounds ({ 0, 7 }).getTopLeft().translated (0, 2);
     grid.mouseDrag (event (destination, pressed));
     grid.mouseUp (event (destination, 0));
-    CHECK (editor.controller.cell ({ 0, 3 }).velocity == 64);
+    CHECK (editor.controller.cell ({ 0, firstStep }).velocity == 64);
+}
+
+TEST_CASE ("iPad separates the loop grip, velocity scrub and split hold", "[native-ui][touch][velocity-draw]")
+{
+    PluginProcessor processor;
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    const Location first { 0, 0 }, split { 0, 4 };
+    const Cell clip { .enabled = true, .velocity = 84, .roll = 3, .span = 2 };
+    editor.controller.begin ("Set up steps");
+    editor.controller.editCell (first, Cell { .enabled = true, .velocity = 90 });
+    editor.controller.editCell (split, clip);
+    editor.controller.commit();
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    auto* peer = editor.getPeer();
+    REQUIRE (peer != nullptr);
+    const auto time = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, time.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto source = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (source != sources.end());
+
+    auto& grid = phoneGrid (editor);
+    const auto event = [&] (juce::Point<float> position, juce::Point<float> origin, int modifiers)
+    {
+        return juce::MouseEvent (*source, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &grid, &grid,
+                                 juce::Time::getCurrentTime(), origin, time, 1, position != origin);
+    };
+    constexpr int pressed = juce::ModifierKeys::leftButtonModifier;
+    SECTION ("The grip sits in the gutter and still resizes the loop")
+    {
+        const auto grip = grid.loopHandleBounds (0, false);
+        CHECK (grip.getRight() < grid.cellBounds (first).getX());
+        CHECK (grid.rowNoteInput (0).getRight() < grip.getX());
+        const auto origin = grip.getCentre();
+        const auto end = origin.translated (grid.layout.cellWidth(), 0);
+        grid.mouseDown (event (origin, origin, pressed));
+        grid.mouseDrag (event (end, origin, pressed));
+        grid.mouseUp (event (end, origin, 0));
+        CHECK (editor.controller.loop (0).loopStart == 1);
+    }
+    SECTION ("A quick vertical drag at the first seam scrubs relative velocity")
+    {
+        const auto cell = grid.cellBounds (first);
+        const auto origin = juce::Point<float> { cell.getX() + 1.0f, cell.getCentreY() };
+        const auto end = origin.translated (0, -8.0f);
+        grid.mouseDown (event (origin, origin, pressed));
+        grid.mouseDrag (event (end, origin, pressed));
+        grid.mouseUp (event (end, origin, 0));
+        CHECK (editor.controller.cell (first).velocity > 90);
+        CHECK (editor.controller.cell (split) == clip);
+        CHECK (editor.controller.loop (0).loopStart == 0);
+    }
+    SECTION ("A touch drag from either gutter starts a line without waiting for a hold")
+    {
+        const bool shortened = GENERATE (false, true);
+        const int start = shortened ? 2 : 0;
+        const int end = shortened ? 12 : grid.layout.steps;
+        editor.controller.command ("channel_loop_length", { 1, end - start, start + 1 });
+        editor.controller.begin ("Set up edge steps");
+        editor.controller.editCell ({ 0, start }, Cell { .enabled = true, .velocity = 90 });
+        editor.controller.editCell ({ 0, end - 1 }, Cell { .enabled = true, .velocity = 90 });
+        editor.controller.commit();
+        for (const bool closing : { false, true })
+        {
+            const Location location { 0, closing ? end - 1 : start };
+            const auto cell = grid.cellBounds (location);
+            const auto origin = juce::Point<float> { closing ? cell.getRight() + 5.0f : cell.getX() - 5.0f, cell.getCentreY() };
+            const auto destination = grid.layout.cell ({ 0, closing ? end - 3 : start + 3 }).getTopLeft().translated (0, 2.0f);
+            grid.mouseDown (event (origin, origin, pressed));
+            grid.mouseDrag (event (destination, origin, pressed));
+            grid.mouseUp (event (destination, origin, 0));
+            CHECK (editor.controller.cell (location).velocity == 64);
+            CHECK (editor.controller.loop (0).loopStart == start);
+            CHECK (editor.controller.loop (0).loopLength == end - start);
+            editor.controller.undo();
+        }
+    }
+    SECTION ("Holding a split divider selects its clip")
+    {
+        const auto body = grid.layout.cellArtwork (grid.cellBounds (split));
+        const auto origin = juce::Point<float> { body.getX() + body.getWidth() / 3.0f, body.getCentreY() };
+        grid.mouseDown (event (origin, origin, pressed));
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 800.0;
+        while (editor.controller.selected.none() && juce::Time::getMillisecondCounterHiRes() < deadline)
+        {
+            juce::Thread::sleep (10);
+            juce::Timer::callPendingTimersSynchronously();
+        }
+        CHECK (editor.controller.selection() == std::vector { split });
+        CHECK_FALSE (editor.controller.editing());
+        grid.mouseUp (event (origin, origin, 0));
+        CHECK (editor.controller.cell (split) == clip);
+    }
 }
 
 TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gesture", "[native-ui][iphone]")

@@ -2,6 +2,9 @@
 #include <juce_audio_plugin_client/detail/juce_IncludeSystemHeaders.h>
 #include "StandalonePreferences.h"
 #include "StandaloneMidiRouting.h"
+#if JUCE_MAC
+ #include "../source/PluginEditor.h"
+#endif
 #include "../source/ui/KshFooterMenu.h"
 #if defined (KSH_STANDALONE_LINK)
  #include "StandaloneLink.h"
@@ -585,41 +588,60 @@ protected:
 private:
    #if JUCE_MAC
     static constexpr CommandID audioSettingsCommand = 0x2000;
+    static constexpr CommandID saveProjectCommand = 0x2001;
     ApplicationCommandManager menuCommands;
 
-    StringArray getMenuBarNames() override { return {}; }
-    PopupMenu getMenuForIndex (int, const String&) override { return {}; }
+    StringArray getMenuBarNames() override { return { "File" }; }
+    PopupMenu getMenuForIndex (int index, const String&) override
+    {
+        PopupMenu menu;
+        if (index == 0)
+            menu.addCommandItem (&menuCommands, saveProjectCommand);
+        return menu;
+    }
     void menuItemSelected (int, int) override {}
 
     void getAllCommands (Array<CommandID>& commands) override
     {
         JUCEApplication::getAllCommands (commands);
         commands.add (audioSettingsCommand);
+        commands.add (saveProjectCommand);
     }
 
     void getCommandInfo (CommandID command, ApplicationCommandInfo& info) override
     {
-        if (command != audioSettingsCommand)
+        if (command == audioSettingsCommand)
         {
-            JUCEApplication::getCommandInfo (command, info);
-            return;
+            info.setInfo ("Audio/MIDI Settings", "Open Audio/MIDI Settings", "Application", 0);
+            info.addDefaultKeypress (',', ModifierKeys::commandModifier);
         }
-
-        info.setInfo (String::fromUTF8 ("Settings…"), "Open Audio/MIDI Settings", "Application", 0);
-        info.addDefaultKeypress (',', ModifierKeys::commandModifier);
+        else if (command == saveProjectCommand)
+        {
+            info.setInfo ("Save", "Save the current project", "File", 0);
+            info.addDefaultKeypress ('s', ModifierKeys::commandModifier);
+        }
+        else
+            JUCEApplication::getCommandInfo (command, info);
     }
 
     bool perform (const InvocationInfo& info) override
     {
-        if (info.commandID != audioSettingsCommand)
+        if (info.commandID != audioSettingsCommand && info.commandID != saveProjectCommand)
             return JUCEApplication::perform (info);
 
-        if (mainWindow != nullptr)
-            if (auto* holder = mainWindow->getPluginHolder())
-            {
-                holder->showAudioSettingsDialog();
-                return true;
-            }
+        auto* holder = mainWindow != nullptr ? mainWindow->getPluginHolder() : nullptr;
+        if (holder == nullptr)
+            return false;
+        if (info.commandID == audioSettingsCommand)
+        {
+            holder->showAudioSettingsDialog();
+            return true;
+        }
+        if (auto* editor = dynamic_cast<PluginEditor*> (holder->processor->getActiveEditor()))
+        {
+            editor->saveCurrentProject();
+            return true;
+        }
         return false;
     }
    #endif

@@ -138,8 +138,9 @@ namespace ksh::ui
         void clearPattern();
         bool applyJamTake (const JamTake&, int source, uint64_t documentEpoch);
         void toggleMute (int channel);
-        void toggleSolo (int channel);
-        int soloedChannel() const;
+        using SoloChannels = std::bitset<Constants::maxChannels>;
+        void toggleSolo (int channel, bool extend = false);
+        SoloChannels soloedChannels() const;
         bool exitSolo();
         struct SplitCycleSelection
         {
@@ -188,7 +189,8 @@ namespace ksh::ui
         juce::String gestureLabel, gestureParameter;
         bool transaction = false;
         std::array<bool, 8> soloRestore {};
-        int soloChannel = -1, soloSource = -1;
+        SoloChannels soloChannels;
+        int soloSource = -1;
         uint64_t epoch = 0;
         void pushHistory (Entry);
         void applyHistory (const Entry&, bool redoing);

@@ -10,6 +10,7 @@ namespace ksh::ui
         DiscardChanges()
         {
             setTitle ("Unsaved changes");
+            setAlwaysOnTop (true);
             setWantsKeyboardFocus (true);
             setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
             addAndMakeVisible (cancel);
@@ -123,6 +124,7 @@ namespace ksh::ui
         explicit ProjectDetails (PluginProcessor& p) : processor (p)
         {
             setTitle ("Project details");
+            setAlwaysOnTop (true);
             setWantsKeyboardFocus (true);
             setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
             for (auto* field : { &name, &author, &description })
@@ -136,6 +138,12 @@ namespace ksh::ui
             name.setTitle ("Project name");
             author.setTitle ("Project author");
             description.setTitle ("Project description");
+            for (auto* field : { &name, &author })
+            {
+                field->setFont (font (20));
+                field->setIndents (10, 0);
+                field->setJustification (juce::Justification::centredLeft);
+            }
             name.setInputRestrictions (160);
             author.setInputRestrictions (160);
             description.setMultiLine (true);
@@ -211,6 +219,11 @@ namespace ksh::ui
             if (onClose)
                 onClose();
         }
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (!card.contains (event.getPosition()))
+                dismiss();
+        }
         bool keyPressed (const juce::KeyPress& key) override
         {
             if (key != juce::KeyPress::escapeKey)
@@ -224,9 +237,11 @@ namespace ksh::ui
             const int x = card.getX() + 24, y = card.getY(), width = card.getWidth() - 48;
             const int nameWidth = (width - 16) * 3 / 5;
             const int controlHeight = getHeight() > 500 ? 64 : 44;
-            name.setBounds (x, y + 80, nameWidth, controlHeight);
-            author.setBounds (x + nameWidth + 16, y + 80, width - nameWidth - 16, controlHeight);
-            description.setBounds (x, name.getBottom() + 36, width, card.getHeight() - controlHeight - 278);
+            const int identityHeight = getHeight() > 500 ? 44 : 38;
+            name.setBounds (x, y + 80, nameWidth, identityHeight);
+            author.setBounds (x + nameWidth + 16, y + 80, width - nameWidth - 16, identityHeight);
+            const int descriptionY = name.getBottom() + 30;
+            description.setBounds (x, descriptionY, width, juce::jmax (0, card.getBottom() - 162 - descriptionY));
             const int datesY = description.getBottom() + 36;
             created.setBounds (x, datesY, (width - 16) / 2, 22);
             modified.setBounds (x + (width + 16) / 2, datesY, (width - 16) / 2, 22);

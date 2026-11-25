@@ -3,6 +3,7 @@
 #include "KshPatternButton.h"
 #include "KshPreviewPanel.h"
 #include "KshProjectDetails.h"
+#include "KshProjectBrowser.h"
 #include "KshCompactPatternPicker.h"
 namespace ksh::ui
 {
@@ -22,11 +23,17 @@ namespace ksh::ui
         juce::String projectTitle() const { return controller.processor.getProjectName(); }
         juce::String projectDescription() const { return controller.processor.getProjectDescription(); }
         void sync();
+        void showProjectSaved();
         void returnToPhoneGrid();
         void confirmDiscardingChanges (std::function<void()>);
+        void showProjectBrowser (juce::File root, juce::File current, std::optional<ProjectBrowser::Details>,
+                                 ProjectBrowser::ListProjects, ProjectBrowser::Submit, std::function<void()> importExternal = {},
+                                 bool confirmOpen = false, ProjectBrowser::ReadDetails = {});
+        bool isProjectBrowserOpen() const { return projectBrowser.isVisible(); }
         void setCompactViewport (bool, int width, int height, bool phone = true);
         void setCompactVisibleRows (int);
         void paint (juce::Graphics&) override;
+        void paintOverChildren (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
         bool keyPressed (const juce::KeyPress&) override;
@@ -51,7 +58,7 @@ namespace ksh::ui
         void editTheme (const Theme&);
         void finishThemeGesture();
         FooterHelp footerHelp { *this };
-        juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Graphical values" };
+        juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Show values" };
         juce::TextButton modifierToggle { "Shift/Option shortcuts" };
         juce::TextButton midiOutput { "MIDI Output" };
         juce::TextButton settings;
@@ -75,6 +82,7 @@ namespace ksh::ui
         static constexpr int patternGlowExtent = 20;
         melatonin::DropShadow patternGlow { { Palette::accent.withAlpha (0.8f), 18 }, { Palette::accent.withAlpha (0.55f), 5 } };
         std::array<juce::TextButton, 6> projectButtons;
+        juce::TimedCallback projectSavedTimer { [this] { projectSavedTimer.stopTimer(); repaint(); } };
         juce::Component recordingStrip;
         std::array<RowTriggerButton, 8> recordingPads;
         PadVelocitySwitch padVelocityMode;
@@ -84,6 +92,7 @@ namespace ksh::ui
         std::optional<std::pair<juce::Time, double>> lastPadTouch;
         ProjectHeader projectHeader;
         ProjectDetails projectDetails;
+        ProjectBrowser projectBrowser { *uiPreferences };
         NoteChooser noteChooser;
         bool noteChooserEditing = false;
         uint64_t noteChooserEpoch = 0;
@@ -113,7 +122,7 @@ namespace ksh::ui
         void syncJamButton();
         SettingsButton recordQuantize, metronome;
         juce::TextButton mutePattern { "M" }, velocityLayer { "Velocity" }, clear { juce::String::fromUTF8 ("×") }, record { juce::String::fromUTF8 ("●") }, left { juce::String::fromUTF8 ("◀") }, right { juce::String::fromUTF8 ("▶") }, undoButton { juce::String::fromUTF8 ("↶") }, redoButton { juce::String::fromUTF8 ("↷") }, rate, play { "Play" }, dc { "Channel colors" };
-        ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale, tempo;
+        ValueControl swing, subdivision, velocityHumanize, timingHumanize, steps, scale;
         std::bitset<8> heldPads;
         int previousScale = 100;
         std::optional<std::pair<Layout, juce::Rectangle<int>>> laidOut;
@@ -130,22 +139,40 @@ namespace ksh::ui
         juce::TextButton compactAccent, compactClear { "Clear pattern..." };
         ClearFlash patternClearFlash { clear }, compactClearFlash { compactClear };
         juce::TextButton recordOptions { "Timing options..." };
-        juce::TextButton tempoButton, metronomeOptions { "Metronome sound..." };
+        GestureButton tempoButton;
+        juce::TextButton metronomeOptions { "Metronome sound..." };
+        struct TempoScrub
+        {
+            juce::MouseInputSource pointer;
+            int start, requested;
+            bool dragging = false;
+        };
+        std::optional<TempoScrub> tempoScrub;
         juce::Slider tempoFader { juce::Slider::LinearHorizontal, juce::Slider::TextBoxAbove };
         juce::TextButton tempoDown { juce::String::fromUTF8 ("−") }, tempoUp { "+" };
+        juce::TextButton tapTempo { "Tap Tempo" };
         class TempoOverlay : public juce::Component
         {
         public:
             std::function<void()> dismiss;
             juce::Rectangle<int> card;
+            bool wideStyle = false;
             void paint (juce::Graphics&) override;
             void mouseDown (const juce::MouseEvent&) override;
         } tempoOverlay;
         bool tempoOpen = false;
-        bool usesTempoPopup() const { return layout.touchRows || layout.phoneRowControls; }
+        static constexpr int minimumTempoBpm = 20, maximumTempoBpm = 300;
+        struct TempoTaps
+        {
+            std::optional<double> lastMs;
+            std::array<double, 4> intervals {};
+            size_t count = 0, next = 0;
+        } tempoTaps;
         void setTempoOpen (bool);
         void layoutTempoPopup();
         void syncTempo();
+        void finishTempoScrub();
+        void registerTempoTap();
         AccentWordmark phoneAboutWordmark;
         std::array<juce::TextButton, 5> panelTabs;
         ValueControl loopStart, loopLength;

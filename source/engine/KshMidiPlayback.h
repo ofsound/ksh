@@ -144,6 +144,7 @@ private:
     int64_t nextBlockStartSample = 0;
     bool wasPlaying = false;
     double expectedNextPpq = 0.0;
+    double previousBeatsPerStep = 0.0;
     std::optional<int> lastEmittedGlobalStep;
     std::optional<int> lastScheduledGlobalStep;
     std::optional<int> anticipatedLoopStep;

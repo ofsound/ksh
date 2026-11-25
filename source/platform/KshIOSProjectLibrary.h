@@ -22,14 +22,14 @@ namespace ksh
         ~IOSProjectLibrary();
         juce::File directory() const;
         juce::File currentFile() const;
-        juce::Array<juce::File> files() const;
+        juce::Array<juce::File> files (const juce::File& directory) const;
         bool busy() const;
         void cancel();
         void acceptFile (const juce::File&);
         void chooseOpen (juce::Component&, Completion);
         void read (const juce::File&, Completion);
-        void save (juce::Component&, const juce::File&, const juce::String& name,
-                   juce::MemoryBlock, bool saveAs, Completion);
+        void readPreview (const juce::File&, Completion);
+        void save (const juce::File&, juce::MemoryBlock, bool createOnly, Completion);
         void share (juce::Component&, const juce::String& name, juce::MemoryBlock, Completion);
         void restoreAccess (const juce::PropertySet&);
         void saveAccess (juce::PropertySet&) const;

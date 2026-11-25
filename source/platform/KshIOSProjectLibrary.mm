@@ -163,7 +163,7 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
                 for (NSMetadataItem* item in self->query.results)
                 {
                     auto f = file ([item valueForAttribute:NSMetadataItemURLKey]);
-                    if (f.getParentDirectory() == self->library) self->cloudFiles.add (f);
+                    if (f.isAChildOf (self->library)) self->cloudFiles.add (f);
                 }
                 [self->query enableUpdates];
             }
@@ -205,63 +205,63 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
         else whenReady = std::move (action);
     }
 
+    static Result readData (NSURL* selected, juce::String* fingerprint = nullptr)
+    {
+        Access access (selected);
+        NSError* error = nil;
+        NSNumber* ubiquitous = nil;
+        [selected getResourceValue:&ubiquitous forKey:NSURLIsUbiquitousItemKey error:nil];
+        if (ubiquitous.boolValue)
+            [[NSFileManager defaultManager] startDownloadingUbiquitousItemAtURL:selected error:&error];
+        __block NSData* data = nil;
+        __block NSString* failure = nil;
+        auto* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+        [coordinator coordinateReadingItemAtURL:selected options:0 error:&error byAccessor:^(NSURL* coordinated) {
+            NSNumber* size = nil;
+            [coordinated getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+            if (size == nil || size.unsignedLongLongValue == 0 || size.unsignedLongLongValue > maximumProjectBytes)
+                failure = @"The selected project is empty or too large.";
+            else
+                data = [NSData dataWithContentsOfURL:coordinated options:0 error:nil];
+        }];
+        Result result;
+        result.file = file (selected);
+        if (error != nil || data == nil)
+            result.error = failure != nil ? string (failure) : "The project could not be downloaded or read. Check your connection and try again.";
+        else
+        {
+            result.data = juce::MemoryBlock (data.bytes, data.length);
+            if (fingerprint != nullptr)
+                *fingerprint = digest (data);
+        }
+        return result;
+    }
+
     void readURL (NSURL* selected)
     {
         auto self = shared_from_this();
         const auto operation = generation;
         dispatch_async (queue, ^{
-            Access access (selected);
-            NSError* error = nil;
-            NSNumber* ubiquitous = nil;
-            [selected getResourceValue:&ubiquitous forKey:NSURLIsUbiquitousItemKey error:nil];
-            if (ubiquitous.boolValue)
-                [[NSFileManager defaultManager] startDownloadingUbiquitousItemAtURL:selected error:&error];
-            __block NSData* data = nil;
-            __block NSString* failure = nil;
-            auto* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-            [coordinator coordinateReadingItemAtURL:selected options:0 error:&error byAccessor:^(NSURL* coordinated) {
-                NSNumber* size = nil;
-                [coordinated getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
-                if (size == nil || size.unsignedLongLongValue == 0 || size.unsignedLongLongValue > maximumProjectBytes)
-                    failure = @"The selected project is empty or too large.";
-                else
-                    data = [NSData dataWithContentsOfURL:coordinated options:0 error:nil];
-            }];
-            Result result;
-            result.file = file (selected);
-            if (error != nil || data == nil)
-                result.error = failure != nil ? string (failure) : "The project could not be downloaded or read. Check your connection and try again.";
-            else
-                result.data = juce::MemoryBlock (data.bytes, data.length);
+            juce::String fingerprint;
+            auto result = readData (selected, &fingerprint);
             dispatch_async (dispatch_get_main_queue(), ^{
                 if (self->generation != operation) return;
                 if (result.error.isEmpty())
                 {
                     self->pendingURL = selected;
-                    self->pendingBaseline = digest (data);
+                    self->pendingBaseline = fingerprint;
                 }
                 self->finish (result);
             });
         });
     }
 
-    void showPicker (juce::Component& component, NSData* exportData, const juce::String& name)
+    void showOpenPicker (juce::Component& component)
     {
         auto* parent = presenter (component);
         if (parent == nil) { finish ({ {}, {}, "The Files picker could not be opened." }); return; }
-        if (exportData != nil)
-        {
-            staging = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("KSH-export", {}, false);
-            if (staging.createDirectory().failed()) { finish ({ {}, {}, "The project copy could not be created." }); return; }
-            auto staged = staging.getChildFile (juce::File::createLegalFileName (name).isEmpty() ? "Untitled Project" : juce::File::createLegalFileName (name)).withFileExtension ("kshproject");
-            if (!staged.replaceWithData (exportData.bytes, exportData.length)) { finish ({ {}, {}, "The project copy could not be written." }); return; }
-            picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[url (staged)] asCopy:YES];
-        }
-        else
-        {
-            auto* type = [UTType typeWithIdentifier:@"com.ofsound.ksh.project"];
-            picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[type != nil ? type : UTTypeData] asCopy:NO];
-        }
+        auto* type = [UTType typeWithIdentifier:@"com.ofsound.ksh.project"];
+        picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[type != nil ? type : UTTypeData] asCopy:NO];
         picker.directoryURL = url (library);
         picker.allowsMultipleSelection = NO;
         delegate = [[KSHProjectPickerDelegate alloc] init];
@@ -270,13 +270,7 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
             auto self = weak.lock();
             if (!self) return;
             if (selected == nil) { self->finish ({ {}, {}, {}, true }); return; }
-            if (exportData != nil)
-            {
-                self->pendingURL = selected;
-                self->pendingBaseline = digest (exportData);
-                self->finish ({ file (selected), {} , {} });
-            }
-            else self->readURL (selected);
+            self->readURL (selected);
         };
         picker.delegate = delegate;
         [parent presentViewController:picker animated:YES completion:nil];
@@ -294,10 +288,12 @@ IOSProjectLibrary::~IOSProjectLibrary() = default;
 juce::File IOSProjectLibrary::directory() const { return state->library; }
 juce::File IOSProjectLibrary::currentFile() const { return file (state->currentURL); }
 bool IOSProjectLibrary::busy() const { return static_cast<bool> (state->completion); }
-juce::Array<juce::File> IOSProjectLibrary::files() const
+juce::Array<juce::File> IOSProjectLibrary::files (const juce::File& directory) const
 {
-    auto result = state->cloudFiles;
-    for (const auto& f : state->library.findChildFiles (juce::File::findFiles, false, "*.kshproject"))
+    juce::Array<juce::File> result;
+    for (const auto& f : state->cloudFiles)
+        if (f.getParentDirectory() == directory) result.add (f);
+    for (const auto& f : directory.findChildFiles (juce::File::findFiles | juce::File::ignoreHiddenFiles, false, "*.kshproject"))
         result.addIfNotAlreadyThere (f);
     return result;
 }
@@ -320,7 +316,7 @@ void IOSProjectLibrary::chooseOpen (juce::Component& component, Completion done)
     juce::Component::SafePointer<juce::Component> safe (&component);
     state->performWhenReady ([self, safe] {
         if (safe == nullptr) self->finish ({ {}, {}, {}, true });
-        else self->showPicker (*safe, nil, {});
+        else self->showOpenPicker (*safe);
     });
 }
 void IOSProjectLibrary::read (const juce::File& f, Completion done)
@@ -328,36 +324,56 @@ void IOSProjectLibrary::read (const juce::File& f, Completion done)
     if (state->begin (std::move (done)))
         state->readURL (file (state->currentURL) == f ? state->currentURL : url (f));
 }
-void IOSProjectLibrary::save (juce::Component& component, const juce::File& f, const juce::String& name,
-                            juce::MemoryBlock data, bool saveAs, Completion done)
+void IOSProjectLibrary::readPreview (const juce::File& f, Completion done)
+{
+    auto* selected = file (state->currentURL) == f ? state->currentURL : url (f);
+    dispatch_async (dispatch_get_global_queue (QOS_CLASS_UTILITY, 0), ^{
+        auto result = State::readData (selected);
+        dispatch_async (dispatch_get_main_queue(), ^{ done (result); });
+    });
+}
+void IOSProjectLibrary::save (const juce::File& f, juce::MemoryBlock data, bool createOnly, Completion done)
 {
     if (!state->begin (std::move (done))) return;
     auto self = state;
     auto* payload = bytes (data);
-    if (saveAs || f == juce::File())
-    {
-        juce::Component::SafePointer<juce::Component> safe (&component);
-        state->performWhenReady ([self, safe, payload, name] {
-            if (safe == nullptr) self->finish ({ {}, {}, {}, true });
-            else self->showPicker (*safe, payload, name);
-        });
-        return;
-    }
-    if (file (state->currentURL) != f || state->baseline.isEmpty())
+    if (!createOnly && (file (state->currentURL) != f || state->baseline.isEmpty()))
     {
         state->finish ({ {}, {}, "Reopen this project before saving, or use Save As to keep a copy." });
         return;
     }
-    auto* selected = state->currentURL;
+    auto* selected = createOnly ? url (f) : state->currentURL;
     const auto expected = state->baseline;
     const auto operation = state->generation;
     dispatch_async (state->queue, ^{
         Access access (selected);
+        if (createOnly)
+        {
+            if (const auto folder = f.getParentDirectory().createDirectory(); folder.failed())
+            {
+                const auto error = folder.getErrorMessage();
+                dispatch_async (dispatch_get_main_queue(), ^{
+                    if (self->generation == operation) self->finish ({ {}, {}, error });
+                });
+                return;
+            }
+        }
         NSError* error = nil;
         __block bool saved = false;
         __block juce::String failure;
         auto* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-        [coordinator coordinateWritingItemAtURL:selected options:NSFileCoordinatorWritingForReplacing error:&error byAccessor:^(NSURL* coordinated) {
+        const auto options = createOnly ? NSFileCoordinatorWritingOptions (0) : NSFileCoordinatorWritingForReplacing;
+        [coordinator coordinateWritingItemAtURL:selected options:options error:&error byAccessor:^(NSURL* coordinated) {
+            if (createOnly)
+            {
+                if (auto* path = coordinated.path; path != nil && [[NSFileManager defaultManager] fileExistsAtPath:path])
+                {
+                    failure = "That project name is already in use.";
+                    return;
+                }
+                saved = [payload writeToURL:coordinated options:NSDataWritingAtomic error:nil];
+                return;
+            }
             NSNumber* size = nil;
             [coordinated getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
             auto* previous = size != nil && size.unsignedLongLongValue <= maximumProjectBytes

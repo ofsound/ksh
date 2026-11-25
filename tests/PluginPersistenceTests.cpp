@@ -23,6 +23,7 @@ public:
     static bool load (PluginEditor& editor, const juce::File& file, juce::String& error) { return editor.loadProjectFile (file, error); }
     static bool loadData (PluginEditor& editor, const juce::File& file, const juce::MemoryBlock& data, juce::String& error) { return editor.loadProjectData (file, data, error); }
     static void layoutPhoneViewport (PluginEditor& editor, juce::Rectangle<float> available) { editor.layoutNativeView (available, true); }
+    static ksh::ui::NativeEditor& view (PluginEditor& editor) { return *editor.nativeView; }
 };
 
 namespace
@@ -272,7 +273,9 @@ TEST_CASE ("Save updates the current project file and keeps author and created d
 
 TEST_CASE ("Standalone keeps the save destination across restarts without adding it to project state", "[plugin][persistence]")
 {
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
     const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-save-restart", ".kshproject");
     auto data = getPluginState (processor);
     REQUIRE (file.replaceWithData (data.getData(), data.getSize()));
@@ -286,10 +289,13 @@ TEST_CASE ("Standalone keeps the save destination across restarts without adding
     ksh::saveStandaloneProjectFile (processor, settings);
     data = getPluginState (processor);
     CHECK_FALSE (nlohmann::json::parse (std::string_view (static_cast<const char*> (data.getData()), data.getSize())).contains ("projectFile"));
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor restarted;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
     setPluginState (restarted, data);
     ksh::restoreStandaloneProjectFile (restarted, settings);
     REQUIRE (restarted.getProjectFile() == file);
+    CHECK (restarted.isDocumentModified());
     {
         PluginEditor editor (restarted);
         bool completed = false;
@@ -300,8 +306,12 @@ TEST_CASE ("Standalone keeps the save destination across restarts without adding
         });
         REQUIRE (completed);
     }
+    CHECK_FALSE (restarted.isDocumentModified());
     const auto saved = nlohmann::json::parse (file.loadFileAsString().toStdString());
+    CHECK_FALSE (saved.contains ("standaloneDocumentModified"));
     PluginProcessor loaded;
+    setPluginState (loaded, data);
+    CHECK_FALSE (loaded.isDocumentModified());
     setPluginStateText (loaded, saved.dump());
     CHECK (loaded.engineStateSnapshot().sources[0][0][0].velocity == 63);
     CHECK (loaded.getProjectFile() == juce::File());
@@ -311,6 +321,160 @@ TEST_CASE ("Standalone keeps the save destination across restarts without adding
     processor.resetProject();
     ksh::saveStandaloneProjectFile (processor, settings);
     CHECK (settings.getValue ("projectFile").isEmpty());
+}
+
+TEST_CASE ("Save As writes project details to nested folders from the project browser", "[plugin][persistence][project-browser]")
+{
+    using namespace ksh::ui;
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-browser", {});
+    const juce::ScopeGuard cleanup { [&] { root.deleteRecursively(); } };
+    REQUIRE (root.createDirectory().wasOk());
+    const auto original = root.getChildFile ("Original.kshproject");
+    PluginProcessor processor;
+    REQUIRE (original.replaceWithText (processor.enginePersistenceState().dump()));
+    processor.setProjectFile (original);
+    const auto previous = original.loadFileAsString();
+    PluginEditor editor (processor);
+    bool completed = false;
+    editor.showSaveProjectDialog ({ "New title", "Original notes" }, [&] (juce::var result)
+    {
+        completed = static_cast<bool> (result["success"]);
+    });
+    auto& view = PluginEditorTestPeer::view (editor);
+    ProjectBrowser* browser = nullptr;
+    for (auto* child : view.getChildren())
+        if (auto* projects = dynamic_cast<ProjectBrowser*> (child)) browser = projects;
+    REQUIRE (browser != nullptr);
+    REQUIRE (browser->isVisible());
+    const auto button = [&] (const juce::String& label)
+    {
+        for (auto* child : browser->getChildren())
+            if (auto* control = dynamic_cast<juce::TextButton*> (child); control != nullptr && control->getButtonText() == label)
+                return control;
+        return static_cast<juce::TextButton*> (nullptr);
+    };
+    const auto field = [&] (const juce::String& title)
+    {
+        for (auto* child : browser->getChildren())
+            if (auto* control = dynamic_cast<juce::TextEditor*> (child); control != nullptr && control->getTitle() == title)
+                return control;
+        return static_cast<juce::TextEditor*> (nullptr);
+    };
+    REQUIRE (button ("New Folder") != nullptr);
+    REQUIRE (button ("Create") != nullptr);
+    REQUIRE (field ("Folder name") != nullptr);
+    for (const auto* folder : { "Sessions", "Live" })
+    {
+        button ("New Folder")->onClick();
+        REQUIRE (field ("Folder name")->isVisible());
+        field ("Folder name")->setText (folder);
+        button ("Create")->onClick();
+    }
+    REQUIRE (field ("Project name") != nullptr);
+    REQUIRE (field ("Project author") != nullptr);
+    REQUIRE (field ("Project description") != nullptr);
+    REQUIRE (button ("Save") != nullptr);
+    field ("Project author")->setText ("ofsound");
+    field ("Project description")->setText ("Saved from KSH");
+    button ("Save")->onClick();
+    CHECK (completed);
+    CHECK_FALSE (browser->isVisible());
+    const auto saved = root.getChildFile ("Sessions/Live/New title.kshproject");
+    REQUIRE (saved.existsAsFile());
+    CHECK (original.loadFileAsString() == previous);
+    CHECK (processor.getProjectFile() == saved);
+    CHECK (processor.getProjectName() == "New title");
+    CHECK (processor.getProjectAuthor() == "ofsound");
+    CHECK (processor.getProjectDescription() == "Saved from KSH");
+    const auto payload = nlohmann::json::parse (saved.loadFileAsString().toStdString());
+    CHECK (payload["projectName"] == "New title");
+    CHECK (payload["projectAuthor"] == "ofsound");
+    CHECK (payload["projectDescription"] == "Saved from KSH");
+
+    view.projectAction (1);
+    REQUIRE (browser->isVisible());
+    view.controller.selectLatched = true;
+    view.sync();
+    for (auto* child : view.getChildren())
+        if (child->getProperties().contains ("selectMode"))
+        {
+            const auto* front = view.getComponentAt (child->getBounds().getCentre());
+            CHECK ((front == browser || browser->isParentOf (front)));
+        }
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+    const juce::TextEditor* preview = nullptr;
+    const juce::ListBox* list = nullptr;
+    for (auto* child : browser->getChildren())
+    {
+        if (auto* control = dynamic_cast<juce::TextEditor*> (child); control && control->isVisible() && control->isReadOnly())
+            preview = control;
+        if (auto* projectList = dynamic_cast<juce::ListBox*> (child))
+            list = projectList;
+    }
+    REQUIRE (preview != nullptr);
+    REQUIRE (list != nullptr);
+    CHECK (preview->getText() == "Saved from KSH");
+    CHECK (preview->getX() > list->getRight());
+    CHECK (processor.getProjectFile() == saved);
+}
+
+TEST_CASE ("The project browser remembers favorites and protects unsaved changes", "[plugin][persistence][project-browser]")
+{
+    using ksh::ui::ProjectBrowser;
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-favorites", {});
+    const juce::ScopeGuard cleanup { [&] { root.deleteRecursively(); } };
+    REQUIRE (root.getChildFile ("Sessions").createDirectory().wasOk());
+    const auto project = root.getChildFile ("Sessions/Favorite.kshproject");
+    REQUIRE (project.create().wasOk());
+    const auto enumerate = [] (const juce::File& directory)
+    {
+        return directory.findChildFiles (juce::File::findFiles, false, "*.kshproject");
+    };
+    const auto findButton = [] (ProjectBrowser& browser, const juce::String& label) -> juce::TextButton*
+    {
+        for (auto* child : browser.getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == label)
+                return button;
+        return nullptr;
+    };
+    const auto settings = root.getChildFile ("settings.xml");
+    juce::PropertiesFile::Options options;
+    options.storageFormat = juce::PropertiesFile::storeAsXML;
+    {
+        juce::PropertiesFile preferences (settings, options);
+        ProjectBrowser browser (preferences);
+        browser.setSize (814, 409);
+        browser.open (root, {}, std::nullopt, enumerate, {});
+        auto* enter = findButton (browser, "Open");
+        REQUIRE (enter != nullptr);
+        enter->onClick();
+        auto* favorite = findButton (browser, "Add Favorite");
+        REQUIRE (favorite != nullptr);
+        REQUIRE (favorite->isEnabled());
+        favorite->onClick();
+        CHECK (favorite->getButtonText() == "Remove Favorite");
+    }
+    juce::PropertiesFile preferences (settings, options);
+    ProjectBrowser browser (preferences);
+    browser.setSize (814, 409);
+    juce::File opened;
+    browser.open (root, {}, std::nullopt, enumerate, [&] (const juce::File& file, const auto&, auto done)
+    {
+        opened = file;
+        done ({});
+    }, {}, true);
+    auto* favorites = findButton (browser, "Favorites");
+    REQUIRE (favorites != nullptr);
+    favorites->onClick();
+    auto* open = findButton (browser, "Open");
+    REQUIRE (open != nullptr);
+    REQUIRE (open->isEnabled());
+    open->onClick();
+    CHECK (opened == juce::File());
+    CHECK (open->getButtonText() == "Discard and Open");
+    open->onClick();
+    CHECK (opened == project);
+    CHECK_FALSE (browser.isVisible());
 }
 
 TEST_CASE ("project author survives metadata saves and resets for old or new projects", "[plugin][persistence]")

@@ -11,6 +11,13 @@ namespace ksh
         library->restoreAccess (settings);
         processor.setProjectFile (library->currentFile());
        #else
+       #if JUCE_MAC
+        if (const auto file = processor.restoreMacProjectBookmark (settings.getValue ("macProjectBookmark")); file != juce::File())
+        {
+            processor.setProjectFile (file);
+            return;
+        }
+       #endif
         const auto path = settings.getValue ("projectFile");
         const juce::File file = juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
         processor.setProjectFile (file.existsAsFile() ? file : juce::File());
@@ -30,7 +37,15 @@ namespace ksh
             processor.getIOSProjectLibrary()->saveAccess (settings);
         settings.removeValue ("projectFile");
        #else
-        settings.setValue ("projectFile", processor.getProjectFile().getFullPathName());
+        const auto file = processor.getProjectFile();
+        settings.setValue ("projectFile", file.getFullPathName());
+       #if JUCE_MAC
+        const auto bookmark = MacProjectFiles::makeBookmark (file);
+        if (bookmark.isNotEmpty())
+            settings.setValue ("macProjectBookmark", bookmark);
+        else
+            settings.removeValue ("macProjectBookmark");
+       #endif
        #endif
     }
 

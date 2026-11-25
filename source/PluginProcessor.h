@@ -2,6 +2,7 @@
 
 #include "KshUiBridge.h"
 #include "platform/KshIOSProjectLibrary.h"
+#include "platform/KshMacProjectFiles.h"
 #include "platform/StandaloneMidiOutput.h"
 #include "platform/StandaloneSync.h"
 #include "RealtimeMailbox.h"
@@ -180,6 +181,9 @@ public:
     [[nodiscard]] juce::String getProjectModifiedAt() const;
     [[nodiscard]] juce::File getProjectFile() const;
     void setProjectFile (const juce::File&);
+   #if JUCE_MAC
+    juce::File restoreMacProjectBookmark (const juce::String& bookmark) { return macProjectFiles.restoreBookmark (bookmark); }
+   #endif
    #if JUCE_IOS
     std::shared_ptr<ksh::IOSProjectLibrary> getIOSProjectLibrary()
     {
@@ -190,6 +194,10 @@ public:
    #endif
 
 private:
+    bool loadStateFromDataInternal (const void*, int, bool imported, bool restoreStandaloneRecovery);
+   #if JUCE_MAC
+    ksh::MacProjectFiles macProjectFiles;
+   #endif
     ksh::StandaloneMidiOutput* standaloneMidiOutput = nullptr;
     void sendStandaloneMidiOutput (const juce::MidiBuffer&, int numSamples, juce::Optional<juce::uint64> presentationTimeNs = {});
     void renderStandaloneMetronome (juce::AudioBuffer<float>&, double ppq, double bpm, bool playing, bool reset, int firstPlaybackSample);

@@ -3,6 +3,52 @@
 #include "engine/KshPersistence.h"
 #include "ui/KshDrumComputerImport.h"
 #include "ui/KshUiScale.h"
+#if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+ #include <unistd.h>
+#endif
+
+namespace
+{
+    constexpr juce::int64 maximumProjectBytes = 16 * 1024 * 1024;
+
+    std::optional<ksh::ui::ProjectBrowser::Details> projectBrowserDetails (const juce::File& file, const juce::MemoryBlock& data)
+    {
+        if (data.isEmpty())
+            return {};
+        const auto project = ksh::parsePersistencePayload (
+            std::string_view (static_cast<const char*> (data.getData()), data.getSize()));
+        if (!project)
+            return {};
+        const auto get = [&] (const char* key) -> juce::String
+        {
+            const auto value = project->find (key);
+            return value != project->end() && value->is_string() ? juce::String (value->get_ref<const std::string&>()) : juce::String();
+        };
+        auto name = get ("projectName");
+        if (name.isEmpty() || name == "Untitled Project")
+            name = file.getFileNameWithoutExtension();
+        return ksh::ui::ProjectBrowser::Details { name, get ("projectAuthor"), get ("projectDescription"),
+                                                  get ("projectCreatedAt"), get ("projectModifiedAt") };
+    }
+
+    auto finishBrowserOperation (ksh::ui::ProjectBrowser::Completion done,
+                                 std::function<void (juce::var)> complete, juce::String fallback)
+    {
+        return [notifyBrowser = std::move (done), notifyEditor = std::move (complete), defaultError = std::move (fallback)] (juce::var result)
+        {
+            if (static_cast<bool> (result["success"]))
+            {
+                notifyBrowser ({});
+                notifyEditor (result);
+            }
+            else
+            {
+                const auto error = result["error"].toString();
+                notifyBrowser (error.isNotEmpty() ? error : defaultError);
+            }
+        };
+    }
+}
 
 PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
 {
@@ -44,6 +90,8 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             safe->nativeView->controller.refresh();
             if (action == 0 && static_cast<bool> (result["success"]))
                 safe->nativeView->returnToPhoneGrid();
+            if ((action == 2 || action == 5) && static_cast<bool> (result["success"]))
+                safe->nativeView->showProjectSaved();
             safe->updateNativeSize();
         };
        #if JUCE_IOS
@@ -53,6 +101,11 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             return;
         }
        #endif
+        if (action == 1)
+        {
+            showLoadProjectDialog (completed);
+            return;
+        }
         if (action == 2 || action == 5)
         {
             if (action == 2)
@@ -66,8 +119,6 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
                 return;
             if (action == 0)
                 safe->createNewProject (completed);
-            else if (action == 1)
-                safe->showLoadProjectDialog (completed);
             else
                 safe->cycleProject (action == 3 ? -1 : 1, completed);
         });
@@ -398,7 +449,7 @@ void PluginEditor::completeProjectDrop (FileDrop drop, ProjectDrop converted)
         if (safe == nullptr || drop.request != safe->fileDropRequest)
             return;
         auto& processor = safe->processorRef;
-        const bool busy = safe->projectFileChooser != nullptr
+        const bool busy = safe->projectFileChooser != nullptr || safe->nativeView->isProjectBrowserOpen()
        #if JUCE_IOS
                        || safe->iosLibrary->busy()
        #endif
@@ -466,7 +517,10 @@ void PluginEditor::completeSwingDrop (FileDrop drop, const ksh::ui::SwingImportR
     if (result.swing)
     {
         const int target = static_cast<int> (ksh::swingSubdivisionValueForIndex (result.swing->target));
-        status = result.swing->amount == 0 ? juce::String ("Straight timing matched") : "Swing matched (" + juce::String (target) + "x)";
+        if (result.swing->amount == 0)
+            status = current.playback.swing == 0 ? "No swing detected in dropped file" : "Dropped file set swing to 0%";
+        else
+            status = "Swing matched (" + juce::String (target) + "x)";
     }
     if (result.bpm)
         status += juce::String::fromUTF8 ("  ·  ") + juce::String (*result.bpm, 1) + (applyTempo ? " BPM" : " BPM in file");
@@ -557,6 +611,8 @@ juce::File PluginEditor::getDefaultProjectsDirectory() const
 {
    #if JUCE_IOS
     return iosLibrary->directory();
+   #elif JUCE_MAC
+    return ksh::MacProjectFiles::documentsDirectory().getChildFile ("ofsound").getChildFile ("KSH");
    #else
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
         .getChildFile ("ofsound")
@@ -570,21 +626,20 @@ juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
     const auto directory = currentProjectFile.existsAsFile()
                                ? currentProjectFile.getParentDirectory()
                                : getDefaultProjectsDirectory();
-    juce::Array<juce::File> files;
-
-   #if JUCE_IOS
-    // Metadata queries include iCloud placeholders which aren't local files yet.
-    if (directory == iosLibrary->directory())
-        files = iosLibrary->files();
-    else
-   #endif
-    if (directory.isDirectory())
-        directory.findChildFiles (files, juce::File::findFiles, false, "*.kshproject");
-
+    auto files = getProjectFiles (directory);
     std::sort (files.begin(), files.end(), [] (const juce::File& left, const juce::File& right) {
         return left.getFileName().compareNatural (right.getFileName(), true) < 0;
     });
     return files;
+}
+
+juce::Array<juce::File> PluginEditor::getProjectFiles (const juce::File& directory) const
+{
+   #if JUCE_IOS
+    return iosLibrary->files (directory);
+   #else
+    return directory.findChildFiles (juce::File::findFiles | juce::File::ignoreHiddenFiles, false, "*.kshproject");
+   #endif
 }
 
 juce::String PluginEditor::getCurrentProjectFileName() const
@@ -615,15 +670,14 @@ juce::var PluginEditor::projectOperationResult (const bool success,
 
 bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorMessage)
 {
-    constexpr juce::uint64 maximumProjectBytes = 16 * 1024 * 1024;
-
     if (!file.existsAsFile())
     {
         errorMessage = "That project file no longer exists.";
         return false;
     }
 
-    if (file.getSize() <= 0 || static_cast<juce::uint64> (file.getSize()) > maximumProjectBytes)
+    const auto size = file.getSize();
+    if (size <= 0 || size > maximumProjectBytes)
     {
         errorMessage = "The selected file is empty or too large to be a KSH project.";
         return false;
@@ -678,142 +732,217 @@ bool PluginEditor::loadProjectData (const juce::File& file, const juce::MemoryBl
     return true;
 }
 
-bool PluginEditor::saveProjectFile (const juce::File& file, juce::String& errorMessage)
+bool PluginEditor::writeProjectFile (const juce::File& file, const juce::MemoryBlock& data,
+                                     bool createOnly, juce::String& errorMessage)
 {
-    if (!file.getParentDirectory().createDirectory())
+    if (file.getParentDirectory().createDirectory().failed())
     {
         errorMessage = "The project folder could not be created.";
         return false;
     }
 
-    juce::MemoryBlock data;
-    processorRef.getStateInformation (data);
     juce::TemporaryFile temporaryFile (file);
-
-    if (!temporaryFile.getFile().replaceWithData (data.getData(), data.getSize())
-        || !temporaryFile.overwriteTargetFileWithTemporary())
+    if (!temporaryFile.getFile().replaceWithData (data.getData(), data.getSize()))
     {
         errorMessage = "The project file could not be written.";
         return false;
     }
+    if (createOnly)
+    {
+       #if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+        // Publish the completed file only if the destination is still unoccupied.
+        if (::link (temporaryFile.getFile().getFullPathName().toRawUTF8(), file.getFullPathName().toRawUTF8()) == 0)
+            return true;
+       #else
+        if (!file.exists() && temporaryFile.getFile().moveFileTo (file))
+            return true;
+       #endif
+        errorMessage = file.exists() ? "That project name is already in use." : "The project file could not be created.";
+        return false;
+    }
+    if (temporaryFile.overwriteTargetFileWithTemporary())
+        return true;
+    errorMessage = "The project file could not be written.";
+    return false;
+}
 
-    processorRef.setProjectFile (file);
-    processorRef.markDocumentClean();
-    return true;
+void PluginEditor::saveCurrentProject()
+{
+    if (nativeView->isProjectBrowserOpen())
+        return;
+    nativeView->controller.commit();
+    nativeView->projectAction (2);
 }
 
 void PluginEditor::saveProject (std::function<void (juce::var)> complete)
 {
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen())
+        return;
+    const auto file = processorRef.getProjectFile();
    #if JUCE_IOS
-    iosProjectAction (2, std::move (complete));
+    const bool hasDestination = file != juce::File();
    #else
-    const auto currentProjectFile = processorRef.getProjectFile();
-    if (projectFileChooser != nullptr)
-    {
-        complete (projectOperationResult (false, "A project dialog is already open."));
-        return;
-    }
-    if (!currentProjectFile.existsAsFile())
-    {
+    const bool hasDestination = file.existsAsFile();
+   #endif
+    if (hasDestination)
+        saveProjectTo (file, { processorRef.getProjectName(), processorRef.getProjectAuthor(), processorRef.getProjectDescription() },
+                       false, std::move (complete));
+    else
         showSaveProjectDialog ({ processorRef.getProjectName(), processorRef.getProjectDescription() }, std::move (complete));
+}
+
+void PluginEditor::saveProjectTo (const juce::File& file, const ksh::ui::ProjectBrowser::Details& details,
+                                  bool createOnly, std::function<void (juce::var)> complete)
+{
+   #if JUCE_IOS
+    if (iosLibrary->busy())
+    {
+        complete (projectOperationResult (false, "A project operation is already open."));
         return;
     }
+    iosOperationEpoch = processorRef.getUiBridge().getDocumentEpoch();
+    const auto epoch = iosOperationEpoch;
+    const auto revision = processorRef.getUiBridge().getRevision();
+   #endif
     const auto now = juce::Time::getCurrentTime().toISO8601 (true);
     const auto created = processorRef.getProjectCreatedAt().isEmpty() ? now : processorRef.getProjectCreatedAt();
-    processorRef.setProjectMetadata (processorRef.getProjectName(), processorRef.getProjectDescription(), created, now);
+    auto snapshot = processorRef.enginePersistenceState();
+    snapshot["projectName"] = details.name.toStdString();
+    snapshot["projectAuthor"] = details.author.toStdString();
+    snapshot["projectDescription"] = details.description.toStdString();
+    snapshot["projectCreatedAt"] = created.toStdString();
+    snapshot["projectModifiedAt"] = now.toStdString();
+    const auto text = snapshot.dump();
+    juce::MemoryBlock data (text.data(), text.size());
+   #if JUCE_IOS
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    iosLibrary->save (file, std::move (data), createOnly,
+        [safe, epoch, revision, details, created, now, completion = std::move (complete)] (ksh::IOSProjectLibrary::Result result)
+    {
+        if (safe == nullptr) return;
+        auto& processor = safe->processorRef;
+        bool success = !result.cancelled && result.error.isEmpty();
+        if (success && epoch != processor.getUiBridge().getDocumentEpoch())
+        {
+            result.error = "The project changed while saving.";
+            success = false;
+        }
+        if (success)
+        {
+            safe->iosLibrary->acceptFile (result.file);
+            processor.setProjectFile (result.file);
+            if (revision == processor.getUiBridge().getRevision())
+            {
+                processor.setProjectMetadata (details.name, details.description, created, now, details.author);
+                processor.markDocumentClean();
+            }
+        }
+        completion (safe->projectOperationResult (success, result.error));
+    });
+   #else
     juce::String error;
-    const bool saved = saveProjectFile (currentProjectFile, error);
+    bool saved = writeProjectFile (file, data, createOnly, error);
+   #if JUCE_MAC
+    if (!saved && !createOnly)
+    {
+        const auto result = ksh::MacProjectFiles::replace (file, data);
+        error = result.getErrorMessage();
+        saved = result.wasOk();
+    }
+   #endif
+    if (saved)
+    {
+        processorRef.setProjectMetadata (details.name, details.description, created, now, details.author);
+        processorRef.setProjectFile (file);
+        processorRef.markDocumentClean();
+    }
     complete (projectOperationResult (saved, error));
    #endif
 }
 
-void PluginEditor::showSaveProjectDialog (
-    const juce::Array<juce::var>& args,
-    std::function<void (juce::var)> complete)
+void PluginEditor::showSaveProjectDialog (const juce::Array<juce::var>& args,
+                                          std::function<void (juce::var)> complete)
 {
-   #if JUCE_IOS
-    iosProjectAction (5, std::move (complete), {}, args.size() > 0 ? args[0].toString() : processorRef.getProjectName(),
-                      args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription());
-   #else
-    const auto currentProjectFile = processorRef.getProjectFile();
-    if (projectFileChooser != nullptr)
-    {
-        complete (projectOperationResult (false, "A project dialog is already open."));
-        return;
-    }
-
-    const auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
-    const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
-    const auto createdAt = processorRef.getProjectCreatedAt();
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen()) return;
+    const juce::Component::SafePointer<PluginEditor> safe (this);
     const auto epoch = processorRef.getUiBridge().getDocumentEpoch();
-    auto directory = currentProjectFile.existsAsFile() ? currentProjectFile.getParentDirectory()
-                                                       : getDefaultProjectsDirectory();
-    directory.createDirectory();
-
-    auto legalName = juce::File::createLegalFileName (
-        name.isNotEmpty() ? name : juce::String ("Untitled Project"));
-    if (legalName.isEmpty())
-        legalName = "Untitled Project";
-
-    const auto suggestedFile = currentProjectFile.existsAsFile()
-                                   ? currentProjectFile
-                                   : directory.getChildFile (legalName + ".kshproject");
-
-    projectFileChooser = std::make_unique<juce::FileChooser> (
-        "Save KSH Project", suggestedFile, "*.kshproject", true);
-    const juce::Component::SafePointer<PluginEditor> safeThis (this);
-    projectFileChooser->launchAsync (
-        juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
-            | juce::FileBrowserComponent::warnAboutOverwriting,
-        [safeThis,
-            completion = std::move (complete),
-            name,
-            description,
-            createdAt,
-            epoch] (const juce::FileChooser& chooser) mutable {
-            if (safeThis == nullptr)
-                return;
-
-            auto file = chooser.getResult();
-            safeThis->projectFileChooser.reset();
-            if (file == juce::File())
+    const auto current = processorRef.getProjectFile();
+    auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
+    if (name.isEmpty()) name = "Untitled Project";
+    const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
+    nativeView->showProjectBrowser (getDefaultProjectsDirectory(), current,
+        ksh::ui::ProjectBrowser::Details { name, processorRef.getProjectAuthor(), description },
+        [this] (const juce::File& folder) { return getProjectFiles (folder); },
+        [safe, epoch, current, projectComplete = std::move (complete)] (const juce::File& file, const ksh::ui::ProjectBrowser::Details& details,
+                                                                       ksh::ui::ProjectBrowser::Completion done)
+        {
+            if (safe == nullptr) return;
+            if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch())
             {
-                completion (safeThis->projectOperationResult (false));
+                done ("The project changed. Close this window and try again.");
                 return;
             }
-            if (epoch != safeThis->processorRef.getUiBridge().getDocumentEpoch())
-            {
-                completion (safeThis->projectOperationResult (false, "The project changed while the save dialog was open. Please save again."));
-                return;
-            }
-
-            if (!file.hasFileExtension (".kshproject"))
-                file = file.withFileExtension (".kshproject");
-
-            const auto previousProjectFile = safeThis->processorRef.getProjectFile();
-            const auto savedToNewPath = !previousProjectFile.existsAsFile()
-                                        || previousProjectFile != file;
-            const auto projectNameToSave = savedToNewPath ? file.getFileNameWithoutExtension()
-                                                          : name;
-
-            const auto now = juce::Time::getCurrentTime().toISO8601 (true);
-            safeThis->processorRef.setProjectMetadata (
-                projectNameToSave, description, createdAt.isEmpty() ? now : createdAt, now);
-            juce::String error;
-            const auto saved = safeThis->saveProjectFile (file, error);
-            completion (safeThis->projectOperationResult (saved, error));
+            safe->saveProjectTo (file, details, file != current,
+                                 finishBrowserOperation (std::move (done), projectComplete, "The project could not be saved."));
         });
-   #endif
 }
 
-void PluginEditor::showLoadProjectDialog (
+void PluginEditor::showLoadProjectDialog (std::function<void (juce::var)> complete)
+{
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen()) return;
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    const auto epoch = processorRef.getUiBridge().getDocumentEpoch();
+    const auto revision = processorRef.getUiBridge().getRevision();
+   #if JUCE_IOS
+    auto readDetails = [this] (const juce::File& file, auto done)
+    {
+        iosLibrary->readPreview (file, [completePreview = std::move (done)] (ksh::IOSProjectLibrary::Result result)
+        {
+            completePreview (result.error.isEmpty() ? projectBrowserDetails (result.file, result.data) : std::nullopt);
+        });
+    };
+   #else
+    auto readDetails = [] (const juce::File& file, auto done)
+    {
+        const auto size = file.getSize();
+        juce::MemoryBlock data;
+        done (size > 0 && size <= maximumProjectBytes && file.loadFileAsData (data)
+                  ? projectBrowserDetails (file, data) : std::nullopt);
+    };
+   #endif
+    nativeView->showProjectBrowser (getDefaultProjectsDirectory(), processorRef.getProjectFile(), std::nullopt,
+        [this] (const juce::File& folder) { return getProjectFiles (folder); },
+        [safe, epoch, revision, complete] (const juce::File& file, const ksh::ui::ProjectBrowser::Details&,
+                                           ksh::ui::ProjectBrowser::Completion done)
+        {
+            if (safe == nullptr) return;
+            if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch() || revision != safe->processorRef.getUiBridge().getRevision())
+            {
+                done ("The project changed while browsing. Close this window and try again.");
+                return;
+            }
+            auto finish = finishBrowserOperation (std::move (done), complete, "The project could not be opened.");
+           #if JUCE_IOS
+            safe->iosProjectAction (1, std::move (finish), file);
+           #else
+            juce::String error;
+            const bool loaded = safe->loadProjectFile (file, error);
+            finish (safe->projectOperationResult (loaded, error));
+           #endif
+        },
+        [safe, complete] { if (safe != nullptr) safe->confirmDiscardingChanges ([safe, complete]
+            { if (safe != nullptr) safe->showExternalProjectDialog (complete); }); }, processorRef.isDocumentModified(),
+        std::move (readDetails));
+}
+
+void PluginEditor::showExternalProjectDialog (
     std::function<void (juce::var)> complete)
 {
    #if JUCE_IOS
     iosProjectAction (1, std::move (complete));
    #else
     const auto currentProjectFile = processorRef.getProjectFile();
-    if (projectFileChooser != nullptr)
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen())
     {
         complete (projectOperationResult (false, "A project dialog is already open."));
         return;
@@ -859,7 +988,7 @@ void PluginEditor::createNewProject (
         return;
     }
    #endif
-    if (projectFileChooser != nullptr)
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen())
     {
         complete (projectOperationResult (false, "Close the open project dialog first."));
         return;
@@ -919,8 +1048,7 @@ void PluginEditor::cycleProject (
 }
 
 #if JUCE_IOS
-void PluginEditor::iosProjectAction (int action, std::function<void (juce::var)> done,
-                                    juce::File target, juce::String name, juce::String description)
+void PluginEditor::iosProjectAction (int action, std::function<void (juce::var)> done, juce::File target)
 {
     if (iosLibrary->busy())
     {
@@ -952,44 +1080,18 @@ void PluginEditor::iosProjectAction (int action, std::function<void (juce::var)>
         else iosLibrary->read (target, std::move (loaded));
         return;
     }
-    if (name.isEmpty()) name = processorRef.getProjectName();
-    if (action != 5) description = processorRef.getProjectDescription();
-    const auto now = juce::Time::getCurrentTime().toISO8601 (true);
-    const auto created = processorRef.getProjectCreatedAt().isEmpty() ? now : processorRef.getProjectCreatedAt();
     auto snapshot = processorRef.enginePersistenceState();
-    snapshot["projectName"] = name.toStdString();
-    snapshot["projectDescription"] = description.toStdString();
-    snapshot["projectCreatedAt"] = created.toStdString();
+    const auto now = juce::Time::getCurrentTime().toISO8601 (true);
+    if (processorRef.getProjectCreatedAt().isEmpty()) snapshot["projectCreatedAt"] = now.toStdString();
     snapshot["projectModifiedAt"] = now.toStdString();
     const auto text = snapshot.dump();
-    juce::MemoryBlock data (text.data(), text.size());
-    auto saved = [safe, epoch, action, name, description, created, now, revision,
-                  complete = std::move (done)] (ksh::IOSProjectLibrary::Result result) {
+    iosLibrary->share (*this, processorRef.getProjectName(), juce::MemoryBlock (text.data(), text.size()),
+        [safe, epoch, complete = std::move (done)] (ksh::IOSProjectLibrary::Result result)
+    {
         if (safe == nullptr) return;
-        if (result.cancelled || result.error.isNotEmpty())
-        {
-            complete (safe->projectOperationResult (false, result.error));
-            return;
-        }
-        if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch())
-        {
-            complete (safe->projectOperationResult (false, "The project changed while the file operation was open."));
-            return;
-        }
-        if (action != 6)
-        {
-            safe->iosLibrary->acceptFile (result.file);
-            safe->processorRef.setProjectFile (result.file);
-            // A file operation may finish after more edits or recording. Keep those edits dirty.
-            if (revision == safe->processorRef.getUiBridge().getRevision())
-            {
-                safe->processorRef.setProjectMetadata (name, description, created, now);
-                safe->processorRef.markDocumentClean();
-            }
-        }
-        complete (safe->projectOperationResult (true));
-    };
-    if (action == 6) iosLibrary->share (*this, name, std::move (data), std::move (saved));
-    else iosLibrary->save (*this, processorRef.getProjectFile(), name, std::move (data), action == 5, std::move (saved));
+        if (epoch != safe->processorRef.getUiBridge().getDocumentEpoch() && !result.cancelled && result.error.isEmpty())
+            result.error = "The project changed while sharing.";
+        complete (safe->projectOperationResult (!result.cancelled && result.error.isEmpty(), result.error));
+    });
 }
 #endif

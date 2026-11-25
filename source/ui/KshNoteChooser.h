@@ -9,6 +9,7 @@ namespace ksh::ui
     {
     public:
         std::function<void()> onChoose;
+        juce::MouseCursor getMouseCursor() override { return juce::MouseCursor::NormalCursor; }
         void mouseDown (const juce::MouseEvent& e) override { armed = isEnabled() && e.mods.isLeftButtonDown(); }
         void mouseDrag (const juce::MouseEvent&) override {}
         void mouseUp (const juce::MouseEvent& e) override

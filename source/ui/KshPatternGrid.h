@@ -22,7 +22,7 @@ namespace ksh::ui
         bool copySelection = false;
         juce::Component* openPresetMenu() const;
         void sync();
-        juce::Rectangle<float> loopHandleBounds (int channel, bool end, bool touch) const;
+        juce::Rectangle<float> loopHandleBounds (int channel, bool end) const;
         void updatePlayback();
         void refreshAccent();
         void toggleDirection (int channel, bool flipReverse);
@@ -98,8 +98,9 @@ namespace ksh::ui
         };
         std::array<Row, 8> rows;
         static constexpr int soloHoldMs = 450;
-        int pendingMute = -1, muteGestureRow = -1, gestureSource = -1;
+        int pendingMute = -1, muteGestureRow = -1, lastMutePaintRow = -1, gestureSource = -1;
         uint64_t mutePress = 0, gestureEpoch = 0;
+        bool extendSoloOnRelease = false;
         void holdMute (int channel);
         void paintMute (int channel);
         bool muteGestureCurrent() const;
@@ -127,6 +128,7 @@ namespace ksh::ui
             velocityLine,
             velocityDraw };
         Drag drag = Drag::none;
+        std::optional<juce::MouseInputSource> gesturePointer;
         Location anchor, target;
         Location touchStepPreview;
         void clearTouchStepPreview();
@@ -161,6 +163,7 @@ namespace ksh::ui
             bool allowEmpty = false;
         };
         std::optional<PresetPress> presetPress;
+        double presetHoldDeadline = 0.0;
         juce::TimedCallback presetHoldTimer { [this] { openHeldPreset(); } };
         void cancelPresetHold();
         void openHeldPreset();
@@ -172,7 +175,7 @@ namespace ksh::ui
             bool scrubbing = false;
         };
         std::optional<SplitPress> splitPress;
-        bool beginSplitPress (const PresetPress&);
+        bool beginSplitPress (const PresetPress&, int selectionDelay);
         void setSplitValue (Location, int, Layer, int);
         void dragSplitValue (const juce::MouseEvent&);
         bool canClickCycleStrip (const juce::ModifierKeys&) const;
@@ -187,11 +190,7 @@ namespace ksh::ui
         juce::TimedCallback hoverMarkerTimer { [this]
         {
             if (hoverEdge)
-            {
-                const auto centre = hoverMarkerPoint();
-                const auto edge = centre.withX (velocityEdgeX (*hoverEdge));
-                repaint (juce::Rectangle<float> (centre, edge).expanded (15.0f).getSmallestIntegerContainer());
-            }
+                repaint (juce::Rectangle<float> (34.0f, 34.0f).withCentre (hoverMarkerPoint()).getSmallestIntegerContainer());
         } };
         bool pointerInGrid = false;
         juce::Point<float> origin, current;
@@ -218,6 +217,7 @@ namespace ksh::ui
         std::pair<int, int> displayedSwing { -1, -1 };
         Selection displayedSelection;
         std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
+        std::array<std::pair<float, float>, 8> displayedLoopEdges {};
         std::array<bool, 8> displayedMutes {};
         int displayedSteps = -1;
         int displayedFirstStep = -1;
@@ -239,13 +239,13 @@ namespace ksh::ui
         float valueX = 0;
         void updateSelection();
         int velocityAtY (float) const;
-        std::optional<bool> loopHandleAt (juce::Point<float>, bool touch) const;
+        std::optional<bool> loopHandleAt (juce::Point<float>) const;
         void updateCursor();
         std::optional<VelocityEdge> velocityHintAt (juce::Point<float>) const;
         juce::Point<float> hoverMarkerPoint() const;
         std::optional<VelocityEdge> velocityEdgeAt (juce::Point<float>, bool touch = false) const;
         float velocityEdgeX (VelocityEdge) const;
-        float velocityLineStartX (VelocityEdge, bool touch = false) const;
+        bool isVelocityGutter (VelocityEdge, float x) const;
         std::optional<VelocityEdge> nearestVelocityEdge (int channel, float x, bool start, float distance, bool touch = false) const;
         VelocityEdge velocityLineEnd() const;
         void beginVelocityLine (VelocityEdge);

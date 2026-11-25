@@ -27,7 +27,8 @@ namespace ksh::ui
         loop.startNewSubPath (9, 11);
         loop.lineTo (9, 8);
         loop.cubicTo (9, 4, 15, 4, 15, 8);
-        loop.lineTo (15, locked ? 11.0f : 6.0f);
+        if (locked)
+            loop.lineTo (15, 11);
         juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (stroke, loop);
         shape.addRoundedRectangle (6, 11, 12, 10, 2);
         shape.addPath (stroke);
@@ -84,7 +85,7 @@ namespace ksh::ui
             const auto adjust = [value] (juce::Colour dim, juce::Colour bright)
             {
                 const float amount = static_cast<float> (value) / 100.0f;
-                return amount < 0.0f ? dim.interpolatedWith (juce::Colours::black, -amount * 0.3f)
+                return amount < 0.0f ? dim.interpolatedWith (juce::Colours::black, -amount * 0.36f)
                                      : dim.interpolatedWith (bright, amount);
             };
             white = adjust (dimWhite, defaultWhite);
@@ -519,6 +520,23 @@ namespace ksh::ui
             return isFooterMenu (options) || (anchor != nullptr && anchor->getProperties().contains ("mutedMenuHeader"));
         }
 
+        static void drawTempoReadout (juce::Graphics& g, const juce::String& label, juce::Rectangle<float> bounds,
+                                      float valueSize, float unitSize, float gap, float unitOffset, juce::Colour ink)
+        {
+            const auto value = label.upToFirstOccurrenceOf (" ", false, false);
+            const auto valueFont = font (valueSize, true);
+            float digitWidth = 0;
+            for (const auto digit : juce::String ("0123456789"))
+                digitWidth = juce::jmax (digitWidth, juce::GlyphArrangement::getStringWidth (valueFont, juce::String::charToString (digit)));
+            const float unitWidth = juce::GlyphArrangement::getStringWidth (font (unitSize, true), "BPM") + 2.0f;
+            auto readout = bounds.withSizeKeepingCentre (3.0f * digitWidth + gap + unitWidth, bounds.getHeight());
+            auto digits = readout.removeFromLeft (3.0f * digitWidth);
+            digits.removeFromLeft (static_cast<float> (juce::jmax (0, 3 - value.length())) * digitWidth);
+            for (const auto digit : value)
+                text (g, juce::String::charToString (digit), digits.removeFromLeft (digitWidth), valueSize, ink, true);
+            text (g, "BPM", readout.withTrimmedLeft (gap).translated (0, unitOffset), unitSize, Palette::muted, true);
+        }
+
     public:
         LookAndFeel() { refreshPalette(); }
         juce::MouseCursor getMouseCursorFor (juce::Component& component) override
@@ -570,6 +588,64 @@ namespace ksh::ui
             }
             g.setColour (editor.hasKeyboardFocus (true) ? Palette::accent : Palette::controls.border);
             g.drawRoundedRectangle (editor.getLocalBounds().toFloat().reduced (1.0f), 4.0f, 1.0f);
+        }
+        juce::Label* createSliderTextBox (juce::Slider& slider) override
+        {
+            auto* label = juce::LookAndFeel_V4::createSliderTextBox (slider);
+            if (static_cast<bool> (slider.getProperties()["tempoReadout"]))
+                label->getProperties().set ("tempoReadout", true);
+            if (static_cast<bool> (slider.getProperties()["wideTempoFader"]))
+            {
+                label->setFont (font (28.0f, true));
+                label->setBorderSize (juce::BorderSize<int> (4));
+                label->setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+                label->setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+                label->setColour (juce::TextEditor::textColourId, Palette::text);
+                label->setColour (juce::TextEditor::backgroundColourId, Palette::controls.app);
+                label->setColour (juce::TextEditor::outlineColourId, Palette::controls.border);
+                label->setColour (juce::TextEditor::highlightColourId, Palette::accent.withAlpha (0.30f));
+                label->getProperties().set ("tabletTempoReadout", true);
+            }
+            return label;
+        }
+        void drawLabel (juce::Graphics& g, juce::Label& label) override
+        {
+            if (!label.getProperties().contains ("tempoReadout") || label.isBeingEdited())
+            {
+                juce::LookAndFeel_V4::drawLabel (g, label);
+                return;
+            }
+
+            const bool wide = label.getProperties().contains ("tabletTempoReadout");
+            drawTempoReadout (g, label.getText(), label.getLocalBounds().toFloat(), wide ? 28.0f : 17.0f,
+                              wide ? 15.0f : 12.0f, wide ? 7.0f : 5.0f, wide ? 4.0f : 1.5f, Palette::text);
+        }
+        void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
+                               float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle style, juce::Slider& slider) override
+        {
+            if (!static_cast<bool> (slider.getProperties()["wideTempoFader"]))
+            {
+                juce::LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+                return;
+            }
+
+            const float centreY = static_cast<float> (y) + static_cast<float> (height) * 0.5f;
+            const auto track = juce::Rectangle<float> (static_cast<float> (x) - 6.0f, centreY - 5.0f, static_cast<float> (width) + 12.0f, 10.0f);
+            g.setColour (Palette::controls.app);
+            g.fillRoundedRectangle (track, 5.0f);
+            g.setColour (Palette::controls.border);
+            g.drawRoundedRectangle (track.reduced (0.5f), 5.0f, 1.0f);
+            g.setColour (Palette::accent.withAlpha (0.78f));
+            g.fillRoundedRectangle (track.reduced (2.0f).withRight (sliderPos), 3.0f);
+
+            const auto thumb = juce::Rectangle<float> (16.0f, 28.0f).withCentre ({ sliderPos, centreY });
+            const bool active = slider.isMouseButtonDown() || slider.hasKeyboardFocus (false);
+            g.setColour (active ? Palette::accent : Palette::controls.raised);
+            g.fillRoundedRectangle (thumb, 5.0f);
+            g.setColour (active ? Palette::text : Palette::muted);
+            g.drawRoundedRectangle (thumb.reduced (0.5f), 5.0f, 1.0f);
+            g.setColour (active ? Palette::controls.app : Palette::text);
+            g.drawLine (sliderPos, centreY - 5.0f, sliderPos, centreY + 5.0f, 1.5f);
         }
         juce::Font getPopupMenuFont() override { return font (labelFontSize); }
         void preparePopupMenuWindow (juce::Component& window) override
@@ -639,6 +715,16 @@ namespace ksh::ui
                 tick.lineTo (x + 9, y - 4);
                 g.setColour (Palette::accent);
                 g.strokePath (tick, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+            else if (item.subMenu != nullptr)
+            {
+                const float x = bounds.getRight() - 10, y = bounds.getCentreY();
+                juce::Path chevron;
+                chevron.startNewSubPath (x - 3, y - 4);
+                chevron.lineTo (x + 1, y);
+                chevron.lineTo (x - 3, y + 4);
+                g.setColour (Palette::muted);
+                g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
         }
         juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font (juce::jmin (height >= 60 ? 18.0f : 14.0f, static_cast<float> (height) * 0.45f), true); }
@@ -713,6 +799,11 @@ namespace ksh::ui
             if (b.getProperties().contains ("dropdown"))
             {
                 controlSurface (g, r, down || b.getToggleState(), hover);
+                return;
+            }
+            if (static_cast<bool> (b.getProperties()["tempoStepper"]))
+            {
+                controlSurface (g, r, down || b.hasKeyboardFocus (false), hover, b.isEnabled() ? 1.0f : 0.45f);
                 return;
             }
             if (b.getProperties().contains ("transport"))
@@ -937,7 +1028,8 @@ namespace ksh::ui
                                   : outlinedIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.8f)
                                   : historyIcon ? juce::jmin (24.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.65f)
                                                 : juce::jmin (30.0f, r.getWidth() * 0.84f);
-                const float size = insetFooterArtwork ? iconSize * footerArtworkScale : iconSize;
+                const float editScale = !patternEditIcon ? 1.0f : icon == "clear" ? 0.96f : 0.91f;
+                const float size = iconSize * editScale * (insetFooterArtwork ? footerArtworkScale : 1.0f);
                 g.addTransform (juce::AffineTransform::scale (size / 24).translated (r.getCentreX() - size / 2, r.getCentreY() - size / 2));
                 juce::Path path;
                 if (icon == "eye")
@@ -1102,7 +1194,16 @@ namespace ksh::ui
             if (b.getProperties().contains ("transport"))
             {
                 const auto ink = b.isEnabled() ? (down ? Palette::accent : Palette::text) : Palette::faint;
-                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 12.0f, ink, true);
+                if (b.getProperties().contains ("tempoReadout"))
+                    drawTempoReadout (g, b.getButtonText(), b.getLocalBounds().toFloat(), 12.0f, 10.0f, 3.0f, 0.75f, ink);
+                else
+                    text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 12.0f, ink, true);
+                return;
+            }
+            if (static_cast<bool> (b.getProperties()["tempoStepper"]))
+            {
+                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 26.0f,
+                      !b.isEnabled() ? Palette::faint : down ? Palette::accent : Palette::text, true);
                 return;
             }
             const auto bounds = b.getLocalBounds().toFloat();
@@ -1788,11 +1889,6 @@ namespace ksh::ui
             }
             else
                 controlSurface (g, r.reduced (0.5f), dragging || input.isVisible(), isEnabled() && (isMouseOver() || hasKeyboardFocus (false)));
-            if (const float pulse = static_cast<float> (getProperties()["tempoPulse"]); pulse > 0.0f)
-            {
-                g.setColour (Palette::accent.withAlpha (pulse * 0.20f));
-                g.fillRoundedRectangle (r.reduced (0.5f), 5);
-            }
             if (gestureOnly || alwaysShowHorizontalArrows || (showAdjustmentHintAtZero && value == 0 && !mixed))
             {
                 const auto centre = r.getCentre();

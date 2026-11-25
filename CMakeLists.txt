@@ -55,6 +55,7 @@ else()
             APP_SANDBOX_ENABLED TRUE
             APP_SANDBOX_OPTIONS
                 com.apple.security.files.user-selected.read-write
+                com.apple.security.files.bookmarks.app-scope
                 com.apple.security.network.client
                 com.apple.security.network.server)
     else()
@@ -185,7 +186,11 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/source/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/source/engine/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/source/engine/*.h")
-target_sources(SharedCode INTERFACE ${SourceFiles})
+# Keep this implementation explicit so existing Xcode projects regenerate to
+# include it even when the generator does not detect additions to the glob.
+set(KSH_PROJECT_BROWSER "${CMAKE_CURRENT_SOURCE_DIR}/source/ui/KshProjectBrowser.cpp")
+list(REMOVE_ITEM SourceFiles "${KSH_PROJECT_BROWSER}")
+target_sources(SharedCode INTERFACE ${SourceFiles} "${KSH_PROJECT_BROWSER}")
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     enable_language(OBJCXX)
     set(KSH_IOS_SOURCES
@@ -202,6 +207,11 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
                 XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios-projects.entitlements")
         endforeach()
     endif()
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    enable_language(OBJCXX)
+    set(KSH_MAC_PROJECT_FILES "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshMacProjectFiles.mm")
+    set_source_files_properties(${KSH_MAC_PROJECT_FILES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_sources(SharedCode INTERFACE ${KSH_MAC_PROJECT_FILES})
 endif()
 
 

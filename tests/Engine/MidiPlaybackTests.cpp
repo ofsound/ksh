@@ -961,6 +961,67 @@ TEST_CASE ("host loop wraps keep cycle phases running", "[engine][transport]")
     REQUIRE (events.kicks == 3);
 }
 
+TEST_CASE ("Changing the live rate rebases scheduling at the new grid", "[engine][transport][rate-change]")
+{
+    const bool faster = GENERATE (true, false);
+    const bool wrapping = GENERATE (true, false);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate (faster ? "16n" : "32n");
+    for (int step = 0; step < 16; ++step)
+        fixture.engine.setCell (0, 0, step, true, 100, 100, 1);
+
+    auto snapshot = std::make_unique<PlaybackSnapshot> (fixture.engine.makePlaybackSnapshot());
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    constexpr int samples = 512;
+    constexpr double blockBeats = samples / 24000.0;
+    const HostLoopRange loop { wrapping, 384.0, 400.0 };
+    juce::MidiBuffer midi;
+    runner.processBlock (*snapshot, 400.0 - blockBeats, 120.0, true, samples, midi, {}, loop);
+    REQUIRE (countNoteOns (midi) == 1);
+
+    fixture.engine.setRate (faster ? "32n" : "16n");
+    *snapshot = fixture.engine.makePlaybackSnapshot();
+    const double landing = wrapping ? loop.startPpq : 400.0;
+    midi.clear();
+    runner.processBlock (*snapshot, landing, 120.0, true, samples, midi, {}, loop);
+    REQUIRE (countNoteOns (midi) == 1);
+    auto event = midi.begin();
+    CHECK ((*event).getMessage().isNoteOff());
+    ++event;
+    REQUIRE (event != midi.end());
+    CHECK ((*event).getMessage().isNoteOn());
+    CHECK ((*event).samplePosition == 0);
+
+    midi.clear();
+    runner.processBlock (*snapshot, landing + blockBeats, 120.0, true, samples, midi, {}, loop);
+    CHECK (countNoteOns (midi) == 0);
+}
+
+TEST_CASE ("A rate change mid-step discards deferred hits from the old grid", "[engine][transport][rate-change]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .roll = 4 });
+    auto snapshot = std::make_unique<PlaybackSnapshot> (fixture.engine.makePlaybackSnapshot());
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    CHECK (countNoteOns (runPlaybackBlock (runner, *snapshot, 0.0, 120.0, true, 1024).midi) == 1);
+
+    fixture.engine.setRate ("32n");
+    *snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto after = runPlaybackBlock (runner, *snapshot, 1024.0 / 24000.0, 120.0, true, 1900);
+    CHECK (countNoteOns (after.midi) == 0);
+}
+
 TEST_CASE ("midi playback releases held notes on stop, seek, and device off", "[engine][transport][realtime]")
 {
     EngineFixture fixture;

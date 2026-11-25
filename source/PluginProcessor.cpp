@@ -1370,16 +1370,24 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    const auto jsonText = enginePersistenceState().dump();
+    auto state = enginePersistenceState();
+    if (hasStandaloneTransport() && isDocumentModified())
+        state["standaloneDocumentModified"] = true;
+    const auto jsonText = state.dump();
     destData.replaceAll (jsonText.data(), jsonText.size());
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    [[maybe_unused]] const bool restored = loadStateFromData (data, sizeInBytes);
+    [[maybe_unused]] const bool restored = loadStateFromDataInternal (data, sizeInBytes, false, hasStandaloneTransport());
 }
 
 bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes, bool imported)
+{
+    return loadStateFromDataInternal (data, sizeInBytes, imported, false);
+}
+
+bool PluginProcessor::loadStateFromDataInternal (const void* data, int sizeInBytes, bool imported, bool restoreStandaloneRecovery)
 {
     if (data == nullptr || sizeInBytes <= 0)
         return false;
@@ -1466,7 +1474,8 @@ bool PluginProcessor::loadStateFromData (const void* data, int sizeInBytes, bool
 
     currentStepForUi.store (0, std::memory_order_relaxed);
     requestPlaybackReset();
-    if (imported)
+    const auto recoveredDirty = payload->find ("standaloneDocumentModified");
+    if (imported || (restoreStandaloneRecovery && recoveredDirty != payload->end() && recoveredDirty->is_boolean() && recoveredDirty->get<bool>()))
         markDocumentModified();
     else
         markDocumentClean();
@@ -1984,6 +1993,9 @@ juce::File PluginProcessor::getProjectFile() const
 void PluginProcessor::setProjectFile (const juce::File& file)
 {
     std::scoped_lock lock { projectMetadataMutex };
+   #if JUCE_MAC
+    macProjectFiles.releaseAccessUnless (file);
+   #endif
     projectFile = file;
 }
 

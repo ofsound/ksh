@@ -374,7 +374,7 @@ TEST_CASE ("The full editor uses a shared 4:3 canvas with header transport only 
     {
         if (child->getTitle() == "Play")
             play = child;
-        else if (child->getTitle() == "Tempo BPM")
+        else if (child->getTitle() == "Set tempo")
             tempo = child;
         else if (child->getTitle() == "Metronome")
             metronome = child;
@@ -627,7 +627,20 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     CHECK (dates == 2);
     CHECK (author->getText() == "ofsound");
     capture ("project-details");
+    const auto pressDetails = [&] (juce::Point<float> position)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        details->mouseDown ({ juce::Desktop::getInstance().getMainMouseSource(), position,
+                             juce::ModifierKeys::leftButtonModifier, 1, 0, 0, 0, 0, details, details,
+                             now, position, now, 1, false });
+    };
     name->setText ("Discard this");
+    pressDetails (details->getLocalBounds().getCentre().toFloat());
+    CHECK (details->isVisible());
+    pressDetails ({ 0, 0 });
+    CHECK_FALSE (details->isVisible());
+    CHECK (processor.getProjectName() == "Night drive");
+    header->onClick();
     CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
     CHECK_FALSE (details->isVisible());
     CHECK (processor.getProjectName() == "Night drive");
@@ -1063,20 +1076,72 @@ TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift 
         const auto point = mute->getLocalBounds().toFloat().getCentre();
         mute->mouseDown (event (*mute, point));
         mute->mouseUp (event (*mute, point));
-        CHECK (editor.controller.soloedChannel() == -1);
+        CHECK (editor.controller.soloedChannels().none());
         const auto originalMutes = editor.controller.state.playback.sourceChannelMutes[0];
         mute->mouseDown (event (*mute, point));
         mute->mouseUp (event (*mute, point, 500));
-        CHECK (editor.controller.soloedChannel() == 0);
+        CHECK (editor.controller.soloedChannels().count() == 1);
+        CHECK (editor.controller.soloedChannels().test (0));
         const auto& mutes = editor.controller.state.playback.sourceChannelMutes[0];
         CHECK_FALSE (mutes[0]);
         CHECK (mutes[1]);
         mute->mouseDown (event (*mute, point));
         mute->mouseUp (event (*mute, point));
-        CHECK (editor.controller.soloedChannel() == -1);
+        CHECK (editor.controller.soloedChannels().none());
         CHECK (mutes == originalMutes);
         release (500);
         CHECK_FALSE (editor.controller.shiftDown ({}));
+    }
+    SECTION ("Row power follows a held swipe across skipped rows and reversals")
+    {
+        constexpr int leftButton = juce::ModifierKeys::leftButtonModifier;
+        const auto swipeEvent = [] (juce::Component& component, juce::Point<float> position, juce::Point<float> origin, int mods)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), position, juce::ModifierKeys (mods), 1, 0, 0, 0, 0,
+                                    &component, &component, now, origin, now, 1, position != origin);
+        };
+        const auto muteFor = [&] (int channel) -> GestureButton&
+        {
+            for (auto* child : grid->getChildren())
+                if (auto* button = dynamic_cast<GestureButton*> (child); button && button->getTitle() == "power channel " + juce::String (channel + 1))
+                    return *button;
+            FAIL ("Missing row power button");
+            std::terminate();
+        };
+        auto& startButton = muteFor (2);
+        const auto centre = startButton.getLocalBounds().toFloat().getCentre();
+        const auto bottom = startButton.getLocalPoint (&muteFor (5), centre);
+        const auto top = startButton.getLocalPoint (&muteFor (0), centre);
+        const auto initialMutes = editor.controller.state.playback.sourceChannelMutes[0];
+        startButton.mouseDown (swipeEvent (startButton, centre, centre, leftButton));
+        startButton.mouseDrag (swipeEvent (startButton, bottom, centre, leftButton));
+        const auto& mutes = editor.controller.state.playback.sourceChannelMutes[0];
+        CHECK (mutes[2]);
+        CHECK (mutes[3]);
+        CHECK (mutes[4]);
+        CHECK (mutes[5]);
+        CHECK_FALSE (mutes[0]);
+        startButton.mouseDrag (swipeEvent (startButton, top, centre, leftButton));
+        startButton.mouseUp (swipeEvent (startButton, top, centre, 0));
+        CHECK (mutes[0]);
+        CHECK (mutes[1]);
+        editor.controller.undo();
+        CHECK (mutes == initialMutes);
+
+        constexpr int shiftClick = leftButton | juce::ModifierKeys::shiftModifier;
+        for (int row : { 2, 5 })
+        {
+            auto& button = muteFor (row);
+            button.mouseDown (swipeEvent (button, centre, centre, shiftClick));
+            button.mouseUp (swipeEvent (button, centre, centre, 0));
+        }
+        const auto solo = editor.controller.soloedChannels();
+        CHECK (solo.count() == 2);
+        CHECK (solo.test (2));
+        CHECK (solo.test (5));
+        CHECK (editor.controller.exitSolo());
+        CHECK (mutes == initialMutes);
     }
 }
 
@@ -1452,7 +1517,7 @@ TEST_CASE ("Grid cursor signals copying on the selected cells", "[native-ui][cur
     CHECK (grid.getMouseCursor() == Cursor::NormalCursor);
 }
 
-TEST_CASE ("Step presets support a right drag and keep their anchor when a span changes", "[native-ui][step-presets]")
+TEST_CASE ("Step presets apply and close on release after a right drag", "[native-ui][step-presets]")
 {
     PluginProcessor processor;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 4, 3, 1, 90, 100, 4, 7 }));
@@ -1490,7 +1555,7 @@ TEST_CASE ("Step presets support a right drag and keep their anchor when a span 
     const auto release = grid.getLocalPoint (roll, roll->getLocalBounds().getCentre()).toFloat();
     grid.mouseDrag (gridEvent (grid, release, active, right, true));
     grid.mouseUp (gridEvent (grid, release, active, 0, true));
-    CHECK (menu->isVisible());
+    CHECK_FALSE (menu->isVisible());
     CHECK (controller.cell (step).roll == 3);
     controller.undo();
     grid.mouseDown (gridEvent (grid, active, active, right));
@@ -1500,14 +1565,11 @@ TEST_CASE ("Step presets support a right drag and keep their anchor when a span 
     auto* triplet = findPreset ("8th triplet");
     REQUIRE (triplet != nullptr);
     triplet->onClick();
-    CHECK (menu->isVisible());
+    CHECK_FALSE (menu->isVisible());
     CHECK (controller.cell (step).cycle == 4);
     CHECK (controller.cell (step).cycleMask == 7);
     CHECK (controller.cell (step).roll == 3);
     CHECK (controller.cell (step).span == 4);
-    CHECK_FALSE (menu->getBounds().intersects (grid.cellBounds (step).getSmallestIntegerContainer()));
-    menu->mouseExit (gridEvent (*menu, { -5, 0 }, {}, 0));
-    CHECK_FALSE (menu->isVisible());
     CHECK_FALSE (grid.hasActiveGesture());
     CHECK (controller.cell (step).enabled);
     CHECK (controller.selected.none());
@@ -1524,10 +1586,8 @@ TEST_CASE ("Step presets support a right drag and keep their anchor when a span 
     grid.mouseDown (gridEvent (grid, empty, empty, right));
     grid.mouseUp (gridEvent (grid, empty, empty, 0));
     REQUIRE (menu->isVisible());
-    const auto originalMenuBounds = menu->getBounds();
     triplet->onClick();
-    CHECK (menu->isVisible());
-    CHECK (menu->getBounds() == originalMenuBounds);
+    CHECK_FALSE (menu->isVisible());
     CHECK (controller.cell ({ 3, 3 }).enabled);
     CHECK (controller.cell ({ 3, 3 }).span == 4);
     CHECK (controller.cell ({ 3, 3 }).roll == 3);
@@ -1648,7 +1708,7 @@ TEST_CASE ("Triplet presets set span and roll while both remain independently ed
     CHECK_FALSE (preset ("Quarter triplet").isEnabled());
     REQUIRE (preset ("8th triplet").isEnabled());
     preset ("8th triplet").onClick();
-    CHECK (preset ("8th triplet").getToggleState());
+    CHECK (grid.openPresetMenu() == nullptr);
     const auto triplet = controller.cell (anchor);
     CHECK (triplet.span == 4);
     CHECK (triplet.roll == 3);
@@ -1676,7 +1736,7 @@ TEST_CASE ("Triplet presets set span and roll while both remain independently ed
     CHECK (controller.cell (anchor) == triplet);
     openMenu ({ 0, 2 });
     CHECK (preset ("8th triplet").getToggleState());
-    CHECK (preset ("8th triplet").getHeight() == 42);
+    CHECK (preset ("8th triplet").getHeight() == 52);
     for (int hits : { 2, 3, 4 })
     {
         auto& roll = preset (juce::String (hits) + "-hit roll");
@@ -1686,9 +1746,10 @@ TEST_CASE ("Triplet presets set span and roll while both remain independently ed
         expected.span = 1;
         expected.roll = hits;
         CHECK (controller.cell (anchor) == expected);
-        CHECK (roll.getToggleState());
+        CHECK (grid.openPresetMenu() == nullptr);
         controller.undo();
         CHECK (controller.cell (anchor) == triplet);
+        openMenu ({ 0, 2 });
     }
     openMenu ({ 0, 15 });
     CHECK_FALSE (preset ("16th triplet").isEnabled());
@@ -1781,9 +1842,10 @@ TEST_CASE ("Rhythm menu edits apply to all selected hits in a single undo", "[na
     auto& roll = preset ("4-hit roll");
     REQUIRE (roll.isEnabled());
     roll.onClick();
-    CHECK (roll.getToggleState());
+    CHECK (grid.openPresetMenu() == nullptr);
     checkBatch (1, 4);
 
+    openMenu (anchor);
     auto& triplet = preset ("16th triplet");
     CHECK (triplet.isEnabled() == !adjacent);
     CHECK (input ("Selected span").isEnabled() == !adjacent);
@@ -2126,7 +2188,7 @@ TEST_CASE ("Reversed row geometry keeps clicks drags and loop handles on their l
     if (!grid.layout.compact)
     {
         controller.selected.reset();
-        const auto handle = grid.layout.cell ({ 0, 0 }).getTopLeft().translated (-8, grid.layout.cellHeight() * 0.5f);
+        const auto handle = grid.loopHandleBounds (0, false).getCentre();
         const auto moved = handle.translated (grid.layout.cellWidth(), 0);
         grid.mouseDown (gridEvent (grid, handle, handle, left));
         grid.mouseDrag (gridEvent (grid, moved, handle, left, true));
@@ -2191,7 +2253,7 @@ TEST_CASE ("Velocity edge hints require a neighboring hit and two active steps i
     grid.setSize (1338, 554);
     grid.sync();
     const auto bounds = grid.layout.cell ({ 0, 1 });
-    const auto edge = juce::Point<float> (loopStartsHere ? grid.loopHandleBounds (0, false, false).getRight() + 3.0f : bounds.getX(), bounds.getCentreY());
+    const auto edge = juce::Point<float> (loopStartsHere ? grid.loopHandleBounds (0, false).getRight() + 3.0f : bounds.getX(), bounds.getCentreY());
     const auto hidden = grid.createComponentSnapshot (grid.getLocalBounds());
     grid.mouseMove (gridEvent (grid, edge.translated (loopStartsHere ? -2.0f : -8.0f, 0), edge, 0));
     // Drain callbacks while waiting so JUCE's timer thread can keep advancing.
@@ -2201,8 +2263,8 @@ TEST_CASE ("Velocity edge hints require a neighboring hit and two active steps i
         juce::Timer::callPendingTimersSynchronously();
     }
     const auto visible = grid.createComponentSnapshot (grid.getLocalBounds());
-    const float halfSize = loopStartsHere ? 3.0f : 5.0f;
-    const auto region = juce::Rectangle<float> (2 * halfSize, 2 * halfSize).withCentre (edge).getSmallestIntegerContainer();
+    const auto marker = juce::Point<float> (bounds.getX(), edge.y);
+    const auto region = juce::Rectangle<float> (8.0f, 8.0f).withCentre (marker).getSmallestIntegerContainer();
     bool changed = false;
     for (int y = region.getY(); y < region.getBottom(); ++y)
         for (int x = region.getX(); x < region.getRight(); ++x)
@@ -2248,48 +2310,62 @@ TEST_CASE ("Velocity edge hints require a neighboring hit and two active steps i
 TEST_CASE ("Velocity lines can start beside either loop handle", "[native-ui]")
 {
     const bool closing = GENERATE (false, true);
-    const int steps = GENERATE (8, 16);
+    const bool shortened = GENERATE (false, true);
+    const int first = shortened ? 2 : 0;
+    const int end = shortened ? 12 : 16;
+    const int steps = end - first;
     PluginProcessor processor;
-    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, steps, 1 }));
-    const int step = closing ? steps - 1 : 0;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, steps, first + 1 }));
+    const int step = closing ? end - 1 : first;
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, step + 1, 1, 90 }));
-    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, closing ? 1 : steps, 1, 90 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, closing ? first + 1 : end, 1, 90 }));
     EditorController controller (processor);
     PatternGrid grid (controller);
-    grid.setSize (1338, 554);
+    grid.setSize (Layout::fullWidth, 554);
     grid.sync();
-    const auto handle = grid.loopHandleBounds (0, closing, false);
+    const auto handle = grid.loopHandleBounds (0, closing);
     const auto row = grid.layout.cell ({ 0, step });
-    const auto edge = juce::Point<float> (closing ? handle.getX() - 3.0f : handle.getRight() + 3.0f, row.getCentreY());
     const float seamX = closing ? row.getRight() : row.getX();
-    const auto cap = juce::Point<float> (seamX, edge.y - 2.0f).roundToInt();
-    const auto connector = juce::Point<float> (seamX + (closing ? -7.0f : 7.0f), edge.y).roundToInt();
-    const auto pixels = [&]
+    const float gutter = closing ? handle.getX() - seamX : seamX - handle.getRight();
+    CHECK (gutter == Catch::Approx (Layout::rowVelocityGutter));
+    const auto edge = juce::Point<float> (seamX + (closing ? 5.0f : -5.0f), row.getCentreY());
+    const auto seam = juce::Point<float> (seamX, edge.y).roundToInt();
+    const auto marker = juce::Rectangle<int> (closing ? seam.x - 7 : seam.x + 3, seam.y - 6, 4, 12);
+    const auto snapshot = [&] { return grid.createComponentSnapshot (grid.getLocalBounds()); };
+    const auto changedBrightness = [&] (const juce::Image& before, const juce::Image& after)
     {
-        const auto image = grid.createComponentSnapshot (grid.getLocalBounds());
-        return std::pair { image.getPixelAt (cap.x, cap.y), image.getPixelAt (connector.x, connector.y) };
+        float brightest = 0.0f;
+        for (int y = marker.getY(); y < marker.getBottom(); ++y)
+            for (int x = marker.getX(); x < marker.getRight(); ++x)
+                if (const auto pixel = after.getPixelAt (x, y); pixel != before.getPixelAt (x, y))
+                    brightest = juce::jmax (brightest, pixel.getPerceivedBrightness());
+        return brightest;
     };
-    const auto idle = pixels();
+    const auto idle = snapshot();
     grid.mouseMove (gridEvent (grid, edge, edge, 0));
     juce::Thread::sleep (100);
-    const auto hovered = pixels();
-    CHECK (hovered.first != idle.first);
-    CHECK (hovered.second != idle.second);
+    const auto hovered = snapshot();
+    CHECK (changedBrightness (idle, hovered) > 0.75f);
     grid.mouseExit (gridEvent (grid, edge, edge, 0));
-    CHECK (pixels() == idle);
-    const auto destination = grid.layout.cell ({ 0, closing ? steps - 3 : 3 }).getTopLeft().translated (0, 2);
+    CHECK (changedBrightness (idle, snapshot()) == 0.0f);
+    const auto destination = grid.layout.cell ({ 0, closing ? end - 3 : first + 3 }).getTopLeft().translated (0, 2);
     const int left = juce::ModifierKeys::leftButtonModifier;
-    grid.mouseDown (gridEvent (grid, edge, edge, left));
-    grid.mouseDrag (gridEvent (grid, destination, edge, left, true));
-    grid.mouseUp (gridEvent (grid, destination, edge, 0, true));
-    CHECK (controller.cell ({ 0, step }).velocity == 64);
-    CHECK (controller.cell ({ 0, step }).enabled);
-    CHECK (controller.loop (0).loopLength == steps);
-    controller.undo();
-    CHECK (controller.cell ({ 0, step }).velocity == 90);
-    // A little farther into the step should scrub the cell, with the grip
-    // and velocity-line target kept close to the loop boundary.
-    const auto body = edge.translated (closing ? -8.0f : 8.0f, 0);
+    const auto drawLine = [&] (juce::Point<float> press)
+    {
+        grid.mouseDown (gridEvent (grid, press, press, left));
+        grid.mouseDrag (gridEvent (grid, destination, press, left, true));
+        grid.mouseUp (gridEvent (grid, destination, press, 0, true));
+        CHECK (controller.cell ({ 0, step }).velocity == 64);
+        CHECK (controller.cell ({ 0, step }).enabled);
+        CHECK (controller.loop (0).loopStart == first);
+        CHECK (controller.loop (0).loopLength == steps);
+        controller.undo();
+        CHECK (controller.cell ({ 0, step }).velocity == 90);
+    };
+    drawLine (edge);
+    drawLine (edge.withX (seamX + (closing ? -8.0f : 8.0f)));
+    // A drag inside the cell still scrubs velocity.
+    const auto body = edge.withX (seamX + (closing ? -12.0f : 12.0f));
     const auto raised = body.translated (0, -20.0f);
     grid.mouseDown (gridEvent (grid, body, body, left));
     grid.mouseDrag (gridEvent (grid, raised, body, left, true));
@@ -2402,8 +2478,10 @@ TEST_CASE ("Holding a split segment selects the span's step without changing it"
     grid.setSize (1338, 554);
     grid.sync();
 
+    const bool divider = GENERATE (false, true);
     const auto body = grid.layout.cellArtwork (grid.cellBounds (step));
-    const auto point = body.getCentre().translated (body.getWidth() / 3.0f, 0.0f);
+    const auto point = body.getCentre().withX (body.getX() + body.getWidth() * (divider ? 2.0f / 3.0f : 5.0f / 6.0f));
+    grid.mouseMove (gridEvent (grid, point, point, 0));
     grid.mouseDown (gridEvent (grid, point, point, juce::ModifierKeys::leftButtonModifier));
     CHECK (controller.selected.none());
     const auto deadline = juce::Time::getMillisecondCounterHiRes() + 1600.0;
@@ -2599,8 +2677,8 @@ TEST_CASE ("Empty row edges keep normal cell clicking and painting", "[native-ui
     const int step = GENERATE (0, 3, 15);
     const bool rightEdge = GENERATE (false, true);
     const auto bounds = grid.layout.cell ({ 0, step });
-    const float leftEdge = juce::jmax (bounds.getX(), grid.loopHandleBounds (0, false, false).getRight());
-    const float rightEdgeX = juce::jmin (bounds.getRight(), grid.loopHandleBounds (0, true, false).getX());
+    const float leftEdge = juce::jmax (bounds.getX(), grid.loopHandleBounds (0, false).getRight());
+    const float rightEdgeX = juce::jmin (bounds.getRight(), grid.loopHandleBounds (0, true).getX());
     const juce::Point<float> start { rightEdge ? rightEdgeX - 1 : leftEdge + 1, bounds.getCentreY() };
     const int left = juce::ModifierKeys::leftButtonModifier;
     const auto down = gridEvent (grid, start, start, left);
@@ -3837,7 +3915,7 @@ TEST_CASE ("Chance grid vertical drags adjust probability and preserve cycle and
         controller.selected.set (1);
     }
     const auto bounds = grid.layout.cell ({ 0, 0 });
-    const float editableLeft = grid.loopHandleBounds (0, false, false).getRight();
+    const float editableLeft = grid.loopHandleBounds (0, false).getRight();
     const auto start = juce::Point<float> (juce::jmax (editableLeft + 1, bounds.getX() + GENERATE (2.0f, 27.0f, 52.0f)),
                                           bounds.getY() + GENERATE (2.0f, 27.0f, 33.0f));
     const int modifiers = juce::ModifierKeys::leftButtonModifier;
@@ -5860,7 +5938,7 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         if (child->getTitle() == "Settings")
             settingsButton = dynamic_cast<juce::TextButton*> (child);
         if (child->getTitle() == "Shift/Option shortcuts" || child->getTitle() == "Channel colors"
-            || child->getTitle() == "Show cell numbers" || child->getTitle() == "Reverse row order")
+            || child->getTitle() == "Show values" || child->getTitle() == "Reverse row order")
             CHECK_FALSE (child->isVisible());
         if (!child->isVisible()) continue;
         if (child->getTitle() == "Show swing on grid")
@@ -5918,7 +5996,7 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         CHECK (popup->getBottom() <= settingsButton->getY());
         CHECK (findSettingsItem ("Footer tooltips") != nullptr);
         CHECK (findSettingsItem ("Reverse row order") != nullptr);
-        auto* numbers = findSettingsItem ("Show cell numbers");
+        auto* numbers = findSettingsItem ("Show values");
         REQUIRE (numbers != nullptr);
         auto* colors = findSettingsItem ("Channel colors");
         REQUIRE (colors != nullptr);
@@ -6056,7 +6134,7 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
     REQUIRE (clear != nullptr);
     CHECK (clear->getWidth() == 42);
     CHECK (clear->getRight() == grid.getWidth());
-    CHECK (static_cast<float> (clear->getX()) >= grid.loopHandleBounds (2, true, true).getRight());
+    CHECK (static_cast<float> (clear->getX()) >= grid.loopHandleBounds (2, true).getRight());
     clear->onClick();
     CHECK (controller.cell ({ 2, 0 }).enabled);
     CHECK (static_cast<bool> (clear->getProperties()["clearPrompt"]));
@@ -6064,7 +6142,7 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
     CHECK_FALSE (controller.cell ({ 2, 0 }).enabled);
     controller.undo();
     CHECK (controller.cell ({ 2, 0 }).enabled);
-    const auto handle = grid.loopHandleBounds (2, true, false).getCentre();
+    const auto handle = grid.loopHandleBounds (2, true).getCentre();
     grid.mouseMove (gridEvent (grid, handle, handle, 0));
     CHECK (grid.getMouseCursor() == horizontalResizeCursor());
     grid.mouseMove (gridEvent (grid, grid.layout.cell ({ 2, 0 }).getCentre(), handle, 0));
@@ -6096,12 +6174,14 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
     constexpr float tabletScale = 744.0f / Layout::fullHeight;
     for (const bool end : { false, true })
     {
-        const auto target = grid.loopHandleBounds (2, end, true);
+        const auto target = grid.loopHandleBounds (2, end);
         if (end)
+        {
             CHECK (target.getRight() == Catch::Approx (clear->getX()));
-        const auto grip = grid.loopHandleBounds (2, end, false);
-        CHECK (grip.intersects (grid.layout.cell ({ 2, end ? 15 : 0 })));
-        CHECK (target.contains (grip));
+            CHECK (target.getX() - grid.layout.cell ({ 2, 15 }).getRight() == Catch::Approx (Layout::rowVelocityGutter));
+        }
+        else
+            CHECK (grid.layout.cell ({ 2, 0 }).getX() - target.getRight() == Catch::Approx (Layout::rowVelocityGutter));
         CHECK (target.getHeight() * tabletScale >= 44.0f);
         CHECK (grid.getLocalBounds().toFloat().contains (target));
         for (int step = 0; step < 16; ++step)

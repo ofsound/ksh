@@ -816,6 +816,8 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
     const double edgeTolerance = 2.0 * beatsPerSample;
     const double blockLastSamplePpq = ppqPosition + static_cast<double> (numSamples - 1) * beatsPerSample;
     const bool hostLoopValid = hostLoop.active && hostLoop.endPpq > hostLoop.startPpq;
+    const bool rateChanged = wasPlaying && std::abs (beatsPerStep - previousBeatsPerStep) > 1.0e-9;
+    previousBeatsPerStep = beatsPerStep;
 
     const int globalStepStart = globalStepForBeats (ppqPosition + firstPlaybackSample * beatsPerSample, snapshot);
     int globalStepEnd = globalStepForBeats (blockLastSamplePpq, snapshot);
@@ -845,9 +847,9 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
 
         const bool loopRestart = hostLoopValid && expectedNextPpq >= hostLoop.endPpq - jitterTolerance
                                  && ppqPosition < expectedNextPpq - jitterTolerance;
-        if ((! stepsContinue || loopRestart) && ! ppqContinues)
+        if (rateChanged || ((! stepsContinue || loopRestart) && ! ppqContinues))
         {
-            const bool loopWrapped = hostLoopValid
+            const bool loopWrapped = ! ppqContinues && hostLoopValid
                                      && expectedNextPpq >= hostLoop.endPpq - jitterTolerance
                                      && ppqPosition >= hostLoop.startPpq - edgeTolerance
                                      && ppqPosition < hostLoop.endPpq;
@@ -858,16 +860,17 @@ MidiPlaybackResult MidiPlaybackRunner::processBlock (const PlaybackSnapshot& sna
                 // Hosts that do not split the block at the wrap still owe the steps from loop start.
                 landingPpq = std::min (ppqPosition, hostLoop.startPpq);
             }
-            else
-            {
+            if (rateChanged || ! loopWrapped)
                 releaseHeldNotes (midiOut);
+            if (! ppqContinues && ! loopWrapped)
                 resetCycleCounters();
-            }
 
-            // Steps that start at the landing position play; a mid-step landing waits for the next boundary.
+            // A grid change invalidates step indices even when the host PPQ is continuous.
+            if (rateChanged && firstPlaybackSample > 0)
+                landingPpq = ppqPosition + firstPlaybackSample * beatsPerSample;
             lastEmittedGlobalStep = firstGlobalStepAtOrAfter (landingPpq - edgeTolerance, beatsPerStep) - 1;
             lastScheduledGlobalStep = lastEmittedGlobalStep;
-            if (!loopWrapped)
+            if (rateChanged || ! loopWrapped)
                 anticipatedLoopStep.reset();
         }
     }

@@ -15,6 +15,16 @@ namespace ksh::ui
         constexpr std::array legacyAccentModeKeys { "orangeAccentColourMode", "blueAccentColourMode" };
         constexpr std::array legacyAccentShadeKeys { "orangeAccentShade", "blueAccentShade" };
 
+        juce::PopupMenu::Options editorPopupOptions (juce::Component& anchor)
+        {
+            anchor.getProperties().set ("mutedMenuHeader", true);
+            return juce::PopupMenu::Options().withTargetComponent (anchor)
+                .withParentComponent (anchor.getTopLevelComponent())
+                .withMinimumWidth (juce::jmax (206, anchor.getWidth()))
+                .withStandardItemHeight (44)
+                .withMaximumNumColumns (1);
+        }
+
         std::optional<juce::Colour> readColour (const juce::PropertiesFile& settings, const juce::String& key)
         {
             const auto saved = settings.getValue (key);
@@ -385,7 +395,7 @@ namespace ksh::ui
         modifierToggle.onClick = [this] { toggleKeyboardModifiers(); };
         controller.graphicalCellValues = uiPreferences->getBoolValue ("graphicalCellValues", true);
         addChildComponent (cellDisplay);
-        cellDisplay.setTitle ("Show cell numbers");
+        cellDisplay.setTitle ("Show values");
         cellDisplay.setTooltip ("Switch between numbers and graphs");
         cellDisplay.onClick = [this]
         {
@@ -564,6 +574,8 @@ namespace ksh::ui
         }
         addAndMakeVisible (projectHeader);
         addChildComponent (projectDetails);
+        addChildComponent (projectBrowser);
+        projectBrowser.onDismiss = [this] { if (isShowing()) grabKeyboardFocus(); };
         addChildComponent (discardChanges);
         projectHeader.onDetails = [this]
         {
@@ -861,11 +873,6 @@ namespace ksh::ui
         steps.captionColour = Palette::muted;
         steps.captionGap = 5;
         steps.resetValue = 16;
-        configureValue (tempo, "", 20, 300, "standalone_tempo");
-        tempo.suffix = " BPM";
-        tempo.suffixFontScale = 0.75f;
-        tempo.setTitle ("Tempo BPM");
-        tempo.resetValue = 120;
         addChildComponent (scale);
         scale.setTitle ("UI scale percent");
         scale.setTooltip ("Double-click to enter a scale");
@@ -1111,6 +1118,16 @@ namespace ksh::ui
         page.setDescription ("Showing steps " + juce::String (layout.firstStep + 1) + " to "
                              + juce::String (layout.firstStep + layout.visibleSteps()));
         duplicate.setToggleState (grid.isCopyMode(), juce::dontSendNotification);
+        for (size_t i = 0; i < patterns.size(); ++i)
+        {
+            const auto& pattern = p.sources[i];
+            const auto stepsInPattern = p.sourceSettings[i].stepCount;
+            const auto channels = std::span (pattern).first (static_cast<size_t> (p.channelCount));
+            patterns[i].setOccupied (std::ranges::any_of (channels, [stepsInPattern] (const auto& row)
+            {
+                return std::ranges::any_of (std::span (row).first (static_cast<size_t> (stepsInPattern)), &Cell::enabled);
+            }));
+        }
         updatePatternButtons();
         updateLayerHeading();
         for (auto* b : { &clear, &left, &right, &rate, static_cast<juce::TextButton*> (&recordQuantize) })
@@ -1147,10 +1164,7 @@ namespace ksh::ui
         stop.setTooltip (lastStandaloneLaunchPending ? "Waiting for the next Link bar. Click to cancel."
                                                     : jamPlayback != JamPlayback::stopped ? "Space or Esc to stop" : "Space to stop");
         if (!layout.compact)
-        {
-            tempo.setVisible (layout.standalone && !usesTempoPopup());
-            tempoButton.setVisible (layout.standalone && usesTempoPopup());
-        }
+            tempoButton.setVisible (layout.standalone);
         if (!layout.compact)
             metronome.setVisible (layout.standalone);
         metronome.setToggleState (controller.processor.isStandaloneMetronomeEnabled(), juce::dontSendNotification);
@@ -1217,6 +1231,7 @@ namespace ksh::ui
         laidOut = { layout, getLocalBounds() };
         noteChooser.setBounds (getLocalBounds());
         projectDetails.setBounds (getLocalBounds());
+        projectBrowser.setBounds (getLocalBounds());
         discardChanges.setBounds (getLocalBounds());
         constexpr int target = Layout::touchTarget;
         const bool phoneMenu = layout.phoneRowControls && panel >= Panel::project && panel <= Panel::help;
@@ -1281,9 +1296,7 @@ namespace ksh::ui
         {
             play.setBounds (rightEdge - target, headerTop, target, target);
             stop.setBounds (play.getBounds());
-            auto& tempoControl = usesTempoPopup() ? static_cast<juce::Component&> (tempoButton) : static_cast<juce::Component&> (tempo);
-            tempoControl.setBounds (muteX, headerTop, target, target);
-            tempo.valueFontSize = 13;
+            tempoButton.setBounds (muteX, headerTop, target, target);
             metronome.setBounds (rightEdge - target, secondRowY, target, target);
             if (tempoOpen)
                 layoutTempoPopup();
@@ -1324,8 +1337,8 @@ namespace ksh::ui
                                               Layout::outerGutter - scrollWidth);
         grid.setBounds (0, juce::roundToInt (layout.gridY()), getWidth(), juce::roundToInt (layout.gridHeight()));
         preview.setBounds (0, juce::roundToInt (layout.previewY()), getWidth(), Layout::previewHeight);
-        const int inspectorLeft = juce::roundToInt (layout.gridLeft()) - Layout::rowEndHandleSpace;
-        const int inspectorRight = juce::roundToInt (layout.gridLeft() + layout.gridWidth()) + Layout::rowEndHandleSpace;
+        const int inspectorLeft = juce::roundToInt (layout.gridLeft()) - Layout::loopEdgeSpace;
+        const int inspectorRight = juce::roundToInt (layout.gridLeft() + layout.gridWidth()) + Layout::loopEdgeSpace;
         preview.setInspectorBounds ({ inspectorLeft, 8, inspectorRight - inspectorLeft, Layout::previewHeight - 16 });
         recordingStrip.setBounds (preview.getBounds());
         layoutRecordingPads();
@@ -1349,6 +1362,21 @@ namespace ksh::ui
         footerHelp.setBounds (Layout::outerGutter, footerControlY, settings.getX() - 2 * Layout::outerGutter, target);
         footerJamPad.setBounds (footerHelp.getBounds());
     }
+    void NativeEditor::showProjectSaved()
+    {
+        projectSavedTimer.startTimer (1400);
+        repaint();
+    }
+
+    void NativeEditor::paintOverChildren (juce::Graphics& g)
+    {
+        if (!projectSavedTimer.isTimerRunning() || projectBrowser.isVisible() || projectDetails.isVisible() || discardChanges.isVisible())
+            return;
+        const auto bounds = juce::Rectangle<float> (150, 40).withCentre ({ getWidth() * 0.5f, getHeight() - 62.0f });
+        controlSurface (g, bounds, true);
+        text (g, "Project saved", bounds, 17, Palette::text, true);
+    }
+
     void NativeEditor::paint (juce::Graphics& g)
     {
         g.fillAll (Palette::app);
@@ -1466,6 +1494,16 @@ namespace ksh::ui
     {
         if (jamTarget || jamPlayback != JamPlayback::stopped || heldJamStopKey)
             globalFocusChanged (getCurrentlyFocusedComponent());
+        if (projectBrowser.isVisible())
+        {
+            if (event.originalComponent == getParentComponent()) projectBrowser.dismiss();
+            return;
+        }
+        if (projectDetails.isVisible() && event.originalComponent == getParentComponent())
+        {
+            projectDetails.dismiss();
+            return;
+        }
         if (tempoOpen && event.originalComponent != this && !isParentOf (event.originalComponent))
         {
             setTempoOpen (false);
@@ -1512,16 +1550,7 @@ namespace ksh::ui
         auto target = rate.getScreenBounds();
         const int gap = juce::roundToInt (4.0f * juce::Component::getApproximateScaleFactorForComponent (&rate));
         target.setBottom (target.getBottom() + gap);
-        auto options = juce::PopupMenu::Options().withTargetComponent (&rate);
-       #if JUCE_IOS || JUCE_ANDROID
-        options = options.withParentComponent (getTopLevelComponent());
-       #endif
-        menu.showMenuAsync (options
-                                .withTargetScreenArea (target)
-                                .withMinimumWidth (rate.getWidth())
-                                .withStandardItemHeight (44)
-                                .withMaximumNumColumns (1)
-                                .withInitiallySelectedItem (selected),
+        menu.showMenuAsync (editorPopupOptions (rate).withTargetScreenArea (target).withInitiallySelectedItem (selected),
                            [safe] (int result) {
             if (safe == nullptr)
                 return;
@@ -1552,6 +1581,17 @@ namespace ksh::ui
         repaint();
     }
     bool NativeEditor::textFocused() const { return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr; }
+    void NativeEditor::showProjectBrowser (juce::File root, juce::File current, std::optional<ProjectBrowser::Details> details,
+                                          ProjectBrowser::ListProjects list, ProjectBrowser::Submit submit,
+                                          std::function<void()> importExternal, bool confirmOpen, ProjectBrowser::ReadDetails readDetails)
+    {
+        cancelCompactGestures();
+        setTempoOpen (false);
+        juce::PopupMenu::dismissAllActiveMenus();
+        projectBrowser.open (std::move (root), std::move (current), std::move (details),
+                             std::move (list), std::move (submit), std::move (importExternal), confirmOpen, std::move (readDetails));
+    }
+
     void NativeEditor::confirmDiscardingChanges (std::function<void()> proceed)
     {
         cancelCompactGestures();
@@ -1562,6 +1602,8 @@ namespace ksh::ui
     {
         if (handleJamStopKey (key))
             return true;
+        if (projectBrowser.isVisible())
+            return projectBrowser.keyPressed (key);
         if (patternPicker.isVisible())
             return patternPicker.keyPressed (key);
         if (noteChooser.isVisible())
@@ -1687,6 +1729,16 @@ namespace ksh::ui
         layerHint.setVisible (!layout.compact && overviewLayer (layer));
         layerHint.setText (overviewLayer (layer) ? juce::String (layer == Layer::nudge ? "Nudge" : "Split") + " / overview" : juce::String(), juce::dontSendNotification);
         const bool selecting = grid.isSelectMode() || controller.selected.any();
+        const char* selectTip = layout.phoneRowControls
+            ? "Tap a step or drag across steps to select. Drag selected steps to move them. Use the inspector to edit the selection."
+            : controller.keyboardModifiersEnabled
+                ? "Click a step or drag across steps to select. Drag selected steps to move them. Option-drag to copy. Use the inspector to edit the selection."
+                : layout.compact
+                    ? "Click a step or drag across steps to select. Drag selected steps to move them. Turn on Copy and drag to duplicate. Use the inspector to edit the selection."
+                    : "Click a step or drag across steps to select. Drag selected steps to move them. Use the inspector to edit the selection.";
+        grid.setTooltip (selecting ? selectTip : "Drag an active step edge for a velocity line. Double-click or double-tap the edge to draw velocity.");
+        selectMode.setTooltip (selecting ? selectTip : layout.compactOnPhone ? "Tap to toggle Select" : "Hold for temporary Select");
+        duplicate.setTooltip ("Turn on Copy, then drag selected steps to duplicate them.");
         const bool chance = layer == Layer::chance;
         velocityLayer.setToggleState (!selecting && layer == Layer::velocity, juce::dontSendNotification);
         chanceLayer.setToggleState (!selecting && chance, juce::dontSendNotification);
@@ -1718,7 +1770,6 @@ namespace ksh::ui
     }
     void NativeEditor::metronomeMenu (juce::Component& anchor)
     {
-        anchor.getProperties().set ("mutedMenuHeader", true);
         constexpr int soundId = 1, pitchId = 10, volumeId = 100;
         const auto& current = controller.processor;
         juce::PopupMenu menu, pitch, volume;
@@ -1733,10 +1784,7 @@ namespace ksh::ui
             volume.addItem (volumeId + percent, juce::String (percent) + "%", true, percent == current.getMetronomeVolume());
         menu.addSubMenu ("Pitch", pitch);
         menu.addSubMenu ("Volume: " + juce::String (current.getMetronomeVolume()) + "%", volume);
-        const auto options = juce::PopupMenu::Options().withTargetComponent (anchor)
-                                 .withParentComponent (getTopLevelComponent())
-                                 .withStandardItemHeight (44)
-                                 .withMaximumNumColumns (1);
+        const auto options = editorPopupOptions (anchor);
         const juce::Component::SafePointer<NativeEditor> safe (this);
         menu.showMenuAsync (options, [safe] (int result)
         {
@@ -1855,10 +1903,7 @@ namespace ksh::ui
         menu.setLookAndFeel (&look);
         menu.addItem (1, "Regular", true, !mpc);
         menu.addItem (2, "MPC", true, mpc);
-        auto options = juce::PopupMenu::Options().withTargetComponent (&swing).withMaximumNumColumns (1);
-       #if JUCE_IOS || JUCE_ANDROID
-        options = options.withParentComponent (getTopLevelComponent()).withStandardItemHeight (44);
-       #endif
+        const auto options = editorPopupOptions (swing);
         const juce::Component::SafePointer<NativeEditor> safe (this);
         menu.showMenuAsync (options, [safe] (int result)
         {
@@ -1884,11 +1929,7 @@ namespace ksh::ui
             offsets.addItem (1000 + value, (value > 0 ? "+" : "") + juce::String (value) + " ms", true, offset == value);
         menu.addSubMenu ("Recording offset: " + juce::String (offset) + " ms", offsets);
         const juce::Component::SafePointer<NativeEditor> safe (this);
-        auto options = juce::PopupMenu::Options().withTargetComponent (layout.phoneRowControls ? &recordOptions : static_cast<juce::TextButton*> (&recordQuantize));
-       #if JUCE_IOS
-        if (layout.phoneRowControls)
-            options = options.withParentComponent (getTopLevelComponent()).withStandardItemHeight (44);
-       #endif
+        const auto options = editorPopupOptions (layout.phoneRowControls ? recordOptions : static_cast<juce::TextButton&> (recordQuantize));
         menu.showMenuAsync (options, [safe] (int result)
         {
             if (safe == nullptr || result == 0)
@@ -2230,12 +2271,11 @@ namespace ksh::ui
             if (controller.processor.isStandaloneTransportPlaying() && !controller.processor.isStandaloneLaunchPending())
             {
                 const double position = controller.processor.getStandaloneTransportPpqForUi();
-                const double beatAgeMs = (position - std::floor (position)) * 60000.0 / juce::jmax (1, tempo.value);
+                const double beatAgeMs = (position - std::floor (position)) * 60000.0 / tempoFader.getValue();
                 pulse = juce::jmax (0.0f, static_cast<float> (1.0 - beatAgeMs / 150.0));
             }
-            for (auto* control : std::array<juce::Component*, 2> { &tempo, &tempoButton })
-                if (control->getProperties().set ("tempoPulse", pulse * pulse))
-                    control->repaint();
+            if (tempoButton.getProperties().set ("tempoPulse", pulse * pulse))
+                tempoButton.repaint();
         }
         // Drain hits immediately before repainting, without an audio-thread wakeup
         // or an additional frame of delay between the processor and editor timers.

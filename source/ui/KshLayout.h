@@ -9,6 +9,9 @@ namespace ksh::ui
         static constexpr int rowHandleWidth = 28;
         static constexpr int rowHandleOffset = 8;
         static constexpr int rowEndHandleSpace = rowHandleWidth / 2 + rowHandleOffset;
+        static constexpr int loopGripWidth = 24;
+        static constexpr int rowVelocityGutter = 7;
+        static constexpr int loopEdgeSpace = loopGripWidth + rowVelocityGutter;
         static constexpr int previewHeight = 174;
         // 64 design units remain >= 44 points at a 1024 x 744 iPad viewport.
         static constexpr int touchTarget = 64;
@@ -64,8 +67,9 @@ namespace ksh::ui
                 return (compactHeight - gridY() - cellsY() - compactInspectorHeight) / static_cast<float> (compactVisibleRows);
             return gridWidth() / 16.0f - 2.0f * (fullCellInsetX - cellInsetY);
         }
-        float gridLeft() const { return compact ? 104.0f : 288.0f; }
-        float gridWidth() const { return width() - gridLeft() - (compact ? 34.0f : static_cast<float> (rowClearWidth + rowEndHandleSpace)); }
+        // Make room for the right gutter while keeping the full grid's cell width and row height.
+        float gridLeft() const { return compact ? 104.0f : 288.0f - (loopEdgeSpace - rowEndHandleSpace); }
+        float gridWidth() const { return width() - gridLeft() - (compact ? 34.0f : static_cast<float> (rowClearWidth + loopEdgeSpace)); }
         float width() const { return compact ? compactWidth : static_cast<float> (fullWidth); }
         float cellsY() const { return compact ? 18.0f : 30.0f; }
         float gridHeight() const
