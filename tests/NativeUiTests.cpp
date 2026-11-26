@@ -206,12 +206,8 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
     CHECK (editor.isZenMode());
     CHECK (scaleControl->isVisible());
     CHECK (scaleControl->isEnabled());
-    auto safeViewport = editor.getLocalBounds().toFloat();
-    if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (editor.getScreenBounds()))
-    {
-        const auto safeScreen = display->safeAreaInsets.subtractedFrom (display->userBounds.toNearestInt());
-        safeViewport = editor.getLocalArea (nullptr, safeScreen).getIntersection (editor.getLocalBounds()).toFloat();
-    }
+    // An embedded editor fits its own viewport, independent of the host display.
+    const auto expectedCentre = editor.getLocalBounds().toFloat().getCentre();
     for (int percent : { 50, 75, 120, 200, 400 })
     {
         processor.setProjectUiScalePercent (percent);
@@ -219,8 +215,8 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
         CHECK (editor.getBounds() == viewport);
         CHECK (processor.getProjectUiScalePercent() == percent);
         const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform());
-        CHECK (content.getCentreX() == Catch::Approx (safeViewport.getCentreX()));
-        CHECK (content.getCentreY() == Catch::Approx (safeViewport.getCentreY()));
+        CHECK (content.getCentreX() == Catch::Approx (expectedCentre.x));
+        CHECK (content.getCentreY() == Catch::Approx (expectedCentre.y));
         CHECK (content.getX() >= -0.01f);
         CHECK (content.getY() >= -0.01f);
         CHECK (content.getRight() <= 1920.01f);
@@ -6401,11 +6397,24 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
     // JUCE popup windows require a display, which is absent in headless test runs.
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
     {
+        // JUCE exposes accessibility handlers only for components with a native peer.
+        juce::Component windowContent;
+        editor.setTransform (juce::AffineTransform::scale (0.65f));
+        windowContent.setBounds (editor.getBoundsInParent());
+        windowContent.addAndMakeVisible (editor);
+        windowContent.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+        windowContent.setVisible (true);
+        const juce::ScopeGuard cleanup { [&]
+        {
+            juce::PopupMenu::dismissAllActiveMenus();
+            windowContent.removeChildComponent (&editor);
+            editor.setTransform ({});
+        } };
         settingsButton->onClick();
         auto* popup = juce::Component::getCurrentlyModalComponent();
         REQUIRE (popup != nullptr);
-        CHECK (popup->getParentComponent() == &editor);
-        CHECK (popup->getBottom() <= settingsButton->getY());
+        CHECK (popup->getParentComponent() == &windowContent);
+        CHECK (popup->getBottom() <= windowContent.getLocalArea (settingsButton, settingsButton->getLocalBounds()).getY());
         CHECK (findSettingsItem ("Footer tooltips") != nullptr);
         CHECK (findSettingsItem ("Reverse row order") != nullptr);
         auto* numbers = findSettingsItem ("Show values");

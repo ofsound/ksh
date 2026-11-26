@@ -428,7 +428,13 @@ TEST_CASE ("Standalone keeps the save destination across restarts without adding
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
     setPluginState (restarted, data);
     ksh::restoreStandaloneProjectFile (restarted, settings);
-    REQUIRE (restarted.getProjectFile() == file);
+    const auto restoredFile = restarted.getProjectFile();
+    INFO ("Original: " << file.getFullPathName() << ", restored: " << restoredFile.getFullPathName());
+    REQUIRE (restoredFile.existsAsFile());
+    // Resolving a macOS bookmark can canonicalize an alias such as /var.
+    const auto originalFileId = file.getFileIdentifier();
+    REQUIRE (originalFileId != 0);
+    REQUIRE (restoredFile.getFileIdentifier() == originalFileId);
     CHECK (restarted.isDocumentModified());
     {
         PluginEditor editor (restarted);
