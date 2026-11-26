@@ -379,11 +379,10 @@ endif()
 # project avoids non-app targets that Xcode cannot sign or run on an iPad.
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(Tests)
-endif()
-
-# A separate target for Benchmarks (keeps the Tests target fast)
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    include(Benchmarks)
+    option(KSH_BUILD_BENCHMARKS "Build the desktop benchmarks" ON)
+    if (KSH_BUILD_BENCHMARKS)
+        include(Benchmarks)
+    endif()
 endif()
 
 # Output some config for CI (like our PRODUCT_NAME)
