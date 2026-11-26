@@ -201,6 +201,10 @@ namespace ksh::ui
             showPanel (panel == Panel::none || panel == Panel::generate ? firstPage : Panel::none);
         };
         closePanel.onClick = [this] { showPanel (Panel::none); };
+        addChildComponent (noteChooserBack);
+        noteChooserBack.setTitle ("Back from MIDI chooser");
+        noteChooserBack.getProperties().set ("phoneMenuIcon", static_cast<int> (phoneMenu::previous));
+        noteChooserBack.onClick = [this] { noteChooser.dismiss(); };
         deselect.onClick = [this]
         {
             grid.cancelGesture();
@@ -248,7 +252,11 @@ namespace ksh::ui
         channelNote.setTitle ("Channel MIDI note");
         channelNote.minimum = 0;
         channelNote.maximum = 127;
-        channelNote.format = [] (int note) { return juce::MidiMessage::getMidiNoteName (note, true, true, 4) + " / " + juce::String (note); };
+        channelNote.format = [this] (int note)
+        {
+            return controller.isControllerRow (selectedChannel) ? "CC " + juce::String (note)
+                : juce::MidiMessage::getMidiNoteName (note, true, true, 4) + " / " + juce::String (note);
+        };
         channelNote.onChoose = [this] { showNoteChooser (selectedChannel, channelNote); };
         loopStart.caption = "Loop start";
         loopStart.setTitle ("Channel loop start");
@@ -275,14 +283,29 @@ namespace ksh::ui
         const bool usePhoneLayout = onPhone || (compact && tabletPlugin);
         const bool settingsInHeader = !compact && tabletPlugin;
         if (layout.compact == compact && layout.phoneRowControls == usePhoneLayout && layout.compactOnPhone == onPhone
-            && layout.settingsInHeader == settingsInHeader
-            && (!compact || (juce::roundToInt (layout.compactWidth) == width && juce::roundToInt (layout.compactHeight) == height)))
+            && layout.settingsInHeader == settingsInHeader)
+        {
+            if (compact && (juce::roundToInt (layout.compactWidth) != width || juce::roundToInt (layout.compactHeight) != height))
+            {
+                cancelCompactGestures();
+                if (patternPicker.isVisible())
+                    patternPicker.dismiss();
+                trackColourPopup.reset();
+                trackColourContent.reset();
+                layout.compactWidth = static_cast<float> (width);
+                layout.compactHeight = static_cast<float> (height);
+                sync();
+            }
             return;
+        }
         cancelCompactGestures();
         if (patternPicker.isVisible())
             patternPicker.dismiss();
+        trackColourPopup.reset();
+        trackColourContent.reset();
         layout.compact = compact;
         layout.phoneRowControls = usePhoneLayout;
+        noteChooser.setMenuPage (usePhoneLayout);
         layout.compactOnPhone = onPhone;
         layout.compactHeaderTopInset = usePhoneLayout && auv3 ? 4 : 0;
         padVelocityMode.phonePadStyle = onPhone;
@@ -373,22 +396,25 @@ namespace ksh::ui
         projectButtons[4].getProperties().set ("icon", compact ? "" : "projectNext");
         if (!compact)
         {
-            const bool detailsVisible = projectDetails.isVisible();
-            const bool browserVisible = projectBrowser.isVisible();
-            for (auto* child : getChildren())
-                child->setVisible (true);
-            projectDetails.setVisible (detailsVisible);
-            projectBrowser.setVisible (browserVisible);
-            patternPicker.setVisible (false);
-            visibleRows.setVisible (false);
-            rowScroll.setVisible (false);
-            for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate, &modifierToggle })
-                button->setVisible (false);
+            for (auto* control : std::initializer_list<juce::Component*> {
+                     &projectHeader, &swing, &subdivision, &showSwing, &velocityHumanize, &timingHumanize, &mutePattern,
+                     &velocityLayer, &chanceLayer, &selectMode, &undoButton, &redoButton, &rate, &steps, &clear,
+                     &left, &right, &recordQuantize, &record, &showPads, &generate, &grid })
+                control->setVisible (true);
+            for (auto& button : projectButtons)
+                button.setVisible (true);
+            for (auto& button : patterns)
+                button.setVisible (true);
+
+            const auto compactOnly = std::initializer_list<juce::Component*> {
+                &visibleRows, &rowScroll, &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls,
+                &closePanel, &noteChooserBack, &deselect, &page, &duplicate, &modifierToggle, &channelNote, &loopStart, &loopLength,
+                &aboutViewport, &phoneAboutWordmark, &metronomeOptions, &channelReverse, &channelPing, &channelSolo
+            };
+            for (auto* control : compactOnly)
+                control->setVisible (false);
             for (auto& tab : panelTabs)
                 tab.setVisible (false);
-            for (auto* component : std::array<juce::Component*, 11> { &channelNote, &loopStart, &loopLength, &aboutViewport, &phoneAboutWordmark,
-                                                                    &tempoButton, &tempoOverlay, &metronomeOptions, &channelReverse, &channelPing, &channelSolo })
-                component->setVisible (false);
             layout.randomVisible = false;
         }
         sync();
@@ -492,17 +518,17 @@ namespace ksh::ui
 
     void NativeEditor::TempoOverlay::paint (juce::Graphics& g)
     {
-        g.fillAll (juce::Colours::black.withAlpha (0.28f));
-        const float radius = wideStyle ? 10.0f : 8.0f;
-        g.setColour (Palette::shell);
-        g.fillRoundedRectangle (card.toFloat(), radius);
-        g.setColour (wideStyle ? Palette::controls.border : Palette::border);
-        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), radius, 1.0f);
+        {
+            const juce::Graphics::ScopedSaveState clip (g);
+            g.excludeClipRegion (triggerBounds);
+            g.fillAll (juce::Colours::black.withAlpha (0.28f));
+        }
+        paintPopupPanel (g, outline, Palette::accent, panelGlow);
     }
 
     void NativeEditor::TempoOverlay::mouseDown (const juce::MouseEvent& event)
     {
-        if (!card.contains (event.getPosition()) && dismiss)
+        if (!card.contains (event.getPosition()) && !outline.contains (event.position) && dismiss)
             dismiss();
     }
 
@@ -517,6 +543,8 @@ namespace ksh::ui
         }
         tempoTaps = {};
         tempoOpen = open;
+        tempoButton.getProperties().set ("tempoPopupOpen", open);
+        tempoButton.repaint();
         tempoOverlay.setVisible (open);
         if (open)
         {
@@ -535,12 +563,15 @@ namespace ksh::ui
         const int readoutHeight = wide ? 46 : 28;
         const int width = wide ? 460 : 340;
         const int gap = 8;
+        const int popupGap = 16;
         const int height = 2 * target + readoutHeight + gap + 2 * inset;
         tempoOverlay.setBounds (getLocalBounds());
-        tempoOverlay.wideStyle = wide;
-        tempoOverlay.card = juce::Rectangle<int> (tempoButton.getBounds().getCentreX() - width / 2,
-                                                  tempoButton.getBottom() + 8, width, height)
+        tempoOverlay.triggerBounds = tempoOverlay.getLocalArea (&tempoButton, tempoButton.getLocalBounds());
+        tempoOverlay.card = juce::Rectangle<int> (tempoOverlay.triggerBounds.getCentreX() - width / 2,
+                                                  tempoOverlay.triggerBounds.getBottom() + popupGap, width, height)
                                 .constrainedWithin (getLocalBounds().reduced (8));
+        tempoOverlay.outline = popupPanelOutline (tempoOverlay.card.toFloat().reduced (0.5f), wide ? 10.0f : 8.0f,
+                                                  tempoOverlay.triggerBounds.toFloat());
         auto controlsRow = tempoOverlay.card.reduced (inset);
         const auto tapRow = controlsRow.removeFromBottom (target);
         tapTempo.setBounds (tapRow.withSizeKeepingCentre (juce::jmin (tapRow.getWidth(), 148), target));
@@ -606,7 +637,14 @@ namespace ksh::ui
     {
         selectedChannel = juce::jlimit (0, layout.channels - 1, selectedChannel);
         const auto& channel = controller.state.playback.channels[static_cast<size_t> (selectedChannel)];
-        channelNote.setValue (channel.note);
+        const juce::String caption = channel.controller ? "MIDI CC" : "MIDI note";
+        if (channelNote.caption != caption)
+        {
+            channelNote.caption = caption;
+            channelNote.setTitle (caption);
+            channelNote.repaint();
+        }
+        channelNote.setValue (channel.controller ? channel.ccNumber : channel.note);
         const auto loop = controller.loop (selectedChannel);
         loopStart.maximum = layout.steps;
         loopStart.setValue (loop.loopStart + 1);
@@ -658,6 +696,7 @@ namespace ksh::ui
 
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const auto& playback = controller.state.playback;
+        const int beatStride = Layout::beatAccentStride (playback.beatsPerStep);
         const int source = controller.source();
         for (int row = 0; row < layout.channels; ++row)
         {
@@ -676,7 +715,7 @@ namespace ksh::ui
                 const bool hit = active && !muted && controller.sourceFlashes[index][static_cast<size_t> (step)] > now;
                 const float opacity = muted ? 0.13f : 0.8f;
                 g.setColour (hit ? colour.brighter (0.6f) : active ? colour.withAlpha (opacity)
-                                                                 : Palette::border.withAlpha (inLoop && step % 4 == 0 ? 0.75f : 0.32f));
+                                                                 : Palette::border.withAlpha (inLoop && step % beatStride == 0 ? 0.75f : 0.32f));
                 const float x = tracks.getX() + static_cast<float> (step) * stepWidth;
                 g.fillRoundedRectangle (x + 1.0f, y + 1.0f, stepWidth - 2.0f, trackHeight - 2.0f, 1.0f);
             }
@@ -696,8 +735,6 @@ namespace ksh::ui
                 layoutTempoPopup();
                 visible.push_back (&tempoOverlay);
             }
-            if (projectDetails.isVisible())
-                visible.push_back (&projectDetails);
             if (projectBrowser.isVisible())
                 visible.push_back (&projectBrowser);
             if (noteChooser.isVisible())
@@ -706,8 +743,11 @@ namespace ksh::ui
                 visible.push_back (&discardChanges);
             if (patternPicker.isVisible())
                 visible.push_back (&patternPicker);
+            if (trackColourPopup != nullptr && trackColourPopup->isVisible())
+                visible.push_back (trackColourPopup.get());
             for (auto* child : getChildren())
                 child->setVisible (std::find (visible.begin(), visible.end(), child) != visible.end());
+            syncNoteChooserGrid();
             if (tempoOpen)
                 tempoOverlay.toFront (false);
             if (patternPicker.isVisible())
@@ -730,6 +770,14 @@ namespace ksh::ui
         const int toolbarY = toolbarInset + layout.compactHeaderTopInset;
         const int toolbarHeight = Layout::compactHeaderHeight - 2 * toolbarInset;
         const int headerBottom = layout.compactHeaderBottom();
+        if (showingNoteChooserPage())
+        {
+            const PhoneMenuLayout menu (getLocalBounds(), true);
+            place (noteChooserBack, menu.body.getX(), toolbarY, 88, toolbarHeight);
+            noteChooser.setBounds (menu.body);
+            finish();
+            return;
+        }
         controls.setToggleState (menuOpen, juce::dontSendNotification);
         generate.setToggleState (panel == Panel::generate, juce::dontSendNotification);
         if (phone)
@@ -1099,7 +1147,9 @@ namespace ksh::ui
 
     void NativeEditor::paintPhoneMenu (juce::Graphics& g) const
     {
-        const PhoneMenuLayout menu (getLocalBounds(), phonePatternPanel());
+        const bool notePage = showingNoteChooserPage();
+        const bool singleHeader = phonePatternPanel() || notePage;
+        const PhoneMenuLayout menu (getLocalBounds(), singleHeader);
         const auto body = menu.body.toFloat();
         const auto leftCard = menu.left.toFloat();
         const auto rightCard = menu.right.toFloat();
@@ -1109,9 +1159,17 @@ namespace ksh::ui
             text (g, label, bounds.withY (bounds.getY() - 20).withHeight (18), 12, Palette::muted, true, align);
         };
 
-        const int navHeight = phonePatternPanel() ? 42 : 94;
+        const int navHeight = singleHeader ? 42 : 94;
         g.setColour (Palette::border.withAlpha (0.48f));
         g.drawHorizontalLine (navHeight, body.getX(), body.getRight());
+        if (notePage)
+        {
+            const auto title = noteChooserBack.getBounds().withX (noteChooserBack.getRight() + 12).toFloat().withRight (body.getRight());
+            text (g, "Track " + juce::String (noteChooserChannel + 1), title, 15,
+                  Palette::channel (noteChooserChannel, controller.drumColors), true, juce::Justification::centredLeft);
+            phoneMenu::card (g, body);
+            return;
+        }
 
         switch (panel)
         {

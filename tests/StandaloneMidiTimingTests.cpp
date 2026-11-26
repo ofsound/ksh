@@ -1,8 +1,75 @@
 #include <PluginProcessor.h>
 #include "../standalone/StandaloneMidiClock.h"
+#include "../standalone/StandaloneMidiRouting.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
+
+TEST_CASE ("A missing preferred MIDI destination is eligible again when its identifier returns", "[standalone-midi][routing]")
+{
+    const juce::String preferred = "saved-id";
+    juce::Array<juce::MidiDeviceInfo> devices;
+    devices.add ({ "Synth", "different-id" });
+    CHECK (ksh::availableStandaloneMidiOutput (devices, preferred).isEmpty());
+    devices.add ({ "Synth", preferred });
+    CHECK (ksh::availableStandaloneMidiOutput (devices, preferred) == preferred);
+    devices.removeLast();
+    CHECK (ksh::availableStandaloneMidiOutput (devices, preferred).isEmpty());
+    devices.add ({ "Renamed synth", preferred });
+    CHECK (ksh::availableStandaloneMidiOutput (devices, preferred) == preferred);
+}
+
+TEST_CASE ("MIDI route flush includes notes with queued releases", "[standalone-midi][routing]")
+{
+    ksh::StandaloneMidiHeldNotes notes;
+    notes.observe (0x20923c60, 10); // Channel 3, pitch 60, still held.
+    notes.observe (0x20914060, 10);
+    notes.observe (0x20814000, 21); // Release has yet to reach the synth.
+    notes.observe (0x20904560, 10);
+    notes.observe (0x20904500, 19); // Velocity zero is a release, already delivered.
+    juce::Array<uint32_t> releases;
+    notes.forEachHeld (20, [&] (auto word) { releases.add (word); });
+    const juce::Array<uint32_t> expected { 0x20814000u, 0x20823c00u };
+    CHECK (releases == expected);
+    notes.clear();
+    releases.clear();
+    notes.forEachHeld (20, [&] (auto word) { releases.add (word); });
+    CHECK (releases.isEmpty());
+}
+
+TEST_CASE ("Link tempo edits persist and project loads leave the session tempo alone", "[standalone-link][persistence]")
+{
+    struct Clock final : ksh::StandaloneSync
+    {
+        double lastRequest = 0.0;
+        int tempoRequests = 0;
+        bool requestPlaying (bool, bool) override { return true; }
+        bool requestTempo (double bpm) override { ++tempoRequests; lastRequest = bpm; return true; }
+        double sessionTempo() const override { return 122.0; }
+        ksh::StandaloneSyncBlock process (juce::Optional<juce::uint64>, double, int, double, bool) override { return {}; }
+    } clock;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor plugin;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    plugin.setStandaloneTempoBpm (90.0);
+    juce::MemoryBlock otherProject;
+    plugin.getStateInformation (otherProject);
+    plugin.markDocumentClean();
+    plugin.setStandaloneSync (&clock);
+    plugin.setStandaloneTempoBpm (137.0);
+    CHECK (clock.lastRequest == Catch::Approx (137.0));
+    CHECK (plugin.isDocumentModified());
+    juce::MemoryBlock saved;
+    plugin.getStateInformation (saved);
+    REQUIRE (plugin.loadStateFromData (otherProject.getData(), static_cast<int> (otherProject.getSize())));
+    CHECK (clock.tempoRequests == 1);
+    CHECK (plugin.getStandaloneTempoBpm() == Catch::Approx (122.0));
+    CHECK (plugin.editorDocument().settings.tempo == Catch::Approx (90.0));
+    plugin.setStandaloneSync (nullptr);
+    REQUIRE (plugin.loadStateFromData (saved.getData(), static_cast<int> (saved.getSize())));
+    CHECK (plugin.getStandaloneTempoBpm() == Catch::Approx (137.0));
+    CHECK_FALSE (plugin.isDocumentModified());
+}
 
 TEST_CASE ("Standalone MIDI timestamps follow the audio clock despite callback jitter", "[standalone-midi][timing]")
 {
@@ -112,6 +179,7 @@ TEST_CASE ("Standalone sends processed MIDI with the hardware timestamp and deta
     TimestampPlayHead playHead;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor plugin;
+    plugin.setStandaloneMidiThru (true);
     plugin.setRateAndBufferSizeDetails (48000, 256);
     plugin.prepareToPlay (48000, 256);
     plugin.setPlayHead (&playHead);

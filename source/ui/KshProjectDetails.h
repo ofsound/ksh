@@ -13,6 +13,8 @@ namespace ksh::ui
             setAlwaysOnTop (true);
             setWantsKeyboardFocus (true);
             setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
+            cancel.getProperties().set ("insetProjectArtwork", true);
+            discard.getProperties().set ("insetProjectArtwork", true);
             addAndMakeVisible (cancel);
             addAndMakeVisible (discard);
             cancel.onClick = [this] { dismiss(); };
@@ -73,7 +75,7 @@ namespace ksh::ui
         juce::Rectangle<int> card;
         juce::String message;
         std::function<void()> onDiscard;
-        juce::TextButton cancel { "Cancel" }, discard { "Discard Changes" };
+        juce::TextButton cancel { "CANCEL" }, discard { "DISCARD CHANGES" };
     };
 
     class ProjectHeader : public juce::TextButton
@@ -82,9 +84,7 @@ namespace ksh::ui
         ProjectHeader()
         {
             setWantsKeyboardFocus (false);
-            onClick = [this] { if (onDetails) onDetails(); };
         }
-        std::function<void()> onDetails;
         void setProjectName (const juce::String& value)
         {
             if (name == value)
@@ -123,24 +123,20 @@ namespace ksh::ui
     public:
         explicit ProjectDetails (PluginProcessor& p) : processor (p)
         {
-            setTitle ("Project details");
-            setAlwaysOnTop (true);
-            setWantsKeyboardFocus (true);
-            setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
+            setTitle ("Current project details");
             for (auto* field : { &name, &author, &description })
             {
                 addAndMakeVisible (*field);
                 field->setFont (font (labelFontSize));
                 field->setIndents (10, 8);
                 field->getProperties().set ("projectMetadata", true);
-                field->onEscapeKey = [this] { dismiss(); };
+                field->onEscapeKey = [this] { if (onClose) onClose(); };
             }
             name.setTitle ("Project name");
             author.setTitle ("Project author");
             description.setTitle ("Project description");
             for (auto* field : { &name, &author })
             {
-                field->setFont (font (20));
                 field->setIndents (10, 0);
                 field->setJustification (juce::Justification::centredLeft);
             }
@@ -155,111 +151,99 @@ namespace ksh::ui
             for (auto* date : { &created, &modified })
             {
                 addAndMakeVisible (*date);
-                date->setFont (font (labelFontSize));
                 date->setColour (juce::Label::textColourId, Palette::text);
                 date->setBorderSize ({});
                 date->setEditable (false, false, false);
             }
             created.setTitle ("Created date, read only");
             modified.setTitle ("Last modified date, read only");
-            addAndMakeVisible (cancel);
+            apply.getProperties().set ("insetProjectArtwork", true);
             addAndMakeVisible (apply);
+            addChildComponent (restore);
+            restore.getProperties().set ("insetProjectArtwork", true);
+            restore.setTooltip ("Recover the last replaced project as an unsaved copy");
+            restore.onClick = [this]
+            {
+                if (onRestore && matchesProject())
+                    onRestore();
+            };
            #if JUCE_IOS
+            share.getProperties().set ("insetProjectArtwork", true);
             addAndMakeVisible (share);
-            share.setTooltip ("Share a project copy");
+            share.setTooltip ("Share a project copy or use Save to Files to put it in iCloud Drive");
             share.onClick = [this]
             {
-                if (onShare && epoch == processor.getUiBridge().getDocumentEpoch())
-                {
-                    dismiss();
+                if (onShare && matchesProject())
                     onShare();
-                }
             };
            #endif
-            cancel.onClick = [this] { dismiss(); };
             apply.onClick = [this]
             {
-                applyChanges();
-                dismiss();
+                if (applyChanges() && onClose)
+                    onClose();
             };
         }
         std::function<void()> onClose;
+        std::function<void()> onRestore;
        #if JUCE_IOS
         std::function<void()> onShare;
        #endif
-        void open()
+        void load()
         {
             epoch = processor.getUiBridge().getDocumentEpoch();
             name.setText (processor.getProjectName(), false);
             author.setText (processor.getProjectAuthor(), false);
             description.setText (processor.getProjectDescription(), false);
             refresh();
-            setVisible (true);
-            toFront (true);
-            if (isShowing())
-                name.grabKeyboardFocus();
         }
+        bool matchesProject() const { return epoch == processor.getUiBridge().getDocumentEpoch(); }
         void refresh()
         {
-            if (isVisible() && epoch != processor.getUiBridge().getDocumentEpoch())
-            {
-                dismiss();
-                return;
-            }
             const auto dateText = [] (const juce::String& iso)
             {
                 return iso.isEmpty() ? juce::String ("Not saved yet") : juce::Time::fromISO8601 (iso).formatted ("%d %b %Y, %H:%M");
             };
             created.setText (dateText (processor.getProjectCreatedAt()), juce::dontSendNotification);
             modified.setText (dateText (processor.getProjectModifiedAt()), juce::dontSendNotification);
-        }
-        void dismiss()
-        {
-            setVisible (false);
-            if (onClose)
-                onClose();
-        }
-        void mouseDown (const juce::MouseEvent& event) override
-        {
-            if (!card.contains (event.getPosition()))
-                dismiss();
-        }
-        bool keyPressed (const juce::KeyPress& key) override
-        {
-            if (key != juce::KeyPress::escapeKey)
-                return false;
-            dismiss();
-            return true;
+            restore.setVisible (processor.canRestorePreviousProject());
         }
         void resized() override
         {
-            card = getLocalBounds().withSizeKeepingCentre (juce::jmin (760, getWidth() - 24), juce::jmin (480, getHeight() - 24));
-            const int x = card.getX() + 24, y = card.getY(), width = card.getWidth() - 48;
-            const int nameWidth = (width - 16) * 3 / 5;
-            const int controlHeight = getHeight() > 500 ? 64 : 44;
-            const int identityHeight = getHeight() > 500 ? 44 : 38;
-            name.setBounds (x, y + 80, nameWidth, identityHeight);
-            author.setBounds (x + nameWidth + 16, y + 80, width - nameWidth - 16, identityHeight);
-            const int descriptionY = name.getBottom() + 30;
-            description.setBounds (x, descriptionY, width, juce::jmax (0, card.getBottom() - 162 - descriptionY));
-            const int datesY = description.getBottom() + 36;
-            created.setBounds (x, datesY, (width - 16) / 2, 22);
-            modified.setBounds (x + (width + 16) / 2, datesY, (width - 16) / 2, 22);
-            apply.setBounds (card.getRight() - 144, card.getBottom() - controlHeight - 16, 120, controlHeight);
-            cancel.setBounds (apply.getX() - 120, apply.getY(), 104, controlHeight);
+            const bool compact = getHeight() < 250;
+            auto area = getLocalBounds();
+            headingBounds = area.removeFromTop (compact ? 28 : 44);
+            auto actions = area.removeFromBottom (compact ? 38 : 46);
+            apply.setBounds (actions.removeFromRight (84));
+            restore.setButtonText (getWidth() < 360 ? "RESTORE" : "RESTORE PREVIOUS PROJECT");
+            restore.setBounds (actions.removeFromLeft (getWidth() < 360 ? 94 : 204));
            #if JUCE_IOS
-            share.setBounds (x, apply.getY(), 120, controlHeight);
+            share.setBounds (actions.removeFromRight (84));
            #endif
+            area.removeFromBottom (compact ? 2 : 6);
+            dateBounds = area.removeFromBottom (compact ? 36 : 44);
+            auto dates = dateBounds.reduced (10, 2).withTrimmedTop (14);
+            created.setBounds (dates.removeFromLeft (dates.getWidth() / 2));
+            modified.setBounds (dates.withTrimmedLeft (4));
+            for (auto* date : { &created, &modified })
+                date->setFont (font (compact ? 12.0f : 14.0f));
+            area.removeFromBottom (compact ? 5 : 10);
+            area.removeFromTop (labelHeight);
+            auto identity = area.removeFromTop (compact ? 28 : 40);
+            name.setBounds (identity.removeFromLeft (identity.getWidth() * 3 / 5).withTrimmedRight (8));
+            author.setBounds (identity);
+            name.setFont (font (compact ? 15.0f : 18.0f));
+            author.setFont (name.getFont());
+            description.setIndents (10, compact ? 4 : 8);
+            description.setBounds (area.withTrimmedTop (labelHeight + (compact ? 2 : 8)));
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colours::black.withAlpha (0.58f));
-            surface (g, card.toFloat());
-            const float x = static_cast<float> (card.getX() + 24), y = static_cast<float> (card.getY());
-            text (g, "Project details", { x, y + 20, 400, 26 }, 20, Palette::text, true, juce::Justification::centredLeft);
-            const auto label = [&] (const juce::String& value, juce::Rectangle<int> bounds)
+            text (g, "Current project", headingBounds.toFloat(), 19, Palette::text, true, juce::Justification::centredLeft);
+            controlSurface (g, dateBounds.toFloat());
+            const auto label = [&g] (const juce::String& value, juce::Rectangle<int> bounds)
             {
-                text (g, value, bounds.withY (bounds.getY() - 22).withHeight (18).toFloat(), 12, Palette::muted, true, juce::Justification::centredLeft);
+                text (g, value, bounds.translated (0, -labelHeight).withHeight (labelHeight).toFloat(),
+                      12, Palette::muted, true, juce::Justification::centredLeft);
             };
             label ("Name", name.getBounds());
             label ("Author", author.getBounds());
@@ -271,7 +255,7 @@ namespace ksh::ui
     private:
         bool applyChanges()
         {
-            if (epoch != processor.getUiBridge().getDocumentEpoch())
+            if (!matchesProject())
                 return false;
             const auto nextName = name.getText().trim().isEmpty() ? juce::String ("Untitled Project") : name.getText().trim();
             const bool changed = nextName != processor.getProjectName()
@@ -284,12 +268,14 @@ namespace ksh::ui
         }
         PluginProcessor& processor;
         uint64_t epoch = 0;
-        juce::Rectangle<int> card;
+        static constexpr int labelHeight = 14;
+        juce::Rectangle<int> headingBounds, dateBounds;
         juce::TextEditor name, author, description;
         juce::Label created, modified;
-        juce::TextButton cancel { "Cancel" }, apply { "Apply" };
+        juce::TextButton apply { "APPLY" };
+        juce::TextButton restore { "RESTORE PREVIOUS PROJECT" };
        #if JUCE_IOS
-        juce::TextButton share { "Share" };
+        juce::TextButton share { "SHARE" };
        #endif
     };
 }

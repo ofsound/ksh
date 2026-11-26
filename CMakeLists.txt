@@ -18,6 +18,9 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else()
     # Configures universal binaries and decides which version of macOS to support
     include(PamplejuceMacOS)
+    if (KSH_MACOS_TESTFLIGHT)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version for TestFlight" FORCE)
+    endif()
 endif()
 
 # Couple tweaks that IMO should be JUCE defaults
@@ -118,6 +121,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     file(READ "${CMAKE_CURRENT_BINARY_DIR}/ios-projects.plist" KSH_IOS_PROJECT_PLIST)
     list(APPEND KSH_IOS_PROJECT_OPTIONS PLIST_TO_MERGE "${KSH_IOS_PROJECT_PLIST}")
     list(APPEND KSH_IOS_PROJECT_OPTIONS ICLOUD_PERMISSIONS_ENABLED ${KSH_IOS_ICLOUD_ENABLED})
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    list(APPEND KSH_MACOS_APP_OPTIONS DOCUMENT_EXTENSIONS kshproject)
 endif()
 
 juce_add_plugin("${PROJECT_NAME}"
@@ -195,7 +200,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     enable_language(OBJCXX)
     set(KSH_IOS_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSFileDrop.mm")
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSFileDrop.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSSafeArea.mm")
     set_source_files_properties(${KSH_IOS_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_sources(SharedCode INTERFACE ${KSH_IOS_SOURCES})
     target_compile_definitions(SharedCode INTERFACE KSH_IOS_ICLOUD_ENABLED=$<BOOL:${KSH_IOS_ICLOUD_ENABLED}>)

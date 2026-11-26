@@ -247,6 +247,13 @@ bool dispatchEngineCommand (KickSnareHatEngine& engine,
         return true;
     }
 
+    if (selector == "channel_cc")
+    {
+        engine.setChannelController (zeroBased (argInt (args, 0, 1)), argInt (args, 1, 0) != 0,
+                                     argInt (args, 2, 1), argInt (args, 3, Constants::defaultMidiChannel));
+        return true;
+    }
+
     if (selector == "channel_audition")
     {
         [[maybe_unused]] const auto audition = engine.auditionChannel (zeroBased (argInt (args, 0, 1)));

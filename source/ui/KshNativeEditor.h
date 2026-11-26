@@ -15,9 +15,11 @@ namespace ksh::ui
         ~NativeEditor() override;
         EditorController controller;
         Layout layout;
-        std::function<void (int)> projectAction; // new, load, save, previous, next, save as
+        static constexpr int restorePreviousProjectAction = 7;
+        std::function<void (int)> projectAction; // new, load, save, previous, next, save as, share, restore
         std::function<void()> preferredSizeChanged;
         std::function<void (bool)> zenModeChanged;
+        std::function<void (const juce::File&)> projectBrowserDismissed;
         void setZenMode (bool);
         void setZenScaleLimit (int);
         juce::String projectTitle() const { return controller.processor.getProjectName(); }
@@ -28,8 +30,10 @@ namespace ksh::ui
         void confirmDiscardingChanges (std::function<void()>);
         void showProjectBrowser (juce::File root, juce::File current, std::optional<ProjectBrowser::Details>,
                                  ProjectBrowser::ListProjects, ProjectBrowser::Submit, std::function<void()> importExternal = {},
-                                 bool confirmOpen = false, ProjectBrowser::ReadDetails = {});
+                                 bool confirmOpen = false, ProjectBrowser::ReadDetails = {}, juce::File lastFolder = {},
+                                 ProjectBrowser::StorageLocations = {});
         bool isProjectBrowserOpen() const { return projectBrowser.isVisible(); }
+        bool isProjectDialogOpen() const { return isProjectBrowserOpen() || discardChanges.isVisible(); }
         void setCompactViewport (bool, int width, int height, bool phone = true);
         void setCompactVisibleRows (int);
         void paint (juce::Graphics&) override;
@@ -91,14 +95,17 @@ namespace ksh::ui
         void triggerPad (int channel, int velocity = CellDefaults::velocity, std::optional<juce::Time> touchTime = std::nullopt);
         std::optional<std::pair<juce::Time, double>> lastPadTouch;
         ProjectHeader projectHeader;
-        ProjectDetails projectDetails;
-        ProjectBrowser projectBrowser { *uiPreferences };
+        ProjectBrowser projectBrowser;
         NoteChooser noteChooser;
+        juce::TextButton noteChooserBack { "Back" };
         bool noteChooserEditing = false;
         uint64_t noteChooserEpoch = 0;
-        int noteChooserChannel = -1, noteChooserOriginal = 0;
+        int noteChooserChannel = -1;
+        Channel noteChooserOriginal;
         void showNoteChooser (int, juce::Component&);
-        void updateNoteChooserTranspose();
+        bool showingNoteChooserPage() const { return layout.phoneRowControls && noteChooser.isVisible(); }
+        void syncNoteChooserGrid();
+        void syncNoteChooserControls();
         void applyNoteChooserPreset (const NoteChooser::RowNotes&, const juce::String& undoLabel);
         DiscardChanges discardChanges;
         uint64_t discardEpoch = 0;
@@ -155,12 +162,15 @@ namespace ksh::ui
         {
         public:
             std::function<void()> dismiss;
-            juce::Rectangle<int> card;
-            bool wideStyle = false;
+            juce::Rectangle<int> card, triggerBounds;
+            juce::Path outline;
             void paint (juce::Graphics&) override;
             void mouseDown (const juce::MouseEvent&) override;
+        private:
+            melatonin::DropShadow panelGlow { juce::Colours::transparentBlack, 10, {}, 1 };
         } tempoOverlay;
         bool tempoOpen = false;
+        bool warnedUnsupportedProjectVersion = false;
         static constexpr int minimumTempoBpm = 20, maximumTempoBpm = 300;
         struct TempoTaps
         {
@@ -190,6 +200,7 @@ namespace ksh::ui
         void configureSelectButton();
         void showPanel (Panel);
         void syncChannel();
+        bool noteChooserMatches() const;
         void syncMidiOutput();
         void cancelCompactGestures();
         void timerCallback() override;

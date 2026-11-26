@@ -22,6 +22,12 @@ namespace ksh
         return url != nil ? fileFromURL (url) : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
     }
 
+    juce::File MacProjectFiles::iCloudDriveDirectory()
+    {
+        const auto home = juce::String::fromUTF8 (NSHomeDirectoryForUser (NSUserName()).fileSystemRepresentation);
+        return home.isNotEmpty() ? juce::File (home).getChildFile ("Library/Mobile Documents/com~apple~CloudDocs") : juce::File();
+    }
+
     juce::String MacProjectFiles::makeBookmark (const juce::File& file)
     {
         if (file == juce::File())

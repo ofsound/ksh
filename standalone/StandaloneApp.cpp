@@ -28,6 +28,9 @@ namespace juce
 namespace
 {
 constexpr auto virtualMidiOutputName = "KSH Output";
+constexpr auto preferredMidiOutputSetting = "kshPreferredMidiOutput";
+constexpr auto midiThruSetting = "kshMidiThru";
+constexpr auto midiThruMenuId = 10002;
 constexpr auto networkMidiOutputName = "Network Session";
 constexpr auto networkMidiOutputSetting = "kshNetworkMidiOutput";
 constexpr auto networkMidiOutputMenuId = 10000;
@@ -67,12 +70,26 @@ public:
         // as an input and echo every emitted note back into the processor.
         deviceManager.removeMidiInputDeviceCallback ({}, &player);
         createVirtualMidiOutput();
+        observedMidiOutput = deviceManager.getDefaultMidiOutputIdentifier();
+        preferredMidiOutput = observedMidiOutput;
+        if (settingsToUse != nullptr)
+        {
+            if (preferredMidiOutput.isEmpty())
+                if (const auto setup = settingsToUse->getXmlValue ("audioSetup"))
+                    preferredMidiOutput = setup->getStringAttribute ("defaultMidiOutputDevice");
+            preferredMidiOutput = settingsToUse->getValue (preferredMidiOutputSetting, preferredMidiOutput);
+            settingsToUse->setValue (preferredMidiOutputSetting, preferredMidiOutput);
+        }
        #if JUCE_IOS
         networkOutputSelected = settingsToUse != nullptr && settingsToUse->getBoolValue (networkMidiOutputSetting);
        #endif
         updateMidiOutput();
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+        {
             plugin->setTimestampedStandaloneMidiInput (true);
+            plugin->setStandaloneMidiThru (settings != nullptr && settings->getBoolValue (midiThruSetting));
+        }
+        refreshMidiInputs();
         deviceManager.addMidiInputDeviceCallback ({}, this);
         deviceManager.addChangeListener (this);
         midiDeviceChanges = MidiDeviceListConnection::make ([this]
@@ -80,7 +97,6 @@ public:
             refreshMidiInputs();
             updateMidiOutput();
         });
-        refreshMidiInputs();
        #if defined (KSH_STANDALONE_LINK)
         if (ksh::StandaloneCoreMidiOutput::isAvailable())
             if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
@@ -92,6 +108,7 @@ public:
 
     ~KshStandalonePluginHolder() override
     {
+        detachMidiOutput();
         clearStandaloneServices();
         masterReference.clear();
         midiDeviceChanges.reset();
@@ -140,6 +157,16 @@ private:
     }
    #endif
 
+   #if JUCE_IOS
+    void audioDeviceError (const String& message) override
+    {
+        // JUCE stops the audio unit on interruption without calling audioDeviceStopped().
+        if (message == "AVAudioSessionInterruptionTypeBegan" || message == "AVAudioSessionMediaServicesWereLostNotification")
+            if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+                plugin->flushStandaloneMidiOutput();
+    }
+   #endif
+
    #if defined (KSH_STANDALONE_LINK)
     void updateLinkOutputLatency (AudioIODevice* device)
     {
@@ -174,9 +201,7 @@ private:
                 if (networkOutputSelected)
                     return String (networkMidiOutputName);
                #endif
-                if (auto* selected = deviceManager.getDefaultMidiOutput())
-                    return selected->getName();
-                return virtualMidiOutput != nullptr ? String (virtualMidiOutputName) : String ("Unavailable");
+                return activeMidiOutput.name.isNotEmpty() ? activeMidiOutput.name : String ("Unavailable");
             };
         }
     }
@@ -200,24 +225,28 @@ private:
         auto destinations = MidiOutput::getAvailableDevices();
         auto localSelected = true;
        #if JUCE_IOS
-        const auto network = ksh::enableStandaloneNetworkMidi();
+        const auto network = ksh::getStandaloneNetworkMidiDestination();
         destinations = ksh::withoutStandaloneNetworkDestination (std::move (destinations), network.identifier);
         localSelected = !networkOutputSelected;
        #endif
-        const auto selected = deviceManager.getDefaultMidiOutputIdentifier();
         PopupMenu menu;
         menu.setLookAndFeel (&target.getLookAndFeel());
         menu.addSectionHeader ("MIDI output destination");
-        menu.addItem (1, virtualMidiOutputName, virtualMidiOutput != nullptr, localSelected && selected.isEmpty());
+        menu.addItem (1, virtualMidiOutputName, virtualMidiOutput != nullptr,
+                      localSelected && activeMidiOutput == virtualOutputInfo);
         menu.addSeparator();
        #if JUCE_IOS
-        menu.addItem (networkMidiOutputMenuId, network.identifier.isNotEmpty() ? networkMidiOutputName : "Network Session unavailable",
-                      network.identifier.isNotEmpty() && virtualMidiOutput != nullptr, networkOutputSelected);
+        menu.addItem (networkMidiOutputMenuId, networkMidiOutputName, virtualMidiOutput != nullptr, networkOutputSelected);
        #endif
         for (int i = 0; i < destinations.size(); ++i)
-            menu.addItem (i + 2, destinations[i].name, true, destinations[i].identifier == selected);
+            menu.addItem (i + 2, destinations[i].name, true, destinations[i].identifier == activeMidiOutput.identifier);
         if (destinations.isEmpty())
             menu.addItem (destinations.size() + 2, "No connected MIDI destinations", false);
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+        {
+            menu.addSeparator();
+            menu.addItem (midiThruMenuId, "MIDI Thru (echo input to output)", true, plugin->isStandaloneMidiThruEnabled());
+        }
        #if JUCE_IOS
         menu.addSeparator();
         menu.addItem (bluetoothMidiMenuId, String::fromUTF8 ("Connect Bluetooth MIDI…"),
@@ -225,14 +254,25 @@ private:
         const Component::SafePointer<Component> menuTarget (&target);
        #endif
         const WeakReference<KshStandalonePluginHolder> weak (this);
-        menu.showMenuAsync (ksh::ui::footerMenuOptions (target), [weak, destinations
-                              #if JUCE_IOS
-                               , menuTarget
-                              #endif
-                               ] (int result)
+        ksh::ui::showAnchoredPopup (menu, ksh::ui::footerMenuOptions (target), [weak, destinations
+                                     #if JUCE_IOS
+                                      , menuTarget
+                                     #endif
+                                      ] (int result)
         {
             if (weak == nullptr || result == 0)
                 return;
+            if (result == midiThruMenuId)
+            {
+                if (auto* plugin = dynamic_cast<PluginProcessor*> (weak->processor.get()))
+                {
+                    const bool enabled = !plugin->isStandaloneMidiThruEnabled();
+                    plugin->setStandaloneMidiThru (enabled);
+                    if (weak->settings != nullptr)
+                        weak->settings->setValue (midiThruSetting, enabled);
+                }
+                return;
+            }
            #if JUCE_IOS
             if (result == bluetoothMidiMenuId)
             {
@@ -257,31 +297,20 @@ private:
 
     void selectMidiOutput (const String& identifier, [[maybe_unused]] bool network)
     {
-        // Detach and flush the old route before the manager closes it.
-        player.setMidiOutput (nullptr);
-       #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
-        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
-            plugin->setStandaloneMidiOutput (nullptr);
-       #endif
-        auto* oldOutput = deviceManager.getDefaultMidiOutput();
-        if (oldOutput == nullptr)
-            oldOutput = virtualMidiOutput.get();
-        if (oldOutput != nullptr)
-        {
-            oldOutput->clearAllPendingMessages();
-            for (int channel = 1; channel <= 16; ++channel)
-                oldOutput->sendMessageNow (MidiMessage::allNotesOff (channel));
-        }
+        detachMidiOutput();
        #if JUCE_IOS
         networkForwarder.stop();
         networkOutputSelected = network;
         if (settings != nullptr)
             settings->setValue (networkMidiOutputSetting, network);
        #endif
-        deviceManager.setDefaultMidiOutputDevice (identifier);
+        rememberMidiOutput (identifier);
         updateMidiOutput();
+       #if JUCE_IOS
+        refreshMidiInputs();
+       #endif
         saveAudioDeviceState();
-        if (identifier.isNotEmpty() && deviceManager.getDefaultMidiOutput() == nullptr)
+        if (identifier.isNotEmpty() && activeMidiOutput.identifier != identifier)
             AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output",
                                               "Could not open that MIDI destination. Using KSH Output instead.");
        #if JUCE_IOS
@@ -314,7 +343,20 @@ private:
 
     void refreshMidiInputs()
     {
-        ksh::updateStandaloneMidiInputs (MidiInput::getAvailableDevices(), lastMidiDevices,
+        auto available = MidiInput::getAvailableDevices();
+       #if JUCE_IOS
+        if (!networkOutputSelected)
+        {
+            const auto networkSource = ksh::getStandaloneNetworkMidiSourceIdentifier();
+            if (networkSource.isNotEmpty())
+            {
+                if (deviceManager.isMidiInputDeviceEnabled (networkSource))
+                    deviceManager.setMidiInputDeviceEnabled (networkSource, false);
+                available.removeIf ([&] (const auto& input) { return input.identifier == networkSource; });
+            }
+        }
+       #endif
+        ksh::updateStandaloneMidiInputs (available, lastMidiDevices,
                                          virtualOutputInfo, autoOpenExternalMidiDevices,
                                          [this] (const String& identifier, bool enabled)
                                          {
@@ -336,46 +378,108 @@ private:
         }
     }
 
+    void rememberMidiOutput (const String& identifier)
+    {
+        preferredMidiOutput = identifier;
+        if (settings != nullptr)
+            settings->setValue (preferredMidiOutputSetting, preferredMidiOutput);
+    }
+
+    void detachMidiOutput()
+    {
+        player.setMidiOutput (nullptr);
+       #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
+        if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
+            plugin->setStandaloneMidiOutput (nullptr);
+       #endif
+        if (auto* output = std::exchange (bufferedMidiOutput, nullptr))
+        {
+            output->clearAllPendingMessages();
+            for (int channel = 1; channel <= 16; ++channel)
+            {
+                output->sendMessageNow (MidiMessage::controllerEvent (channel, 64, 0));
+                output->sendMessageNow (MidiMessage::allNotesOff (channel));
+            }
+        }
+    }
+
     void updateMidiOutput()
     {
-        // An explicit destination (including the iOS network session) takes
-        // priority over the local virtual source. JUCE persists this selection.
+        if (updatingMidiOutput)
+            return;
+        const ScopedValueSetter<bool> updating (updatingMidiOutput, true);
+
+        const auto managerSelection = deviceManager.getDefaultMidiOutputIdentifier();
+        // The JUCE audio settings dialog can also change the selected device.
+        if (managerSelection != observedMidiOutput)
+        {
+            rememberMidiOutput (managerSelection);
+           #if JUCE_IOS
+            if (managerSelection.isNotEmpty() && networkOutputSelected)
+            {
+                networkForwarder.stop();
+                networkOutputSelected = false;
+                if (settings != nullptr)
+                    settings->setValue (networkMidiOutputSetting, false);
+            }
+           #endif
+        }
+
+        auto destinations = MidiOutput::getAvailableDevices();
+       #if JUCE_IOS
+        const auto network = ksh::getStandaloneNetworkMidiDestination();
+        destinations = ksh::withoutStandaloneNetworkDestination (std::move (destinations), network.identifier);
+        const auto availableId = networkOutputSelected ? String() : ksh::availableStandaloneMidiOutput (destinations, preferredMidiOutput);
+       #else
+        const auto availableId = ksh::availableStandaloneMidiOutput (destinations, preferredMidiOutput);
+       #endif
+        if (availableId != managerSelection)
+        {
+            detachMidiOutput();
+            deviceManager.setDefaultMidiOutputDevice (availableId);
+        }
+        observedMidiOutput = deviceManager.getDefaultMidiOutputIdentifier();
         auto* selected = deviceManager.getDefaultMidiOutput();
         auto* output = selected != nullptr ? selected : virtualMidiOutput.get();
+        activeMidiOutput = {};
+
        #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
-        if (!ksh::StandaloneCoreMidiOutput::isAvailable())
-        {
-            if (output != nullptr && !output->isBackgroundThreadRunning())
-                output->startBackgroundThread();
-            player.setMidiOutput (output);
-            return;
-        }
-        // CoreMIDI receives audio-clock timestamps directly. Never let the
-        // AudioProcessorPlayer also send the same block via its timer queue.
-        player.setMidiOutput (nullptr);
         if (auto* plugin = dynamic_cast<PluginProcessor*> (processor.get()))
         {
-            const auto info = output != nullptr ? output->getDeviceInfo() : MidiDeviceInfo();
-            if (output != nullptr && !nativeMidiOutput.matches (info, selected == nullptr))
+            if (ksh::StandaloneCoreMidiOutput::isAvailable())
             {
-                plugin->setStandaloneMidiOutput (nullptr);
-                const auto error = nativeMidiOutput.open (info, selected == nullptr);
-                if (error.isNotEmpty())
+                const auto attach = [this, plugin] (MidiOutput* candidate, bool virtualSource)
                 {
-                    if (!output->isBackgroundThreadRunning())
-                        output->startBackgroundThread();
-                    player.setMidiOutput (output);
-                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "MIDI output", error);
+                    if (candidate == nullptr)
+                        return false;
+                    const auto info = candidate->getDeviceInfo();
+                    if (!nativeMidiOutput.matches (info, virtualSource))
+                    {
+                        detachMidiOutput();
+                        if (nativeMidiOutput.open (info, virtualSource).isNotEmpty())
+                            return false;
+                    }
+                    plugin->setStandaloneMidiOutput (&nativeMidiOutput);
+                    activeMidiOutput = info;
+                    return true;
+                };
+                if (attach (output, selected == nullptr) || (selected != nullptr && attach (virtualMidiOutput.get(), true)))
+                {
+                    updateNetworkForwarding();
                     return;
                 }
+                output = virtualMidiOutput.get();
             }
-            plugin->setStandaloneMidiOutput (output != nullptr ? &nativeMidiOutput : nullptr);
         }
-       #else
+       #endif
+        if (output != bufferedMidiOutput)
+            detachMidiOutput();
         if (output != nullptr && !output->isBackgroundThreadRunning())
             output->startBackgroundThread();
+        bufferedMidiOutput = output;
         player.setMidiOutput (output);
-       #endif
+        if (output != nullptr)
+            activeMidiOutput = output->getDeviceInfo();
         updateNetworkForwarding();
     }
 
@@ -396,6 +500,10 @@ private:
 
     std::unique_ptr<MidiOutput> virtualMidiOutput;
     MidiDeviceInfo virtualOutputInfo { virtualMidiOutputName, {} };
+    MidiDeviceInfo activeMidiOutput;
+    String preferredMidiOutput, observedMidiOutput;
+    MidiOutput* bufferedMidiOutput = nullptr;
+    bool updatingMidiOutput = false;
     MidiDeviceListConnection midiDeviceChanges;
     const bool autoOpenExternalMidiDevices;
    #if defined (KSH_STANDALONE_LINK)
@@ -449,7 +557,23 @@ public:
         return true;
     }
 
-    void anotherInstanceStarted (const String&) override {}
+    void anotherInstanceStarted ([[maybe_unused]] const String& commandLine) override
+    {
+       #if JUCE_MAC
+        const auto paths = StringArray::fromTokens (commandLine, true);
+        if (paths.size() != 1)
+            return;
+        const auto path = paths[0].unquoted();
+        if (!File::isAbsolutePath (path))
+            return;
+        const File file (path);
+        if (file.hasFileExtension ("kshproject"))
+        {
+            pendingProject = file;
+            openPendingProject();
+        }
+       #endif
+    }
 
     StandaloneFilterWindow* createWindow()
     {
@@ -499,11 +623,9 @@ public:
                                                             autoOpenMidiDevices);
     }
 
-    void initialise (const String&) override
+    void initialise ([[maybe_unused]] const String& commandLine) override
     {
        #if JUCE_IOS
-        // Start Network MIDI before the holder initializes JUCE's cached endpoints.
-        (void) ksh::enableStandaloneNetworkMidi();
         if (SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
             Desktop::getInstance().setOrientationsEnabled (Desktop::rotatedClockwise | Desktop::rotatedAntiClockwise);
        #endif
@@ -523,6 +645,12 @@ public:
            #endif
 
             mainWindow->setVisible (true);
+           #if JUCE_MAC
+            if (pendingProject == File())
+                anotherInstanceStarted (commandLine);
+            else
+                openPendingProject();
+           #endif
            #if JUCE_IOS
             updateFullscreenSystemGestures();
            #endif
@@ -589,14 +717,31 @@ private:
    #if JUCE_MAC
     static constexpr CommandID audioSettingsCommand = 0x2000;
     static constexpr CommandID saveProjectCommand = 0x2001;
+    static constexpr CommandID saveProjectAsCommand = 0x2002;
     ApplicationCommandManager menuCommands;
+    File pendingProject;
+
+    void openPendingProject()
+    {
+        if (pendingProject == File() || mainWindow == nullptr)
+            return;
+        auto* holder = mainWindow->getPluginHolder();
+        if (auto* editor = dynamic_cast<PluginEditor*> (holder->processor->getActiveEditor()))
+        {
+            const auto file = std::exchange (pendingProject, File());
+            editor->filesDropped ({ file.getFullPathName() }, 0, 0);
+        }
+    }
 
     StringArray getMenuBarNames() override { return { "File" }; }
     PopupMenu getMenuForIndex (int index, const String&) override
     {
         PopupMenu menu;
         if (index == 0)
+        {
             menu.addCommandItem (&menuCommands, saveProjectCommand);
+            menu.addCommandItem (&menuCommands, saveProjectAsCommand);
+        }
         return menu;
     }
     void menuItemSelected (int, int) override {}
@@ -606,6 +751,7 @@ private:
         JUCEApplication::getAllCommands (commands);
         commands.add (audioSettingsCommand);
         commands.add (saveProjectCommand);
+        commands.add (saveProjectAsCommand);
     }
 
     void getCommandInfo (CommandID command, ApplicationCommandInfo& info) override
@@ -620,13 +766,18 @@ private:
             info.setInfo ("Save", "Save the current project", "File", 0);
             info.addDefaultKeypress ('s', ModifierKeys::commandModifier);
         }
+        else if (command == saveProjectAsCommand)
+        {
+            info.setInfo ("Save As...", "Save a project under a new name or location", "File", 0);
+            info.addDefaultKeypress ('s', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+        }
         else
             JUCEApplication::getCommandInfo (command, info);
     }
 
     bool perform (const InvocationInfo& info) override
     {
-        if (info.commandID != audioSettingsCommand && info.commandID != saveProjectCommand)
+        if (info.commandID != audioSettingsCommand && info.commandID != saveProjectCommand && info.commandID != saveProjectAsCommand)
             return JUCEApplication::perform (info);
 
         auto* holder = mainWindow != nullptr ? mainWindow->getPluginHolder() : nullptr;
@@ -639,7 +790,7 @@ private:
         }
         if (auto* editor = dynamic_cast<PluginEditor*> (holder->processor->getActiveEditor()))
         {
-            editor->saveCurrentProject();
+            editor->saveCurrentProject (info.commandID == saveProjectAsCommand);
             return true;
         }
         return false;

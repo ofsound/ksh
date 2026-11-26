@@ -1,5 +1,5 @@
 #include "KshPatternGrid.h"
-#include "../engine/KshMath.h"
+#include "../engine/KshControllerCurve.h"
 namespace ksh::ui
 {
     namespace
@@ -98,9 +98,10 @@ namespace ksh::ui
             return juce::Rectangle<int> (step.getCentreX() - width / 2, y, width, height).constrainedWithin (available);
         }
 
-        juce::String accessibleDescription (const Cell& value)
+        juce::String accessibleDescription (const Cell& value, bool cc)
         {
-            return juce::String (value.enabled ? "On" : "Off") + ", velocity " + juce::String (value.velocity) + ", probability " + juce::String (value.probability) + ", split " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle) + ", nudge " + juce::String (value.nudge) + "%" + (value.span > 1 ? ", span " + juce::String (value.span) + " steps" : juce::String());
+            return juce::String (value.enabled ? "On" : "Off") + (cc ? ", CC value " : ", velocity ")
+                + juce::String (cc ? value.controllerValue() : value.velocity) + ", probability " + juce::String (value.probability) + ", split " + juce::String (value.roll) + ", cycle " + juce::String (value.cycle) + ", nudge " + juce::String (value.nudge) + "%" + (value.span > 1 ? ", span " + juce::String (value.span) + " steps" : juce::String());
         }
     }
 
@@ -114,10 +115,24 @@ namespace ksh::ui
             addMouseListener (this, true);
             for (const auto& preset : rhythmPresets)
             {
-                auto* item = items.add (new PresetButton (preset));
+                auto* item = items.add (new PresetButton (preset.label));
                 addAndMakeVisible (*item);
-                item->onClick = [this, item] { choosePreset (item->preset); };
+                item->onClick = [this, preset] { choosePreset (preset); };
             }
+            glide.setTitle ("Glide to next");
+            glide.setToggleable (true);
+            glide.onClick = [this]
+            {
+                auto& editor = owner.controller;
+                editor.refresh();
+                if (!isVisible() || !targetsAreCurrent() || !canEditGlide() || editor.editing())
+                    return;
+                editor.toggleCcGlide (targets);
+                if (closeAfterChoice)
+                    close();
+                else
+                    refresh();
+            };
         }
 
         bool isTrackingPress() const { return trackingPress; }
@@ -148,9 +163,14 @@ namespace ksh::ui
                 container = &owner;
             container->addChildComponent (*this);
             const int targetSize = owner.layout.touchRows && !owner.layout.compactOnPhone ? Layout::touchTarget : 52;
-            rowHeight = juce::jlimit (1, targetSize, (container->getHeight() - fixedHeight) / rowsPerColumn);
-            setBounds (stepPopupBounds (stepBounds (*container), container->getLocalBounds(),
-                                        2 * columnWidth + columnGap + 2 * contentInset, fixedHeight + rowsPerColumn * rowHeight));
+            if (canEditGlide())
+                addAndMakeVisible (glide);
+            else
+                removeChildComponent (&glide);
+            const int menuRows = rowsPerColumn + (hasGlideSection() ? 1 : 0);
+            const int frameHeight = fixedHeight + (hasGlideSection() ? headingHeight + sectionGap : 0);
+            rowHeight = juce::jlimit (1, targetSize, (container->getHeight() - frameHeight) / menuRows);
+            place (*container, 2 * columnWidth + columnGap + 2 * contentInset, frameHeight + menuRows * rowHeight);
             resized();
             setVisible (true);
             toFront (false);
@@ -166,7 +186,7 @@ namespace ksh::ui
             setVisible (false);
         }
 
-        void paintAnchor (juce::Graphics& g) const
+        void paintAnchor (juce::Graphics& g)
         {
             if (!isVisible())
                 return;
@@ -174,19 +194,28 @@ namespace ksh::ui
             const auto frame = owner.layout.cellArtwork (owner.cellBounds (press.location)).reduced (0.7f);
             const juce::Graphics::ScopedSaveState clip (g);
             g.reduceClipRegion (owner.getLocalBounds().toFloat().withX (owner.layout.gridLeft()).withWidth (owner.layout.gridWidth()).getSmallestIntegerContainer());
-            g.setColour (accent.brighter (0.22f).withAlpha (0.55f));
-            g.drawRoundedRectangle (frame, 4.5f, 1.25f);
+            juce::Path outline;
+            outline.addRoundedRectangle (frame, 4.5f);
+            anchorGlow.setColor (accent.brighter (0.2f).withAlpha (0.82f));
+            anchorGlow.render (g, outline, juce::PathStrokeType (2.5f));
+            g.setColour (accent.interpolatedWith (Palette::text, 0.22f));
+            g.strokePath (outline, juce::PathStrokeType (1.5f));
         }
 
         void track (juce::Point<int> position)
         {
             const auto* highlighted = itemAt (position);
-            for (auto* item : items)
-                if (const bool active = item == highlighted; item->dragHighlighted != active)
+            const auto highlight = [highlighted] (PresetButton& item)
+            {
+                if (const bool active = &item == highlighted; item.dragHighlighted != active)
                 {
-                    item->dragHighlighted = active;
-                    item->repaint();
+                    item.dragHighlighted = active;
+                    item.repaint();
                 }
+            };
+            for (auto* item : items)
+                highlight (*item);
+            highlight (glide);
         }
 
         void leaveAnchor (juce::Point<int> position)
@@ -202,8 +231,8 @@ namespace ksh::ui
             track ({ -1, -1 });
             if (press.position.getDistanceFrom (position) < presetPressSlop)
                 return;
-            if (const auto* item = itemAt (getLocalPoint (&owner, position).roundToInt()))
-                choosePreset (item->preset);
+            if (auto* item = itemAt (getLocalPoint (&owner, position).roundToInt()))
+                item->onClick();
             else if (!dismissOnPress)
                 close();
         }
@@ -218,63 +247,86 @@ namespace ksh::ui
                 return;
             }
             if (auto* container = getParentComponent())
-                setBounds (stepPopupBounds (stepBounds (*container), container->getLocalBounds(), getWidth(), getHeight()));
+                place (*container, getWidth(), getHeight());
             const auto colour = Palette::channel (press.location.channel);
             if (std::exchange (accent, colour) != colour)
             {
-                panelGlow.setColor (accent.brighter (0.15f).withAlpha (0.62f));
                 repaint();
                 repaintAnchor();
             }
-            for (auto* item : items)
+            glide.setEnabled (canEditGlide());
+            glide.setAccent (colour);
+            glide.setToggleState (glide.isEnabled() && std::ranges::all_of (targets, [this] (Location p)
+                { return !owner.controller.isControllerRow (p.channel) || owner.controller.glidesToNext (p); }), juce::dontSendNotification);
+            for (int i = 0; i < items.size(); ++i)
             {
-                const int length = spanForPreset (item->preset, owner.controller.state.playback.beatsPerStep);
+                auto* item = items[i];
+                const auto& preset = rhythmPresets[static_cast<size_t> (i)];
+                const int length = spanForPreset (preset, owner.controller.state.playback.beatsPerStep);
                 const bool enabled = allowedSpan (length);
                 item->setAccent (colour);
                 item->setEnabled (enabled);
                 item->setToggleState (enabled && std::ranges::all_of (targets, [&] (Location location)
                 {
                     const auto& hit = owner.controller.cell (location);
-                    return hit.enabled && hit.span == length && hit.roll == item->preset.split;
+                    return hit.enabled && hit.span == length && hit.roll == preset.split;
                 }), juce::dontSendNotification);
             }
         }
 
         void mouseExit (const juce::MouseEvent& event) override
         {
-            if (isVisible() && !dismissOnPress && !trackingPress && event.source.canHover()
-                && !panelBounds().contains (event.getEventRelativeTo (this).getPosition()))
+            const auto position = event.getEventRelativeTo (this).getPosition();
+            if (isVisible() && !dismissOnPress && !trackingPress && event.source.canHover() && !hitTest (position.x, position.y))
                 close();
         }
 
-        bool hitTest (int x, int y) override { return panelBounds().contains (x, y); }
+        bool hitTest (int x, int y) override
+        {
+            return panelBounds().contains (x, y) || panelOutline.contains (static_cast<float> (x), static_cast<float> (y));
+        }
 
         void resized() override
         {
-            panelOutline.clear();
-            panelOutline.addRoundedRectangle (panelBounds().toFloat().reduced (0.5f), panelRadius);
+            const int presetsY = presetHeadingY() + headingHeight;
             for (int i = 0; i < items.size(); ++i)
-                items[i]->setBounds (columnX (i / rowsPerColumn), contentInset + headingHeight + (i % rowsPerColumn) * rowHeight, columnWidth, rowHeight);
+                items[i]->setBounds (columnX (i / rowsPerColumn), presetsY + (i % rowsPerColumn) * rowHeight, columnWidth, rowHeight);
+            if (hasGlideSection())
+                glide.setBounds (contentInset, contentInset + headingHeight, 2 * columnWidth + columnGap, rowHeight);
         }
 
         void paint (juce::Graphics& g) override
         {
-            panelGlow.render (g, panelOutline);
-            g.setGradientFill (surfaceGradient (panelOutline.getBounds(), Palette::backgrounds, false, [this] (juce::Colour colour)
+            paintPopupPanel (g, panelOutline, accent, panelGlow);
+            const auto heading = juce::Rectangle<int> (contentInset + 8, contentInset, columnWidth - 8, headingHeight);
+            const auto ink = Palette::text.interpolatedWith (accent, 0.35f);
+            if (hasGlideSection())
             {
-                return colour.interpolatedWith (accent, 0.08f);
-            }));
-            g.fillPath (panelOutline);
-            g.setColour (accent.interpolatedWith (Palette::text, 0.22f));
-            g.strokePath (panelOutline, juce::PathStrokeType (1.2f));
-            const auto heading = juce::Rectangle<int> (contentInset + 8, contentInset, columnWidth - 8, headingHeight).toFloat();
-            text (g, "Step Presets", heading, 18, Palette::text.interpolatedWith (accent, 0.35f), true, juce::Justification::centredLeft);
+                text (g, "Glide to Next", heading.toFloat(), 18, ink, true, juce::Justification::centredLeft);
+                g.setColour (accent.withAlpha (0.28f));
+                g.drawHorizontalLine (presetHeadingY() - sectionGap / 2, static_cast<float> (glide.getX()),
+                                      static_cast<float> (glide.getRight()));
+            }
+            text (g, "Step Presets", heading.withY (presetHeadingY()).toFloat(), 18, ink, true, juce::Justification::centredLeft);
         }
 
     private:
+        void place (const juce::Component& container, int width, int height)
+        {
+            const auto step = stepBounds (container);
+            setBounds (stepPopupBounds (step, container.getLocalBounds(), width, height));
+            const auto targetBounds = step.translated (-getX(), -getY()).toFloat();
+            auto outline = popupPanelOutline (panelBounds().toFloat().reduced (0.5f), panelRadius, targetBounds);
+            if (outline != panelOutline)
+            {
+                panelOutline = std::move (outline);
+                repaint();
+            }
+        }
+
         void repaintAnchor() const
         {
-            owner.repaint (owner.cellBounds (press.location).getSmallestIntegerContainer());
+            owner.repaint (owner.cellPaintBounds (press.location).getSmallestIntegerContainer());
         }
 
         juce::Rectangle<int> stepBounds (const juce::Component& container) const
@@ -289,7 +341,7 @@ namespace ksh::ui
         class PresetButton final : public juce::TextButton
         {
         public:
-            explicit PresetButton (const RhythmPreset& rhythm) : juce::TextButton (rhythm.label), preset (rhythm) {}
+            explicit PresetButton (const juce::String& label) : juce::TextButton (label) {}
             void setAccent (juce::Colour colour)
             {
                 if (std::exchange (accent, colour) != colour)
@@ -320,7 +372,6 @@ namespace ksh::ui
                     g.strokePath (tick, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 }
             }
-            const RhythmPreset& preset;
             bool dragHighlighted = false;
 
         private:
@@ -339,8 +390,8 @@ namespace ksh::ui
             const auto wouldChange = [&] (Location location)
             {
                 const auto& saved = editor.cell (location);
-                const auto cell = saved.enabled ? saved : Cell {};
-                return cell.span != length || cell.roll != preset.split;
+                const auto cell = saved.enabled || editor.isControllerRow (location.channel) ? saved : Cell {};
+                return !cell.enabled || cell.span != length || cell.roll != preset.split;
             };
             if (std::ranges::none_of (targets, wouldChange))
             {
@@ -356,8 +407,9 @@ namespace ksh::ui
                     if (!wouldChange (location))
                         continue;
                     auto cell = editor.cell (location);
-                    if (!cell.enabled)
-                        cell = Cell { .enabled = true };
+                    if (!cell.enabled && !editor.isControllerRow (location.channel))
+                        cell = {};
+                    cell.enabled = true;
                     cell.span = length;
                     cell.roll = preset.split;
                     editor.editCell (location, cell);
@@ -381,9 +433,16 @@ namespace ksh::ui
             return length == 1 || std::ranges::all_of (targets, [&] (Location location) { return owner.controller.canFitSpan (location, length); });
         }
 
-        const PresetButton* itemAt (juce::Point<int> position) const
+        bool canEditGlide() const
         {
-            for (const auto* item : items)
+            return owner.controller.isControllerRow (press.location.channel) && owner.controller.cell (press.location).enabled;
+        }
+
+        PresetButton* itemAt (juce::Point<int> position)
+        {
+            if (hasGlideSection() && glide.isEnabled() && glide.getBounds().contains (position))
+                return &glide;
+            for (auto* item : items)
                 if (item->isVisible() && item->isEnabled() && item->getBounds().contains (position))
                     return item;
             return nullptr;
@@ -391,20 +450,24 @@ namespace ksh::ui
 
         juce::Rectangle<int> panelBounds() const { return getLocalBounds().reduced (glowInset); }
         int columnX (int column) const { return contentInset + column * (columnWidth + columnGap); }
+        bool hasGlideSection() const { return glide.getParentComponent() == this; }
+        int presetHeadingY() const { return contentInset + (hasGlideSection() ? headingHeight + rowHeight + sectionGap : 0); }
         static constexpr int glowInset = 12, contentInset = glowInset + 14;
         static constexpr float panelRadius = 7.0f;
-        static constexpr int columnWidth = 160, columnGap = 8, headingHeight = 32;
+        static constexpr int columnWidth = 160, columnGap = 8, headingHeight = 32, sectionGap = 8;
         static constexpr int rowsPerColumn = 3;
         static constexpr int fixedHeight = 2 * contentInset + headingHeight;
         int rowHeight = 0;
         PatternGrid& owner;
         juce::OwnedArray<PresetButton> items;
+        PresetButton glide { "Glide" };
         std::vector<Location> targets;
         std::optional<Selection> selectionAtOpen;
         PresetPress press {};
         juce::Colour accent;
         juce::Path panelOutline;
         melatonin::DropShadow panelGlow { juce::Colours::transparentBlack, 10 };
+        melatonin::DropShadow anchorGlow { juce::Colours::transparentBlack, 6, {}, 1 };
         float anchorOffset = 0.0f;
         int anchorSpan = 1;
         bool trackingPress = false, dismissOnPress = false, closeAfterChoice = false;
@@ -414,7 +477,7 @@ namespace ksh::ui
 
     bool PatternGrid::hasActiveGesture() const
     {
-        return drag != Drag::none || velocityTap.has_value() || presetPress.has_value() || cyclePress.has_value() || splitPress.has_value() || mutePainting || pendingMute >= 0 || directionSwipe.has_value()
+        return drag != Drag::none || velocityTap.has_value() || presetPress.has_value() || cyclePress.has_value() || splitPress.has_value() || rowSwipe.has_value()
             || (presetMenu != nullptr && presetMenu->isVisible());
     }
 
@@ -447,7 +510,7 @@ namespace ksh::ui
                 auto& cell = accessibleCells[static_cast<size_t> (location.key())];
                 addAndMakeVisible (cell);
                 cell.setTitle ("Channel " + juce::String (ch + 1) + ", step " + juce::String (step + 1));
-                cell.setDescription (accessibleDescription (displayedCells[static_cast<size_t> (location.key())]));
+                cell.setDescription (accessibleDescription (displayedCells[static_cast<size_t> (location.key())], false));
                 cell.onClick = [this, location] { toggleCell (location); };
                 cell.navigate = [this, location] (const juce::KeyPress& key) { return handleCellKey (location, key); };
             }
@@ -470,7 +533,18 @@ namespace ksh::ui
             r.label.setButtonText (juce::String (ch + 1));
             r.label.getProperties().set ("rowNumber", true);
             r.label.setTooltip ("Triggers this row. Records when armed.");
-            r.label.onClick = [this, ch] { if (rowTriggered) rowTriggered (ch); };
+            r.label.onClick = [this, ch, &r]
+            {
+                if (controller.isControllerRow (ch))
+                {
+                    if (layout.compact && channelSettings)
+                        channelSettings (ch);
+                    else if (noteChooserRequested)
+                        noteChooserRequested (ch, r.note);
+                }
+                else if (rowTriggered)
+                    rowTriggered (ch);
+            };
             r.label.showColourPicker = [this, ch]
             {
                 if (!layout.compactOnPhone && trackColourRequested)
@@ -487,117 +561,33 @@ namespace ksh::ui
             r.note.insetRowArtwork = true;
             r.note.format = [] (int note) { return juce::MidiMessage::getMidiNoteName (note, true, true, 4); };
             r.note.onChoose = [this, ch, &r] { if (noteChooserRequested) noteChooserRequested (ch, r.note); };
-            for (auto* button : { &r.reverse, &r.ping })
+            r.mute.onClick = [this, ch] { if (!controller.exitSolo()) controller.toggleMute (ch); };
+            r.reverse.onClick = [this, ch] { toggleDirection (ch, true); };
+            r.ping.onClick = [this, ch] { toggleDirection (ch, false); };
+            r.reverse.setTooltip ("Click to toggle Reverse. Drag across rows to set a range and drag back to shrink it.");
+            r.ping.setTooltip ("Click to toggle Ping-Pong. Drag across rows to set a range and drag back to shrink it.");
+            const std::array controls {
+                std::pair { &r.mute, RowControl::power },
+                std::pair { &r.reverse, RowControl::reverse },
+                std::pair { &r.ping, RowControl::pingPong }
+            };
+            for (auto [button, control] : controls)
             {
-                const bool reverse = button == &r.reverse;
-                button->onClick = [this, ch, reverse] { toggleDirection (ch, reverse); };
-                button->pressed = [this, ch, reverse, button] (const juce::MouseEvent& e)
+                button->pressed = [this, ch, control] (const juce::MouseEvent& event)
                 {
-                    if (e.mods.isLeftButtonDown() && !e.mods.isPopupMenu() && controller.source() >= 0 && !directionSwipe)
-                        directionSwipe = DirectionSwipe { ch, layout.displayRow (ch), controller.source(), controller.state.documentEpoch,
-                                                          reverse, !button->getToggleState() };
+                    beginRowSwipe (ch, control, event);
                 };
-                button->dragged = [this, ch, reverse] (const juce::MouseEvent& e)
+                button->dragged = [this, ch, control] (const juce::MouseEvent& event)
                 {
-                    if (!directionSwipeCurrent() || directionSwipe->channel != ch || directionSwipe->reverse != reverse)
-                        return;
-                    const int channel = layout.channelAtY (e.getEventRelativeTo (this).position.y);
-                    if (channel < 0)
-                        return;
-                    const int row = layout.displayRow (channel);
-                    const auto swipe = *directionSwipe;
-                    if (row == swipe.lastRow)
-                        return;
-                    directionSwipe->lastRow = row;
-                    directionSwipe->painting = true;
-                    if (!swipe.painting)
-                    {
-                        controller.begin (reverse ? "Paint reverse playback" : "Paint ping-pong playback");
-                        setDirection (ch, reverse, swipe.value);
-                    }
-                    const int delta = row > swipe.lastRow ? 1 : -1;
-                    for (int next = swipe.lastRow + delta; next != row + delta; next += delta)
-                        setDirection (layout.channelForRow (next), reverse, swipe.value);
+                    if (rowSwipeMatches (ch, control, event))
+                        updateRowSwipe (event);
                 };
-                button->released = [this, ch, reverse, button] (const juce::MouseEvent& e)
+                button->released = [this, ch, control, button] (const juce::MouseEvent& event)
                 {
-                    if (!directionSwipeCurrent() || directionSwipe->channel != ch || directionSwipe->reverse != reverse)
-                        return;
-                    const auto swipe = std::exchange (directionSwipe, std::nullopt);
-                    if (swipe->painting)
-                        controller.commit();
-                    else if (button->getLocalBounds().contains (e.getPosition()))
-                        button->onClick();
+                    if (rowSwipeMatches (ch, control, event))
+                        endRowSwipe (event, *button);
                 };
             }
-            r.mute.onClick = [this, ch] { if (!controller.exitSolo()) controller.toggleMute (ch); };
-            r.mute.pressed = [this, ch] (const juce::MouseEvent& e)
-            {
-                if (!e.mods.isLeftButtonDown() || e.mods.isPopupMenu() || controller.source() < 0 || pendingMute >= 0 || mutePainting)
-                    return;
-                pendingMute = muteGestureRow = ch;
-                extendSoloOnRelease = controller.keyboardModifiersEnabled && e.mods.isShiftDown();
-                gestureSource = controller.source();
-                gestureEpoch = controller.state.documentEpoch;
-                const auto press = ++mutePress;
-                if (layout.compactOnPhone || extendSoloOnRelease)
-                    return;
-                const juce::Component::SafePointer<PatternGrid> safe (this);
-                juce::Timer::callAfterDelay (soloHoldMs, [safe, press, ch]
-                {
-                    if (safe != nullptr && safe->mutePress == press && safe->pendingMute == ch)
-                        safe->holdMute (ch);
-                });
-            };
-            r.mute.dragged = [this, ch] (const juce::MouseEvent& e)
-            {
-                if (ch != muteGestureRow || !muteGestureCurrent() || (!mutePainting && pendingMute != ch) || e.getDistanceFromDragStart() < 4)
-                    return;
-                const int channel = layout.channelAtY (e.getEventRelativeTo (this).position.y);
-                ++mutePress;
-                if (channel < 0 || (!mutePainting && channel == ch))
-                    return;
-                pendingMute = -1;
-                if (extendSoloOnRelease || controller.soloedChannels().any())
-                    return;
-                if (!mutePainting)
-                {
-                    mutePainting = true;
-                    muteValue = !controller.state.playback.sourceChannelMutes[static_cast<size_t> (gestureSource)][static_cast<size_t> (ch)];
-                    lastMutePaintRow = layout.displayRow (ch);
-                    controller.begin ("Paint channel mutes");
-                    paintMute (ch);
-                }
-                const int row = layout.displayRow (channel);
-                while (lastMutePaintRow != row)
-                {
-                    lastMutePaintRow += row > lastMutePaintRow ? 1 : -1;
-                    paintMute (layout.channelForRow (lastMutePaintRow));
-                }
-            };
-            r.mute.released = [this, ch, &r] (const juce::MouseEvent& e)
-            {
-                if (ch != muteGestureRow)
-                    return;
-                muteGestureRow = -1;
-                if (mutePainting)
-                {
-                    mutePainting = false;
-                    controller.commit();
-                }
-                if (pendingMute != ch)
-                    return;
-                if (muteGestureCurrent() && r.mute.getLocalBounds().contains (e.getPosition()))
-                {
-                    if (extendSoloOnRelease)
-                        controller.toggleSolo (ch, true);
-                    else if (!layout.compactOnPhone && e.getDistanceFromDragStart() < 4 && e.getLengthOfMousePress() >= soloHoldMs)
-                        holdMute (ch);
-                    else
-                        r.mute.onClick();
-                }
-                pendingMute = -1;
-            };
         }
     }
 
@@ -619,28 +609,141 @@ namespace ksh::ui
             controller.command ("channel_playback_mode", { channel + 1, playbackModeToString (next) }, "Playback direction");
     }
 
-    bool PatternGrid::directionSwipeCurrent() const
+    void PatternGrid::beginRowSwipe (int channel, RowControl control, const juce::MouseEvent& event)
     {
-        return directionSwipe && directionSwipe->source == controller.source()
-            && directionSwipe->epoch == controller.processor.getUiBridge().getDocumentEpoch();
+        if (!event.mods.isLeftButtonDown() || event.mods.isPopupMenu() || controller.source() < 0 || rowSwipe)
+            return;
+
+        const bool power = control == RowControl::power;
+        const bool extendSolo = power && controller.keyboardModifiersEnabled && event.mods.isShiftDown();
+        rowSwipe = RowSwipe { event.source, channel, controller.source(), controller.state.documentEpoch, control, extendSolo };
+        if (!power)
+            return;
+        const auto press = ++soloPress;
+        if (layout.compactOnPhone || extendSolo)
+            return;
+
+        const juce::Component::SafePointer<PatternGrid> safe (this);
+        juce::Timer::callAfterDelay (soloHoldMs, [safe, press]
+        {
+            if (safe != nullptr && safe->soloPress == press)
+                safe->holdRowSolo();
+        });
     }
 
-    bool PatternGrid::muteGestureCurrent() const
+    bool PatternGrid::rowSwipeMatches (int channel, RowControl control, const juce::MouseEvent& event) const
     {
-        return gestureSource >= 0 && gestureSource == controller.source() && gestureEpoch == controller.processor.getUiBridge().getDocumentEpoch();
+        return rowSwipe && rowSwipe->channel == channel && rowSwipe->control == control && rowSwipe->pointer == event.source;
     }
 
-    void PatternGrid::holdMute (int channel)
+    bool PatternGrid::rowSwipeCurrent (const RowSwipe& swipe) const
     {
-        pendingMute = -1;
-        if (muteGestureCurrent())
-            controller.toggleSolo (channel);
+        return swipe.source == controller.source() && swipe.epoch == controller.processor.getUiBridge().getDocumentEpoch();
     }
 
-    void PatternGrid::paintMute (int channel)
+    void PatternGrid::holdRowSolo()
     {
-        if (controller.state.playback.sourceChannelMutes[static_cast<size_t> (gestureSource)][static_cast<size_t> (channel)] != muteValue)
-            controller.command ("source_channel_mute", { gestureSource + 1, channel + 1, muteValue });
+        if (rowSwipe && rowSwipe->control == RowControl::power && rowSwipe->clickPending && rowSwipeCurrent (*rowSwipe))
+        {
+            rowSwipe->clickPending = false;
+            controller.toggleSolo (rowSwipe->channel);
+        }
+    }
+
+    bool PatternGrid::rowControlValue (const RowSwipe& swipe, int channel) const
+    {
+        const auto index = static_cast<size_t> (channel);
+        const auto& playback = controller.state.playback;
+        if (swipe.control == RowControl::power)
+            return playback.sourceChannelMutes[static_cast<size_t> (swipe.source)][index];
+
+        const auto mode = playback.channels[index].playbackMode;
+        return mode == PlaybackMode::reverse_ping_pong
+            || mode == (swipe.control == RowControl::reverse ? PlaybackMode::reverse : PlaybackMode::ping_pong);
+    }
+
+    void PatternGrid::updateRowSwipe (const juce::MouseEvent& event)
+    {
+        if (!rowSwipeCurrent (*rowSwipe)
+            || (rowSwipe->endRow < 0 && (!rowSwipe->clickPending || event.getDistanceFromDragStart() < 4)))
+            return;
+
+        const int channel = rowSwipe->channel;
+        const auto control = rowSwipe->control;
+        const bool power = control == RowControl::power;
+        if (power)
+            ++soloPress;
+
+        const float y = event.getEventRelativeTo (this).position.y;
+        const int first = layout.compact ? layout.firstRow : 0;
+        const int last = layout.compact ? juce::jmin (layout.channels, first + layout.compactVisibleRows) - 1 : layout.channels - 1;
+        const int anchorRow = layout.displayRow (channel);
+        const int hitChannel = layout.channelAtY (y);
+        const int endRow = hitChannel >= 0 ? layout.displayRow (hitChannel) : y < layout.cellsY() ? first : last;
+        const int previousEnd = rowSwipe->endRow;
+        if (previousEnd == endRow)
+            return;
+
+        if (previousEnd < 0)
+        {
+            if (endRow == anchorRow)
+                return;
+            rowSwipe->clickPending = false;
+            if (power && (rowSwipe->extendSolo || controller.soloedChannels().any()))
+                return;
+            controller.begin (power ? "Set row power" : control == RowControl::reverse ? "Set row reverse" : "Set row ping-pong");
+            if (!rowSwipe || !rowSwipeCurrent (*rowSwipe))
+                return;
+            for (int ch = 0; ch < layout.channels; ++ch)
+                rowSwipe->initialValues[static_cast<size_t> (ch)] = rowControlValue (*rowSwipe, ch);
+        }
+        rowSwipe->endRow = endRow;
+
+        const auto inRange = [anchorRow] (int row, int end)
+        {
+            return end >= 0 && row >= juce::jmin (anchorRow, end) && row <= juce::jmax (anchorRow, end);
+        };
+        const bool targetValue = !rowSwipe->initialValues[static_cast<size_t> (channel)];
+        for (int row = first; row <= last && rowSwipe && rowSwipeCurrent (*rowSwipe); ++row)
+        {
+            const bool inside = inRange (row, endRow);
+            if (inside == inRange (row, previousEnd))
+                continue;
+            const int rowChannel = layout.channelForRow (row);
+            const bool initial = rowSwipe->initialValues[static_cast<size_t> (rowChannel)];
+            if (!inside && initial == targetValue)
+                continue;
+
+            const bool value = inside ? targetValue : initial;
+            if (rowControlValue (*rowSwipe, rowChannel) == value)
+                continue;
+            if (power)
+                controller.command ("source_channel_mute", { rowSwipe->source + 1, rowChannel + 1, value });
+            else
+                setDirection (rowChannel, control == RowControl::reverse, value);
+        }
+    }
+
+    void PatternGrid::endRowSwipe (const juce::MouseEvent& event, const RowPlaybackButton& button)
+    {
+        updateRowSwipe (event);
+        const auto swipe = std::exchange (rowSwipe, std::nullopt);
+        if (!swipe)
+            return;
+        if (swipe->endRow >= 0)
+        {
+            controller.commit();
+            return;
+        }
+        if (!swipe->clickPending || !rowSwipeCurrent (*swipe) || !button.getLocalBounds().contains (event.getPosition()))
+            return;
+        if (swipe->extendSolo)
+            controller.toggleSolo (swipe->channel, true);
+        else if (swipe->control == RowControl::power && !layout.compactOnPhone
+                 && event.getDistanceFromDragStart() < 4 && event.getLengthOfMousePress() >= soloHoldMs)
+            controller.toggleSolo (swipe->channel);
+        else
+            button.onClick();
     }
 
     juce::Rectangle<float> PatternGrid::loopHandleBounds (int channel, bool end) const
@@ -756,7 +859,7 @@ namespace ksh::ui
     juce::Point<float> PatternGrid::hitPosition (Location location, int rollIndex) const
     {
         const auto& cell = controller.cell (location);
-        const int roll = juce::jlimit (1, Constants::maxRoll, cell.roll);
+        const int roll = juce::jlimit (1, Constants::maxRoll, controller.splitCount (location));
         const double part = static_cast<double> (juce::jlimit (0, roll - 1, rollIndex)) / static_cast<double> (roll);
         const int span = displayedSpan (location);
         const double offset = static_cast<double> (cell.nudge) / 100.0 + part * span + (span == 1 ? displayedSwingDelay (location, part) : 0.0);
@@ -771,6 +874,116 @@ namespace ksh::ui
     juce::Rectangle<float> PatternGrid::cellPaintBounds (Location location) const
     {
         return cellBounds (location).expanded (selectionGlowExtent);
+    }
+
+    juce::Path PatternGrid::makeControllerCurve (int channel) const
+    {
+        const auto& playback = controller.state.playback;
+        const auto loop = controller.loop (channel);
+        const auto mode = playback.channels[static_cast<size_t> (channel)].playbackMode;
+        const bool reverse = mode == PlaybackMode::reverse || mode == PlaybackMode::reverse_ping_pong;
+        const double beatsPerStep = playback.beatsPerStep;
+        struct Point
+        {
+            double beat, endBeat;
+            int value, endValue, intervals, order;
+        };
+        std::vector<Point> points;
+        std::optional<Point> outgoing;
+        bool previousGlides = false;
+
+        // The editor shows the first pass through the row. Visit the adjoining
+        // passes too so ramps that cross the edge retain their actual phase.
+        for (int pass = -1; pass <= 1; ++pass)
+        {
+            const bool backwards = reverse != (pass != 0 && playbackModeIsPingPong (mode));
+            for (int offset = 0; offset < loop.loopLength; ++offset)
+            {
+                const int step = pass * loop.loopLength + offset;
+                Location location { channel, loop.loopStart + (backwards ? loop.loopLength - 1 - offset : offset) };
+                if (backwards)
+                {
+                    if (controller.cell (location).enabled && displayedSpan (location) > 1)
+                        continue;
+                    if (const auto spanStart = coveringSpan (location); spanStart.valid()
+                        && spanStart.step + displayedSpan (spanStart) - 1 == location.step)
+                        location = spanStart;
+                }
+                auto cell = controller.cell (location);
+                if (!cell.enabled)
+                    continue;
+                cell.span = displayedSpan (location);
+                for (int part = 0; part < cell.roll; ++part)
+                {
+                    const auto beat = (step + splitOffsetInSteps (cell, part, step, playback.swing,
+                                                                 playback.swingSubdivisionIndex)) * beatsPerStep;
+                    const auto value = cell.roll == 1 ? cell.controllerValue() : cell.splitControllerValue (part);
+                    const bool guaranteed = cell.controllerPointUnconditional (part);
+                    if (outgoing)
+                    {
+                        if (previousGlides && guaranteed && beat > outgoing->beat)
+                        {
+                            outgoing->endBeat = beat;
+                            outgoing->endValue = value;
+                            outgoing->intervals = controllerGlideIntervals (beat - outgoing->beat, outgoing->value, value);
+                        }
+                        points.push_back (*outgoing);
+                        outgoing.reset();
+                    }
+                    const auto& gate = cell.splitGates[static_cast<size_t> (part)];
+                    if (cell.probability > 0 && cell.cycleMask != 0 && (cell.roll == 1 || (gate.probability() > 0 && gate.cycleMask() != 0)))
+                        outgoing = Point { beat, beat, value, value, 0, static_cast<int> (points.size()) };
+                    previousGlides = cell.ccGlide != 0 && guaranteed;
+                }
+            }
+        }
+        if (outgoing)
+            points.push_back (*outgoing);
+        if (points.empty())
+            return {};
+
+        // A nudge can change the order of two onsets. Playback sends the new
+        // point at that time and stops any preceding ramp.
+        std::sort (points.begin(), points.end(), [] (const auto& a, const auto& b)
+        {
+            return std::tie (a.beat, a.order) < std::tie (b.beat, b.order);
+        });
+        juce::Path path;
+        auto value = points.front().value;
+        const auto loopEnd = loop.loopLength * beatsPerStep;
+        const auto changeAt = [&] (double beat, int next)
+        {
+            // Fold the opening change into the initial value and stop the final
+            // hold at the loop edge so neither edge shows the wraparound jump.
+            if (beat >= loopEnd)
+                return;
+            if (beat > 0.0)
+            {
+                if (path.isEmpty())
+                    path.startNewSubPath (0.0f, static_cast<float> (value));
+                const auto x = static_cast<float> (beat);
+                path.lineTo (x, static_cast<float> (value));
+                path.lineTo (x, static_cast<float> (next));
+            }
+            value = next;
+        };
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            const auto& point = points[i];
+            changeAt (point.beat, point.value);
+            for (int update = 1; update < point.intervals; ++update)
+            {
+                const auto fraction = static_cast<double> (update) / point.intervals;
+                const auto beat = point.beat + (point.endBeat - point.beat) * fraction;
+                if (i + 1 < points.size() && beat >= points[i + 1].beat)
+                    break;
+                changeAt (beat, controllerGlideValue (point.value, point.endValue, fraction));
+            }
+        }
+        if (path.isEmpty())
+            path.startNewSubPath (0.0f, static_cast<float> (value));
+        path.lineTo (static_cast<float> (loopEnd), static_cast<float> (value));
+        return path;
     }
     juce::Rectangle<float> PatternGrid::emptyStepBounds (Location location) const
     {
@@ -868,7 +1081,7 @@ namespace ksh::ui
         {
             const auto& cell = controller.cell ({ channel, step });
             if (cell.enabled)
-                hits += cell.roll;
+                hits += controller.splitCount ({ channel, step });
         }
         if (hits < 2)
             return {};
@@ -951,11 +1164,11 @@ namespace ksh::ui
                     if (start && touch && layout.touchRows && loopBoundary && !isVelocityGutter ({ channel, step }, x))
                         radius = juce::jmin (radius, layout.cellWidth() * 0.32f);
                     const auto hit = active ? location : previous;
-                    if (start && hit.valid() && controller.cell (hit).roll > 1)
+                    if (start && hit.valid() && controller.splitCount (hit) > 1)
                     {
                         const auto raw = cellBounds (hit);
                         const auto body = layout.cellArtwork (raw);
-                        const float width = body.getWidth() / static_cast<float> (controller.cell (hit).roll);
+                        const float width = body.getWidth() / static_cast<float> (controller.splitCount (hit));
                         radius = juce::jmin (radius, body.getX() - raw.getX() + width * (touch ? 0.3f : 0.25f));
                     }
                     consider ({ channel, step }, radius);
@@ -964,7 +1177,7 @@ namespace ksh::ui
             // On a tablet, a hold at a split divider selects the clip. Dividers still snap line ends.
             if (active && !(start && touch && layout.touchRows && !layout.compact))
             {
-                const auto roll = controller.cell (location).roll;
+                const auto roll = controller.splitCount (location);
                 if (roll < 2)
                     continue;
                 const auto segment = splitSegment (layout.cellArtwork (cellBounds (location)), roll, 0);
@@ -1049,6 +1262,8 @@ namespace ksh::ui
         const auto& p = controller.state.playback;
         const std::pair swing { p.swing, p.swingSubdivisionIndex };
         const bool swingChanged = displayedSwing != swing;
+        const bool controllerTimingChanged = !juce::approximatelyEqual (controllerCurveRate, p.beatsPerStep);
+        controllerCurveRate = p.beatsPerStep;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
         const bool patternChanged = displayedSource != controller.source() || displayedEpoch != controller.state.documentEpoch;
@@ -1072,21 +1287,22 @@ namespace ksh::ui
             lastHandleClick.reset();
             displayedSource = controller.source();
             displayedEpoch = controller.state.documentEpoch;
-            pendingMute = muteGestureRow = -1;
-            mutePainting = false;
-            directionSwipe.reset();
+            rowSwipe.reset();
             for (auto& row : rows)
                 row.clearFlash.cancel();
         }
         if (hoverEdge && velocityHintAt (hoverPosition) != hoverEdge)
             clearHoverMarker();
         const auto splitCycle = controller.selectedSplitCycle();
-        const bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
-                               || displayedGraphicalValues != controller.graphicalCellValues
+        // Quarter-note triplets land on a beat every three steps, spanning two beats.
+        const int beatStride = Layout::beatAccentStride (p.beatsPerStep);
+        bool fullPaint = displayedFirstStep != layout.firstStep || displayedSteps != layout.steps || displayedLayer != displayLayer() || displayedColors != controller.drumColors
+                               || displayedGraphicalValues != controller.graphicalCellValues || displayedBeatStride != beatStride
                                || displayedSelection.any() != controller.selected.any() || displayedSplitCycle != splitCycle
                                || !laidOut.has_value() || laidOut->first != layout || swingChanged;
         displayedSplitCycle = splitCycle;
         displayedSwing = swing;
+        displayedBeatStride = beatStride;
         displayedSteps = layout.steps;
         displayedFirstStep = layout.firstStep;
         displayedLayer = displayLayer();
@@ -1104,14 +1320,26 @@ namespace ksh::ui
                 button->setEnabled (controller.source() >= 0);
             }
             r.label.setVisible (visible);
-            r.label.setEnabled (p.deviceActive);
+            r.label.setEnabled (p.deviceActive || channel.controller);
             r.label.allowColourPickerHold = layout.touchRows && !layout.compactOnPhone;
-            r.label.setTooltip (layout.compactOnPhone ? "Triggers this row. Records when armed."
+            r.label.setTooltip (channel.controller ? "Edit CC row settings."
+                : layout.compactOnPhone ? "Triggers this row. Records when armed."
                                                         : "Tap to trigger this row. Right-click or hold to choose its color.");
             r.label.setColour (juce::TextButton::textColourOffId, Palette::channel (ch, controller.drumColors));
             r.note.setVisible (visible && !layout.compact);
             r.more.setVisible (visible && layout.compact);
-            r.note.setValue (channel.note);
+            r.note.setValue (channel.controller ? channel.ccNumber : channel.note);
+            const int ccMode = channel.controller ? 1 + static_cast<int> (channel.playbackMode) : 0;
+            if (displayedCcModes[static_cast<size_t> (ch)] != ccMode)
+            {
+                displayedCcModes[static_cast<size_t> (ch)] = ccMode;
+                r.note.setStackedCcLabel (channel.controller);
+                r.note.setTitle ((channel.controller ? "MIDI CC row " : "MIDI note channel ") + juce::String (ch + 1));
+                r.label.setTitle ((channel.controller ? "Edit CC track " : "Play track ") + juce::String (ch + 1));
+                r.note.repaint();
+                fullPaint = true;
+            }
+            r.more.setButtonText (channel.controller ? "CC" : "...");
             if (displayedNames != controller.noteNames)
                 r.note.repaint();
             const auto rev = channel.playbackMode == PlaybackMode::reverse || channel.playbackMode == PlaybackMode::reverse_ping_pong;
@@ -1138,11 +1366,17 @@ namespace ksh::ui
             {
                 r.mute.repaint();
             }
-            const juce::String muteTip = solo.any() ? "Click to exit solo." : "Click to toggle this row. Drag across rows to set them together.";
+            const juce::String muteTip = solo.any() ? "Click to exit solo." : "Click to toggle this row. Drag to set a range and drag back to shrink it.";
             r.mute.setTooltip (layout.compactOnPhone ? muteTip : muteTip + " Hold to solo."
                 + (controller.keyboardModifiersEnabled ? " Shift-click to add or remove a row from the solo group." : ""));
         }
         for (int ch = 0; ch < Constants::maxChannels; ++ch)
+        {
+            auto& curve = controllerCurves[static_cast<size_t> (ch)];
+            const auto range = controller.loop (ch);
+            const auto& channel = p.channels[static_cast<size_t> (ch)];
+            const int mode = channel.controller && controller.source() >= 0 ? 1 + static_cast<int> (channel.playbackMode) : 0;
+            bool curveChanged = curve.loop != range || curve.mode != mode || patternChanged || swingChanged || controllerTimingChanged;
             for (int step = 0; step < Constants::maxSteps; ++step)
             {
                 const Location location { ch, step };
@@ -1156,15 +1390,23 @@ namespace ksh::ui
                     accessible.setBounds (cellBounds (location).toNearestInt());
                 }
                 displayedPaintBounds[index] = paintBounds;
-                if (displayedCells[index] != value)
-                    accessible.setDescription (accessibleDescription (value));
+                const int ccMode = displayedCcModes[static_cast<size_t> (ch)];
+                if (displayedCells[index] != value || fullPaint)
+                    accessible.setDescription (accessibleDescription (value, ccMode != 0));
+                if (mode != 0 && displayedCells[index] != value)
+                    curveChanged = true;
                 displayedCells[index] = value;
                 accessible.setVisible (layout.channelVisible (ch) && !coveringSpan (location).valid()
                     && step < layout.firstStep + layout.visibleSteps() && step + displayedSpan (location) > layout.firstStep);
-                const auto loop = controller.loop (ch);
-                accessible.setEnabled (controller.source() >= 0 && step >= loop.loopStart && step < loop.loopStart + loop.loopLength);
+                accessible.setEnabled (controller.source() >= 0 && step >= range.loopStart && step < range.loopStart + range.loopLength);
                 accessible.setToggleState (value.enabled, juce::dontSendNotification);
             }
+            if (curveChanged && (mode != 0 || curve.mode != 0))
+            {
+                curve = { mode != 0 ? makeControllerCurve (ch) : juce::Path {}, range, mode };
+                repaint (layout.cell ({ ch, layout.firstStep }).withWidth (layout.gridWidth()).expanded (2.0f).getSmallestIntegerContainer());
+            }
+        }
         updateCursor();
         displayedSelection = controller.selected;
         displayedNames = controller.noteNames;
@@ -1329,11 +1571,16 @@ namespace ksh::ui
             }
             paintCycle (strip, cycle, mask, foreground, split);
         };
-        const auto paintHit = [&] (const Cell& c, juce::Rectangle<float> r, juce::Colour colour, int span, float pulse, float slotX)
+        const auto paintHit = [&] (const Cell& cell, juce::Rectangle<float> r, juce::Colour colour, int span, float pulse, float slotX, bool cc)
         {
-            const auto valueColour = Palette::app;
+            const auto& c = cell;
+            const int baseValue = cellValue (c, Layer::velocity, cc);
+            const bool ccValues = cc && layer == Layer::velocity;
+            if (ccValues)
+                colour = colour.interpolatedWith (Palette::app, 0.60f);
+            const auto valueColour = ccValues ? Palette::text : Palette::app;
             const auto light = colour.brighter (0.1f);
-            paintGridHitFill (g, r, colour, layer == Layer::velocity ? c.velocity : 127);
+            paintGridHitFill (g, r, colour, layer == Layer::velocity && (!cc || graphicalValues) ? baseValue : 127);
             const bool spanned = span > 1;
             if (c.roll > 1 && (spanned || !overviewLayer (layer) || layer == Layer::roll))
             {
@@ -1352,8 +1599,9 @@ namespace ksh::ui
                 {
                     const float x = part == 0 ? r.getX() : rollBoundary (part);
                     const float end = part + 1 == c.roll ? r.getRight() : rollBoundary (part + 1);
-                    if (layer == Layer::velocity && c.splitVelocity (part) != c.velocity)
-                        paintGridHitFill (g, r.withX (x).withWidth (end - x), colour, c.splitVelocity (part), 0.0f);
+                    const int value = splitValue (c, part, cc);
+                    if (layer == Layer::velocity && (!cc || graphicalValues) && value != baseValue)
+                        paintGridHitFill (g, r.withX (x).withWidth (end - x), colour, value, 0.0f);
                     if (part % 2 == 1)
                     {
                         g.setColour (Palette::app.withAlpha (0.14f));
@@ -1377,7 +1625,7 @@ namespace ksh::ui
                 {
                     // Let the unlit background lead the flash; the velocity fill follows more gently.
                     const auto foregroundFlash = flash.withAlpha (0.4f * pulse * pulse);
-                    const double shade = 1.0 - c.velocity / 127.0;
+                    const double shade = 1.0 - baseValue / 127.0;
                     const double edge = juce::jmin (1.0, shade + 0.5 / juce::jmax (1.0, static_cast<double> (r.getHeight())));
                     juce::ColourGradient velocityFlash (foregroundFlash, r.getTopLeft(), foregroundFlash, r.getBottomLeft(), false);
                     if (shade > 0.0)
@@ -1392,8 +1640,7 @@ namespace ksh::ui
                 }
                 g.fillRoundedRectangle (r, 5);
             }
-            g.setColour (Palette::text.withAlpha (0.14f));
-            g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
+            paintGridHitEdge (g, r, colour);
             if (layer == Layer::chance)
             {
                 // Keep the hit visible above the inset graphics without flashing the labels.
@@ -1437,7 +1684,7 @@ namespace ksh::ui
                     const auto segment = splitSegment (r, c.roll, part);
                     const float size = valueSize * 0.9f;
                     if (c.roll == 1 || segment.getWidth() >= 2.0f * size)
-                        text (g, juce::String (c.roll == 1 ? c.velocity : c.splitVelocity (part)), segment.translated (0, 2), size, valueColour, true);
+                        text (g, juce::String (c.roll == 1 ? baseValue : splitValue (c, part, cc)), segment.translated (0, 2), size, valueColour, true);
                 }
             }
         };
@@ -1488,6 +1735,7 @@ namespace ksh::ui
             if (!layout.channelVisible (ch))
                 continue;
             const int source = controller.source();
+            const auto& channel = controller.state.playback.channels[static_cast<size_t> (ch)];
             const bool muted = source >= 0 && controller.state.playback.sourceChannelMutes[static_cast<size_t> (source)][static_cast<size_t> (ch)];
             bool ghostRow = false;
             if (movingSelection)
@@ -1548,14 +1796,31 @@ namespace ksh::ui
                     const auto remaining = controller.sourceFlashes[static_cast<size_t> (ch)][static_cast<size_t> (step)] - now;
                     const auto pulse = muted ? 0.0f : static_cast<float> (juce::jlimit (0.0, 1.0, remaining / EditorController::sourceFlashDurationMs));
                     if (drawHits)
-                        paintHit (c, r, colour, displayedSpan (pos), pulse, slot.getX());
+                        paintHit (c, r, colour, displayedSpan (pos), pulse, slot.getX(), channel.controller);
                     else
-                        paintGridSlot (g, r, gridBackdrop, !c.enabled && step % 4 == 0);
+                        paintGridSlot (g, r, gridBackdrop, step % displayedBeatStride == 0);
                 }
                 if (ghostPass)
                     paintSelection (ch, range, muted);
                 if (fade)
                     g.endTransparencyLayer();
+            }
+            if (channel.controller && layer == Layer::velocity && source >= 0)
+            {
+                const auto& curve = controllerCurves[static_cast<size_t> (ch)].path;
+                const juce::Graphics::ScopedSaveState ccClip (g);
+                const auto loopBounds = first.withWidth (static_cast<float> (range.loopLength) * layout.cellWidth());
+                const auto clip = loopBounds.getIntersection (loopBounds.withX (layout.gridLeft()).withWidth (layout.gridWidth()));
+                if (!curve.isEmpty() && g.reduceClipRegion (clip.getSmallestIntegerContainer()))
+                {
+                    const auto body = layout.cellArtwork (first).reduced (0.0f, 3.0f);
+                    const bool reverse = channel.playbackMode == PlaybackMode::reverse || channel.playbackMode == PlaybackMode::reverse_ping_pong;
+                    const auto pixelsPerBeat = layout.cellWidth() / static_cast<float> (controller.state.playback.beatsPerStep);
+                    const auto transform = juce::AffineTransform::scale (reverse ? -pixelsPerBeat : pixelsPerBeat, -body.getHeight() / 127.0f)
+                        .translated (reverse ? loopBounds.getRight() : loopBounds.getX(), body.getBottom());
+                    g.setColour (Palette::channel (ch, controller.drumColors).withAlpha (muted ? 0.25f : 1.0f));
+                    g.strokePath (curve, juce::PathStrokeType (2.5f, juce::PathStrokeType::curved), transform);
+                }
             }
             if (!ghostRow && hasSelection)
                 paintSelection (ch, range, muted);
@@ -1626,8 +1891,9 @@ namespace ksh::ui
                 paintBrightRing (ring, 2.5f, remaining);
             }
             const auto row = layout.cell (anchor);
+            const int minimum = controller.isControllerRow (anchor.channel) ? 0 : 1;
             const auto start = juce::Point<float> (velocityEdgeX (lineStart),
-                row.getBottom() - static_cast<float> (lineVelocity - 1) / 126.0f * row.getHeight());
+                row.getBottom() - static_cast<float> (lineVelocity - minimum) / static_cast<float> (127 - minimum) * row.getHeight());
             const auto end = juce::Point<float> (velocityEdgeX (velocityLineEnd()),
                 juce::jlimit (row.getY(), row.getBottom(), current.y));
             paintMarker (start);
@@ -1655,6 +1921,7 @@ namespace ksh::ui
 
                 const auto& cell = controller.cell (p);
                 auto slot = cell.enabled ? layout.cell (destination) : emptyStepBounds (destination);
+                const bool cc = controller.isControllerRow (destination.channel);
                 const auto span = displayedSpan (p);
                 if (cell.enabled)
                 {
@@ -1664,9 +1931,9 @@ namespace ksh::ui
                 }
                 const auto body = layout.cellArtwork (slot);
                 if (cell.enabled)
-                    paintHit (cell, body, Palette::channel (destination.channel, controller.drumColors), span, 0.0f, slot.getX());
+                    paintHit (cell, body, Palette::channel (destination.channel, controller.drumColors), span, 0.0f, slot.getX(), cc);
                 else
-                    paintGridSlot (g, body, gridBackdrop, destination.step % 4 == 0);
+                    paintGridSlot (g, body, gridBackdrop, destination.step % displayedBeatStride == 0);
 
                 g.setColour (Palette::text.withAlpha (cell.enabled ? 0.9f : 0.38f));
                 g.drawRoundedRectangle (body.reduced (0.5f), 5, 1);
@@ -1776,7 +2043,9 @@ namespace ksh::ui
         {
             if (controller.cell (p).enabled == enable || (enable && coveringSpan (p).valid()))
                 continue;
-            controller.editCell (p, Cell { .enabled = enable });
+            auto cell = controller.isControllerRow (p.channel) ? controller.cell (p) : Cell {};
+            cell.enabled = enable;
+            controller.editCell (p, cell);
         }
     }
 
@@ -1913,7 +2182,7 @@ namespace ksh::ui
             }
         }
         if (dragLayer == Layer::chance && !handle && canClickCycleStrip (e.mods)
-            && (!additive || selectedAtStart || controller.cell (anchor).roll > 1)
+            && (!additive || selectedAtStart || controller.splitCount (anchor) > 1)
             && canSetPreset (press) && cycleStripContains (anchor, origin))
         {
             lastHandleClick.reset();
@@ -1988,7 +2257,7 @@ namespace ksh::ui
         if (!original.enabled)
             original = Cell {};
         valueStep = anchor.step;
-        valueVelocity = original.velocity;
+        valueVelocity = cellValue (original, Layer::velocity, controller.isControllerRow (anchor.channel));
         valueX = origin.x;
         originals.clear();
         if (selectedAtStart)
@@ -2077,7 +2346,9 @@ namespace ksh::ui
     int PatternGrid::velocityAtY (float y) const
     {
         const auto r = layout.cell (anchor);
-        return juce::jlimit (1, 127, jsRound (1 + (1 - (y - r.getY()) / r.getHeight()) * 126));
+        const int minimum = controller.isControllerRow (anchor.channel) ? 0 : 1;
+        return juce::jlimit (minimum, 127, jsRound (static_cast<float> (minimum)
+            + (1 - (y - r.getY()) / r.getHeight()) * static_cast<float> (127 - minimum)));
     }
     void PatternGrid::beginVelocityLine (VelocityEdge edge)
     {
@@ -2127,7 +2398,7 @@ namespace ksh::ui
     {
         const auto body = cellBounds (location);
         const auto artwork = layout.cellArtwork (body);
-        if (controller.cell (location).roll > 1)
+        if (controller.splitCount (location) > 1)
             return body.contains (position) && position.y >= artwork.getY() + artwork.getHeight() * (2.0f / 3.0f - chanceCycleHeightIncrease);
         const auto strip = cycleStripBounds (body.reduced (layout.cellInsetX(), Layout::cellInsetY));
         const auto paintedStrip = cycleStripBounds (artwork);
@@ -2137,7 +2408,7 @@ namespace ksh::ui
     int PatternGrid::splitIndexAt (Location location, float x) const
     {
         const auto body = layout.cellArtwork (cellBounds (location));
-        const int count = controller.cell (location).roll;
+        const int count = controller.splitCount (location);
         const float width = body.getWidth() / static_cast<float> (count);
         return width > 0.0f ? juce::jlimit (0, count - 1, static_cast<int> ((x - body.getX()) / width)) : 0;
     }
@@ -2147,28 +2418,22 @@ namespace ksh::ui
         if (!canSetPreset (press))
             return false;
         const auto& cell = controller.cell (press.location);
-        if (cell.roll < 2)
+        if (controller.splitCount (press.location) < 2)
             return false;
         const int index = splitIndexAt (press.location, press.position.x);
-        const int value = dragLayer == Layer::velocity ? cell.splitVelocity (index)
+        const int value = dragLayer == Layer::velocity ? splitValue (cell, index, controller.isControllerRow (press.location.channel))
                             : cell.splitGates[static_cast<size_t> (index)].probability();
         splitPress = SplitPress { press, index, value };
         startTimer (selectionDelay);
         return true;
     }
 
-    void PatternGrid::setSplitValue (Location location, int index, Layer layer, int value)
+    void PatternGrid::setSplitProbability (Location location, int index, int value)
     {
         auto cell = controller.cell (location);
         if (!cell.enabled || cell.roll < 2 || index >= cell.roll)
             return;
-        if (layer == Layer::velocity)
-        {
-            const int next = juce::jlimit (1, 127, value);
-            cell.setSplitVelocity (index, next == cell.velocity ? 0 : next);
-        }
-        else
-            cell.splitGates[static_cast<size_t> (index)].setProbability (value);
+        cell.splitGates[static_cast<size_t> (index)].setProbability (value);
         controller.editCell (location, cell);
         controller.notify();
     }
@@ -2197,14 +2462,15 @@ namespace ksh::ui
                 const auto row = layout.cell (splitPress->target.location);
                 const auto location = cellAt (event.position.withY (row.getCentreY()));
                 const auto step = location.valid() ? location.step : event.position.x < layout.gridLeft() ? 0 : layout.steps - 1;
-                dragVelocityValues (event.position.x, step, juce::jlimit (1, 127, splitPress->value + dragOffset (-delta.y, 1.25f)));
+                const int minimum = controller.isControllerRow (splitPress->target.location.channel) ? 0 : 1;
+                dragVelocityValues (event.position.x, step, juce::jlimit (minimum, 127, splitPress->value + dragOffset (-delta.y, 1.25f)));
                 controller.notify();
             }
             else
             {
                 const auto track = probabilityTrack (layout.cellArtwork (cellBounds (splitPress->target.location)), true);
                 const float sensitivity = juce::jmax (0.30f, track.getHeight() / 100.0f);
-                setSplitValue (splitPress->target.location, splitPress->index, dragLayer, splitPress->value + dragOffset (-delta.y, sensitivity));
+                setSplitProbability (splitPress->target.location, splitPress->index, splitPress->value + dragOffset (-delta.y, sensitivity));
             }
         }
     }
@@ -2253,6 +2519,7 @@ namespace ksh::ui
         const float left = juce::jmin (start.x, point.x);
         const float right = juce::jmax (start.x, point.x);
         const auto loop = controller.loop (anchor.channel);
+        const bool cc = controller.isControllerRow (anchor.channel);
         const int first = loop.loopStart;
         const int last = juce::jmin (layout.firstStep + layout.visibleSteps(), loop.loopStart + loop.loopLength);
         bool changed = false;
@@ -2264,18 +2531,19 @@ namespace ksh::ui
                 continue;
             const auto body = cellBounds (location);
             const auto originalCell = cell;
-            for (int part = 0; part < cell.roll; ++part)
+            const int roll = controller.splitCount (location);
+            for (int part = 0; part < roll; ++part)
             {
-                const auto bounds = splitSegment (body, cell.roll, part).getIntersection (row);
+                const auto bounds = splitSegment (body, roll, part).getIntersection (row);
                 if (bounds.isEmpty() || bounds.getRight() <= left || bounds.getX() > right)
                     continue;
                 const float x = bounds.contains (point) ? point.x : juce::jlimit (left, right, bounds.getCentreX());
                 const float fraction = juce::approximatelyEqual (start.x, point.x) ? 1.0f : (x - start.x) / (point.x - start.x);
                 const int velocity = velocityAtY (start.y + fraction * (point.y - start.y));
-                if (cell.roll == 1)
-                    cell.velocity = velocity;
+                if (roll == 1)
+                    cell = withValue (cell, Layer::velocity, velocity, cc);
                 else
-                    cell.setSplitVelocity (part, velocity == cell.velocity ? 0 : velocity);
+                    setSplitValue (cell, part, velocity, cc);
             }
             if (cell != originalCell)
             {
@@ -2291,6 +2559,7 @@ namespace ksh::ui
     void PatternGrid::dragVelocityValues (float x, int step, int velocity)
     {
         const auto loop = controller.loop (anchor.channel);
+        const bool cc = controller.isControllerRow (anchor.channel);
         const int loopEnd = loop.loopStart + loop.loopLength;
         step = juce::jlimit (loop.loopStart, loopEnd - 1, step);
         const int first = juce::jmin (valueStep, step);
@@ -2319,17 +2588,19 @@ namespace ksh::ui
                     const bool underPointer = x >= segment.getX() && x < segment.getRight();
                     const float sampleX = underPointer ? x : juce::jlimit (left, right, segment.getCentreX());
                     const int drawn = interpolate (juce::approximatelyEqual (valueX, x) ? 1.0f : (sampleX - valueX) / (x - valueX));
-                    next.setSplitVelocity (part, drawn == next.velocity ? 0 : drawn);
+                    setSplitValue (next, part, drawn, cc);
                 }
             }
             else
             {
                 if (s < first || s > last || coveringSpan (location).valid())
                     continue;
-                if (!next.enabled)
+                if (!next.enabled && !cc)
                     next = Cell { .enabled = true };
+                else
+                    next.enabled = true;
                 const float fraction = step == valueStep ? 1.0f : static_cast<float> (s - valueStep) / static_cast<float> (step - valueStep);
-                next.velocity = interpolate (fraction);
+                next = withValue (next, Layer::velocity, interpolate (fraction), cc);
             }
             controller.editCell (location, next);
         }
@@ -2464,19 +2735,23 @@ namespace ksh::ui
                 const Location location { anchor.channel, s };
                 if (controller.cell (location).enabled == enable || (enable && coveringSpan (location).valid()))
                     continue;
-                controller.editCell (location, Cell { .enabled = enable });
+                auto cell = controller.isControllerRow (location.channel) ? controller.cell (location) : Cell {};
+                cell.enabled = enable;
+                controller.editCell (location, cell);
             }
         }
         else if (drag == Drag::value)
         {
             const float sensitivity = dragLayer == Layer::velocity ? 1.25f : 2.0f;
             const int offset = dragOffset (origin.y - current.y, sensitivity);
+            const bool cc = controller.isControllerRow (anchor.channel);
             if (dragLayer == Layer::velocity && !selectedAtStart)
-                dragVelocityValues (current.x, target.step, juce::jlimit (1, 127, original.velocity + offset));
+                dragVelocityValues (current.x, target.step, juce::jlimit (cc ? 0 : 1, 127, cellValue (original, dragLayer, cc) + offset));
             else
                 for (const auto& [p, c] : originals)
                 {
-                    auto next = withValue (c, dragLayer, cellValue (c, dragLayer) + offset);
+                    const bool ccRow = controller.isControllerRow (p.channel);
+                    auto next = withValue (c, dragLayer, cellValue (c, dragLayer, ccRow) + offset, ccRow);
                     if (!selectedAtStart)
                         next.enabled = true;
                     controller.editCell (p, next);
@@ -2499,6 +2774,7 @@ namespace ksh::ui
                 auto next = c;
                 if (endEdge != lineStart)
                 {
+                    const bool cc = controller.isControllerRow (p.channel);
                     if (c.enabled && c.roll > 1 && right > left)
                     {
                         const auto body = layout.cellArtwork (cellBounds (p));
@@ -2509,14 +2785,15 @@ namespace ksh::ui
                                 continue;
                             const float fraction = juce::jlimit (0.0f, 1.0f, (segment.getCentreX() - leftEdge) / (rightEdge - leftEdge));
                             const int drawn = jsRound (static_cast<float> (lineVelocity) + fraction * static_cast<float> (velocity - lineVelocity));
-                            next.setSplitVelocity (part, drawn == c.velocity ? 0 : drawn);
+                            setSplitValue (next, part, drawn, cc);
                         }
                     }
                     else if (endBoundary != boundary && p.step >= juce::jmin (start, end) && p.step <= juce::jmax (start, end)
                              && !coveringSpan (p).valid())
                     {
                         const float fraction = static_cast<float> (std::abs (p.step - start)) / static_cast<float> (juce::jmax (1, std::abs (end - start)));
-                        next.velocity = jsRound (static_cast<float> (lineVelocity) + fraction * static_cast<float> (velocity - lineVelocity));
+                        next = withValue (next, Layer::velocity,
+                                          jsRound (static_cast<float> (lineVelocity) + fraction * static_cast<float> (velocity - lineVelocity)), cc);
                     }
                 }
                 controller.editCell (p, next);
@@ -2564,7 +2841,7 @@ namespace ksh::ui
             if (press->position.getDistanceFrom (e.position) < (touch ? touchPresetPressSlop : presetPressSlop) && canSetPreset (*press))
             {
                 const auto step = static_cast<size_t> (press->location.key());
-                if (controller.cell (press->location).roll > 1)
+                if (controller.splitCount (press->location) > 1)
                     controller.selectSplitCycle (press->location, splitIndexAt (press->location, press->position.x));
                 else if (!controller.selected.test (step))
                 {
@@ -2648,9 +2925,7 @@ namespace ksh::ui
             presetMenu->close();
         clearHoverMarker();
         drag = Drag::none;
-        mutePainting = false;
-        pendingMute = muteGestureRow = -1;
-        directionSwipe.reset();
+        rowSwipe.reset();
         lastHandleClick.reset();
         updateCursor();
         controller.cancel();

@@ -262,3 +262,27 @@ TEST_CASE ("Drum transcription fits the first 64 bars across all 16 pattern slot
     CHECK (document.sources[15][2][63].enabled);
     CHECK (document.settings.sourceSettings[15].stepCount == 64);
 }
+
+TEST_CASE ("A closed editor's pending drum transcription cannot replace the project after reopening", "[drum-audio-import][native-ui]")
+{
+    const juce::TemporaryFile older (".wav"), newer (".wav");
+    writeDrumRecording (older.getFile(), 92.0, 24, 64, false);
+    writeDrumRecording (newer.getFile(), 144.0, 16, 1, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    const auto epoch = processor.getUiBridge().getDocumentEpoch();
+    {
+        PluginEditor editor (processor);
+        editor.filesDropped ({ older.getFile().getFullPathName() }, 100, 130);
+    }
+    PluginEditor editor (processor);
+    editor.filesDropped ({ newer.getFile().getFullPathName() }, 100, 130);
+
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 5000.0;
+    while (processor.getUiBridge().getDocumentEpoch() == epoch && juce::Time::getMillisecondCounterHiRes() < deadline)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+
+    CHECK (processor.getUiBridge().getDocumentEpoch() == epoch + 1);
+    CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (144.0));
+}

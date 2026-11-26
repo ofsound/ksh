@@ -36,6 +36,12 @@ inline void to_json (nlohmann::json& json, const Cell& cell)
         json["splitGates"] = cell.splitGates;
     if (cell.splitVelocities != Cell {}.splitVelocities)
         json["splitVelocities"] = cell.splitVelocities;
+    if (cell.ccValue >= 0)
+        json["ccValue"] = cell.ccValue;
+    if (cell.ccGlide != 0)
+        json["ccGlide"] = cell.ccGlide;
+    if (cell.splitCcValues != Cell {}.splitCcValues)
+        json["splitCcValues"] = cell.splitCcValues;
 }
 
 inline void from_json (const nlohmann::json& json, Cell& cell)
@@ -78,11 +84,17 @@ inline void from_json (const nlohmann::json& json, Cell& cell)
         cell.roll = json["roll"].get<int>();
 
     cell.nudge = json.value ("nudge", 0);
+    cell.ccValue = json.value ("ccValue", -1);
+    cell.ccGlide = json.value ("ccGlide", 0);
     cell.span = json.value ("span", CellDefaults::span);
     cell.splitGates = json.value ("splitGates", Cell {}.splitGates);
     const auto velocities = json.value ("splitVelocities", std::array<int, Constants::maxRoll> {});
+    const auto ccValues = json.value ("splitCcValues", std::array<int, Constants::maxRoll> {});
     for (int i = 0; i < Constants::maxRoll; ++i)
+    {
         cell.setSplitVelocity (i, velocities[static_cast<size_t> (i)]);
+        cell.setSplitControllerValue (i, clampInt (ccValues[static_cast<size_t> (i)], 0, 128) - 1);
+    }
 
     if (json.contains ("source"))
         cell.source = json["source"].get<int>();

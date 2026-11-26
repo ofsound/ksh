@@ -11,6 +11,8 @@ namespace ksh::ui
         constexpr auto backgroundTintPreference = "backgroundTint";
         constexpr auto textBrightnessPreference = "textBrightness";
         constexpr int maxFeelPercent = 99;
+        constexpr float gridHeaderValueFontSize = 22.0f;
+        const juce::String padShortcutKeys { "ASDFGHJK" };
         constexpr std::array accentColourKeys { "orangeAccentColour", "blueAccentColour" };
         constexpr std::array legacyAccentModeKeys { "orangeAccentColourMode", "blueAccentColourMode" };
         constexpr std::array legacyAccentShadeKeys { "orangeAccentShade", "blueAccentShade" };
@@ -220,7 +222,7 @@ namespace ksh::ui
         private:
             class MenuButton final : public juce::TextButton
             {
-                static constexpr int padding = 14, checkboxSize = 16, checkboxGap = 10;
+                static constexpr int padding = popupMenuRowPadding, checkboxSize = 16, checkboxGap = 10;
 
             public:
                 using juce::TextButton::TextButton;
@@ -326,7 +328,7 @@ namespace ksh::ui
         {
             int widest = 0;
             for (const auto& name : rateNames)
-                widest = juce::jmax (widest, dropdownWidth (name));
+                widest = juce::jmax (widest, dropdownWidth (name, gridHeaderValueFontSize));
             return widest;
         }();
         return width;
@@ -359,7 +361,7 @@ namespace ksh::ui
 
     NativeEditor::NativeEditor (PluginProcessor& processor, std::shared_ptr<juce::PropertiesFile> preferences)
         : controller (processor), uiPreferences (preferences ? std::move (preferences) : sharedUiPreferences()),
-          grid (controller), preview (controller), randomPanel (controller, true), projectDetails (processor)
+          grid (controller), preview (controller), randomPanel (controller, true), projectBrowser (*uiPreferences, processor)
     {
        #if JUCE_IOS
         layout.touchRows = true;
@@ -462,22 +464,41 @@ namespace ksh::ui
                 content->grabKeyboardFocus();
         };
         addChildComponent (noteChooser);
-        for (int row = 0; row < Constants::maxChannels; ++row)
-            noteChooser.setRowNoteInput (row, grid.rowNoteInput (row));
         grid.noteChooserRequested = [this] (int ch, juce::Component& input) { showNoteChooser (ch, input); };
+        noteChooser.onDismiss = [this]
+        {
+            if (layout.phoneRowControls)
+            {
+                sync();
+                repaint();
+            }
+        };
         noteChooser.onChoose = [this] (int note)
         {
             controller.refresh();
-            if (noteChooserEpoch == controller.processor.getUiBridge().getDocumentEpoch()
-                && juce::isPositiveAndBelow (noteChooserChannel, controller.state.playback.channelCount)
-                && controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note == noteChooserOriginal)
+            if (noteChooserMatches() && !noteChooserOriginal.controller)
             {
                 // Accept subsequent scrub notes, while still rejecting external edits.
                 const juce::ScopedValueSetter<bool> editing (noteChooserEditing, true);
                 controller.command ("channel_note", { noteChooserChannel + 1, note }, "Change channel note");
-                noteChooserOriginal = note;
+                noteChooserOriginal.note = note;
                 (void) controller.processor.auditionRowFromUi (noteChooserChannel);
             }
+        };
+        noteChooser.onControllerChange = [this] (bool enabled, int number, int midiChannel)
+        {
+            controller.refresh();
+            if (!noteChooserMatches())
+                return;
+            const auto& original = noteChooserOriginal;
+            if (enabled == original.controller && number == original.ccNumber
+                && midiChannel == original.ccChannel)
+                return;
+            const juce::ScopedValueSetter<bool> editing (noteChooserEditing, true);
+            controller.command ("channel_cc", { noteChooserChannel + 1, enabled ? 1 : 0, number, midiChannel },
+                                enabled == original.controller ? "Change CC settings" : "Change row MIDI mode");
+            noteChooserOriginal = controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)];
+            noteChooser.setRowOutput (noteChooserOriginal);
         };
         noteChooser.onNavigate = [this] (int delta)
         {
@@ -485,7 +506,7 @@ namespace ksh::ui
             if (!juce::isPositiveAndBelow (row, layout.channels))
                 return;
             const int channel = layout.channelForRow (row);
-            if (layout.compact)
+            if (layout.compact && (!layout.phoneRowControls || panel == Panel::channel))
             {
                 selectedChannel = channel;
                 syncChannel();
@@ -509,15 +530,19 @@ namespace ksh::ui
             {
                 constexpr int octaveSize = 12;
                 const auto& playback = controller.state.playback;
-                int totalDifference = 0;
+                int totalDifference = 0, noteRows = 0;
                 for (int row = 0; row < playback.channelCount; ++row)
                 {
                     const auto index = static_cast<size_t> (row);
-                    totalDifference += playback.channels[index].note - notes[index];
+                    if (!playback.channels[index].controller)
+                    {
+                        totalDifference += playback.channels[index].note - notes[index];
+                        ++noteRows;
+                    }
                 }
                 // One shared shift keeps the preset voicing intact while minimizing pitch movement across visible rows.
                 const auto [lowest, highest] = std::minmax_element (notes.begin(), notes.end());
-                const auto nearestOctave = std::lround (static_cast<double> (totalDifference) / (playback.channelCount * octaveSize));
+                const auto nearestOctave = std::lround (static_cast<double> (totalDifference) / (juce::jmax (1, noteRows) * octaveSize));
                 const int shift = juce::jlimit (-(*lowest / octaveSize), (127 - *highest) / octaveSize,
                                                static_cast<int> (nearestOctave)) * octaveSize;
                 for (auto& note : notes)
@@ -573,17 +598,21 @@ namespace ksh::ui
             button.onClick = [this, i] { controller.commit(); if (projectAction) projectAction (i); };
         }
         addAndMakeVisible (projectHeader);
-        addChildComponent (projectDetails);
+        projectHeader.onClick = projectButtons[1].onClick;
         addChildComponent (projectBrowser);
-        projectBrowser.onDismiss = [this] { if (isShowing()) grabKeyboardFocus(); };
-        addChildComponent (discardChanges);
-        projectHeader.onDetails = [this]
+        projectBrowser.onDismiss = [this] (const juce::File& folder)
         {
-            cancelCompactGestures();
-            projectDetails.open();
+            if (projectBrowserDismissed) projectBrowserDismissed (folder);
+            sync();
+            if (isShowing()) grabKeyboardFocus();
+        };
+        addChildComponent (discardChanges);
+        projectBrowser.onRestore = [this]
+        {
+            if (projectAction) projectAction (restorePreviousProjectAction);
         };
        #if JUCE_IOS
-        projectDetails.onShare = [this] { if (projectAction) projectAction (6); };
+        projectBrowser.onShare = [this] { if (projectAction) projectAction (6); };
        #endif
         addChildComponent (recordingStrip);
         recordingStrip.setTitle ("Performance pads");
@@ -624,12 +653,6 @@ namespace ksh::ui
             uiPreferences->saveIfNeeded();
             syncRecordingPads();
         };
-        projectDetails.onClose = [this]
-        {
-            sync();
-            if (isShowing())
-                grabKeyboardFocus();
-        };
         for (auto* b : { &mutePattern, &velocityLayer, &clear, &record, &left, &right, &undoButton, &redoButton, &rate, &play })
             addAndMakeVisible (*b);
         addChildComponent (dc);
@@ -644,8 +667,11 @@ namespace ksh::ui
         generate.setTitle ("Generate");
         generate.getProperties().set ("icon", "computer");
         generate.setTooltip ("Show or hide the pattern generator");
+        generate.setClickingTogglesState (false);
         generate.onClick = [this]
         {
+            if (jamTarget)
+                return;
             if (layout.compact)
             {
                 if (showingCompactPadPreview())
@@ -802,7 +828,8 @@ namespace ksh::ui
                 controller.clearPattern();
         };
         record.setTitle ("Arm Record");
-        record.setTooltip ("Record MIDI or ASDFGHJK");
+        record.setTooltip (processor.hasStandaloneTransport() ? "Record MIDI, pads, or " + padShortcutKeys
+                                                              : "Record incoming MIDI or play the pads");
         record.onClick = [this] { controller.command ("pattern_record_enabled", { !controller.processor.isPatternRecordingEnabled(), controller.source() + 1 }); };
         addAndMakeVisible (recordQuantize);
         recordQuantize.getProperties().set ("icon", "recordLock");
@@ -823,6 +850,7 @@ namespace ksh::ui
         undoButton.setTooltip (juce::String::fromUTF8 ("Undo • Cmd-Z"));
         redoButton.setTooltip (juce::String::fromUTF8 ("Redo • Cmd-Shift-Z"));
         rate.getProperties().set ("dropdown", true);
+        rate.getProperties().set ("gridHeaderValue", true);
         rate.setTitle ("Pattern rate");
         rate.onClick = [this] { rateMenu(); };
         play.onClick = [this] { controller.command ("standalone_transport_playing", { true }); };
@@ -869,9 +897,9 @@ namespace ksh::ui
             control->limitDisplayedValue = true;
         }
         configureValue (steps, "Grid Length", 1, Constants::maxSteps, "source_steps");
+        steps.getProperties().set ("gridHeaderValue", true);
         steps.captionFontSize = 12;
         steps.captionColour = Palette::muted;
-        steps.captionGap = 5;
         steps.resetValue = 16;
         addChildComponent (scale);
         scale.setTitle ("UI scale percent");
@@ -1020,32 +1048,78 @@ namespace ksh::ui
         if (!juce::isPositiveAndBelow (ch, controller.state.playback.channelCount))
             return;
         const auto& channel = controller.state.playback.channels[static_cast<size_t> (ch)];
+        if (layout.phoneRowControls)
+            setTempoOpen (false);
         noteChooserChannel = ch;
-        noteChooserOriginal = channel.note;
+        noteChooserOriginal = channel;
         noteChooserEpoch = controller.processor.getUiBridge().getDocumentEpoch();
-        noteChooser.open (getLocalArea (&input, input.getLocalBounds()), juce::String (ch + 1), channel.note, &input, grid.rowTitle (ch));
-        updateNoteChooserTranspose();
+        noteChooser.setRowOutput (channel);
+        noteChooser.open (juce::String (ch + 1), channel.note, &input);
+        syncNoteChooserControls();
+        if (showingNoteChooserPage())
+        {
+            sync();
+            repaint();
+        }
     }
-    void NativeEditor::updateNoteChooserTranspose()
+    void NativeEditor::syncNoteChooserGrid()
     {
+        if (layout.phoneRowControls)
+            return;
+        juce::Rectangle<float> cells;
+        if (grid.isVisible() || layout.compact)
+        {
+            const int rows = layout.compact ? juce::jmin (layout.compactVisibleRows, layout.channels - layout.firstRow) : layout.channels;
+            cells = { layout.gridLeft(), layout.cellsY(), layout.gridWidth(),
+                      static_cast<float> (rows - 1) * layout.rowHeight() + layout.cellHeight() };
+            if (grid.isVisible())
+                cells = getLocalArea (&grid, cells.getIntersection (grid.getLocalBounds().toFloat()));
+            else
+                cells.translate (0.0f, layout.gridY());
+        }
+        noteChooser.setGridCells (cells, grid.isVisible());
+    }
+    void NativeEditor::syncNoteChooserControls()
+    {
+        noteChooser.setAccent (Palette::channel (noteChooserChannel, controller.drumColors));
         const auto& channels = controller.state.playback.channels;
-        const auto [lowest, highest] = std::minmax_element (channels.begin(), channels.end(),
-            [] (const auto& a, const auto& b) { return a.note < b.note; });
-        noteChooser.setTransposeRange (lowest->note, highest->note);
+        int lowest = 127, highest = 0;
+        for (const auto& row : channels)
+            if (!row.controller)
+            {
+                lowest = juce::jmin (lowest, row.note);
+                highest = juce::jmax (highest, row.note);
+            }
+        noteChooser.setTransposeRange (lowest, highest);
+    }
+    bool NativeEditor::noteChooserMatches() const
+    {
+        if (!noteChooser.isVisible() || noteChooserEpoch != controller.processor.getUiBridge().getDocumentEpoch()
+            || !juce::isPositiveAndBelow (noteChooserChannel, controller.state.playback.channelCount))
+            return false;
+        const auto output = [] (const Channel& row)
+        {
+            return std::tie (row.note, row.controller, row.ccNumber, row.ccChannel);
+        };
+        return output (controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)]) == output (noteChooserOriginal);
     }
     void NativeEditor::applyNoteChooserPreset (const NoteChooser::RowNotes& notes, const juce::String& undoLabel)
     {
-        if (!noteChooser.isVisible() || noteChooserEpoch != controller.processor.getUiBridge().getDocumentEpoch()
-            || !juce::isPositiveAndBelow (noteChooserChannel, controller.state.playback.channelCount)
-            || controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note != noteChooserOriginal
-            || std::any_of (notes.begin(), notes.end(), [] (int note) { return !juce::isPositiveAndBelow (note, 128); }))
+        if (!noteChooserMatches() || noteChooserOriginal.controller)
             return;
 
+        auto noteAssignments = notes;
+        const auto& channels = controller.state.playback.channels;
+        for (size_t row = 0; row < channels.size(); ++row)
+            if (channels[row].controller)
+                noteAssignments[row] = channels[row].note;
+        if (std::ranges::any_of (noteAssignments, [] (int note) { return !juce::isPositiveAndBelow (note, 128); }))
+            return;
         const juce::ScopedValueSetter<bool> editing (noteChooserEditing, true);
-        controller.command ("channel_notes", notes, undoLabel);
-        noteChooserOriginal = controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note;
-        noteChooser.setAssignedNote (noteChooserOriginal);
-        updateNoteChooserTranspose();
+        controller.command ("channel_notes", noteAssignments, undoLabel);
+        noteChooserOriginal.note = controller.state.playback.channels[static_cast<size_t> (noteChooserChannel)].note;
+        noteChooser.setAssignedNote (noteChooserOriginal.note);
+        syncNoteChooserControls();
     }
     void NativeEditor::configureValue (ValueControl& control, const juce::String& caption, int minimum, int maximum, const std::string& command)
     {
@@ -1067,8 +1141,9 @@ namespace ksh::ui
         syncing = true;
         const auto& p = controller.state.playback;
         const auto oldHeight = layout.height(), oldWidth = layout.width();
-        const bool scaleChanged = previousScale != controller.processor.getProjectUiScalePercent();
-        previousScale = controller.processor.getProjectUiScalePercent();
+        const int requestedScale = controller.processor.getUserUiScalePercent();
+        const bool scaleChanged = previousScale != requestedScale;
+        previousScale = requestedScale;
         layout.channels = p.channelCount;
         layout.steps = p.stepCount;
         if (layout.firstStep >= layout.steps)
@@ -1077,6 +1152,7 @@ namespace ksh::ui
         if (jamTarget && (jamTarget->source != controller.source() || jamTarget->epoch != controller.state.documentEpoch))
             cancelJam();
         syncJamButton();
+        generate.setEnabled (!jamTarget);
         record.setEnabled (controller.source() >= 0 && !jamTarget);
         record.setToggleState (controller.processor.isPatternRecordingEnabled(), juce::dontSendNotification);
         syncMidiOutput();
@@ -1186,18 +1262,16 @@ namespace ksh::ui
         cellDisplay.setToggleState (!controller.graphicalCellValues, juce::dontSendNotification);
         modifierToggle.setToggleState (controller.keyboardModifiersEnabled, juce::dontSendNotification);
         rowOrder.setToggleState (layout.reverseRows, juce::dontSendNotification);
-        projectHeader.setProjectName (controller.processor.getProjectName());
-        if (projectDetails.isVisible())
-            projectDetails.refresh();
+        projectHeader.setProjectName (controller.processor.hasUnsupportedProjectVersion() ? juce::String ("Unsupported project version")
+                                                                                         : controller.processor.getProjectName());
+        projectBrowser.refreshCurrentProject();
         if (noteChooser.isVisible() && !noteChooserEditing)
         {
-            if (noteChooserEpoch != controller.processor.getUiBridge().getDocumentEpoch()
-                || !juce::isPositiveAndBelow (noteChooserChannel, p.channelCount)
-                || p.channels[static_cast<size_t> (noteChooserChannel)].note != noteChooserOriginal)
+            if (!noteChooserMatches())
                 noteChooser.dismiss();
             else
             {
-                updateNoteChooserTranspose();
+                syncNoteChooserControls();
                 noteChooser.toFront (false);
             }
         }
@@ -1209,8 +1283,8 @@ namespace ksh::ui
         // The compact layout also decides visibility from editor state, so it always re-runs.
         if (layout.compact || laidOut != std::pair { layout, getLocalBounds() })
             resized();
-        if (projectDetails.isVisible())
-            projectDetails.toFront (false);
+        if (projectBrowser.isVisible())
+            projectBrowser.toFront (false);
         if (discardChanges.isVisible())
         {
             if (discardEpoch != controller.processor.getUiBridge().getDocumentEpoch())
@@ -1229,13 +1303,16 @@ namespace ksh::ui
     void NativeEditor::resized()
     {
         laidOut = { layout, getLocalBounds() };
-        noteChooser.setBounds (getLocalBounds());
-        projectDetails.setBounds (getLocalBounds());
+        if (!layout.phoneRowControls)
+            noteChooser.setBounds (getLocalBounds());
         projectBrowser.setBounds (getLocalBounds());
         discardChanges.setBounds (getLocalBounds());
         constexpr int target = Layout::touchTarget;
         const bool phoneMenu = layout.phoneRowControls && panel >= Panel::project && panel <= Panel::help;
         steps.valueWidth = phoneMenu ? 0 : target;
+        steps.valueFontSize = layout.compact ? 13.0f : gridHeaderValueFontSize;
+        steps.captionGap = layout.compact ? 2 : 5;
+        rate.getProperties().set ("dropdownFontSize", steps.valueFontSize);
         if (layout.compact)
             steps.captionFontSize = layout.phoneRowControls ? 10.0f : 12.0f;
         for (auto* value : { &swing, &subdivision, &velocityHumanize, &timingHumanize })
@@ -1311,7 +1388,6 @@ namespace ksh::ui
         redoButton.setBounds (399, inputY, target, target);
         const int divisionWidth = juce::jmax (144, rateControlWidth());
         rate.setBounds (rightEdge - divisionWidth, inputY, divisionWidth, target);
-        steps.valueFontSize = 22;
         steps.captionFontSize = labelFontSize;
         steps.setBounds (rate.getX() - 100, inputY - 23, 90, target + 23);
         clear.setBounds (steps.getX() - 78, inputY, target, target);
@@ -1336,6 +1412,7 @@ namespace ksh::ui
         randomPanel.setDesktopRandomizerSize (getWidth() - scrollWidth, juce::jmax (minRandomizerHeight, aboutHeight),
                                               Layout::outerGutter - scrollWidth);
         grid.setBounds (0, juce::roundToInt (layout.gridY()), getWidth(), juce::roundToInt (layout.gridHeight()));
+        syncNoteChooserGrid();
         preview.setBounds (0, juce::roundToInt (layout.previewY()), getWidth(), Layout::previewHeight);
         const int inspectorLeft = juce::roundToInt (layout.gridLeft()) - Layout::loopEdgeSpace;
         const int inspectorRight = juce::roundToInt (layout.gridLeft() + layout.gridWidth()) + Layout::loopEdgeSpace;
@@ -1370,7 +1447,7 @@ namespace ksh::ui
 
     void NativeEditor::paintOverChildren (juce::Graphics& g)
     {
-        if (!projectSavedTimer.isTimerRunning() || projectBrowser.isVisible() || projectDetails.isVisible() || discardChanges.isVisible())
+        if (!projectSavedTimer.isTimerRunning() || isProjectDialogOpen())
             return;
         const auto bounds = juce::Rectangle<float> (150, 40).withCentre ({ getWidth() * 0.5f, getHeight() - 62.0f });
         controlSurface (g, bounds, true);
@@ -1384,7 +1461,7 @@ namespace ksh::ui
         {
             if (showingCompactPadPreview())
                 paintCompactPadPreview (g);
-            if (layout.phoneRowControls && panel >= Panel::project && panel <= Panel::help)
+            if (showingNoteChooserPage() || (layout.phoneRowControls && panel >= Panel::project && panel <= Panel::help))
             {
                 paintPhoneMenu (g);
                 return;
@@ -1425,7 +1502,8 @@ namespace ksh::ui
                 }
                 else if (panel == Panel::channel)
                 {
-                    text (g, "MIDI note and loop", { 28, 64, 160, 24 }, 16, Palette::channel (selectedChannel, controller.drumColors), true, juce::Justification::centredLeft);
+                    const auto heading = controller.isControllerRow (selectedChannel) ? "MIDI CC and loop" : "MIDI note and loop";
+                    text (g, heading, { 28, 64, 160, 24 }, 16, Palette::channel (selectedChannel, controller.drumColors), true, juce::Justification::centredLeft);
                 }
                 else if (panel == Panel::help)
                 {
@@ -1499,11 +1577,6 @@ namespace ksh::ui
             if (event.originalComponent == getParentComponent()) projectBrowser.dismiss();
             return;
         }
-        if (projectDetails.isVisible() && event.originalComponent == getParentComponent())
-        {
-            projectDetails.dismiss();
-            return;
-        }
         if (tempoOpen && event.originalComponent != this && !isParentOf (event.originalComponent))
         {
             setTempoOpen (false);
@@ -1516,7 +1589,7 @@ namespace ksh::ui
         if (showingCompactPadPreview() || (layout.phoneRowControls && patternPicker.isVisible())
             || grid.handleCellPopupMouseDown (event.originalComponent)
             || !event.mods.isLeftButtonDown() || controller.selected.none()
-            || projectDetails.isVisible() || discardChanges.isVisible())
+            || discardChanges.isVisible())
             return;
         // Child listeners receive clicks on nested labels and editors too.
         // Keep selection available to every control that can act on it.
@@ -1550,7 +1623,7 @@ namespace ksh::ui
         auto target = rate.getScreenBounds();
         const int gap = juce::roundToInt (4.0f * juce::Component::getApproximateScaleFactorForComponent (&rate));
         target.setBottom (target.getBottom() + gap);
-        menu.showMenuAsync (editorPopupOptions (rate).withTargetScreenArea (target).withInitiallySelectedItem (selected),
+        showAnchoredPopup (menu, editorPopupOptions (rate).withTargetScreenArea (target).withInitiallySelectedItem (selected),
                            [safe] (int result) {
             if (safe == nullptr)
                 return;
@@ -1583,13 +1656,15 @@ namespace ksh::ui
     bool NativeEditor::textFocused() const { return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr; }
     void NativeEditor::showProjectBrowser (juce::File root, juce::File current, std::optional<ProjectBrowser::Details> details,
                                           ProjectBrowser::ListProjects list, ProjectBrowser::Submit submit,
-                                          std::function<void()> importExternal, bool confirmOpen, ProjectBrowser::ReadDetails readDetails)
+                                          std::function<void()> importExternal, bool confirmOpen, ProjectBrowser::ReadDetails readDetails,
+                                          juce::File lastFolder, ProjectBrowser::StorageLocations locations)
     {
         cancelCompactGestures();
         setTempoOpen (false);
         juce::PopupMenu::dismissAllActiveMenus();
         projectBrowser.open (std::move (root), std::move (current), std::move (details),
-                             std::move (list), std::move (submit), std::move (importExternal), confirmOpen, std::move (readDetails));
+                             std::move (list), std::move (submit), std::move (importExternal), confirmOpen, std::move (readDetails),
+                             std::move (lastFolder), std::move (locations));
     }
 
     void NativeEditor::confirmDiscardingChanges (std::function<void()> proceed)
@@ -1610,8 +1685,6 @@ namespace ksh::ui
             return noteChooser.keyPressed (key);
         if (discardChanges.isVisible())
             return discardChanges.keyPressed (key);
-        if (projectDetails.isVisible())
-            return projectDetails.keyPressed (key);
         if (textFocused())
             return false;
         if (key.getModifiers().isCommandDown() && key.isKeyCode ('Z'))
@@ -1660,16 +1733,19 @@ namespace ksh::ui
             controller.command ("standalone_transport_playing", { !controller.processor.isStandaloneTransportPlaying() });
             return true;
         }
-        const auto character = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
-        const int index = juce::String ("asdfghjk").indexOfChar (character);
-        if (index >= 0 && index < layout.channels && !key.getModifiers().isCommandDown())
+        if (layout.standalone && !key.getModifiers().isCommandDown())
         {
-            if (!heldPads.test (static_cast<size_t> (index)))
+            const auto character = juce::CharacterFunctions::toUpperCase (key.getTextCharacter());
+            const int index = padShortcutKeys.indexOfChar (character);
+            if (juce::isPositiveAndBelow (index, layout.channels))
             {
-                heldPads.set (static_cast<size_t> (index));
-                triggerPad (index);
+                if (!heldPads.test (static_cast<size_t> (index)))
+                {
+                    heldPads.set (static_cast<size_t> (index));
+                    triggerPad (index);
+                }
+                return true;
             }
-            return true;
         }
         return !layout.randomVisible && grid.isVisible() && hasKeyboardFocus (false) && grid.keyPressed (key);
     }
@@ -1682,10 +1758,10 @@ namespace ksh::ui
                 heldJamStopKey.reset();
                 globalFocusChanged (getCurrentlyFocusedComponent());
             }
-            const juce::String keys ("ASDFGHJK");
-            for (int i = 0; i < 8; ++i)
-                if (!juce::KeyPress::isKeyCurrentlyDown (keys[i]))
-                    heldPads.reset (static_cast<size_t> (i));
+            if (layout.standalone)
+                for (int i = 0; i < padShortcutKeys.length(); ++i)
+                    if (!juce::KeyPress::isKeyCurrentlyDown (padShortcutKeys[i]))
+                        heldPads.reset (static_cast<size_t> (i));
         }
         return false;
     }
@@ -1707,11 +1783,13 @@ namespace ksh::ui
             repaint (mutePattern.getBounds().expanded (patternGlowExtent));
         mutePattern.setToggleState (muted, juce::dontSendNotification);
         // Keep the armed source highlighted; pulse smoothly between 70% and full opacity.
+        const int queued = controller.processor.getQueuedPatternForUi();
         const auto phase = static_cast<double> (juce::Time::getMillisecondCounter() % 200u) / 200.0;
         const float copyAlpha = 0.85f + 0.15f * static_cast<float> (std::cos (juce::MathConstants<double>::twoPi * phase));
         for (int i = 0; i < 16; ++i)
         {
             auto& button = patterns[static_cast<size_t> (i)];
+            button.setQueued (queued == i);
             const bool active = controller.copySource == i || controller.source() == i;
             const bool copyDestination = controller.copySource >= 0 && controller.copySource != i;
             const bool copyDestinationChanged = std::exchange (button.copyDestination, copyDestination) != copyDestination;
@@ -1774,7 +1852,6 @@ namespace ksh::ui
         const auto& current = controller.processor;
         juce::PopupMenu menu, pitch, volume;
         menu.setLookAndFeel (&look);
-        menu.addSectionHeader ("Click sound");
         const std::array<const char*, 3> sounds { "Classic", "Woodblock", "Claves" };
         for (int index = 0; index < static_cast<int> (sounds.size()); ++index)
             menu.addItem (soundId + index, sounds[static_cast<size_t> (index)], true, static_cast<int> (current.getMetronomeSound()) == index);
@@ -1786,7 +1863,7 @@ namespace ksh::ui
         menu.addSubMenu ("Volume: " + juce::String (current.getMetronomeVolume()) + "%", volume);
         const auto options = editorPopupOptions (anchor);
         const juce::Component::SafePointer<NativeEditor> safe (this);
-        menu.showMenuAsync (options, [safe] (int result)
+        showAnchoredPopup (menu, options, [safe] (int result)
         {
             if (safe == nullptr || result == 0)
                 return;
@@ -1861,7 +1938,7 @@ namespace ksh::ui
         auto options = footerMenuOptions (settings);
         if (layout.settingsInHeader)
             options = options.withPreferredPopupDirection (juce::PopupMenu::Options::PopupDirection::downwards);
-        menu.showMenuAsync (options, [safe] (int result)
+        showAnchoredPopup (menu, options, [safe] (int result)
         {
             if (safe == nullptr)
                 return;
@@ -1957,6 +2034,8 @@ namespace ksh::ui
         preview.sync();
         randomPanel.sync();
         syncRecordingPads();
+        if (noteChooser.isVisible())
+            syncNoteChooserControls();
         sendLookAndFeelChange();
         repaint();
     }
@@ -2160,15 +2239,16 @@ namespace ksh::ui
     void NativeEditor::syncRecordingPads()
     {
         const auto& playback = controller.state.playback;
-        const juce::String keys ("ASDFGHJK");
         for (int channel = 0; channel < static_cast<int> (recordingPads.size()); ++channel)
         {
             auto& pad = recordingPads[static_cast<size_t> (channel)];
-            const auto key = juce::String::charToString (keys[channel]);
-            const auto note = juce::MidiMessage::getMidiNoteName (playback.channels[static_cast<size_t> (channel)].note, true, true, 4);
+            const auto key = layout.standalone ? juce::String::charToString (padShortcutKeys[channel]) : juce::String();
+            const auto& row = playback.channels[static_cast<size_t> (channel)];
+            const auto note = row.controller ? "CC " + juce::String (row.ccNumber)
+                                             : juce::MidiMessage::getMidiNoteName (row.note, true, true, 4);
             pad.setTitle ("Trigger channel " + juce::String (channel + 1));
             pad.setAppearance (Palette::channel (channel, controller.drumColors), key, note);
-            pad.setEnabled (channel < playback.channelCount && playback.deviceActive);
+            pad.setEnabled (channel < playback.channelCount && playback.deviceActive && !row.controller);
             pad.positionSensitive = padVelocityMode.getToggleState();
         }
     }
@@ -2225,6 +2305,12 @@ namespace ksh::ui
     {
         if (!isShowing())
             return;
+        const bool unsupported = controller.processor.hasUnsupportedProjectVersion();
+        if (unsupported && !warnedUnsupportedProjectVersion)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Unsupported KSH project version",
+                                                  "This build of KSH cannot open this project version. The original state will be kept when you save the session. Open it in a compatible version of KSH, or choose New or Load to replace it.",
+                                                  {}, this);
+        warnedUnsupportedProjectVersion = unsupported;
         if (jamTarget || jamPlayback != JamPlayback::stopped || heldJamStopKey)
             globalFocusChanged (getCurrentlyFocusedComponent());
         if (jamTarget)

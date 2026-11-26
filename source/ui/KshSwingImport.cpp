@@ -16,6 +16,11 @@ namespace ksh::ui
         constexpr size_t maxFitHits = 220;
         constexpr auto tolerance = 0.18; // in grid steps
 
+        bool importCancelled (const std::atomic<bool>* cancelled)
+        {
+            return cancelled != nullptr && cancelled->load (std::memory_order_relaxed);
+        }
+
         struct Hit
         {
             double time;
@@ -95,7 +100,7 @@ namespace ksh::ui
             }
         };
 
-        GridFit fitGrid (const std::vector<Hit>& hits, double step, bool freePhase)
+        GridFit fitGrid (const std::vector<Hit>& hits, double step, bool freePhase, const std::atomic<bool>* cancelled)
         {
             GridFit fit;
             for (int target = 0; target < Constants::swingSubdivisionCount; ++target)
@@ -107,6 +112,9 @@ namespace ksh::ui
                 {
                     for (int offset = 0; offset < (freePhase ? 2 * group : 1); ++offset)
                     {
+                        if (importCancelled (cancelled))
+                            return {};
+
                         const auto phase = freePhase ? std::remainder (hits[anchor].time / step - offset, 2.0 * group) : 0.0;
                         const auto straight = scoreFit (hits, step, phase, 0, target);
                         if (straight.score > fit.straight.score)
@@ -151,7 +159,7 @@ namespace ksh::ui
             return swing;
         }
 
-        SwingImportResult analyseMidi (const juce::File& file, double beatsPerStep)
+        SwingImportResult analyseMidi (const juce::File& file, double beatsPerStep, const std::atomic<bool>* cancelled)
         {
             if (file.getSize() > maxMidiBytes)
                 return { {}, {}, "The MIDI file exceeds 16 MB." };
@@ -166,9 +174,13 @@ namespace ksh::ui
 
             std::vector<Hit> hits;
             for (int track = 0; track < midi.getNumTracks(); ++track)
+            {
+                if (importCancelled (cancelled))
+                    return {};
                 for (const auto* event : *midi.getTrack (track))
                     if (event->message.isNoteOn())
                         hits.push_back ({ event->message.getTimeStamp() / midi.getTimeFormat() });
+            }
 
             std::sort (hits.begin(), hits.end(), [] (const Hit& a, const Hit& b) { return a.time < b.time; });
             auto end = std::unique (hits.begin(), hits.end(), [] (const Hit& a, const Hit& b) { return b.time - a.time < 0.004; });
@@ -177,11 +189,11 @@ namespace ksh::ui
             if (hits.size() < 4)
                 return { {}, {}, "This MIDI file has too few distinct note starts to measure swing." };
 
-            const auto project = fitGrid (hits, beatsPerStep, false);
+            const auto project = fitGrid (hits, beatsPerStep, false, cancelled);
             const auto sixteenth = Constants::beatsForRate ("16n");
             if (beatsPerStep > sixteenth)
             {
-                const auto finer = fitGrid (hits, sixteenth, false);
+                const auto finer = fitGrid (hits, sixteenth, false, cancelled);
                 const auto groove = finer.result();
                 if (groove && finer.rhythm().score > project.rhythm().score + 0.025)
                     return { swingForRate (groove, sixteenth, beatsPerStep), {}, {} };
@@ -191,7 +203,7 @@ namespace ksh::ui
 
         constexpr auto frameSeconds = 0.002;
 
-        std::vector<Hit> waveOnsets (juce::AudioFormatReader& reader, int64_t samples)
+        std::vector<Hit> waveOnsets (juce::AudioFormatReader& reader, int64_t samples, const std::atomic<bool>* cancelled)
         {
             constexpr int bands = 3;
             const int frameSamples = juce::jmax (1, juce::roundToInt (frameSeconds * reader.sampleRate));
@@ -205,7 +217,7 @@ namespace ksh::ui
             for (int64_t start = 0; start < samples; start += block.getNumSamples())
             {
                 const auto count = static_cast<int> (std::min<int64_t> (samples - start, block.getNumSamples()));
-                if (! reader.read (&block, 0, count, start, true, analysisChannels > 1))
+                if (importCancelled (cancelled) || ! reader.read (&block, 0, count, start, true, analysisChannels > 1))
                     return {};
 
                 for (int first = 0; first < count; first += frameSamples)
@@ -374,7 +386,8 @@ namespace ksh::ui
         }
 
         AudioGroove measureAudioGroove (const juce::AudioFormatReader& reader, int64_t samples,
-                                        std::vector<Hit> hits, double beatsPerStep, double referenceBpm)
+                                        std::vector<Hit> hits, double beatsPerStep, double referenceBpm,
+                                        const std::atomic<bool>* cancelled)
         {
             const auto duration = static_cast<double> (samples) / reader.sampleRate;
             // Keep the tempo search sensitive to sixteenth-note grooves even
@@ -386,7 +399,7 @@ namespace ksh::ui
             if (taggedTempo >= 20.0 && taggedTempo <= 300.0
                 && reader.metadataValues[juce::WavAudioFormat::acidOneShot].getIntValue() == 0)
             {
-                const auto fit = hits.size() >= 4 ? fitGrid (hits, 60.0 * analysisStep / taggedTempo, true) : GridFit {};
+                const auto fit = hits.size() >= 4 ? fitGrid (hits, 60.0 * analysisStep / taggedTempo, true, cancelled) : GridFit {};
                 return { { swingForRate (fit.result(), analysisStep, beatsPerStep), std::round (taggedTempo * 10.0) / 10.0, {} },
                          fit, taggedTempo };
             }
@@ -403,12 +416,15 @@ namespace ksh::ui
             GridFit bestFit;
             for (const auto beat : candidateBeats (hits, duration, referenceBpm))
             {
-                const auto coarse = fitGrid (excerpt, beat * analysisStep, true);
+                if (importCancelled (cancelled))
+                    return {};
+
+                const auto coarse = fitGrid (excerpt, beat * analysisStep, true, cancelled);
                 if (coarse.rhythm().score < 0.36)
                     continue;
 
                 const auto refined = refinedBeat (excerpt, coarse.rhythm(), beat, analysisStep);
-                const auto fit = fitGrid (hits, refined * analysisStep, true);
+                const auto fit = fitGrid (hits, refined * analysisStep, true, cancelled);
                 const auto rhythm = fit.rhythm();
                 const auto span = (hits.back().time - hits.front().time) / refined;
                 if (rhythm.score < (hits.size() < 7 ? 0.75 : 0.56) || span < 2.5)
@@ -448,7 +464,7 @@ namespace ksh::ui
             auto swing = swingForRate (bestFit.result(), analysisStep, beatsPerStep);
             if (beatsPerStep - analysisStep > 0.001)
             {
-                const auto projectFit = fitGrid (hits, bestBeat * beatsPerStep, true);
+                const auto projectFit = fitGrid (hits, bestBeat * beatsPerStep, true, cancelled);
                 const auto projectSwing = projectFit.result();
                 if (projectSwing && projectFit.rhythm().score > bestFit.rhythm().score + 0.025)
                     swing = projectSwing;
@@ -463,13 +479,14 @@ namespace ksh::ui
             return std::unique_ptr<juce::AudioFormatReader> (formats.createReaderFor (file.createInputStream()));
         }
 
-        SwingImportResult analyseWave (const juce::File& file, double beatsPerStep, double referenceBpm)
+        SwingImportResult analyseWave (const juce::File& file, double beatsPerStep, double referenceBpm,
+                                       const std::atomic<bool>* cancelled)
         {
             const auto reader = openAudio (file);
             if (!usableReader (reader))
                 return { {}, {}, "Couldn't read this WAV file." };
             const auto samples = analysisSamples (*reader, maxWaveSeconds);
-            return measureAudioGroove (*reader, samples, waveOnsets (*reader, samples), beatsPerStep, referenceBpm).result;
+            return measureAudioGroove (*reader, samples, waveOnsets (*reader, samples, cancelled), beatsPerStep, referenceBpm, cancelled).result;
         }
 
         constexpr int drumRows = 3, stepsPerBar = 16, barsPerPattern = Constants::maxSteps / stepsPerBar;
@@ -564,12 +581,15 @@ namespace ksh::ui
             std::vector<float> frame, window;
         };
 
-        DrumTracks classifyDrumHits (juce::AudioFormatReader& reader, const std::vector<Hit>& hits)
+        DrumTracks classifyDrumHits (juce::AudioFormatReader& reader, const std::vector<Hit>& hits,
+                                     const std::atomic<bool>* cancelled)
         {
             AttackSpectrum spectrum (reader);
             DrumTracks tracks;
             for (const auto& hit : hits)
             {
+                if (importCancelled (cancelled))
+                    return {};
                 const auto [bass, body, snap, high, air] = spectrum.rise (hit.time);
                 const auto snare = body + 0.75 * snap;
                 const auto hats = high + air;
@@ -691,9 +711,12 @@ namespace ksh::ui
         return file.hasFileExtension ("wav;wave;aif;aiff;aifc;flac;mp3;m4a;aac;caf;ogg");
     }
 
-    AudioDrumImport importDrumAudio (const juce::File& file, const juce::String& originalName, double referenceBpm)
+    AudioDrumImport importDrumAudio (const juce::File& file, const juce::String& originalName, double referenceBpm,
+                                    const std::atomic<bool>* cancelled)
     {
         AudioDrumImport result;
+        if (importCancelled (cancelled))
+            return result;
         const auto reader = openAudio (file);
         if (!usableReader (reader))
         {
@@ -702,21 +725,25 @@ namespace ksh::ui
         }
 
         const auto excerptSamples = analysisSamples (*reader, maxWaveSeconds);
-        auto hits = waveOnsets (*reader, excerptSamples);
+        auto hits = waveOnsets (*reader, excerptSamples, cancelled);
+        if (importCancelled (cancelled))
+            return {};
         if (hits.empty())
         {
             result.error = "Couldn't find drum attacks in the audio.";
             return result;
         }
 
-        auto groove = measureAudioGroove (*reader, excerptSamples, hits, 0.25, std::clamp (referenceBpm, 90.0, 145.0));
+        auto groove = measureAudioGroove (*reader, excerptSamples, hits, 0.25, std::clamp (referenceBpm, 90.0, 145.0), cancelled);
+        if (importCancelled (cancelled))
+            return {};
         result.estimatedTempo = groove.exactTempo.has_value();
         result.bpm = groove.exactTempo.value_or (std::clamp (referenceBpm, 20.0, 300.0));
         const auto stepSeconds = 15.0 / result.bpm;
         if (!result.estimatedTempo && hits.size() >= 4)
         {
             const auto count = std::min (maxFitHits, hits.size());
-            groove.fit = fitGrid (std::vector<Hit> (hits.begin(), hits.begin() + static_cast<std::ptrdiff_t> (count)), stepSeconds, true);
+            groove.fit = fitGrid (std::vector<Hit> (hits.begin(), hits.begin() + static_cast<std::ptrdiff_t> (count)), stepSeconds, true, cancelled);
             groove.result.swing = groove.fit.result();
         }
         const auto swing = groove.result.swing.value_or (ImportedSwing {});
@@ -732,10 +759,13 @@ namespace ksh::ui
         const auto endTime = origin + stepSeconds * (result.bars * stepsPerBar + 0.25);
         const auto samples = analysisSamples (*reader, endTime);
         if (samples > excerptSamples)
-            hits = waveOnsets (*reader, samples);
+            hits = waveOnsets (*reader, samples, cancelled);
         while (!hits.empty() && hits.back().time >= endTime)
             hits.pop_back();
-        const auto tracks = classifyDrumHits (*reader, hits);
+        const auto tracks = classifyDrumHits (*reader, hits, cancelled);
+
+        if (importCancelled (cancelled))
+            return {};
 
         auto document = std::make_unique<DocumentState>();
         auto& settings = document->settings;
@@ -789,12 +819,15 @@ namespace ksh::ui
         return {};
     }
 
-    SwingImportResult analyseSwingFile (const juce::File& file, SwingFileType type, double beatsPerStep, double referenceBpm)
+    SwingImportResult analyseSwingFile (const juce::File& file, SwingFileType type, double beatsPerStep, double referenceBpm,
+                                       const std::atomic<bool>* cancelled)
     {
+        if (importCancelled (cancelled))
+            return {};
         if (! file.existsAsFile())
             return { {}, {}, "Couldn't open the dropped file." };
         if (type == SwingFileType::midi)
-            return analyseMidi (file, beatsPerStep);
-        return analyseWave (file, beatsPerStep, std::clamp (referenceBpm, 90.0, 145.0));
+            return analyseMidi (file, beatsPerStep, cancelled);
+        return analyseWave (file, beatsPerStep, std::clamp (referenceBpm, 90.0, 145.0), cancelled);
     }
 }

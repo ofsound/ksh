@@ -1,6 +1,6 @@
 #pragma once
 
-#include "KshStyle.h"
+#include "KshProjectDetails.h"
 
 namespace ksh::ui
 {
@@ -16,13 +16,25 @@ namespace ksh::ui
         using ReadDetails = std::function<void (const juce::File&, std::function<void (std::optional<Details>)>)>;
         using Completion = std::function<void (juce::String)>;
         using Submit = std::function<void (const juce::File&, const Details&, Completion)>;
+        struct StorageLocations
+        {
+            juce::String projectsName;
+            juce::File cloudFolder;
+            std::function<void (std::function<void (juce::File)>)> chooseCloudFolder;
+        };
 
-        explicit ProjectBrowser (juce::PropertiesFile&);
+        ProjectBrowser (juce::PropertiesFile&, PluginProcessor&);
         ~ProjectBrowser() override;
         void open (juce::File root, juce::File current, std::optional<Details>, ListProjects, Submit,
-                   std::function<void()> importExternal = {}, bool confirmOpen = false, ReadDetails = {});
+                   std::function<void()> importExternal = {}, bool confirmOpen = false, ReadDetails = {}, juce::File lastFolder = {},
+                   StorageLocations = {});
         void dismiss();
-        std::function<void()> onDismiss;
+        void refreshCurrentProject();
+        std::function<void (const juce::File&)> onDismiss;
+        std::function<void()> onRestore;
+       #if JUCE_IOS
+        std::function<void()> onShare;
+       #endif
 
         void paint (juce::Graphics&) override;
         void resized() override;
@@ -43,6 +55,12 @@ namespace ksh::ui
         private:
             ProjectBrowser& owner;
         };
+        class FavoriteButton final : public juce::Button
+        {
+        public:
+            FavoriteButton();
+            void paintButton (juce::Graphics&, bool hovered, bool down) override;
+        };
         int getNumRows() override;
         juce::String getNameForRow (int) override;
         void paintListBoxItem (int, juce::Graphics&, int, int, bool) override;
@@ -51,8 +69,9 @@ namespace ksh::ui
         void listBoxItemDoubleClicked (int, const juce::MouseEvent&) override;
         void returnKeyPressed (int) override;
         const Entry* entryAt (int) const;
-        void refresh (const juce::File& select = {});
+        void refresh (const juce::File& select = {}, bool selectFirst = true);
         void navigate (juce::File);
+        void navigateToRoot (const juce::File&);
         void goUp();
         void activate (int);
         void updateActions();
@@ -63,27 +82,34 @@ namespace ksh::ui
         void showStatus (const juce::String&);
         void updatePreview (const Entry*);
         void loadPreview();
+        void layoutPreview();
 
         juce::PropertiesFile& preferences;
         ListProjects listProjects;
         ReadDetails readDetails;
         Submit onSubmit;
         std::function<void()> onImportExternal;
+        StorageLocations locations;
         juce::File libraryRoot, folderRoot, folder, currentFile, pendingOpen;
         std::vector<Entry> entries;
         juce::StringArray favoritePaths;
         juce::Rectangle<int> card, locationBounds, emptyBounds, previewBounds;
+        juce::Rectangle<int> previewIdentityBounds, previewDescriptionBounds, previewDatesBounds;
         juce::File previewFile;
         std::optional<Details> preview;
         juce::String previewMessage;
         uint64_t previewRequest = 0;
         bool saving = false, confirmOpen = false, favoritesOnly = false, addingFolder = false, busy = false;
         ProjectList list { *this };
+        ProjectDetails currentDetails;
         juce::TextEditor name, author, description, folderName, previewDescription;
         juce::Label status;
-        juce::TextButton home { "Projects" }, up { "Up" }, favorites { "Favorites" }, newFolder { "New Folder" };
-        juce::TextButton favorite { "Add Favorite" }, import { "Browse Files" }, reveal { "Show in Finder" };
-        juce::TextButton cancel { "Cancel" }, primary { "Open" }, create { "Create" };
+        FavoriteButton favorite;
+        juce::TextButton home { "PROJECTS" }, up { "UP" }, favorites { "FAVORITES" }, newFolder { "NEW FOLDER" };
+        juce::TextButton cloud { "ICLOUD DRIVE" };
+        juce::TextButton import { "BROWSE FILES" }, reveal { "SHOW IN FINDER" };
+        juce::TextButton currentProject { "CURRENT PROJECT" };
+        juce::TextButton cancel { "CANCEL" }, primary { "OPEN" }, create { "CREATE" };
         juce::TimedCallback previewTimer { [this] { loadPreview(); } };
     };
 }

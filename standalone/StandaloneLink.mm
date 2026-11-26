@@ -295,7 +295,7 @@ namespace
             menu.addItem (1, "Enable Ableton Link", true, enabled);
             menu.addItem (2, "Start/Stop Sync", enabled, session.syncsTransport());
             const juce::WeakReference<LinkClock> weak (this);
-            menu.showMenuAsync (ui::footerMenuOptions (target), [weak] (int item)
+            ui::showAnchoredPopup (menu, ui::footerMenuOptions (target), [weak] (int item)
             {
                 if (auto* clock = weak.get())
                     clock->selectSetting (item);

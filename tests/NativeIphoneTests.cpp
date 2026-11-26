@@ -59,6 +59,76 @@ namespace
     }
 }
 
+TEST_CASE ("An iPad AUv3 viewport transition preserves modal state and restores grid access", "[native-ui][auv3][resize]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_AudioUnitv3);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    const auto setCompact = [&] (bool compact)
+    {
+        editor.setCompactViewport (compact, 814, 390, false);
+        editor.setSize (juce::roundToInt (editor.layout.width()), juce::roundToInt (editor.layout.height()));
+    };
+    auto& grid = phoneGrid (editor);
+    NoteChooser* chooser = nullptr;
+    DiscardChanges* discard = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* noteChooser = dynamic_cast<NoteChooser*> (child)) chooser = noteChooser;
+        if (auto* discardDialog = dynamic_cast<DiscardChanges*> (child)) discard = discardDialog;
+    }
+    REQUIRE (chooser != nullptr);
+    REQUIRE (discard != nullptr);
+    setCompact (true);
+
+    SECTION ("A dismissed overlay stays closed")
+    {
+        editor.confirmDiscardingChanges ([] { FAIL ("Unexpected project replacement"); });
+        REQUIRE (discard->isVisible());
+        discard->dismiss();
+        setCompact (false);
+        CHECK_FALSE (chooser->isVisible());
+        CHECK_FALSE (discard->isVisible());
+    }
+    SECTION ("An open note chooser can still be dismissed after expansion")
+    {
+        REQUIRE (grid.rowTitle (0) != nullptr);
+        grid.noteChooserRequested (0, *grid.rowTitle (0));
+        REQUIRE (chooser->isVisible());
+        CHECK_FALSE (grid.isVisible());
+        CHECK_FALSE (chooser->isAlwaysOnTop());
+        setCompact (false);
+        CHECK (chooser->isVisible());
+        CHECK (chooser->isAlwaysOnTop());
+        CHECK (chooser->getBounds() == editor.getLocalBounds());
+        CHECK (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+        CHECK_FALSE (chooser->isVisible());
+        CHECK_FALSE (discard->isVisible());
+    }
+    SECTION ("An anchored color callout closes when its viewport changes")
+    {
+        REQUIRE (grid.rowTitle (0) != nullptr);
+        grid.trackColourRequested (0, *grid.rowTitle (0));
+        auto* callout = dynamic_cast<juce::CallOutBox*> (juce::Component::getCurrentlyModalComponent());
+        REQUIRE (callout != nullptr);
+        editor.sync();
+        CHECK (callout->isVisible());
+        setCompact (false);
+        CHECK (juce::Component::getCurrentlyModalComponent() == nullptr);
+        for (auto* child : editor.getChildren())
+            CHECK (dynamic_cast<juce::CallOutBox*> (child) == nullptr);
+    }
+
+    CHECK (grid.isVisible());
+    const auto cell = grid.layout.cell ({ 0, 0 }).getCentre();
+    const auto initiallyEnabled = editor.controller.cell ({ 0, 0 }).enabled;
+    grid.mouseDown (phoneEvent (grid, cell, cell));
+    grid.mouseUp (phoneEvent (grid, cell, cell, 0));
+    CHECK (editor.controller.cell ({ 0, 0 }).enabled != initiallyEnabled);
+}
+
 TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector", "[native-ui][iphone][render]")
 {
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
@@ -354,6 +424,41 @@ TEST_CASE ("iPhone Jam opens the pads and exposes a larger target to finish the 
     CHECK (performanceBounds() == idleBounds);
     CHECK (processor.isStandaloneTransportPlaying());
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
+}
+
+TEST_CASE ("Jam closes Generate and keeps it unavailable until the take ends", "[native-ui][jam]")
+{
+    const bool compact = GENERATE (false, true);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    if (compact)
+        editor.setCompactViewport (true, 814, 390);
+    editor.setSize (compact ? 814 : Layout::fullWidth, compact ? 390 : Layout::fullHeight);
+
+    auto& generate = phoneButton (editor, "Generate");
+    auto& jam = phoneButton (editor, "Jam");
+    generate.onClick();
+    REQUIRE (generate.getToggleState());
+    jam.onClick();
+    REQUIRE (jam.getToggleState());
+    CHECK_FALSE (generate.getToggleState());
+    CHECK_FALSE (generate.isEnabled());
+
+    REQUIRE (editor.keyPressed (juce::KeyPress ('a', {}, 'a')));
+    editor.sync();
+    REQUIRE (jam.getTitle() == "Jam recording");
+    generate.onClick();
+    CHECK (jam.getToggleState());
+    CHECK_FALSE (generate.getToggleState());
+    CHECK_FALSE (generate.isEnabled());
+
+    jam.onClick();
+    CHECK_FALSE (jam.getToggleState());
+    REQUIRE (generate.isEnabled());
+    generate.onClick();
+    CHECK (generate.getToggleState());
 }
 
 TEST_CASE ("Jam, Pads and Arm Record settle on the Jam stop press", "[native-ui][jam][render]")
@@ -852,6 +957,7 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
 {
     const bool phone = GENERATE (false, true);
     PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 4, 0 }));
     NativeEditor editor (processor);
     editor.layout.touchRows = true;
     if (phone)
@@ -917,6 +1023,37 @@ TEST_CASE ("Holding an empty cell opens the rhythm menu and sliding releases ont
     CHECK_FALSE (editor.controller.cell (outside).enabled);
     editor.controller.undo();
     CHECK_FALSE (editor.controller.cell (cell).enabled);
+
+    editor.controller.begin ("Seed CC steps");
+    editor.controller.editCell (cell, Cell { .enabled = true });
+    editor.controller.editCell (outside, Cell { .enabled = true });
+    editor.controller.commit();
+    editor.controller.selected.set (static_cast<size_t> (cell.key()));
+    editor.controller.selected.set (static_cast<size_t> (outside.key()));
+    editor.controller.notify();
+    grid.mouseDown (event (origin, pressed));
+    const auto glideDeadline = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    while (grid.openPresetMenu() == nullptr && juce::Time::getMillisecondCounterHiRes() < glideDeadline)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    REQUIRE (grid.openPresetMenu() != nullptr);
+    juce::Component* glide = nullptr;
+    for (auto* child : grid.openPresetMenu()->getChildren())
+        if (child->getTitle() == "Glide to next")
+            glide = child;
+    REQUIRE (glide != nullptr);
+    CHECK (glide->getBottom() < preset.getY());
+    capturePhone (editor, phone ? "cc-preset-menu-compact" : "cc-preset-menu-tablet");
+    const auto glideTarget = grid.getLocalPoint (glide, glide->getLocalBounds().getCentre().toFloat());
+    grid.mouseDrag (event (glideTarget, pressed));
+    grid.mouseUp (event (glideTarget, 0));
+    CHECK (editor.controller.glidesToNext (cell));
+    CHECK (editor.controller.glidesToNext (outside));
+    editor.controller.undo();
+    CHECK_FALSE (editor.controller.glidesToNext (cell));
+    CHECK_FALSE (editor.controller.glidesToNext (outside));
 }
 
 TEST_CASE ("iPad can scrub velocity and open a roll near the last step's handle", "[native-ui][touch][step-presets]")
@@ -1191,6 +1328,7 @@ TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gestur
     REQUIRE (editor.controller.editing());
     editor.setCompactViewport (true, 850, 409);
     grid.mouseUp (phoneEvent (grid, last, first));
+    CHECK (grid.layout.firstStep == lastPage);
     CHECK_FALSE (editor.controller.editing());
     CHECK_FALSE (editor.controller.cell ({ 0, lastPage }).enabled);
     CHECK_FALSE (editor.controller.cell ({ 0, lastPage + 3 }).enabled);
@@ -1278,7 +1416,7 @@ TEST_CASE ("iPhone inspector value edits respect drag speed, undo, and viewport 
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 80);
 
-    const auto dragRight = [&] (ValueControl& control, bool phone)
+    const auto dragRight = [&] (ValueControl& control)
     {
         // Exercise the horizontal gesture with a synthetic desktop mouse source.
         control.horizontalAdjustment = true;
@@ -1292,7 +1430,7 @@ TEST_CASE ("iPhone inspector value edits respect drag speed, undo, and viewport 
             return juce::String (value);
         });
         CHECK_FALSE (control.createComponentSnapshot (control.getLocalBounds()).isNull());
-        CHECK (formatted == (phone ? 0 : 1));
+        CHECK (formatted == 0);
         control.format = std::move (previousFormat);
         control.mouseUp (phoneEvent (control, end, origin, 0));
     };
@@ -1310,10 +1448,10 @@ TEST_CASE ("iPhone inspector value edits respect drag speed, undo, and viewport 
                 CHECK (control->valueFaceBounds().getWidth() == 42.0f);
                 CHECK (control->valueFaceBounds().getHeight() == 42.0f);
             }
-        dragRight (*velocity, phone);
+        dragRight (*velocity);
         CHECK (editor.controller.cell ({ 0, 0 }).velocity == (phone ? 95 : 90));
         editor.controller.undo();
-        dragRight (*probability, phone);
+        dragRight (*probability);
         CHECK (editor.controller.cell ({ 0, 0 }).probability == (phone ? 90 : 85));
         editor.controller.undo();
     }
@@ -1331,6 +1469,62 @@ TEST_CASE ("iPhone inspector value edits respect drag speed, undo, and viewport 
     CHECK (editor.controller.cell ({ 0, 0 }).roll == 4);
     editor.controller.undo();
     CHECK (editor.controller.cell ({ 0, 0 }).roll == 1);
+}
+
+TEST_CASE ("Pencil activates touch scrubbing and long press on numeric controls", "[native-ui][ipad][pen]")
+{
+    ValueControl control;
+    control.setSize (100, 100);
+    control.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    control.setVisible (true);
+    auto* peer = control.getPeer();
+    REQUIRE (peer != nullptr);
+
+    const auto now = juce::Time::getCurrentTime();
+    peer->handleMouseEvent (juce::MouseInputSource::pen, {}, {}, 0.0f, 0.0f, now.toMilliseconds());
+    const auto& sources = juce::Desktop::getInstance().getMouseSources();
+    const auto pen = std::find_if (sources.begin(), sources.end(), [] (const auto& pointer) { return pointer.isPen(); });
+    REQUIRE (pen != sources.end());
+    const auto pointer = *pen;
+
+    const juce::Point<float> origin { 32, 40 };
+    const auto right = origin.translated (20, 0);
+    const auto up = origin.translated (0, -20);
+    const auto event = [&] (juce::Point<float> position, int modifiers = juce::ModifierKeys::leftButtonModifier)
+    {
+        return juce::MouseEvent (pointer, position, juce::ModifierKeys (modifiers), 1, 0, 0, 0, 0, &control, &control,
+                                 juce::Time::getCurrentTime(), origin, now, 1, position != origin);
+    };
+
+    control.value = 50;
+    control.horizontalDragOnTouch = true;
+    control.mouseDown (event (origin));
+    control.mouseDrag (event (up));
+    CHECK (control.value == 50);
+    control.mouseDrag (event (right));
+    control.mouseUp (event (right, 0));
+    CHECK (control.value == 54);
+
+    control.mouseDown (phoneEvent (control, origin, origin));
+    control.mouseDrag (phoneEvent (control, right, origin));
+    CHECK (control.value == 54);
+    control.mouseDrag (phoneEvent (control, up, origin));
+    control.mouseUp (phoneEvent (control, up, origin, 0));
+    CHECK (control.value == 58);
+
+    int menuOpens = 0;
+    control.onContextMenu = [&] { ++menuOpens; };
+    control.mouseDown (event (origin));
+    CHECK (menuOpens == 0);
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 1250.0;
+    while (menuOpens == 0 && juce::Time::getMillisecondCounterHiRes() < deadline)
+    {
+        juce::Thread::sleep (10);
+        juce::Timer::callPendingTimersSynchronously();
+    }
+    CHECK (menuOpens == 1);
+    control.mouseUp (event (origin, 0));
+    CHECK (menuOpens == 1);
 }
 
 TEST_CASE ("Compact iPad AUv3 uses the phone layout with iPad touch behavior", "[native-ui][iphone][ipad][auv3][render]")
@@ -1459,6 +1653,117 @@ TEST_CASE ("Compact iPad AUv3 uses the phone layout with iPad touch behavior", "
         CHECK_FALSE (editor.layout.settingsInHeader);
         CHECK (phoneButton (editor, "Open menu").getButtonText() == "Menu");
     }
+}
+
+TEST_CASE ("iPhone and compact AUv3 can edit a CC row through the note chooser", "[native-ui][iphone][auv3][cc][render]")
+{
+    const bool phone = GENERATE (true, false);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (phone ? juce::AudioProcessor::wrapperType_Standalone
+                                                       : juce::AudioProcessor::wrapperType_AudioUnitv3);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    NativeEditor editor (processor);
+    editor.layout.touchRows = true;
+    editor.setCompactViewport (true, 814, 390, phone);
+    editor.setSize (814, 390);
+    auto& grid = phoneGrid (editor);
+    const int pitch = editor.controller.state.playback.channels[0].note;
+    editor.controller.begin ("Seed notes");
+    editor.controller.editCell ({ 0, 0 }, Cell { .enabled = true, .velocity = 81, .roll = 3 });
+    editor.controller.editCell ({ 0, 6 }, Cell { .enabled = true, .velocity = 36 });
+    editor.controller.commit();
+
+    phoneButton (editor, "Settings channel 1").onClick();
+    NoteInput* input = nullptr;
+    NoteChooser* chooser = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* choice = dynamic_cast<NoteInput*> (child)) input = choice;
+        if (auto* overlay = dynamic_cast<NoteChooser*> (child)) chooser = overlay;
+    }
+    REQUIRE (input != nullptr);
+    REQUIRE (input->isVisible());
+    REQUIRE (chooser != nullptr);
+    input->onChoose();
+    REQUIRE (chooser->isVisible());
+    CHECK_FALSE (chooser->isAlwaysOnTop());
+    CHECK_FALSE (input->isVisible());
+    CHECK_FALSE (grid.isVisible());
+    auto& back = phoneButton (editor, "Back from MIDI chooser");
+    CHECK (back.getBottom() < chooser->getY());
+    auto& noteMode = phoneButton (editor, "Note mode");
+    auto& ccMode = phoneButton (editor, "CC mode");
+    const auto switchBounds = noteMode.getBounds().getUnion (ccMode.getBounds());
+    CHECK (chooser->getLocalBounds().contains (switchBounds));
+    CHECK (noteMode.getRight() == ccMode.getX() + 1);
+    CHECK (noteMode.getHeight() >= 42);
+    CHECK (noteMode.getToggleState());
+    capturePhone (editor, phone ? "iphone-note-mode-chooser" : "compact-auv3-note-mode-chooser");
+    ccMode.onClick();
+    REQUIRE (editor.controller.isControllerRow (0));
+    CHECK (ccMode.getToggleState());
+    CHECK_FALSE (noteMode.getToggleState());
+    CHECK (noteMode.getBounds().getUnion (ccMode.getBounds()) == switchBounds);
+    REQUIRE (input->caption == "MIDI CC");
+    ValueControl* number = nullptr;
+    for (auto* child : chooser->getChildren())
+        if (child->getTitle() == "CC number")
+            number = dynamic_cast<ValueControl*> (child);
+    REQUIRE (number != nullptr);
+    REQUIRE (number->isVisible());
+    CHECK (number->getY() > switchBounds.getBottom());
+    number->createAccessibilityHandler()->getValueInterface()->setValue (74.0);
+    CHECK (editor.controller.state.playback.channels[0].ccNumber == 74);
+    CHECK_FALSE (editor.controller.glidesToNext ({ 0, 0 }));
+    CHECK (std::ranges::none_of (chooser->getChildren(), [] (auto* child) { return child->getTitle().containsIgnoreCase ("Glide"); }));
+    capturePhone (editor, phone ? "iphone-cc-chooser" : "compact-auv3-cc-chooser");
+    back.onClick();
+    CHECK_FALSE (chooser->isVisible());
+    CHECK_FALSE (back.isVisible());
+    CHECK (input->isVisible());
+    phoneButton (editor, "Done").onClick();
+    REQUIRE (grid.isVisible());
+
+    editor.controller.selected.set (0);
+    editor.controller.notify();
+    ValueControl* value = nullptr;
+    for (auto* child : editor.getChildren())
+        if (auto* panel = dynamic_cast<PreviewPanel*> (child); panel != nullptr && panel->isVisible())
+            for (auto* control : panel->getChildren())
+                if (control->getTitle() == "Selected CC value")
+                    value = dynamic_cast<ValueControl*> (control);
+    REQUIRE (value != nullptr);
+    CHECK (value->showAdjustmentArrows);
+    value->createAccessibilityHandler()->getValueInterface()->setValue (0.0);
+    CHECK (editor.controller.cell ({ 0, 0 }).controllerValue() == 0);
+    CHECK (editor.controller.cell ({ 0, 0 }).velocity == 81);
+    CHECK (editor.controller.cell ({ 0, 0 }).roll == 3);
+    editor.controller.selected.set (6);
+    editor.controller.notify();
+    auto& glide = phoneButton (editor, "Glide to next");
+    CHECK (glide.getWidth() == 42);
+    CHECK (glide.getHeight() == 42);
+    CHECK (glide.getX() > value->getRight());
+    CHECK_FALSE (glide.getToggleState());
+    glide.onClick();
+    CHECK (glide.getToggleState());
+    CHECK (editor.controller.glidesToNext ({ 0, 0 }));
+    CHECK (editor.controller.glidesToNext ({ 0, 6 }));
+    capturePhone (editor, phone ? "iphone-cc-grid" : "compact-auv3-cc-grid");
+    glide.onClick();
+    CHECK_FALSE (editor.controller.glidesToNext ({ 0, 0 }));
+    CHECK_FALSE (editor.controller.glidesToNext ({ 0, 6 }));
+    capturePhone (editor, phone ? "iphone-cc-hold-grid" : "compact-auv3-cc-hold-grid");
+
+    phoneButton (editor, "Settings channel 1").onClick();
+    input->onChoose();
+    noteMode.onClick();
+    CHECK_FALSE (editor.controller.isControllerRow (0));
+    CHECK (editor.controller.state.playback.channels[0].note == pitch);
+    CHECK (editor.controller.cell ({ 0, 0 }).velocity == 81);
+    CHECK (editor.controller.cell ({ 0, 0 }).roll == 3);
+    REQUIRE (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK (input->isVisible());
 }
 
 TEST_CASE ("Compact Copy toggle stays available outside iPhone mode", "[native-ui][iphone]")
@@ -1967,6 +2272,21 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
     CHECK (processor.isPatternRecordingEnabled());
 }
 
+TEST_CASE ("Only standalone consumes QWERTY pad shortcuts", "[native-ui][row-trigger]")
+{
+    using Processor = juce::AudioProcessor;
+    const auto wrapper = GENERATE (Processor::wrapperType_Standalone, Processor::wrapperType_VST3, Processor::wrapperType_AudioUnitv3);
+    Processor::setTypeOfNextNewPlugin (wrapper);
+    PluginProcessor processor;
+    Processor::setTypeOfNextNewPlugin (Processor::wrapperType_Undefined);
+    REQUIRE (processor.dispatchUiEngineCommand ("channels", { 8 }));
+    NativeEditor editor (processor);
+
+    const bool standalone = wrapper == Processor::wrapperType_Standalone;
+    for (const auto key : juce::String ("asdfghjk"))
+        CHECK (editor.keyPressed (juce::KeyPress (static_cast<int> (key), {}, key)) == standalone);
+}
+
 TEST_CASE ("Incoming MIDI flashes pads assigned to the note with transport stopped", "[native-ui][iphone][ipad][row-trigger][midi-input]")
 {
     const bool compact = GENERATE (false, true);
@@ -2021,7 +2341,7 @@ TEST_CASE ("Incoming MIDI flashes pads assigned to the note with transport stopp
             CHECK (event.getMessage().getNoteNumber() == 60);
             CHECK (event.getMessage().getVelocity() == 95);
         }
-    CHECK (noteOns == 1);
+    CHECK (noteOns == (standalone ? 0 : 1));
 }
 
 TEST_CASE ("Pads triggered by the same touch event share their MIDI timing", "[native-ui][iphone][ipad][row-trigger][latency]")

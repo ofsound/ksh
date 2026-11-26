@@ -60,6 +60,173 @@ bool containsNoteOn (const juce::MidiBuffer& midi, int pitch)
 }
 } // namespace
 
+TEST_CASE ("CC rows send zero and glide independently of note playback and block size", "[engine][transport][cc]")
+{
+    const bool glide = GENERATE (false, true);
+    const bool conditionalEnd = GENERATE (false, true);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelLoopLength (0, 4);
+    fixture.engine.setChannelLoopLength (1, 4);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setChannelController (0, true, 74, 4);
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .velocity = 90, .ccValue = 0, .ccGlide = glide ? 1 : 0 });
+    fixture.engine.setCell (0, 0, 2, Cell { .enabled = true, .probability = conditionalEnd ? 0 : 100, .ccValue = 120 });
+    fixture.engine.setCell (0, 1, 1, Cell { .enabled = true, .velocity = 86 });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto render = [&] (int blockSize)
+    {
+        auto runner = std::make_unique<MidiPlaybackRunner>();
+        runner->prepare (48000.0);
+        std::vector<std::pair<int, int>> cc, notes;
+        constexpr int end = 18000;
+        for (int start = 0; start < end; start += blockSize)
+        {
+            const auto block = runPlaybackBlock (*runner, snapshot, start / 24000.0, 120.0, true, std::min (end - start, blockSize));
+            for (const auto event : block.midi)
+            {
+                const auto message = event.getMessage();
+                const int sample = start + event.samplePosition;
+                if (message.isController())
+                {
+                    CHECK (message.getControllerNumber() == 74);
+                    CHECK (message.getChannel() == 4);
+                    cc.emplace_back (sample, message.getControllerValue());
+                }
+                else if (message.isNoteOn())
+                {
+                    CHECK (message.getChannel() == Constants::defaultMidiChannel);
+                    notes.emplace_back (sample, message.getVelocity());
+                }
+            }
+        }
+        return std::pair { cc, notes };
+    };
+    const auto [cc, notes] = render (257);
+    CHECK (render (8192) == std::pair { cc, notes });
+    CHECK (notes == std::vector<std::pair<int, int>> { { 6000, 86 } });
+    REQUIRE_FALSE (cc.empty());
+    CHECK (cc.front() == std::pair { 0, 0 });
+    if (conditionalEnd)
+        CHECK (cc.size() == 1);
+    else
+    {
+        REQUIRE (cc.size() == (glide ? 97 : 2));
+        CHECK (cc.back() == std::pair { 12000, 120 });
+        if (glide)
+            CHECK (cc[48] == std::pair { 6000, 60 });
+    }
+}
+
+TEST_CASE ("A CC ramp stops when transport switches patterns", "[engine][transport][cc]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelLoopLength (0, 4);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setChannelController (0, true, 74, 1);
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .ccValue = 0, .ccGlide = 1 });
+    fixture.engine.setCell (0, 0, 3, Cell { .enabled = true, .ccValue = 120 });
+    fixture.engine.setCell (1, 0, 1, Cell { .enabled = true, .ccValue = 64 });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    auto runner = std::make_unique<MidiPlaybackRunner>();
+    runner->prepare (48000.0);
+    MidiPatternSelectionBlock selections;
+    selections.add (6001, 1);
+    juce::MidiBuffer midi;
+    runner->processBlock (snapshot, 0, 120.0, true, 24000, midi, selections);
+    std::vector<std::pair<int, int>> changes;
+    for (const auto event : midi)
+    {
+        REQUIRE (event.getMessage().isController());
+        changes.emplace_back (event.samplePosition, event.getMessage().getControllerValue());
+    }
+    REQUIRE_FALSE (changes.empty());
+    CHECK (changes.front() == std::pair { 0, 0 });
+    CHECK (changes.back() == std::pair { 6001, 64 });
+    REQUIRE (changes.size() == 42);
+    CHECK (changes[40] == std::pair { 6000, 40 });
+}
+
+TEST_CASE ("Spanned CC splits play their values and gates at triplet intervals", "[engine][transport][cc][split-edits]")
+{
+    const bool reverse = GENERATE (false, true);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelLoopLength (0, 4);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setChannelPlaybackMode (0, reverse ? PlaybackMode::reverse : PlaybackMode::normal);
+    fixture.engine.setChannelController (0, true, 74, 4);
+    Cell triplet { .enabled = true, .velocity = 88, .roll = 3, .span = 2, .ccValue = 48, .ccGlide = 1 };
+    triplet.setSplitControllerValue (0, 0);
+    triplet.setSplitControllerValue (1, 99);
+    triplet.setSplitControllerValue (2, 127);
+    triplet.splitGates[1].setProbability (0);
+    triplet.splitGates[2].setCycle (2, 0b10);
+    fixture.engine.setCell (0, 0, 0, triplet);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    const auto render = [&] (int blockSize)
+    {
+        auto runner = std::make_unique<MidiPlaybackRunner>();
+        runner->prepare (48000.0);
+        std::vector<std::pair<int, int>> changes;
+        for (int start = 0; start < 48000; start += blockSize)
+        {
+            const auto block = runPlaybackBlock (*runner, snapshot, start / 24000.0, 120.0, true, std::min (48000 - start, blockSize));
+            for (const auto event : block.midi)
+            {
+                const auto message = event.getMessage();
+                REQUIRE (message.isController());
+                CHECK (message.getControllerNumber() == 74);
+                CHECK (message.getChannel() == 4);
+                changes.emplace_back (start + event.samplePosition, message.getControllerValue());
+            }
+        }
+        return changes;
+    };
+    const int offset = reverse ? 12000 : 0;
+    const std::vector<std::pair<int, int>> expected { { offset, 0 }, { offset + 24000, 0 }, { offset + 32000, 127 } };
+    CHECK (render (257) == expected);
+    CHECK (render (8192) == expected);
+}
+
+TEST_CASE ("CC Glide interpolates between unconditional split points", "[engine][transport][cc][split-edits]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setStepCount (4);
+    fixture.engine.setChannelLoopLength (0, 4);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setChannelController (0, true, 74, 4);
+    Cell split { .enabled = true, .roll = 2, .span = 2, .ccValue = 0, .ccGlide = 1 };
+    split.setSplitControllerValue (1, 120);
+    fixture.engine.setCell (0, 0, 0, split);
+    fixture.engine.setCell (0, 0, 2, Cell { .enabled = true, .ccValue = 0 });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    auto runner = std::make_unique<MidiPlaybackRunner>();
+    runner->prepare (48000.0);
+    std::vector<std::pair<int, int>> changes;
+    for (int start = 0; start < 12001; start += 257)
+    {
+        const auto block = runPlaybackBlock (*runner, snapshot, start / 24000.0, 120.0, true, std::min (12001 - start, 257));
+        for (const auto event : block.midi)
+            changes.emplace_back (start + event.samplePosition, event.getMessage().getControllerValue());
+    }
+    REQUIRE (changes.size() == 97);
+    CHECK (changes[0] == std::pair { 0, 0 });
+    CHECK (changes[24] == std::pair { 3000, 60 });
+    CHECK (changes[48] == std::pair { 6000, 120 });
+    CHECK (changes[72] == std::pair { 9000, 60 });
+    CHECK (changes[96] == std::pair { 12000, 0 });
+}
+
 TEST_CASE ("Split hits apply their own probability cycle and velocity on the original timing", "[engine][transport][split-edits]")
 {
     const int span = GENERATE (1, 2);
@@ -165,6 +332,125 @@ TEST_CASE ("Spanned rolls respect row and host loop boundaries", "[engine][trans
         CHECK (attacks == std::vector<int> { 0, 2000, 4000, 12000, 14000, 16000 });
     else
         CHECK (attacks == std::vector<int> { 0, 8000, 12000, 20000 });
+}
+
+TEST_CASE ("Deferred split attacks follow host tempo changes in beat time", "[engine][transport][host-tempo]")
+{
+    const bool triplet = GENERATE (false, true);
+    const int blockSize = GENERATE (127, 1024);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setTempo (90.0);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .roll = triplet ? 3 : 4, .span = triplet ? 2 : 1 });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    std::vector<int> attacks;
+    int lastRelease = 0;
+    double ppq = 0.0;
+    int sample = 0;
+    for (const auto [end, bpm] : { std::pair { 600, 120.0 }, { 1200, 180.0 }, { 6400, 240.0 } })
+    {
+        while (sample < end)
+        {
+            const int count = std::min (blockSize, end - sample);
+            const auto block = runPlaybackBlock (runner, snapshot, ppq, bpm, true, count);
+            for (const auto event : block.midi)
+                if (event.getMessage().isNoteOn())
+                    attacks.push_back (sample + event.samplePosition);
+                else if (event.getMessage().isNoteOff())
+                    lastRelease = sample + event.samplePosition;
+            ppq += count * bpm / (60.0 * 48000.0);
+            sample += count;
+        }
+    }
+    const auto expected = triplet ? std::vector<int> { 0, 2450, 4450 } : std::vector<int> { 0, 1200, 1950, 2700 };
+    CHECK (attacks == expected);
+    CHECK (lastRelease == (triplet ? 6226 : 3372));
+}
+
+TEST_CASE ("Swing and humanize ignore stale snapshot tempo during host playback", "[engine][transport][host-tempo]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (64);
+    fixture.engine.setTimingHumanize (80);
+    for (int step = 0; step < 4; ++step)
+        fixture.engine.setCell (0, 0, step, Cell { .enabled = true, .roll = 4 });
+
+    const auto render = [&] (double storedTempo)
+    {
+        fixture.engine.setTempo (storedTempo);
+        const auto snapshot = fixture.engine.makePlaybackSnapshot();
+        MidiPlaybackRunner runner;
+        runner.prepare (48000.0);
+        std::vector<int> attacks;
+        for (int sample = 0; sample < 12000; sample += 512)
+        {
+            const auto block = runPlaybackBlock (runner, snapshot, sample / 12000.0, 240.0, true, 512);
+            for (const auto event : block.midi)
+                if (event.getMessage().isNoteOn())
+                    attacks.push_back (sample + event.samplePosition);
+        }
+        return attacks;
+    };
+    const auto expected = render (240.0);
+    REQUIRE (expected.size() > 8);
+    CHECK (render (90.0) == expected);
+}
+
+TEST_CASE ("Same-pitch retriggers turn off the old gate before the new attack", "[engine][transport][retrigger]")
+{
+    const int blockSize = GENERATE (512, 8192);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("32n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, true, 90);
+    fixture.engine.setCell (0, 0, 1, true, 110);
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    runner.queueAuditionNote ({ 36, 64, 2, 100 });
+    std::vector<std::pair<int, bool>> sequenced, audition;
+    for (int sample = 0; sample < 8192; sample += blockSize)
+    {
+        const auto block = runPlaybackBlock (runner, snapshot, sample / 24000.0, 120.0, true, blockSize);
+        for (const auto event : block.midi)
+        {
+            const auto message = event.getMessage();
+            auto& events = message.getChannel() == 1 ? sequenced : audition;
+            events.emplace_back (sample + event.samplePosition, message.isNoteOn());
+        }
+    }
+    CHECK (sequenced == std::vector<std::pair<int, bool>> { { 0, true }, { 3000, false }, { 3000, true }, { 7800, false } });
+    CHECK (audition == std::vector<std::pair<int, bool>> { { 0, true }, { 4800, false } });
+}
+
+TEST_CASE ("Out-of-order nudges retrigger in audible order", "[engine][transport][retrigger]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setChannelNote (0, 36);
+    fixture.engine.setChannelNote (1, 36);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setTempo (120.0);
+    fixture.engine.setCell (0, 0, 0, Cell { .enabled = true, .velocity = 90, .nudge = 50 });
+    fixture.engine.setCell (0, 1, 0, Cell { .enabled = true, .velocity = 70 });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    const auto block = runPlaybackBlock (runner, snapshot, 0.0, 120.0, true, 8192);
+    std::vector<std::pair<int, int>> events;
+    for (const auto event : block.midi)
+        events.emplace_back (event.samplePosition, event.getMessage().isNoteOn() ? event.getMessage().getVelocity() : 0);
+    CHECK (events == std::vector<std::pair<int, int>> { { 0, 70 }, { 3000, 0 }, { 3000, 90 }, { 7800, 0 } });
 }
 
 TEST_CASE ("Changing the current pattern releases queued hits from a spanned roll", "[engine][transport][realtime][triplets]")
@@ -961,6 +1247,70 @@ TEST_CASE ("host loop wraps keep cycle phases running", "[engine][transport]")
     REQUIRE (events.kicks == 3);
 }
 
+TEST_CASE ("Off-grid transport entry keeps upcoming hits on their original timeline", "[engine][transport][off-grid]")
+{
+    const int swing = GENERATE (0, 50);
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setStepCount (16);
+    fixture.engine.setChannelCount (2);
+    fixture.engine.setGenerationMode (GenerationMode::staticSource);
+    fixture.engine.setRate ("16n");
+    fixture.engine.setSwing (swing);
+    fixture.engine.setCell (0, 0, 1, Cell { .enabled = true, .roll = 4 });
+    fixture.engine.setCell (0, 1, 1, Cell { .enabled = true });
+    fixture.engine.setCell (0, 0, 2, Cell { .enabled = true });
+    const auto snapshot = fixture.engine.makePlaybackSnapshot();
+
+    constexpr int start = 7200, end = 12500;
+    const auto attacks = [] (const juce::MidiBuffer& midi, int from, int origin)
+    {
+        std::vector<std::pair<int, int>> result;
+        for (const auto event : midi)
+            if (event.samplePosition >= from && event.getMessage().isNoteOn())
+                result.emplace_back (origin + event.samplePosition, event.getMessage().getNoteNumber());
+        return result;
+    };
+    MidiPlaybackRunner reference;
+    reference.prepare (48000.0);
+    const auto full = runPlaybackBlock (reference, snapshot, 0, 120.0, true, end);
+    const auto expected = attacks (full.midi, start, 0);
+    REQUIRE (expected.size() > 1);
+
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    int launchSample = 0;
+    SECTION ("Press Play") {}
+    SECTION ("Resume after bypass")
+    {
+        runPlaybackBlock (runner, snapshot, 0, 120.0, true, 128);
+        juce::MidiBuffer muted;
+        runner.suspend (muted);
+    }
+    SECTION ("Reactivate the device")
+    {
+        runPlaybackBlock (runner, snapshot, 0, 120.0, true, 128);
+        auto inactiveSnapshot = snapshot;
+        inactiveSnapshot.deviceActive = false;
+        runPlaybackBlock (runner, inactiveSnapshot, 128.0 / 24000.0, 120.0, true, 128);
+    }
+    SECTION ("Start inside the audio callback") { launchSample = 64; }
+    const int origin = start - launchSample;
+    juce::MidiBuffer midi;
+    runner.processBlock (snapshot, origin / 24000.0, 120.0, true, 256, midi, {}, {}, 0.0, {}, launchSample);
+    const auto following = runPlaybackBlock (runner, snapshot, (origin + 256) / 24000.0, 120.0, true, end - origin - 256);
+    auto actual = attacks (midi, 0, origin);
+    const auto rest = attacks (following.midi, 0, origin + 256);
+    actual.insert (actual.end(), rest.begin(), rest.end());
+    CHECK (actual == expected);
+
+    runner.reset();
+    midi.clear();
+    runner.processBlock (snapshot, 0.5, 120.0, true, 64, midi);
+    REQUIRE (countNoteOns (midi) == 1);
+    CHECK ((*midi.begin()).samplePosition == 0);
+}
+
 TEST_CASE ("Changing the live rate rebases scheduling at the new grid", "[engine][transport][rate-change]")
 {
     const bool faster = GENERATE (true, false);
@@ -974,6 +1324,8 @@ TEST_CASE ("Changing the live rate rebases scheduling at the new grid", "[engine
     fixture.engine.setRate (faster ? "16n" : "32n");
     for (int step = 0; step < 16; ++step)
         fixture.engine.setCell (0, 0, step, true, 100, 100, 1);
+    // Put a real hit just before the rate change so its gate is still open.
+    fixture.engine.setCellNudge (0, 0, 15, 90);
 
     auto snapshot = std::make_unique<PlaybackSnapshot> (fixture.engine.makePlaybackSnapshot());
     MidiPlaybackRunner runner;
@@ -982,7 +1334,8 @@ TEST_CASE ("Changing the live rate rebases scheduling at the new grid", "[engine
     constexpr double blockBeats = samples / 24000.0;
     const HostLoopRange loop { wrapping, 384.0, 400.0 };
     juce::MidiBuffer midi;
-    runner.processBlock (*snapshot, 400.0 - blockBeats, 120.0, true, samples, midi, {}, loop);
+    const int lastStepSamples = faster ? 6000 : 3000;
+    runner.processBlock (*snapshot, 400.0 - lastStepSamples / 24000.0, 120.0, true, lastStepSamples, midi, {}, loop);
     REQUIRE (countNoteOns (midi) == 1);
 
     fixture.engine.setRate (faster ? "32n" : "16n");

@@ -22,7 +22,7 @@ class PluginEditorTestPeer
 public:
     static bool load (PluginEditor& editor, const juce::File& file, juce::String& error) { return editor.loadProjectFile (file, error); }
     static bool loadData (PluginEditor& editor, const juce::File& file, const juce::MemoryBlock& data, juce::String& error) { return editor.loadProjectData (file, data, error); }
-    static void layoutPhoneViewport (PluginEditor& editor, juce::Rectangle<float> available) { editor.layoutNativeView (available, true); }
+    static void layoutMobileViewport (PluginEditor& editor, juce::Rectangle<float> available, bool phone) { editor.layoutNativeView (available, phone); }
     static ksh::ui::NativeEditor& view (PluginEditor& editor) { return *editor.nativeView; }
 };
 
@@ -131,6 +131,102 @@ TEST_CASE ("plugin state roundtrips through getStateInformation", "[plugin][pers
     REQUIRE (engine.sources[0][1][4].velocity == 90);
 }
 
+TEST_CASE ("Replacing a clean DAW project leaves all patterns recoverable", "[plugin][persistence][project-recovery]")
+{
+    PluginProcessor original;
+    original.setProjectMetadata ("DAW project", "All patterns", {}, {});
+    for (int pattern = 1; pattern <= Constants::sourceCount; ++pattern)
+        REQUIRE (original.dispatchUiEngineCommand ("cell", { pattern, 1, pattern, 1, 60 + pattern }));
+
+    const juce::TemporaryFile temporaryFolder ("-projects");
+    const auto folder = temporaryFolder.getFile();
+    REQUIRE (folder.createDirectory().wasOk());
+    const auto firstFile = folder.getChildFile ("01.kshproject");
+    const auto secondFile = folder.getChildFile ("02.kshproject");
+    REQUIRE (firstFile.replaceWithText (original.enginePersistenceState().dump()));
+    PluginProcessor replacement;
+    replacement.setProjectMetadata ("Replacement", {}, {}, {});
+    REQUIRE (secondFile.replaceWithText (replacement.enginePersistenceState().dump()));
+
+    PluginProcessor processor;
+    setPluginState (processor, getPluginState (original));
+    REQUIRE_FALSE (processor.isDocumentModified());
+    REQUIRE_FALSE (processor.canRestorePreviousProject());
+    {
+        PluginEditor editor (processor);
+        auto& view = PluginEditorTestPeer::view (editor);
+        SECTION ("New") { view.projectAction (0); }
+        SECTION ("Next project")
+        {
+            processor.setProjectFile (firstFile);
+            view.projectAction (4);
+        }
+        SECTION ("File drop") { editor.filesDropped ({ secondFile.getFullPathName() }, 100, 100); }
+    }
+    CHECK (processor.getProjectName() != "DAW project");
+    REQUIRE (processor.canRestorePreviousProject());
+
+    // A failed open must leave the last successful replacement recoverable.
+    const std::string badProject = R"({"v":1,"channelCount":0,"channels":[]})";
+    REQUIRE_FALSE (processor.loadStateFromData (badProject.data(), static_cast<int> (badProject.size())));
+    PluginEditor reopened (processor);
+    auto& view = PluginEditorTestPeer::view (reopened);
+    view.projectAction (1);
+    ksh::ui::ProjectDetails* details = nullptr;
+    for (auto* child : view.getChildren())
+        if (auto* browser = dynamic_cast<ksh::ui::ProjectBrowser*> (child); browser && browser->isVisible())
+            for (auto* component : browser->getChildren())
+                if (auto* project = dynamic_cast<ksh::ui::ProjectDetails*> (component)) details = project;
+    REQUIRE (details != nullptr);
+    REQUIRE (details->isVisible());
+    juce::TextButton* restore = nullptr;
+    for (auto* child : details->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "RESTORE PREVIOUS PROJECT")
+            restore = button;
+    REQUIRE (restore != nullptr);
+    REQUIRE (restore->isVisible());
+    restore->onClick();
+    REQUIRE_FALSE (processor.canRestorePreviousProject());
+    CHECK (processor.getProjectName() == "DAW project");
+    CHECK (processor.getProjectDescription() == "All patterns");
+    CHECK (processor.getProjectFile() == juce::File());
+    CHECK (processor.isDocumentModified());
+    const auto restored = processor.engineStateSnapshot();
+    for (size_t pattern = 0; pattern < Constants::sourceCount; ++pattern)
+    {
+        CHECK (restored.sources[pattern][0][pattern].enabled);
+        CHECK (restored.sources[pattern][0][pattern].velocity == 61 + static_cast<int> (pattern));
+    }
+    CHECK (folder.deleteRecursively());
+}
+
+TEST_CASE ("Unsupported host project versions are saved byte for byte until replaced", "[plugin][persistence]")
+{
+    auto future = GENERATE (std::string (" \n{\"v\":2, \"future\":true}\n"), std::string (R"({"v":4294967297})"));
+    PluginProcessor processor;
+    configureSnarePattern (processor);
+    const auto supported = getPluginState (processor);
+    setPluginStateText (processor, future);
+    REQUIRE (processor.hasUnsupportedProjectVersion());
+    CHECK (getPluginState (processor) == juce::MemoryBlock (future.data(), future.size()));
+
+    const std::string invalid = "truncated state";
+    setPluginStateText (processor, invalid);
+    REQUIRE_FALSE (processor.loadStateFromData (future.data(), static_cast<int> (future.size())));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 93 }));
+    CHECK (getPluginState (processor) == juce::MemoryBlock (future.data(), future.size()));
+
+    SECTION ("The user chooses New") { processor.resetProject(); }
+    SECTION ("The user opens a supported file")
+    {
+        REQUIRE (processor.loadStateFromData (supported.getData(), static_cast<int> (supported.getSize())));
+    }
+    SECTION ("The host restores a supported project") { setPluginState (processor, supported); }
+    CHECK_FALSE (processor.hasUnsupportedProjectVersion());
+    const auto saved = getPluginState (processor);
+    CHECK (parsePersistencePayload ({ static_cast<const char*> (saved.getData()), saved.getSize() }).has_value());
+}
+
 TEST_CASE ("restored plugin emits MIDI from saved pattern", "[plugin][persistence]")
 {
     PluginProcessor original;
@@ -202,6 +298,44 @@ TEST_CASE ("plugin state save flushes pending host macro parameter changes", "[p
         std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
 
     REQUIRE (parsed["swing"] == 64);
+}
+
+TEST_CASE ("Pattern and row mute overrides roundtrip only in DAW state", "[plugin][persistence]")
+{
+    PluginProcessor plugin;
+    REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { 4 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("source_channel_mute", { 4, 2, 1 }));
+    plugin.markDocumentClean();
+    const auto project = plugin.enginePersistenceState();
+
+    auto* pattern = plugin.getValueTreeState().getParameter ("pattern");
+    auto* mute = plugin.getValueTreeState().getParameter ("row_8_mute");
+    REQUIRE (pattern != nullptr);
+    REQUIRE (mute != nullptr);
+    pattern->setValueNotifyingHost (pattern->convertTo0to1 (16.0f));
+    mute->setValueNotifyingHost (1.0f);
+    CHECK (plugin.enginePersistenceState() == project);
+    CHECK_FALSE (plugin.isDocumentModified());
+    const auto saved = getPluginState (plugin);
+
+    PluginProcessor restored;
+    setPluginState (restored, saved);
+    auto* restoredPattern = restored.getValueTreeState().getParameter ("pattern");
+    auto* restoredMute = restored.getValueTreeState().getParameter ("row_8_mute");
+    REQUIRE (restoredPattern != nullptr);
+    REQUIRE (restoredMute != nullptr);
+    CHECK (restoredPattern->getText (restoredPattern->getValue(), 16) == "16");
+    CHECK (restoredMute->getValue() == 1.0f);
+    CHECK (restored.engineStateSnapshot().staticSource == 3);
+    CHECK (restored.engineStateSnapshot().sourceChannelMutes[3][1]);
+
+    const auto projectData = project.dump();
+    const auto size = static_cast<int> (projectData.size());
+    REQUIRE (restored.loadStateFromData (projectData.data(), size));
+    CHECK (restoredMute->getValue() == 1.0f);
+    restored.setStateInformation (projectData.data(), size);
+    CHECK (restoredPattern->getText (restoredPattern->getValue(), 16) == "Manual");
+    CHECK (restoredMute->getValue() == 0.0f);
 }
 
 TEST_CASE ("project metadata and editor state roundtrip through plugin state", "[plugin][persistence]")
@@ -360,23 +494,23 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
                 return control;
         return static_cast<juce::TextEditor*> (nullptr);
     };
-    REQUIRE (button ("New Folder") != nullptr);
-    REQUIRE (button ("Create") != nullptr);
+    REQUIRE (button ("NEW FOLDER") != nullptr);
+    REQUIRE (button ("CREATE") != nullptr);
     REQUIRE (field ("Folder name") != nullptr);
     for (const auto* folder : { "Sessions", "Live" })
     {
-        button ("New Folder")->onClick();
+        button ("NEW FOLDER")->onClick();
         REQUIRE (field ("Folder name")->isVisible());
         field ("Folder name")->setText (folder);
-        button ("Create")->onClick();
+        button ("CREATE")->onClick();
     }
     REQUIRE (field ("Project name") != nullptr);
     REQUIRE (field ("Project author") != nullptr);
     REQUIRE (field ("Project description") != nullptr);
-    REQUIRE (button ("Save") != nullptr);
+    REQUIRE (button ("SAVE") != nullptr);
     field ("Project author")->setText ("ofsound");
     field ("Project description")->setText ("Saved from KSH");
-    button ("Save")->onClick();
+    button ("SAVE")->onClick();
     CHECK (completed);
     CHECK_FALSE (browser->isVisible());
     const auto saved = root.getChildFile ("Sessions/Live/New title.kshproject");
@@ -391,6 +525,9 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
     CHECK (payload["projectAuthor"] == "ofsound");
     CHECK (payload["projectDescription"] == "Saved from KSH");
 
+    auto other = payload;
+    other["projectDescription"] = "Preview another project";
+    REQUIRE (saved.getSiblingFile ("Other.kshproject").replaceWithText (other.dump()));
     view.projectAction (1);
     REQUIRE (browser->isVisible());
     view.controller.selectLatched = true;
@@ -401,21 +538,98 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
             const auto* front = view.getComponentAt (child->getBounds().getCentre());
             CHECK ((front == browser || browser->isParentOf (front)));
         }
+    juce::ListBox* list = nullptr;
+    ProjectDetails* current = nullptr;
+    for (auto* child : browser->getChildren())
+    {
+        if (auto* projectList = dynamic_cast<juce::ListBox*> (child)) list = projectList;
+        if (auto* details = dynamic_cast<ProjectDetails*> (child)) current = details;
+    }
+    REQUIRE (list != nullptr);
+    REQUIRE (current != nullptr);
+    REQUIRE (current->isVisible());
+    CHECK (current->getX() > list->getRight());
+    list->selectRow (1);
+    CHECK_FALSE (current->isVisible());
     juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
     const juce::TextEditor* preview = nullptr;
-    const juce::ListBox* list = nullptr;
     for (auto* child : browser->getChildren())
     {
         if (auto* control = dynamic_cast<juce::TextEditor*> (child); control && control->isVisible() && control->isReadOnly())
             preview = control;
-        if (auto* projectList = dynamic_cast<juce::ListBox*> (child))
-            list = projectList;
     }
     REQUIRE (preview != nullptr);
-    REQUIRE (list != nullptr);
-    CHECK (preview->getText() == "Saved from KSH");
+    CHECK (preview->getText() == "Preview another project");
     CHECK (preview->getX() > list->getRight());
     CHECK (processor.getProjectFile() == saved);
+    auto* showCurrent = button ("CURRENT PROJECT");
+    REQUIRE (showCurrent != nullptr);
+    REQUIRE (showCurrent->isVisible());
+    showCurrent->onClick();
+    CHECK (current->isVisible());
+    CHECK_FALSE (preview->isVisible());
+    for (auto* child : browser->getChildren())
+        if (const auto* action = dynamic_cast<juce::TextButton*> (child); action && action->isVisible())
+        {
+            CHECK (static_cast<bool> (action->getProperties()["insetProjectArtwork"]));
+            CHECK (action->getButtonText() == action->getButtonText().toUpperCase());
+            const auto labelFont = font (projectActionLabelSize (action->getHeight()), true);
+            CHECK (juce::GlyphArrangement::getStringWidth (labelFont, action->getButtonText())
+                   <= footerArtworkBounds (action->getLocalBounds().toFloat()).getWidth());
+        }
+    const auto captureDir = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+    if (captureDir.isNotEmpty())
+    {
+        const juce::File directory (captureDir);
+        REQUIRE (directory.createDirectory().wasOk());
+        auto imageFile = directory.getChildFile ("project-browser.png").createOutputStream();
+        REQUIRE (imageFile != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (view.createComponentSnapshot (view.getLocalBounds()), *imageFile));
+    }
+}
+
+TEST_CASE ("A dropped KSH project opens in place and protects unsaved edits", "[plugin][persistence][file-drop]")
+{
+    const juce::TemporaryFile temp (".kshproject");
+    const auto file = temp.getFile();
+    PluginProcessor processor;
+    processor.setProjectMetadata ("Dropped project", "Notes from Finder", {}, {});
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 1, 100 }));
+    REQUIRE (file.replaceWithText (processor.enginePersistenceState().dump()));
+    processor.resetProject();
+
+    PluginEditor editor (processor);
+    const juce::StringArray files { file.getFullPathName() };
+    CHECK (editor.isInterestedInFileDrag (files));
+    CHECK_FALSE (editor.isInterestedInFileDrag ({ files[0], files[0] }));
+    editor.filesDropped (files, 100, 100);
+    CHECK (processor.getProjectFile() == file);
+    CHECK (processor.getProjectName() == "Dropped project");
+    CHECK_FALSE (processor.isDocumentModified());
+
+    auto& view = PluginEditorTestPeer::view (editor);
+    const ksh::ui::Location savedStep { 0, 2 };
+    CHECK (view.controller.cell (savedStep).enabled);
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 3, 0 }));
+    view.controller.refresh();
+    REQUIRE (processor.isDocumentModified());
+    editor.filesDropped (files, 100, 100);
+    CHECK_FALSE (view.controller.cell (savedStep).enabled);
+    REQUIRE (view.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    CHECK (processor.isDocumentModified());
+
+    editor.filesDropped (files, 100, 100);
+    juce::TextButton* discard = nullptr;
+    for (auto* child : view.getChildren())
+        if (auto* dialog = dynamic_cast<ksh::ui::DiscardChanges*> (child); dialog && dialog->isVisible())
+            for (auto* control : dialog->getChildren())
+                if (auto* button = dynamic_cast<juce::TextButton*> (control); button && button->getButtonText() == "DISCARD CHANGES")
+                    discard = button;
+    REQUIRE (discard != nullptr);
+    discard->onClick();
+    CHECK (view.controller.cell (savedStep).enabled);
+    CHECK (processor.getProjectFile() == file);
+    CHECK_FALSE (processor.isDocumentModified());
 }
 
 TEST_CASE ("The project browser remembers favorites and protects unsaved changes", "[plugin][persistence][project-browser]")
@@ -430,32 +644,39 @@ TEST_CASE ("The project browser remembers favorites and protects unsaved changes
     {
         return directory.findChildFiles (juce::File::findFiles, false, "*.kshproject");
     };
-    const auto findButton = [] (ProjectBrowser& browser, const juce::String& label) -> juce::TextButton*
+    const auto findButton = [] (ProjectBrowser& browser, const juce::String& label) -> juce::Button*
     {
         for (auto* child : browser.getChildren())
-            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == label)
+            if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getButtonText() == label)
                 return button;
         return nullptr;
     };
     const auto settings = root.getChildFile ("settings.xml");
     juce::PropertiesFile::Options options;
     options.storageFormat = juce::PropertiesFile::storeAsXML;
+    PluginProcessor processor;
     {
         juce::PropertiesFile preferences (settings, options);
-        ProjectBrowser browser (preferences);
+        ProjectBrowser browser (preferences, processor);
         browser.setSize (814, 409);
         browser.open (root, {}, std::nullopt, enumerate, {});
-        auto* enter = findButton (browser, "Open");
+        auto* enter = findButton (browser, "OPEN");
         REQUIRE (enter != nullptr);
         enter->onClick();
-        auto* favorite = findButton (browser, "Add Favorite");
+        auto* favorite = findButton (browser, "Favorite project");
         REQUIRE (favorite != nullptr);
+        REQUIRE (favorite->isVisible());
         REQUIRE (favorite->isEnabled());
+        CHECK_FALSE (favorite->getToggleState());
         favorite->onClick();
-        CHECK (favorite->getButtonText() == "Remove Favorite");
+        CHECK (favorite->getToggleState());
+        favorite->onClick();
+        CHECK_FALSE (favorite->getToggleState());
+        favorite->onClick();
+        CHECK (favorite->getToggleState());
     }
     juce::PropertiesFile preferences (settings, options);
-    ProjectBrowser browser (preferences);
+    ProjectBrowser browser (preferences, processor);
     browser.setSize (814, 409);
     juce::File opened;
     browser.open (root, {}, std::nullopt, enumerate, [&] (const juce::File& file, const auto&, auto done)
@@ -463,18 +684,131 @@ TEST_CASE ("The project browser remembers favorites and protects unsaved changes
         opened = file;
         done ({});
     }, {}, true);
-    auto* favorites = findButton (browser, "Favorites");
+    auto* favorites = findButton (browser, "FAVORITES");
     REQUIRE (favorites != nullptr);
     favorites->onClick();
-    auto* open = findButton (browser, "Open");
+    auto* open = findButton (browser, "OPEN");
     REQUIRE (open != nullptr);
     REQUIRE (open->isEnabled());
     open->onClick();
     CHECK (opened == juce::File());
-    CHECK (open->getButtonText() == "Discard and Open");
+    CHECK (open->getButtonText() == "DISCARD AND OPEN");
     open->onClick();
     CHECK (opened == project);
     CHECK_FALSE (browser.isVisible());
+}
+
+TEST_CASE ("The project browser keeps Save As details when choosing a cloud folder", "[plugin][persistence][project-browser]")
+{
+    using ksh::ui::ProjectBrowser;
+    juce::TemporaryFile temporary (".settings");
+    juce::PropertiesFile::Options options;
+    juce::PropertiesFile preferences (temporary.getFile(), options);
+    PluginProcessor processor;
+    ProjectBrowser browser (preferences, processor);
+    browser.setSize (814, 409);
+    const auto root = temporary.getFile().getParentDirectory();
+    const auto local = root.getNonexistentChildFile ("KSH Local", {});
+    const auto cloud = root.getNonexistentChildFile ("KSH Cloud", {});
+
+    std::function<void (juce::File)> chooseFolder;
+    juce::File destination;
+    ProjectBrowser::Details saved;
+    browser.open (local, {}, ProjectBrowser::Details { "Sequence", "Author", "Notes" }, {},
+        [&] (const juce::File& file, const ProjectBrowser::Details& details, auto done)
+        {
+            destination = file;
+            saved = details;
+            done ({});
+        }, {}, false, {}, {}, { "Local projects", cloud, [&] (auto done) { chooseFolder = std::move (done); } });
+
+    const auto button = [&] (const juce::String& label) -> juce::Button*
+    {
+        for (auto* child : browser.getChildren())
+            if (auto* control = dynamic_cast<juce::TextButton*> (child); control != nullptr && control->getButtonText() == label)
+                return control;
+        return nullptr;
+    };
+    auto* cloudButton = button ("ICLOUD DRIVE");
+    auto* save = button ("SAVE");
+    REQUIRE (cloudButton != nullptr);
+    REQUIRE (cloudButton->isVisible());
+    REQUIRE (save != nullptr);
+    cloudButton->onClick();
+    REQUIRE (chooseFolder);
+    CHECK_FALSE (save->isEnabled());
+    chooseFolder ({});
+    CHECK (save->isEnabled());
+    CHECK (destination == juce::File());
+
+    cloudButton->onClick();
+    chooseFolder (cloud);
+    REQUIRE (save->isEnabled());
+    save->onClick();
+    CHECK (destination == cloud.getChildFile ("Sequence.kshproject"));
+    CHECK (saved.name == "Sequence");
+    CHECK (saved.author == "Author");
+    CHECK (saved.description == "Notes");
+    CHECK_FALSE (browser.isVisible());
+}
+
+TEST_CASE ("Project arrows wrap within the current folder", "[plugin][persistence][project-browser]")
+{
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-cycle-projects", {});
+    const juce::ScopeGuard cleanup { [&] { root.deleteRecursively(); } };
+    const auto folder = root.getChildFile ("Sessions");
+    const auto nested = folder.getChildFile ("Archive");
+    REQUIRE (nested.createDirectory().wasOk());
+    const auto first = folder.getChildFile ("Take 2.kshproject");
+    const auto second = folder.getChildFile ("Take 10.kshproject");
+    PluginProcessor processor;
+    const auto contents = processor.enginePersistenceState().dump();
+    for (const auto& file : { first, second, nested.getChildFile ("Archived.kshproject"), root.getChildFile ("Other.kshproject") })
+        REQUIRE (file.replaceWithText (contents));
+
+    PluginEditor editor (processor);
+    auto& view = PluginEditorTestPeer::view (editor);
+    view.showProjectBrowser (root, {}, std::nullopt, {}, {});
+    ksh::ui::ProjectBrowser* browser = nullptr;
+    for (auto* child : view.getChildren())
+        if (auto* candidate = dynamic_cast<ksh::ui::ProjectBrowser*> (child))
+            browser = candidate;
+    REQUIRE (browser != nullptr);
+    juce::Button* browserOpen = nullptr;
+    for (auto* child : browser->getChildren())
+        if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getButtonText() == "OPEN")
+            browserOpen = button;
+    REQUIRE (browserOpen != nullptr);
+    browserOpen->onClick();
+    browser->dismiss();
+
+    const auto clickArrow = [&] (const juce::String& tooltip)
+    {
+        for (auto* child : view.getChildren())
+            if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getTooltip() == tooltip)
+            {
+                button->onClick();
+                return;
+            }
+        FAIL ("Missing project navigation button: " << tooltip);
+    };
+    const juce::String next ("Next project in this folder"), previous ("Previous project in this folder");
+    clickArrow (next);
+    REQUIRE (processor.getProjectFile() == first);
+    clickArrow (next);
+    CHECK (processor.getProjectFile() == second);
+    clickArrow (next);
+    CHECK (processor.getProjectFile() == first);
+    clickArrow (previous);
+    CHECK (processor.getProjectFile() == second);
+    REQUIRE (second.deleteFile());
+    clickArrow (next);
+    CHECK (processor.getProjectFile() == first);
+
+    view.projectAction (0);
+    REQUIRE (processor.getProjectFile() == juce::File());
+    clickArrow (previous);
+    CHECK (processor.getProjectFile() == first);
 }
 
 TEST_CASE ("project author survives metadata saves and resets for old or new projects", "[plugin][persistence]")
@@ -569,7 +903,7 @@ TEST_CASE ("iPhone balances its vertical margins inside the safe area", "[native
                                   juce::Rectangle<float> (59.0f, 24.0f, 814.0f, 406.0f),
                                   juce::Rectangle<float> (101.0f, 0.0f, 730.0f, 430.0f) })
     {
-        PluginEditorTestPeer::layoutPhoneViewport (editor, available);
+        PluginEditorTestPeer::layoutMobileViewport (editor, available, true);
         REQUIRE (view->layout.compactOnPhone);
         const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform());
         CHECK (available.withTrimmedTop (10.0f).expanded (0.01f).contains (content));
@@ -578,25 +912,84 @@ TEST_CASE ("iPhone balances its vertical margins inside the safe area", "[native
     }
 }
 
-TEST_CASE ("UI scale is independent of saved and legacy projects", "[plugin][persistence]")
+TEST_CASE ("iPad standalone and AUv3 fit the safe area as their windows narrow", "[native-ui][ipad]")
+{
+    const bool standalone = GENERATE (true, false);
+    juce::AudioProcessor::setTypeOfNextNewPlugin (standalone ? juce::AudioProcessor::wrapperType_Standalone
+                                                            : juce::AudioProcessor::wrapperType_AudioUnitv3);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    PluginEditor editor (processor, standalone);
+    auto& view = PluginEditorTestPeer::view (editor);
+    view.layout.touchRows = true;
+    if (!standalone)
+        editor.setResizable (true, false);
+    processor.setProjectUiScalePercent (85);
+
+    const auto checkViewport = [&] (juce::Rectangle<int> window, juce::BorderSize<int> insets, bool compact, const char* capture = nullptr)
+    {
+        editor.setBounds (window);
+        const auto safe = insets.subtractedFrom (editor.getLocalBounds()).toFloat();
+        PluginEditorTestPeer::layoutMobileViewport (editor, safe, false);
+        CHECK (view.layout.compact == compact);
+        CHECK (view.layout.phoneRowControls == (compact && !standalone));
+        const auto content = view.getLocalBounds().toFloat().transformedBy (view.getTransform());
+        CHECK (safe.expanded (0.01f).contains (content));
+        CHECK (std::abs (content.getCentreX() - safe.getCentreX()) < 0.01f);
+        CHECK (std::abs (content.getCentreY() - safe.getCentreY()) < 0.01f);
+        CHECK (processor.getProjectUiScalePercent() == 85);
+
+        const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
+        if (capture != nullptr && directory.isNotEmpty())
+        {
+            const juce::File root (directory);
+            REQUIRE (root.createDirectory().wasOk());
+            juce::TemporaryFile image (root.getChildFile (capture));
+            {
+                auto stream = image.getFile().createOutputStream();
+                REQUIRE (stream != nullptr);
+                REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds(), true, 2.0f), *stream));
+            }
+            REQUIRE (image.overwriteTargetFileWithTemporary());
+        }
+    };
+
+    checkViewport ({ 0, 0, 1194, 834 }, { 24, 0, 20, 0 }, false, standalone ? "ipad-standalone-safe-area.png" : nullptr);
+    checkViewport ({ 596, 0, 598, 834 }, { 24, 8, 20, 6 }, !standalone, standalone ? nullptr : "ipad-auv3-narrow-safe-area.png");
+    checkViewport ({ 720, 25, 320, 690 }, { 30, 0, 34, 0 }, !standalone);
+    checkViewport ({ 720, 25, 320, 690 }, { 45, 14, 20, 0 }, !standalone);
+    checkViewport ({ 0, 0, 900, 450 }, { 0, 0, 0, 0 }, true);
+    checkViewport ({ 0, 0, 900, 720 }, { 0, 0, 0, 0 }, false);
+}
+
+TEST_CASE ("DAW sessions remember editor zoom independently of project files", "[plugin][persistence]")
 {
     PluginProcessor plugin;
-    plugin.setProjectUiScalePercent (75);
+    plugin.setProjectUiScalePercent (175);
     const auto saved = getPluginState (plugin);
     auto payload = nlohmann::json::parse (
         std::string_view (static_cast<const char*> (saved.getData()), saved.getSize()));
+    REQUIRE (payload["editorZoomPercent"] == 175);
     REQUIRE_FALSE (payload.contains ("projectUiScalePercent"));
+    CHECK_FALSE (plugin.enginePersistenceState().contains ("editorZoomPercent"));
 
     plugin.setProjectUiScalePercent (110);
     setPluginState (plugin, saved);
-    CHECK (plugin.getProjectUiScalePercent() == 110);
+    CHECK (plugin.getProjectUiScalePercent() == 175);
 
+    plugin.setProjectUiScalePercent (110);
     payload["projectUiScalePercent"] = 50;
-    setPluginStateText (plugin, payload.dump());
+    const auto project = payload.dump();
+    REQUIRE (plugin.loadStateFromData (project.data(), static_cast<int> (project.size())));
     CHECK (plugin.getProjectUiScalePercent() == 110);
 
     plugin.resetProject();
     CHECK (plugin.getProjectUiScalePercent() == 110);
+
+    payload.erase ("editorZoomPercent");
+    setPluginStateText (plugin, payload.dump());
+    CHECK (plugin.getUserUiScalePercent() == 0);
+    CHECK (plugin.getProjectUiScalePercent() == 100);
 }
 
 TEST_CASE ("persistence keeps hidden channels and steps beyond the current lengths", "[plugin][persistence]")

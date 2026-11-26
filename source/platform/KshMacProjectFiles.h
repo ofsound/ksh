@@ -9,6 +9,7 @@ namespace ksh
     {
     public:
         static juce::File documentsDirectory();
+        static juce::File iCloudDriveDirectory();
         static juce::String makeBookmark (const juce::File&);
         static juce::Result replace (const juce::File&, const juce::MemoryBlock&);
 

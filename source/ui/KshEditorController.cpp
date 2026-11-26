@@ -36,17 +36,20 @@ namespace ksh::ui
         {
             visit (target.enabled, a.enabled, b.enabled);
             visit (target.velocity, a.velocity, b.velocity);
+            visit (target.ccValue, a.ccValue, b.ccValue);
+            visit (target.ccGlide, a.ccGlide, b.ccGlide);
             visit (target.probability, a.probability, b.probability);
             visit (target.cycle, a.cycle, b.cycle);
             visit (target.cycleMask, a.cycleMask, b.cycleMask);
             visit (target.roll, a.roll, b.roll);
             visit (target.nudge, a.nudge, b.nudge);
             visit (target.span, a.span, b.span);
-            if (a.splitGates == b.splitGates && a.splitVelocities == b.splitVelocities)
+            if (a.splitGates == b.splitGates && a.splitVelocities == b.splitVelocities && a.splitCcValues == b.splitCcValues)
                 return;
             for (size_t i = 0; i < target.splitGates.size(); ++i)
             {
                 visit (target.splitVelocities[i], a.splitVelocities[i], b.splitVelocities[i]);
+                visit (target.splitCcValues[i], a.splitCcValues[i], b.splitCcValues[i]);
                 auto& gate = target.splitGates[i];
                 const auto& first = a.splitGates[i];
                 const auto& second = b.splitGates[i];
@@ -83,6 +86,9 @@ namespace ksh::ui
                 const auto &x = a.channels[ch], &y = b.channels[ch];
                 visit (t.label, x.label, y.label);
                 visit (t.note, x.note, y.note);
+                visit (t.controller, x.controller, y.controller);
+                visit (t.ccNumber, x.ccNumber, y.ccNumber);
+                visit (t.ccChannel, x.ccChannel, y.ccChannel);
                 visit (t.lock, x.lock, y.lock);
                 visit (t.loopStart, x.loopStart, y.loopStart);
                 visit (t.loopLength, x.loopLength, y.loopLength);
@@ -178,6 +184,30 @@ namespace ksh::ui
                     result.push_back (location);
             }
         return result;
+    }
+    bool EditorController::glidesToNext (Location location) const
+    {
+        return isControllerRow (location.channel) && cell (location).ccGlide != 0;
+    }
+    void EditorController::toggleCcGlide (const std::vector<Location>& locations)
+    {
+        if (editing())
+            return;
+
+        const auto isCcStep = [this] (Location p) { return isControllerRow (p.channel) && cell (p).enabled; };
+        if (!std::ranges::any_of (locations, isCcStep))
+            return;
+        const bool glide = std::ranges::any_of (locations, [&] (Location p) { return isCcStep (p) && !glidesToNext (p); });
+        begin ("Glide to next");
+        for (const auto location : locations)
+        {
+            if (!isCcStep (location))
+                continue;
+            auto next = cell (location);
+            next.ccGlide = glide ? 1 : 0;
+            editCell (location, next);
+        }
+        commit();
     }
     void EditorController::finishParameter()
     {
@@ -432,12 +462,10 @@ namespace ksh::ui
         flush();
         if (processor.getUiBridge().getRevision() != state.revision)
             reloadState();
-        const int previousGlobalStep = playingStep > 0 ? playingGlobalStep : 0;
         playingStep = processor.getCurrentStepForUi();
         playingGlobalStep = playingStep > 0 ? processor.getGlobalStepForUi() : 0;
-        const bool swingPhaseChanged = state.playback.swing > 0 && previousGlobalStep != playingGlobalStep;
         const bool revised = previousRevision != state.revision;
-        if (revised || swingPhaseChanged)
+        if (revised)
             notify();
         return revised;
     }
@@ -478,7 +506,8 @@ namespace ksh::ui
             notify();
             return;
         }
-        if (copySource >= 0 && index >= 0)
+        const bool copying = copySource >= 0 && index >= 0;
+        if (copying)
         {
             command ("source_pattern_copy", { copySource + 1, index + 1 }, "Copy pattern");
             copySource = -1;
@@ -486,6 +515,12 @@ namespace ksh::ui
         selected.reset();
         if (source() != index)
             exitSolo();
+        if (!copying && state.playback.generationMode == GenerationMode::staticSource
+            && processor.queueLivePatternLaunch (index, source()))
+        {
+            notify();
+            return;
+        }
         command ("static_source", index < 0 ? nlohmann::json::array ({ "mute" }) : nlohmann::json::array ({ index + 1 }));
     }
     void EditorController::deleteSelection()
@@ -508,7 +543,10 @@ namespace ksh::ui
                                          wrap (target.step + p.step - anchor.step, state.playback.stepCount) };
             destinations.emplace_back (destination, cell (p));
         }
-        const auto isSpanned = [] (const auto& entry) { return entry.second.enabled && entry.second.span > 1; };
+        const auto isSpanned = [] (const auto& entry)
+        {
+            return entry.second.enabled && entry.second.span > 1;
+        };
         if (std::any_of (destinations.begin(), destinations.end(), isSpanned))
         {
             auto pattern = state.playback.sources[static_cast<size_t> (source())];
@@ -517,9 +555,9 @@ namespace ksh::ui
                     pattern[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] = {};
             for (const auto& [p, value] : destinations)
                 pattern[static_cast<size_t> (p.channel)][static_cast<size_t> (p.step)] = value;
-            for (const auto& [p, value] : destinations)
-                if (value.enabled && value.span > 1
-                    && !rollSpanFits (pattern[static_cast<size_t> (p.channel)], loop (p.channel), p.step, value.span))
+            for (const auto& entry : destinations)
+                if (isSpanned (entry) && !rollSpanFits (pattern[static_cast<size_t> (entry.first.channel)], loop (entry.first.channel),
+                                                       entry.first.step, entry.second.span))
                     return;
         }
         if (!copy)
@@ -678,7 +716,7 @@ namespace ksh::ui
             auto c = cell (p);
             if (split && split->location == p)
                 c.splitGates[static_cast<size_t> (split->index)].setCycle (length, mask);
-            else if (editAllSplits && c.roll > 1)
+            else if (editAllSplits && splitCount (p) > 1)
             {
                 for (int part = 0; part < c.roll; ++part)
                     c.splitGates[static_cast<size_t> (part)].setCycle (length, mask);

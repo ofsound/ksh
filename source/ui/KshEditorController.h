@@ -24,7 +24,7 @@ namespace ksh::ui
             return 0;
         return (delta < 0 ? -1 : 1) * jsRound ((std::abs (delta) - deadZone) / sensitivity);
     }
-    inline int cellValue (const Cell& c, Layer layer)
+    inline int cellValue (const Cell& c, Layer layer, bool cc = false)
     {
         switch (layer)
         {
@@ -34,11 +34,11 @@ namespace ksh::ui
             case Layer::roll: return c.roll;
             case Layer::cycle: return c.cycle;
             case Layer::velocity:
-                return c.velocity;
+                return cc ? c.controllerValue() : c.velocity;
         }
         return c.velocity;
     }
-    inline Cell withValue (Cell c, Layer layer, int value)
+    inline Cell withValue (Cell c, Layer layer, int value, bool cc = false)
     {
         switch (layer)
         {
@@ -50,10 +50,26 @@ namespace ksh::ui
             case Layer::cycle:
                 break; // Inspector overview layers never paint values into the grid.
             case Layer::velocity:
-                c.velocity = juce::jlimit (1, 127, value);
+                if (cc)
+                    c.ccValue = juce::jlimit (0, 127, value);
+                else
+                    c.velocity = juce::jlimit (1, 127, value);
                 break;
         }
         return c;
+    }
+
+    inline int splitValue (const Cell& cell, int part, bool cc)
+    {
+        return cc ? cell.splitControllerValue (part) : cell.splitVelocity (part);
+    }
+
+    inline void setSplitValue (Cell& cell, int part, int value, bool cc)
+    {
+        if (cc)
+            cell.setSplitControllerValue (part, value == cell.controllerValue() ? -1 : value);
+        else
+            cell.setSplitVelocity (part, value == cell.velocity ? 0 : value);
     }
 
     class EditorController
@@ -111,10 +127,18 @@ namespace ksh::ui
         int playingGlobalStep = 0;
 
         int source() const { return state.playback.staticSource; }
+        bool isControllerRow (int row) const
+        {
+            return juce::isPositiveAndBelow (row, state.playback.channelCount)
+                && state.playback.channels[static_cast<size_t> (row)].controller;
+        }
+        int splitCount (Location p) const { return cell (p).roll; }
         const Cell& cell (Location p) const;
         LoopRange loop (int channel) const;
         bool canFitSpan (Location, int span) const;
         std::vector<Location> selection (bool enabledOnly = false) const;
+        bool glidesToNext (Location) const;
+        void toggleCcGlide (const std::vector<Location>&);
         void selectSource (int sourceIndex, bool copy = false);
         void command (std::string_view, const nlohmann::json&, const juce::String& label = {});
         void begin (const juce::String& label, const juce::String& parameter = {});

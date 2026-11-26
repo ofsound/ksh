@@ -37,6 +37,14 @@ public:
         return { processor.pendingMidiPatternRecordEvents.size_approx(), processor.pendingUiPatternRecordEvents.size_approx() };
     }
     static uint64_t recordingSession (const PluginProcessor& processor) { return processor.patternRecordingSession.load(); }
+    static std::array<size_t, 2> pendingFeedbackCounts (const PluginProcessor& processor)
+    {
+        return { processor.noteHitsForUi.size_approx(), processor.cycleVisitsForUi.size_approx() };
+    }
+    static bool usesReservedMidiStorage (const PluginProcessor& processor, const juce::MidiBuffer& midi)
+    {
+        return std::ranges::find (processor.reservedMidiStorage, midi.data.begin()) != processor.reservedMidiStorage.end();
+    }
     static double jamFirstHitTime (const PluginProcessor& processor) { return processor.jamHits.front().timestampMs; }
     static bool enqueueLateRecord (PluginProcessor& processor, uint64_t session)
     {
@@ -236,6 +244,11 @@ public:
         position.setBpm (bpm);
     }
 
+    void setTimeSignature (int numerator, int denominator)
+    {
+        position.setTimeSignature (TimeSignature { numerator, denominator });
+    }
+
 private:
     PositionInfo position;
 };
@@ -316,6 +329,147 @@ TEST_CASE ("audio note hits reach the UI through the message-thread timer", "[pl
     plugin.setPlayHead (nullptr);
 }
 
+TEST_CASE ("Host state restore filters old playback feedback while audio and UI run", "[plugin][bridge][state-restore]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 100, 1 }));
+    juce::MemoryBlock state;
+    plugin.getStateInformation (state);
+
+    auto play = [&] (double ppq)
+    {
+        playHead.setPpqPosition (ppq);
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        plugin.processBlock (buffer, midi);
+    };
+    int hits = 0, visits = 0;
+    plugin.getUiBridge().onNoteHit = [&] (const ksh::NativeHit&) { ++hits; };
+    plugin.getUiBridge().onCycleVisit = [&] (const ksh::NativeCycleVisit&) { ++visits; };
+    play (0.0);
+    std::thread firstRestore ([&] { plugin.setStateInformation (state.getData(), static_cast<int> (state.getSize())); });
+    firstRestore.join();
+    CHECK (PluginProcessorTestPeer::pendingFeedbackCounts (plugin) == std::array<size_t, 2> { 1, 1 });
+    CHECK (plugin.emitPendingNoteHitsForUi() == 0);
+    CHECK (hits == 0);
+    CHECK (visits == 0);
+    play (0.0);
+    plugin.emitPendingNoteHitsForUi();
+    REQUIRE (hits == 1);
+    REQUIRE (visits == 1);
+
+    constexpr int repeats = 20;
+    const auto epoch = plugin.getUiBridge().getDocumentEpoch();
+    juce::WaitableEvent audioStart, hostStart, audioDone, hostDone;
+    std::thread audio ([&]
+    {
+        for (int i = 1; i <= repeats; ++i)
+        {
+            audioStart.wait();
+            play (i * 512.0 / 24000.0);
+            audioDone.signal();
+        }
+    });
+    std::thread host ([&]
+    {
+        for (int i = 0; i < repeats; ++i)
+        {
+            hostStart.wait();
+            plugin.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            hostDone.signal();
+        }
+    });
+    for (int i = 0; i < repeats; ++i)
+    {
+        audioStart.signal();
+        hostStart.signal();
+        PluginProcessorTestPeer::tick (plugin);
+        audioDone.wait();
+        hostDone.wait();
+    }
+    audio.join();
+    host.join();
+    CHECK (plugin.getUiBridge().getDocumentEpoch() == epoch + repeats);
+    plugin.emitPendingNoteHitsForUi();
+    play (0.0);
+    CHECK (plugin.emitPendingNoteHitsForUi() == 2);
+    plugin.getUiBridge().onNoteHit = {};
+    plugin.getUiBridge().onCycleVisit = {};
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("A host parameter callback can read the just-edited plugin state", "[plugin][bridge][state-restore]")
+{
+    PluginProcessor plugin;
+    struct HostListener final : juce::AudioProcessorParameter::Listener
+    {
+        explicit HostListener (PluginProcessor& owner) : processor (owner) {}
+
+        void parameterValueChanged (int, float) override { processor.getStateInformation (saved); }
+        void parameterGestureChanged (int, bool) override {}
+
+        PluginProcessor& processor;
+        juce::MemoryBlock saved;
+    };
+    HostListener host (plugin);
+    auto* swing = plugin.getValueTreeState().getParameter ("swing");
+    REQUIRE (swing != nullptr);
+    swing->addListener (&host);
+    const juce::ScopeGuard remove { [&] { swing->removeListener (&host); } };
+    REQUIRE (plugin.dispatchUiEngineCommand ("swing", { 57 }));
+    REQUIRE (host.saved.getSize() > 0);
+    const auto* bytes = static_cast<const char*> (host.saved.getData());
+    CHECK (nlohmann::json::parse (std::string_view (bytes, host.saved.getSize()))["swing"] == 57);
+}
+
+TEST_CASE ("State restore and New or Open notify the host of changed macros without edit gestures", "[plugin][bridge][state-restore]")
+{
+    PluginProcessor plugin;
+    PluginProcessor modified;
+    REQUIRE (modified.dispatchUiEngineCommand ("rate", { "8n" }));
+    REQUIRE (modified.dispatchUiEngineCommand ("swing", { 57 }));
+    REQUIRE (modified.dispatchUiEngineCommand ("velocity_humanize", { 22 }));
+    REQUIRE (modified.dispatchUiEngineCommand ("timing_humanize", { 33 }));
+    REQUIRE (modified.dispatchUiEngineCommand ("device_active", { 0 }));
+    const auto project = modified.enginePersistenceState().dump();
+
+    struct HostListener final : juce::AudioProcessorParameter::Listener
+    {
+        void parameterValueChanged (int index, float value) override { changes.emplace_back (index, value); }
+        void parameterGestureChanged (int, bool) override { ++gestures; }
+        std::vector<std::pair<int, float>> changes;
+        int gestures = 0;
+    } host;
+    std::vector<juce::RangedAudioParameter*> observed;
+    const juce::ScopeGuard remove { [&] { for (auto* parameter : observed) parameter->removeListener (&host); } };
+    for (const auto* id : { "rate", "swing", "velocity_humanize", "timing_humanize", "device_active" })
+    {
+        auto* parameter = plugin.getValueTreeState().getParameter (id);
+        REQUIRE (parameter != nullptr);
+        observed.push_back (parameter);
+        parameter->addListener (&host);
+    }
+    const auto checkChanges = [&host, &observed]
+    {
+        REQUIRE (host.changes.size() == observed.size());
+        for (auto* parameter : observed)
+            CHECK (std::ranges::find (host.changes, std::pair { parameter->getParameterIndex(), parameter->getValue() }) != host.changes.end());
+        CHECK (host.gestures == 0);
+        host.changes.clear();
+    };
+
+    SECTION ("Host state restore") { plugin.setStateInformation (project.data(), static_cast<int> (project.size())); }
+    SECTION ("Open project") { REQUIRE (plugin.loadStateFromData (project.data(), static_cast<int> (project.size()))); }
+    checkChanges();
+    plugin.resetProject();
+    checkChanges();
+    plugin.resetProject();
+    CHECK (host.changes.empty());
+}
+
 TEST_CASE ("MIDI uses the final edit after a burst while audio processing is suspended", "[plugin][bridge][realtime]")
 {
     PluginProcessor plugin;
@@ -336,6 +490,256 @@ TEST_CASE ("MIDI uses the final edit after a burst while audio processing is sus
     REQUIRE (containsNoteOn (midi, 80));
     REQUIRE_FALSE (containsNoteOn (midi, 60));
     plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Offline automation changes rendered MIDI without message-thread ticks", "[plugin][bridge][offline-automation]")
+{
+    const auto [id, automatedValue] = GENERATE (std::pair { "rate", 6.0f }, std::pair { "swing", 65.0f },
+                                                std::pair { "timing_humanize", 100.0f }, std::pair { "velocity_humanize", 100.0f },
+                                                std::pair { "device_active", 0.0f });
+    CAPTURE (id);
+    using Event = std::tuple<int, bool, int>;
+    constexpr int blockSize = 600;
+    constexpr int automationStart = 5 * blockSize;
+    constexpr int automationEnd = 25 * blockSize;
+    const auto bounce = [&] (bool automate, bool tick)
+    {
+        PluginProcessor processor;
+        FixedPlayHead playHead;
+        processor.setPlayHead (&playHead);
+        processor.setNonRealtime (true);
+        for (int step = 1; step <= 16; ++step)
+            REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, step, 1, 72 }));
+        processor.prepareToPlay (48000.0, blockSize);
+        auto* parameter = processor.getValueTreeState().getParameter (id);
+        REQUIRE (parameter != nullptr);
+        const float initialValue = parameter->getValue();
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        std::vector<Event> rendered;
+        for (int sample = 0; sample < 30000; sample += blockSize)
+        {
+            if (automate && sample == automationStart)
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (automatedValue));
+            if (automate && sample == automationEnd)
+                parameter->setValueNotifyingHost (initialValue);
+            if (tick)
+                PluginProcessorTestPeer::tick (processor);
+            playHead.setPpqPosition (sample / 24000.0);
+            midi.clear();
+            processor.processBlock (buffer, midi);
+            for (const auto event : midi)
+            {
+                const auto message = event.getMessage();
+                if (message.isNoteOnOrOff())
+                    rendered.emplace_back (sample + event.samplePosition, message.isNoteOn(), message.getVelocity());
+            }
+        }
+        return rendered;
+    };
+
+    const auto automated = bounce (true, false);
+    CHECK (automated == bounce (true, false));
+    CHECK (automated == bounce (true, true));
+    CHECK (automated != bounce (false, false));
+    if (std::string_view (id) == "device_active")
+    {
+        CHECK (std::find (automated.begin(), automated.end(), Event { automationStart, false, 0 }) != automated.end());
+        CHECK (std::none_of (automated.begin(), automated.end(), [] (const auto& event)
+        {
+            const auto [sample, on, velocity] = event;
+            return on && sample >= automationStart && sample < automationEnd;
+        }));
+        CHECK (std::any_of (automated.begin(), automated.end(), [] (const auto& event)
+        {
+            return std::get<1> (event) && std::get<0> (event) >= automationEnd;
+        }));
+    }
+}
+
+TEST_CASE ("Pattern automation plays a last-beat fill and follows host position on seek", "[plugin][bridge][offline-automation]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 6000);
+    plugin.setNonRealtime (true);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 12, 1, 88 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 13, 1, 88 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 13, 1, 99 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 14, 1, 101 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("source_rate", { 16, "8n" }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 16, 1, 3, 1, 115 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 16, 1, 6, 1, 116 }));
+
+    auto* pattern = plugin.getValueTreeState().getParameter ("pattern");
+    REQUIRE (pattern != nullptr);
+    REQUIRE (pattern->isDiscrete());
+    CHECK (pattern->getText (pattern->getDefaultValue(), 16) == "Manual");
+    CHECK (pattern->getText (pattern->convertTo0to1 (17.0f), 16) == "M");
+    juce::AudioBuffer<float> buffer (2, 6000);
+    juce::MidiBuffer midi;
+    const auto render = [&] (double ppq, int slot)
+    {
+        pattern->setValueNotifyingHost (pattern->convertTo0to1 (static_cast<float> (slot)));
+        playHead.setPpqPosition (ppq);
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+    };
+
+    render (2.75, 0);
+    CHECK (containsNoteOnWithVelocity (midi, 36, 88));
+    render (3.0, 2);
+    CHECK (containsNoteOnWithVelocity (midi, 36, 99));
+    CHECK (countNoteOns (midi) == 1);
+    render (3.25, 17);
+    CHECK (countNoteOns (midi) == 0);
+    render (9.0, 16);
+    CHECK (containsNoteOnWithVelocity (midi, 36, 115));
+    auto* rate = plugin.getValueTreeState().getParameter ("rate");
+    REQUIRE (rate != nullptr);
+    rate->setValueNotifyingHost (rate->getValueForText ("16n"));
+    render (9.25, 16);
+    CHECK (containsNoteOnWithVelocity (midi, 36, 116));
+    CHECK (plugin.engineStateSnapshot().staticSource == 0);
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Host row mutes gate notes and CC without changing saved row mutes", "[plugin][bridge][offline-automation]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 6000);
+    REQUIRE (plugin.dispatchUiEngineCommand ("channel_cc", { 3, 1, 74, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("source_channel_mute", { 1, 2, 1 }));
+    std::vector<PluginProcessor::CellEdit> edits;
+    for (int step = 0; step < 3; ++step)
+    {
+        edits.push_back ({ 0, 0, step, {}, { .enabled = true, .velocity = 90 } });
+        edits.push_back ({ 0, 1, step, {}, { .enabled = true, .velocity = 90 } });
+        edits.push_back ({ 0, 2, step, {}, { .enabled = true, .ccValue = 30 + step * 40, .ccGlide = 1 } });
+    }
+    REQUIRE (plugin.applyNativeCellEdits (edits, plugin.getUiBridge().getDocumentEpoch()));
+    auto* noteMute = plugin.getValueTreeState().getParameter ("row_1_mute");
+    auto* ccMute = plugin.getValueTreeState().getParameter ("row_3_mute");
+    REQUIRE (noteMute != nullptr);
+    REQUIRE (ccMute != nullptr);
+    CHECK (noteMute->isBoolean());
+    juce::AudioBuffer<float> buffer (2, 6000);
+    juce::MidiBuffer midi;
+    const auto render = [&] (double ppq, float muted)
+    {
+        noteMute->setValueNotifyingHost (muted);
+        ccMute->setValueNotifyingHost (muted);
+        playHead.setPpqPosition (ppq);
+        midi.clear();
+        plugin.processBlock (buffer, midi);
+        return std::any_of (midi.begin(), midi.end(), [] (auto event) { return event.getMessage().isController(); });
+    };
+    CHECK (render (0.0, 0.0f));
+    CHECK (containsNoteOn (midi, 36));
+    CHECK_FALSE (containsNoteOn (midi, 38));
+    CHECK_FALSE (render (0.25, 1.0f));
+    CHECK (countNoteOns (midi) == 0);
+    CHECK (render (0.5, 0.0f));
+    CHECK (containsNoteOn (midi, 36));
+    CHECK_FALSE (containsNoteOn (midi, 38));
+    const auto mutes = plugin.engineStateSnapshot().sourceChannelMutes[0];
+    CHECK_FALSE (mutes[0]);
+    CHECK (mutes[1]);
+    CHECK_FALSE (mutes[2]);
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Dense CC glides at a fast tempo fit the preallocated MIDI output buffer", "[plugin][bridge][cc][realtime]")
+{
+    constexpr int rows = ksh::Constants::maxChannels;
+    constexpr int blockSize = 8192;
+    constexpr double sampleRate = 48000.0, bpm = 300.0;
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setBpm (bpm);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (sampleRate, blockSize);
+    REQUIRE (plugin.dispatchUiEngineCommand ("rate", { "16n" }));
+    std::vector<PluginProcessor::CellEdit> edits;
+    for (int row = 0; row < rows; ++row)
+    {
+        REQUIRE (plugin.dispatchUiEngineCommand ("channel_cc", { row + 1, 1, 74, row + 1 }));
+        for (int step = 0; step < 16; ++step)
+            edits.push_back ({ 0, row, step, {}, { .enabled = true, .ccValue = step % 2 == 0 ? 0 : 127, .ccGlide = 1 } });
+    }
+    REQUIRE (plugin.applyNativeCellEdits (edits, plugin.getUiBridge().getDocumentEpoch()));
+
+    juce::AudioBuffer<float> audio (2, blockSize);
+    juce::MidiBuffer midi;
+    for (int block = 0; block < 4; ++block)
+    {
+        playHead.setPpqPosition (block * blockSize * bpm / (60.0 * sampleRate));
+        midi.clear();
+        plugin.processBlock (audio, midi);
+        CHECK (PluginProcessorTestPeer::usesReservedMidiStorage (plugin, midi));
+        CHECK (midi.getNumEvents() >= 163 * rows);
+        CHECK (midi.getNumEvents() <= 164 * rows);
+    }
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Live pattern buttons cue to the upcoming host downbeat", "[plugin][bridge][offline-automation]")
+{
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    playHead.setTimeSignature (3, 4);
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 12000);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 12, 1, 80 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 13, 1, 80 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 12, 1, 110 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 13, 1, 110 }));
+    juce::AudioBuffer<float> buffer (2, 12000);
+    juce::MidiBuffer midi;
+    playHead.setPpqPosition (2.125);
+    plugin.processBlock (buffer, midi);
+    auto editor = std::make_unique<ksh::ui::EditorController> (plugin);
+    editor->selectSource (1);
+    REQUIRE (plugin.getQueuedPatternForUi() == 1);
+    playHead.setPpqPosition (2.625);
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    CHECK (containsNoteOnWithVelocity (midi, 36, 80));
+    CHECK (containsNoteOnWithVelocity (midi, 36, 110));
+    CHECK (countNoteOns (midi) == 2);
+    PluginProcessorTestPeer::tick (plugin);
+    CHECK (plugin.engineStateSnapshot().staticSource == 1);
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Restored pattern rate supersedes older host automation without a UI tick", "[plugin][bridge][offline-automation]")
+{
+    PluginProcessor processor;
+    FixedPlayHead playHead;
+    processor.setPlayHead (&playHead);
+    REQUIRE (processor.dispatchUiEngineCommand ("rate", { "8n" }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 90 }));
+    juce::MemoryBlock state;
+    processor.getStateInformation (state);
+    processor.prepareToPlay (48000.0, 512);
+    auto* rate = processor.getValueTreeState().getParameter ("rate");
+    REQUIRE (rate != nullptr);
+    rate->setValueNotifyingHost (rate->convertTo0to1 (4.0f)); // 16ths
+    processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    playHead.setPpqPosition (0.25);
+    processor.processBlock (buffer, midi);
+    CHECK (countNoteOns (midi) == 0);
+
+    rate->setValueNotifyingHost (rate->convertTo0to1 (4.0f)); // The same automation value is a new host event.
+    midi.clear();
+    processor.processBlock (buffer, midi);
+    CHECK (countNoteOns (midi) == 1);
 }
 
 TEST_CASE ("host macro edits after a MIDI pattern switch keep the new pattern's rate", "[plugin][bridge][midi-input]")
@@ -397,6 +801,41 @@ TEST_CASE ("bypass and state restore release notes that are still sounding", "[p
         REQUIRE (containsNoteOff (midi, 36));
     }
 
+    plugin.setPlayHead (nullptr);
+}
+
+TEST_CASE ("Buffer restarts deliver pending note-offs before any new attacks", "[plugin][bridge][realtime]")
+{
+    const bool bypass = GENERATE (false, true);
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 256);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 100, 100, 1 }));
+    juce::AudioBuffer<float> audio (2, 256);
+    juce::MidiBuffer midi;
+    plugin.processBlock (audio, midi);
+    REQUIRE (containsNoteOn (midi, 36));
+    REQUIRE_FALSE (containsNoteOff (midi, 36));
+
+    SECTION ("The host releases resources first") { plugin.releaseResources(); }
+    SECTION ("The host prepares again directly") {}
+    plugin.prepareToPlay (48000.0, 512);
+    audio.setSize (2, 512);
+    midi.clear();
+    if (bypass)
+        plugin.processBlockBypassed (audio, midi);
+    else
+        plugin.processBlock (audio, midi);
+    REQUIRE_FALSE (midi.isEmpty());
+    CHECK ((*midi.begin()).getMessage().isNoteOff());
+    CHECK ((*midi.begin()).getMessage().getNoteNumber() == 36);
+    CHECK ((*midi.begin()).samplePosition == 0);
+    CHECK (countNoteOns (midi) == (bypass ? 0 : 1));
+    midi.clear();
+    playHead.setPpqPosition (512.0 / 24000.0);
+    plugin.processBlock (audio, midi);
+    CHECK_FALSE (containsNoteOff (midi, 36));
     plugin.setPlayHead (nullptr);
 }
 
@@ -931,6 +1370,39 @@ TEST_CASE ("incoming MIDI source selector affects beat one playback immediately"
 
     PluginProcessorTestPeer::tick (plugin);
     REQUIRE (plugin.engineStateSnapshot().staticSource == 0);
+}
+
+TEST_CASE ("An explicit pattern choice supersedes MIDI selections the audio thread has not acknowledged", "[plugin][bridge][midi-input]")
+{
+    const bool synchronized = GENERATE (false, true);
+    const int selected = GENERATE (1, 3);
+    PluginProcessor plugin;
+    FixedPlayHead playHead;
+    plugin.setPlayHead (&playHead);
+    plugin.prepareToPlay (48000.0, 512);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 71, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 1, 1, 82, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 2, 1, 82, 100, 1 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 3, 1, 2, 1, 93, 100, 1 }));
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 1, juce::uint8 { 100 }), 0);
+    plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOn (midi, 36));
+    if (synchronized)
+        PluginProcessorTestPeer::tick (plugin);
+
+    REQUIRE (plugin.dispatchUiEngineCommand ("static_source", { selected }));
+    playHead.setPpqPosition (0.25);
+    midi.clear();
+    plugin.processBlock (buffer, midi);
+    REQUIRE (countNoteOns (midi) == 1);
+    for (const auto event : midi)
+        if (event.getMessage().isNoteOn())
+            CHECK (event.getMessage().getVelocity() == (selected == 1 ? 71 : 93));
+    PluginProcessorTestPeer::tick (plugin);
+    CHECK (plugin.engineStateSnapshot().staticSource == selected - 1);
+    plugin.setPlayHead (nullptr);
 }
 
 TEST_CASE ("incoming MIDI source selector notes filter note-offs and preserve other MIDI", "[plugin][bridge][midi-input]")
@@ -1538,6 +2010,60 @@ TEST_CASE ("Standalone MIDI input guard breaks note and controller feedback with
     incoming.clear();
     plugin.processBlock (audio, incoming);
     CHECK (incoming.isEmpty());
+}
+
+TEST_CASE ("Standalone MIDI Thru is opt-in while playback and input recording stay active", "[plugin][standalone-midi][realtime]")
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
+    PluginProcessor processor;
+    juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+    REQUIRE_FALSE (processor.isStandaloneMidiThruEnabled());
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_note", { 2, 38 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 97 }));
+    processor.prepareToPlay (48000.0, 64);
+    processor.setStandaloneTransportPlaying (true);
+    processor.setPatternRecordingEnabled (true, 0);
+    juce::AudioBuffer<float> audio (2, 64);
+    juce::MidiBuffer midi;
+
+    midi.addEvent (juce::MidiMessage::noteOn (1, 38, static_cast<juce::uint8> (81)), 5);
+    midi.addEvent (juce::MidiMessage::midiClock(), 9);
+    processor.processBlock (audio, midi);
+    REQUIRE (countNoteOns (midi) == 1);
+    CHECK (containsNoteOn (midi, 36));
+    for (const auto event : midi)
+        CHECK_FALSE (event.getMessage().isMidiClock());
+    PluginProcessorTestPeer::tick (processor);
+    const auto recorded = processor.engineStateSnapshot();
+    CHECK (recorded.sources[0][1][0].enabled);
+    CHECK (recorded.sources[0][1][0].velocity == 81);
+
+    processor.setStandaloneMidiThru (true);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (90)), 10);
+    midi.addEvent (juce::MidiMessage::midiStart(), 11);
+    midi.addEvent (juce::MidiMessage::midiClock(), 12);
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 13);
+    processor.processBlock (audio, midi);
+    REQUIRE (midi.getNumEvents() == 4);
+    CHECK (containsNoteOn (midi, 60));
+
+    processor.setStandaloneMidiThru (false);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::midiClock(), 0);
+    processor.processBlock (audio, midi);
+    REQUIRE (midi.getNumEvents() == 3);
+    CHECK (containsNoteOff (midi, 60));
+    auto event = midi.begin();
+    CHECK ((*event).getMessage().isSustainPedalOff());
+    std::advance (event, 2);
+    CHECK ((*event).getMessage().isMidiStop());
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::midiClock(), 0);
+    processor.processBlockBypassed (audio, midi);
+    for (const auto bypassedEvent : midi)
+        CHECK_FALSE (bypassedEvent.getMessage().isMidiClock());
 }
 
 TEST_CASE ("Network MIDI destination listed by JUCE is not duplicated beside the native route", "[plugin][standalone-midi]")

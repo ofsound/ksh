@@ -230,11 +230,24 @@ TEST_CASE ("Zen keeps the standalone viewport fixed while scaling its centered i
             const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
             CHECK (image.getPixelAt (0, 0) == juce::Colours::black);
         }
+        if (percent == 75)
+        {
+            const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
+            const auto inside = content.getSmallestIntegerContainer().reduced (1);
+            for (const int x : { inside.getX(), inside.getRight() - 1 })
+                for (const int y : { inside.getY(), inside.getBottom() - 1 })
+                    CHECK (image.getPixelAt (x, y) == juce::Colours::black);
+            CHECK (image.getPixelAt (inside.getCentreX(), inside.getY()) != juce::Colours::black);
+            CHECK (image.getPixelAt (inside.getCentreX(), inside.getBottom() - 1) != juce::Colours::black);
+        }
     }
     CHECK (view->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
     CHECK_FALSE (editor.isZenMode());
     CHECK_FALSE (scaleControl->isVisible());
     CHECK (editor.getBounds() == viewport);
+    const auto content = view->getLocalBounds().toFloat().transformedBy (view->getTransform()).getSmallestIntegerContainer().reduced (1);
+    const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
+    CHECK (image.getPixelAt (content.getX(), content.getY()) != juce::Colours::black);
 }
 
 TEST_CASE ("Hosted plugins do not expose or enter Zen", "[native-ui][zen]")
@@ -496,8 +509,8 @@ TEST_CASE ("Discard confirmation uses the native card and only proceeds on expli
     for (auto* child : dialog->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
-            if (button->getButtonText() == "Cancel") cancel = button;
-            if (button->getButtonText() == "Discard Changes") discard = button;
+            if (button->getButtonText() == "CANCEL") cancel = button;
+            if (button->getButtonText() == "DISCARD CHANGES") discard = button;
         }
     REQUIRE (cancel != nullptr);
     REQUIRE (discard != nullptr);
@@ -531,7 +544,7 @@ TEST_CASE ("Discard confirmation uses the native card and only proceeds on expli
     CHECK (discarded == 1);
 }
 
-TEST_CASE ("Project details keep header and dates read only and apply metadata explicitly", "[native-ui][project-details][render]")
+TEST_CASE ("Project name and Load open the same browser with editable current details", "[native-ui][project-details][render]")
 {
     PluginProcessor processor;
     processor.setProjectMetadata ("Night drive", "A sparse rhythm", "2026-07-08T10:00:00Z", "2026-07-09T11:00:00Z", "ofsound");
@@ -548,15 +561,30 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
                     button->onClick();
     }
     ProjectHeader* header = nullptr;
+    ProjectBrowser* browser = nullptr;
     ProjectDetails* details = nullptr;
+    juce::TextButton* load = nullptr;
     for (auto* child : editor.getChildren())
     {
         if (auto* candidate = dynamic_cast<ProjectHeader*> (child)) header = candidate;
-        if (auto* candidate = dynamic_cast<ProjectDetails*> (child)) details = candidate;
+        if (auto* candidate = dynamic_cast<ProjectBrowser*> (child)) browser = candidate;
+        if (auto* button = dynamic_cast<juce::TextButton*> (child); button && button->getButtonText() == (compact ? "Open" : "LOAD")) load = button;
         CHECK ((dynamic_cast<juce::TextEditor*> (child) == nullptr || child->getTitle() != "Project title"));
     }
     REQUIRE (header != nullptr);
+    REQUIRE (load != nullptr);
+    REQUIRE (browser != nullptr);
+    for (auto* child : browser->getChildren())
+        if (auto* candidate = dynamic_cast<ProjectDetails*> (child)) details = candidate;
     REQUIRE (details != nullptr);
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-project-details", {});
+    int action = -1;
+    editor.projectAction = [&] (int value)
+    {
+        action = value;
+        if (value == 1)
+            editor.showProjectBrowser (root, {}, std::nullopt, {}, {});
+    };
     CHECK (header->isVisible());
     CHECK_FALSE (header->getWantsKeyboardFocus());
     CHECK_FALSE (details->isVisible());
@@ -576,10 +604,15 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     };
     capture ("project-header");
     header->onClick();
+    CHECK (action == 1);
+    CHECK (browser->isVisible());
     CHECK (details->isVisible());
-    details->dismiss();
+    browser->dismiss();
     CHECK_FALSE (details->isVisible());
-    header->onClick();
+    action = -1;
+    load->onClick();
+    CHECK (action == 1);
+    CHECK (browser->isVisible());
     CHECK (details->isVisible());
     juce::TextEditor* name = nullptr;
     juce::TextEditor* author = nullptr;
@@ -611,13 +644,14 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
         }
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
         {
-            if (button->getButtonText() == "Apply") apply = button;
+            if (button->getButtonText() == "APPLY") apply = button;
             CHECK (button->getButtonText() != "Save As...");
         }
     }
     REQUIRE (name != nullptr);
     REQUIRE (author != nullptr);
     REQUIRE (description != nullptr);
+    CHECK (description->getHeight() >= 36);
     REQUIRE (apply != nullptr);
     REQUIRE (saveAs != nullptr);
     REQUIRE (save != nullptr);
@@ -630,12 +664,12 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     const auto pressDetails = [&] (juce::Point<float> position)
     {
         const auto now = juce::Time::getCurrentTime();
-        details->mouseDown ({ juce::Desktop::getInstance().getMainMouseSource(), position,
-                             juce::ModifierKeys::leftButtonModifier, 1, 0, 0, 0, 0, details, details,
+        browser->mouseDown ({ juce::Desktop::getInstance().getMainMouseSource(), position,
+                             juce::ModifierKeys::leftButtonModifier, 1, 0, 0, 0, 0, browser, browser,
                              now, position, now, 1, false });
     };
     name->setText ("Discard this");
-    pressDetails (details->getLocalBounds().getCentre().toFloat());
+    pressDetails (details->getBounds().getCentre().toFloat());
     CHECK (details->isVisible());
     pressDetails ({ 0, 0 });
     CHECK_FALSE (details->isVisible());
@@ -655,8 +689,6 @@ TEST_CASE ("Project details keep header and dates read only and apply metadata e
     CHECK (processor.getProjectCreatedAt() == "2026-07-08T10:00:00Z");
     CHECK (processor.getProjectModifiedAt() != "2026-07-09T11:00:00Z");
     CHECK_FALSE (details->isVisible());
-    int action = -1;
-    editor.projectAction = [&] (int value) { action = value; };
     header->onClick();
     author->setText ("Copy author");
     apply->onClick();
@@ -1094,6 +1126,7 @@ TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift 
     }
     SECTION ("Row power follows a held swipe across skipped rows and reversals")
     {
+        const bool startMuted = GENERATE (false, true);
         constexpr int leftButton = juce::ModifierKeys::leftButtonModifier;
         const auto swipeEvent = [] (juce::Component& component, juce::Point<float> position, juce::Point<float> origin, int mods)
         {
@@ -1113,19 +1146,30 @@ TEST_CASE ("Select modifier supports tap latch momentary use and physical Shift 
         const auto centre = startButton.getLocalBounds().toFloat().getCentre();
         const auto bottom = startButton.getLocalPoint (&muteFor (5), centre);
         const auto top = startButton.getLocalPoint (&muteFor (0), centre);
+        const auto nearTop = startButton.getLocalPoint (&muteFor (1), centre);
+        const bool targetMute = !startMuted;
+        REQUIRE (processor.dispatchUiEngineCommand ("source_channel_mute", { 1, 3, startMuted }));
+        REQUIRE (processor.dispatchUiEngineCommand ("source_channel_mute", { 1, 4, targetMute }));
+        REQUIRE (processor.dispatchUiEngineCommand ("source_channel_mute", { 1, 5, startMuted }));
+        editor.controller.refresh();
         const auto initialMutes = editor.controller.state.playback.sourceChannelMutes[0];
         startButton.mouseDown (swipeEvent (startButton, centre, centre, leftButton));
         startButton.mouseDrag (swipeEvent (startButton, bottom, centre, leftButton));
         const auto& mutes = editor.controller.state.playback.sourceChannelMutes[0];
-        CHECK (mutes[2]);
-        CHECK (mutes[3]);
-        CHECK (mutes[4]);
-        CHECK (mutes[5]);
-        CHECK_FALSE (mutes[0]);
+        for (size_t channel : { 2u, 3u, 4u, 5u })
+            CHECK (mutes[channel] == targetMute);
+        CHECK (mutes[0] == initialMutes[0]);
+        startButton.mouseDrag (swipeEvent (startButton, centre, centre, leftButton));
+        CHECK (mutes[2] == targetMute);
+        for (size_t channel : { 3u, 4u, 5u })
+            CHECK (mutes[channel] == initialMutes[channel]);
         startButton.mouseDrag (swipeEvent (startButton, top, centre, leftButton));
-        startButton.mouseUp (swipeEvent (startButton, top, centre, 0));
-        CHECK (mutes[0]);
-        CHECK (mutes[1]);
+        CHECK (mutes[0] == targetMute);
+        CHECK (mutes[1] == targetMute);
+        startButton.mouseUp (swipeEvent (startButton, nearTop, centre, 0));
+        CHECK (mutes[0] == initialMutes[0]);
+        CHECK (mutes[1] == targetMute);
+        CHECK (mutes[2] == targetMute);
         editor.controller.undo();
         CHECK (mutes == initialMutes);
 
@@ -1440,6 +1484,34 @@ TEST_CASE ("Grid cell artwork has a small inset and keeps full hit zones", "[nat
     CHECK (controller.cell (empty).enabled);
 }
 
+TEST_CASE ("Empty grid slots distinguish beat starts at the current division", "[native-ui][render]")
+{
+    PluginProcessor processor;
+    EditorController controller (processor);
+    PatternGrid grid (controller);
+    grid.layout.compact = GENERATE (false, true);
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    for (const auto& [rate, stride] : { std::pair { "16n", 4 }, { "8n", 2 }, { "4nt", 3 } })
+    {
+        REQUIRE (processor.dispatchUiEngineCommand ("source_rate", { 1, rate }));
+        controller.refresh();
+        grid.sync();
+        const auto image = grid.createComponentSnapshot (grid.getLocalBounds());
+        const auto brightness = [&] (int step)
+        {
+            const auto centre = grid.layout.cell ({ 0, step }).getCentre().roundToInt();
+            return image.getPixelAt (centre.x, centre.y).getPerceivedBrightness();
+        };
+        for (int step = 0; step < 16; ++step)
+        {
+            if (step % stride == 0)
+                CHECK (brightness (step) + 0.02f < brightness (1));
+            else
+                CHECK (brightness (step) == Catch::Approx (brightness (1)).margin (0.005f));
+        }
+    }
+}
+
 TEST_CASE ("Editor cursors follow the control and ignore disabled actions", "[native-ui][cursor]")
 {
     using Cursor = juce::MouseCursor;
@@ -1665,7 +1737,10 @@ TEST_CASE ("Velocity and Probability step clicks remove immediately and recreate
 
 TEST_CASE ("Triplet presets set span and roll while both remain independently editable", "[native-ui][step-presets][triplets]")
 {
+    const bool cc = GENERATE (false, true);
     PluginProcessor processor;
+    if (cc)
+        REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 4, 0 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 90, 67, 4, 5, 2 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 8, 1, 80 }));
     REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, 1, 16, 1, 95 }));
@@ -1704,7 +1779,27 @@ TEST_CASE ("Triplet presets set span and roll while both remain independently ed
     };
     auto& span = input ("Selected span");
     auto& split = input ("Selected split");
-    CHECK (grid.openPresetMenu()->getNumChildComponents() == 6);
+    CHECK (grid.openPresetMenu()->getNumChildComponents() == (cc ? 7 : 6));
+    if (cc)
+    {
+        const Location other { 0, 7 };
+        controller.selected.set (static_cast<size_t> (anchor.key()));
+        controller.selected.set (static_cast<size_t> (other.key()));
+        openMenu (anchor);
+        CHECK (preset ("Glide").getBottom() < preset ("16th triplet").getY());
+        CHECK (preset ("Glide").getBottom() < preset ("2-hit roll").getY());
+        CHECK_FALSE (preset ("Glide").getToggleState());
+        preset ("Glide").onClick();
+        CHECK (controller.glidesToNext (anchor));
+        CHECK (controller.glidesToNext (other));
+        CHECK_FALSE (controller.glidesToNext ({ 0, 15 }));
+        controller.undo();
+        CHECK_FALSE (controller.glidesToNext (anchor));
+        CHECK_FALSE (controller.glidesToNext (other));
+        controller.selected.reset();
+        grid.sync();
+        openMenu (anchor);
+    }
     CHECK_FALSE (preset ("Quarter triplet").isEnabled());
     REQUIRE (preset ("8th triplet").isEnabled());
     preset ("8th triplet").onClick();
@@ -2593,7 +2688,10 @@ TEST_CASE ("A lone split step accepts velocity lines and sweeps within its paint
 {
     const int span = GENERATE (1, 3);
     const int stepCount = GENERATE (16, 64);
+    const bool cc = GENERATE (false, true);
     PluginProcessor processor;
+    if (cc)
+        REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 4, 0 }));
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, stepCount }));
     EditorController controller (processor);
     const Location step { 0, 5 };
@@ -2619,9 +2717,9 @@ TEST_CASE ("A lone split step accepts velocity lines and sweeps within its paint
         grid.mouseDrag (gridEvent (grid, end, start, left, true));
         grid.mouseUp (gridEvent (grid, end, start, 0, true));
         const auto changed = controller.cell (step);
-        CHECK (changed.splitVelocity (0) == original.velocity);
-        CHECK (changed.splitVelocity (1) > original.velocity);
-        CHECK (changed.splitVelocity (2) == original.velocity);
+        CHECK (splitValue (changed, 0, cc) == original.velocity);
+        CHECK (splitValue (changed, 1, cc) > original.velocity);
+        CHECK (splitValue (changed, 2, cc) == original.velocity);
     }
     SECTION ("A manual drag sweeps from one split body into the next")
     {
@@ -2633,9 +2731,9 @@ TEST_CASE ("A lone split step accepts velocity lines and sweeps within its paint
         grid.mouseDrag (gridEvent (grid, end, start, left, true));
         grid.mouseUp (gridEvent (grid, end, start, 0, true));
         const auto changed = controller.cell (step);
-        CHECK (changed.splitVelocity (0) > original.velocity);
-        CHECK (changed.splitVelocity (1) > changed.splitVelocity (0));
-        CHECK (changed.splitVelocity (2) == original.velocity);
+        CHECK (splitValue (changed, 0, cc) > original.velocity);
+        CHECK (splitValue (changed, 1, cc) > splitValue (changed, 0, cc));
+        CHECK (splitValue (changed, 2, cc) == original.velocity);
     }
     SECTION ("A double-click on a divider starts freeform drawing")
     {
@@ -2653,12 +2751,14 @@ TEST_CASE ("A lone split step accepts velocity lines and sweeps within its paint
         grid.mouseUp (gridEvent (grid, end, start, 0, true));
         grid.finishVelocityDrawing();
         const auto changed = controller.cell (step);
-        CHECK (changed.splitVelocity (0) == original.velocity);
-        CHECK (changed.splitVelocity (1) > original.velocity);
-        CHECK (changed.splitVelocity (2) == original.velocity);
+        CHECK (splitValue (changed, 0, cc) == original.velocity);
+        CHECK (splitValue (changed, 1, cc) > original.velocity);
+        CHECK (splitValue (changed, 2, cc) == original.velocity);
     }
     const auto changed = controller.cell (step);
     CHECK (changed.velocity == original.velocity);
+    if (cc)
+        CHECK (changed.splitVelocities == original.splitVelocities);
     CHECK (changed.splitGates == original.splitGates);
     CHECK_FALSE (controller.cell ({ 0, step.step + 1 }).enabled);
     REQUIRE (controller.canUndo());
@@ -3268,6 +3368,7 @@ TEST_CASE ("Dragging S adjusts and persists text brightness without opening Gene
     };
     const auto defaultS = renderS();
     REQUIRE (defaultS.isOpaque());
+    const std::array defaultColours { Palette::white, Palette::text, Palette::muted };
 
     const auto origin = brightness->getLocalBounds().toFloat().getCentre();
     const auto gesture = [brightness, origin] (float y, int modifiers)
@@ -3278,8 +3379,10 @@ TEST_CASE ("Dragging S adjusts and persists text brightness without opening Gene
     brightness->mouseDown (gesture (0, down));
     brightness->mouseDrag (gesture (120, down));
     CHECK (Palette::textBrightness() == -40);
-    CHECK (Palette::white.getRed() < 199);
-    CHECK (renderS().getPerceivedBrightness() < defaultS.getPerceivedBrightness());
+    const std::array darkestColours { Palette::white, Palette::text, Palette::muted };
+    for (size_t i = 0; i < defaultColours.size(); ++i)
+        CHECK (darkestColours[i].getRed() == Catch::Approx (static_cast<float> (defaultColours[i].getRed()) * 0.685f).margin (1));
+    CHECK (renderS().getPerceivedBrightness() == Catch::Approx (defaultS.getPerceivedBrightness() * 0.685f).margin (0.01));
     brightness->mouseDrag (gesture (-120, down));
     CHECK (Palette::textBrightness() == 100);
     CHECK (Palette::white == juce::Colours::white);
@@ -3351,6 +3454,7 @@ TEST_CASE ("Inspector offsets follow vertical mouse drags in both layouts", "[na
             adjustment = dynamic_cast<ValueControl*> (child);
     REQUIRE (adjustment != nullptr);
     REQUIRE (adjustment->isEnabled());
+    CHECK (adjustment->showAdjustmentArrows);
     const auto first = controller.cell ({ 0, 0 });
     const auto second = controller.cell ({ 0, 1 });
     const auto start = adjustment->getLocalBounds().toFloat().getCentre();
@@ -4027,6 +4131,23 @@ TEST_CASE ("Inspector hover previews cell layers without changing the chosen lay
     CHECK (grid.displayLayer() == chosen);
 }
 
+namespace
+{
+    juce::TextButton* chooserButton (juce::Component& parent, const juce::String& title)
+    {
+        for (auto* child : parent.getChildren())
+        {
+            if (!child->isVisible())
+                continue;
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getTitle() == title)
+                return button;
+            if (auto* button = chooserButton (*child, title))
+                return button;
+        }
+        return nullptr;
+    }
+}
+
 TEST_CASE ("Piano note chooser browses without editing and assigns one undoable note", "[native-ui][note-chooser]")
 {
     PluginProcessor processor;
@@ -4061,16 +4182,19 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
     REQUIRE (chooser->isVisible());
     const auto click = [&] (const juce::String& title)
     {
-        for (auto* child : chooser->getChildren())
-            if (child->getTitle() == title)
-                if (auto* button = dynamic_cast<juce::TextButton*> (child))
-                {
-                    button->onClick();
-                    return true;
-                }
-        return false;
+        auto* button = chooserButton (*chooser, title);
+        REQUIRE (button != nullptr);
+        button->onClick();
     };
-    REQUIRE (click ("Scroll keyboard right"));
+    auto* middleC = chooserButton (*chooser, "C4");
+    REQUIRE (middleC != nullptr);
+    const auto beforeScroll = chooser->getLocalArea (middleC, middleC->getLocalBounds());
+    click ("Scroll keyboard right");
+    CHECK (chooser->getLocalArea (middleC, middleC->getLocalBounds()) == beforeScroll);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+    CHECK (chooser->getLocalArea (middleC, middleC->getLocalBounds()).getX() < beforeScroll.getX());
+    CHECK (chooserButton (*chooser, "C1") == nullptr);
+    CHECK (chooserButton (*chooser, "C5") != nullptr);
     CHECK (editor.controller.state.playback.channels[0].note == initial);
     CHECK_FALSE (processor.isDocumentModified());
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
@@ -4080,7 +4204,7 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
         REQUIRE (stream != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
     }
-    REQUIRE (click ("G4"));
+    click ("G4");
     CHECK (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == 67);
     editor.controller.undo();
@@ -4095,6 +4219,24 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
     editor.controller.refresh();
     CHECK_FALSE (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == 60);
+
+    const auto rowFace = input->valueFaceBounds();
+    input->onChoose();
+    click ("CC mode");
+    chooser->onControllerChange (true, 127, 1);
+    CHECK (input->value == 127);
+    CHECK (input->valueFaceBounds() == rowFace);
+    if (directory.isNotEmpty())
+    {
+        auto chooserStream = juce::File (directory).getChildFile ("cc-chooser.png").createOutputStream();
+        REQUIRE (chooserStream != nullptr);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *chooserStream));
+        chooser->dismiss();
+        auto rowStream = juce::File (directory).getChildFile ("cc-127-row.png").createOutputStream();
+        REQUIRE (rowStream != nullptr);
+        const auto rowBounds = grid->getLocalArea (input, input->getLocalBounds()).expanded (14, 3);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (grid->createComponentSnapshot (rowBounds, true, 3.0f), *rowStream));
+    }
 }
 
 TEST_CASE ("The note chooser applies all eight notes in one undo step", "[native-ui][note-chooser]")
@@ -4198,6 +4340,29 @@ TEST_CASE ("Piano note chooser switches rows with one outside click", "[native-u
     const int firstNote = editor.controller.state.playback.channels[0].note;
     const int secondNote = editor.controller.state.playback.channels[1].note;
     processor.markDocumentClean();
+    const auto firstCell = editor.layout.cell ({ editor.layout.channelForRow (0), editor.layout.firstStep });
+    const auto gridPoint = editor.getLocalPoint (grid, firstCell.getCentre().roundToInt());
+    const auto rowControlsPoint = gridPoint.withX (inputs[0]->getRight() + 16);
+    const auto beforeChooser = editor.createComponentSnapshot (editor.getLocalBounds());
+    inputs[0]->onChoose();
+    const auto withChooser = editor.createComponentSnapshot (editor.getLocalBounds());
+    CHECK (withChooser.getPixelAt (gridPoint.x, gridPoint.y).getBrightness()
+           < beforeChooser.getPixelAt (gridPoint.x, gridPoint.y).getBrightness());
+    CHECK (withChooser.getPixelAt (rowControlsPoint.x, rowControlsPoint.y)
+           == beforeChooser.getPixelAt (rowControlsPoint.x, rowControlsPoint.y));
+    const auto chooserControls = chooser->getChildren();
+    const auto scalePresets = std::find_if (chooserControls.begin(), chooserControls.end(), [] (const auto* child)
+    {
+        const auto* button = dynamic_cast<const juce::TextButton*> (child);
+        return button != nullptr && button->getButtonText() == "Scale presets";
+    });
+    REQUIRE (scalePresets != chooserControls.end());
+    const auto toolbarPosition = (*scalePresets)->getPosition();
+    for (const int row : { 0, editor.layout.channels - 1 })
+    {
+        grid->rowNoteInput (editor.layout.channelForRow (row)).onChoose();
+        CHECK ((*scalePresets)->getPosition() == toolbarPosition);
+    }
     inputs[0]->onChoose();
     for (const int row : { 1, 0, 1 })
     {
@@ -4205,14 +4370,19 @@ TEST_CASE ("Piano note chooser switches rows with one outside click", "[native-u
         REQUIRE (editor.getComponentAt (editor.getLocalPoint (chooser, position.toInt())) == chooser);
         chooser->mouseDown (gridEvent (*chooser, position, position, juce::ModifierKeys::leftButtonModifier));
         REQUIRE (chooser->isVisible());
-        for (auto* child : chooser->getChildren())
-            if (auto* key = dynamic_cast<juce::TextButton*> (child); key != nullptr && key->getToggleState())
-                CHECK (key->getTitle() == juce::MidiMessage::getMidiNoteName (row == 0 ? firstNote : secondNote, true, true, 4));
+        CHECK ((*scalePresets)->getPosition() == toolbarPosition);
+        const auto accent = Palette::channel (row, editor.controller.drumColors);
+        CHECK (chooser->findColour (juce::TextButton::buttonOnColourId) == accent);
+        const auto noteName = juce::MidiMessage::getMidiNoteName (row == 0 ? firstNote : secondNote, true, true, 4);
+        const auto* selectedKey = chooserButton (*chooser, noteName);
+        REQUIRE (selectedKey != nullptr);
+        CHECK (selectedKey->getToggleState());
+        CHECK (selectedKey->findColour (juce::TextButton::buttonOnColourId, true) == accent);
         CHECK_FALSE (processor.isDocumentModified());
     }
-    for (auto* child : chooser->getChildren())
-        if (child->getTitle() == "C#4")
-            if (auto* key = dynamic_cast<juce::TextButton*> (child)) key->onClick();
+    auto* newKey = chooserButton (*chooser, "C#4");
+    REQUIRE (newKey != nullptr);
+    newKey->onClick();
     CHECK (chooser->isVisible());
     CHECK (editor.controller.state.playback.channels[0].note == firstNote);
     CHECK (editor.controller.state.playback.channels[1].note == 61);
@@ -4239,14 +4409,8 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints without duplicate entry con
     chooser.setSize (900, 600);
     int assigned = -1;
     chooser.onChoose = [&] (int note) { assigned = note; };
-    const auto open = [&] { chooser.open ({ 100, 100, 44, 32 }, "1", 36, nullptr); };
-    const auto button = [&] (const juce::String& title) -> juce::TextButton*
-    {
-        for (auto* child : chooser.getChildren())
-            if (child->getTitle() == title)
-                if (auto* candidate = dynamic_cast<juce::TextButton*> (child)) return candidate;
-        return nullptr;
-    };
+    const auto open = [&] { chooser.open ("1", 36, nullptr); };
+    const auto button = [&] (const juce::String& title) { return chooserButton (chooser, title); };
     open();
     REQUIRE (button ("C1") != nullptr);
     REQUIRE (button ("B4") != nullptr);
@@ -4254,6 +4418,7 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints without duplicate entry con
     for (int i = 0; i < 2; ++i)
         button ("Scroll keyboard left")->onClick();
     CHECK_FALSE (button ("Scroll keyboard left")->isEnabled());
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
     REQUIRE (button ("C-1") != nullptr);
     button ("C-1")->onClick();
     CHECK (assigned == 0);
@@ -4261,6 +4426,7 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints without duplicate entry con
     for (int i = 0; i < 7; ++i)
         button ("Scroll keyboard right")->onClick();
     CHECK_FALSE (button ("Scroll keyboard right")->isEnabled());
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
     REQUIRE (button ("G9") != nullptr);
     button ("G9")->onClick();
     CHECK (assigned == 127);
@@ -4296,6 +4462,15 @@ TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[
         if (child->getTitle() == "MIDI note channel 1")
             dynamic_cast<NoteInput*> (child)->onChoose();
     REQUIRE (chooser->isVisible());
+    for (const auto* title : { "Scroll keyboard left", "Scroll keyboard right" })
+    {
+        auto* arrow = chooserButton (*chooser, title);
+        REQUIRE (arrow != nullptr);
+        CHECK (arrow->getWidth() == 42);
+        CHECK (arrow->getHeight() == 42);
+        CHECK (chooser->getComponentAt (arrow->getBounds().getTopLeft()) == arrow);
+        CHECK (chooser->getComponentAt (arrow->getBounds().getBottomRight().translated (-1, -1)) == arrow);
+    }
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
     if (directory.isNotEmpty())
     {
@@ -4303,12 +4478,7 @@ TEST_CASE ("Piano keys assign on press and audition each scrubbed note once", "[
         REQUIRE (stream != nullptr);
         REQUIRE (juce::PNGImageFormat().writeImageToStream (editor.createComponentSnapshot (editor.getLocalBounds()), *stream));
     }
-    const auto key = [&] (const juce::String& name) -> juce::Component*
-    {
-        for (auto* child : chooser->getChildren())
-            if (child->getTitle() == name) return child;
-        return nullptr;
-    };
+    const auto key = [&] (const juce::String& name) -> juce::Component* { return chooserButton (*chooser, name); };
     auto* startKey = key ("C1");
     REQUIRE (startKey != nullptr);
     const auto start = startKey->getLocalBounds().toFloat().getCentre().withY (90);
@@ -4848,6 +5018,26 @@ TEST_CASE ("Standalone UI scale defaults and limits remain valid", "[native-ui]"
     CHECK (processor.getProjectUiScalePercent() == 400);
 }
 
+TEST_CASE ("The desktop plug-in default fits a laptop display and leaves room for the host frame", "[native-ui][editor-scale]")
+{
+    const float workHeight = GENERATE (845.0f, 920.0f, 1440.0f);
+    const Layout layout;
+    const auto scale = UiScale::pluginDefaultFactor (layout.width(), layout.height(), 1440.0f, workHeight);
+    CHECK (scale <= UiScale::baseline);
+    CHECK (layout.width() * scale <= 1408.0f);
+    CHECK (layout.height() * scale <= workHeight - 111.0f);
+    CHECK (UiScale::factor (UiScale::maximumPercent) > scale * 3.0f);
+
+    PluginProcessor processor;
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    CHECK (processor.getUserUiScalePercent() == 0);
+    const auto* view = dynamic_cast<NativeEditor*> (editor->getChildComponent (0));
+    REQUIRE (view != nullptr);
+    editor->setSize (juce::roundToInt (view->layout.width() * UiScale::factor (180)),
+                     juce::roundToInt (view->layout.height() * UiScale::factor (180)));
+    CHECK (processor.getProjectUiScalePercent() == 180);
+}
+
 namespace
 {
     struct GestureCounter final : juce::AudioProcessorListener
@@ -4888,6 +5078,165 @@ namespace
         for (int i = 0; i < std::abs (ticks); ++i)
             control.mouseWheelMove (event, wheel);
     }
+}
+
+TEST_CASE ("CC hold transitions are painted at step and split onsets", "[native-ui][cc][render]")
+{
+    const bool compact = GENERATE (false, true);
+    const bool shifted = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 1 }));
+    if (shifted)
+    {
+        REQUIRE (processor.dispatchUiEngineCommand ("swing", { 37 }));
+        REQUIRE (processor.dispatchUiEngineCommand ("swing_subdivision", { 1 }));
+    }
+    EditorController controller (processor);
+    const Location split { 0, 3 };
+    Cell values { .enabled = true, .roll = 2, .nudge = shifted ? 15 : 0, .ccValue = 112 };
+    values.setSplitControllerValue (1, 16);
+    controller.begin ("Set CC values");
+    controller.editCell ({ 0, 1 }, Cell { .enabled = true, .ccValue = 16 });
+    controller.editCell (split, values);
+    controller.commit();
+
+    PatternGrid grid (controller);
+    grid.layout.compact = compact;
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto image = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto body = grid.layout.cellArtwork (grid.cellBounds (split));
+    const auto accent = Palette::channel (split.channel, controller.drumColors);
+    const int midValueY = juce::roundToInt (body.getCentreY());
+
+    MidiPlaybackRunner runner;
+    runner.prepare (48000.0);
+    juce::MidiBuffer midi;
+    runner.processBlock (controller.state.playback, 0.0, 120.0, true, 30000, midi);
+    std::vector<int> onsets;
+    for (const auto event : midi)
+        if (const auto message = event.getMessage(); message.isController() && message.getControllerNumber() == 74)
+            onsets.push_back (event.samplePosition);
+    REQUIRE (onsets.size() == 3);
+    for (const int part : { 0, 1 })
+    {
+        const auto visualX = grid.layout.gridLeft() + grid.layout.cellWidth() * static_cast<float> (onsets[static_cast<size_t> (part + 1)]) / 6000.0f;
+        const int onsetX = static_cast<int> (std::floor (visualX));
+        const int segmentCentreX = juce::roundToInt (body.getX() + (static_cast<float> (part) + 0.5f) * body.getWidth() / 2.0f);
+        CHECK (image.getPixelAt (onsetX, midValueY) == accent);
+        CHECK (image.getPixelAt (segmentCentreX, midValueY) != accent);
+    }
+}
+
+TEST_CASE ("CC hold lines end flat at the loop boundaries", "[native-ui][cc][render]")
+{
+    const bool reverse = GENERATE (false, true);
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 1 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 7, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_playback_mode", { 1, reverse ? "reverse" : "normal" }));
+    EditorController controller (processor);
+    controller.begin ("Set CC values");
+    controller.editCell ({ 0, 2 }, Cell { .enabled = true, .ccValue = 16 });
+    controller.editCell ({ 0, 8 }, Cell { .enabled = true, .ccValue = 112 });
+    controller.commit();
+
+    PatternGrid grid (controller);
+    grid.layout.compact = true;
+    grid.layout.compactWidth = 778.0f; // A 640 px grid puts loop edges on whole pixels.
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto image = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto first = grid.layout.cell ({ 0, 2 });
+    const int left = juce::roundToInt (first.getX());
+    const int right = juce::roundToInt (grid.layout.cell ({ 0, 8 }).getRight()) - 1;
+    const int middleY = juce::roundToInt (first.getCentreY());
+    const auto accent = Palette::channel (0, controller.drumColors);
+
+    const auto body = grid.layout.cellArtwork (first).reduced (0.0f, 3.0f);
+    const auto yFor = [&body] (int value)
+    {
+        return static_cast<int> (std::floor (body.getBottom() - body.getHeight() * static_cast<float> (value) / 127.0f));
+    };
+    CHECK (image.getPixelAt (left + 2, yFor (16)) == accent);
+    CHECK (image.getPixelAt (right - 2, yFor (112)) == accent);
+
+    // Compare the edge against a flat row to account for the border painted over it.
+    controller.begin ("Match CC values");
+    controller.editCell ({ 0, 8 }, Cell { .enabled = true, .ccValue = 16 });
+    controller.commit();
+    grid.sync();
+    const auto flat = grid.createComponentSnapshot (grid.getLocalBounds());
+    CHECK (image.getPixelAt (left, middleY) == flat.getPixelAt (left, middleY));
+    CHECK (image.getPixelAt (right, middleY) == flat.getPixelAt (right, middleY));
+}
+
+TEST_CASE ("The CC glide line follows emitted MIDI values at their actual beat positions", "[native-ui][cc][render]")
+{
+    const auto* mode = GENERATE ("normal", "reverse", "ping_pong", "reverse_ping_pong");
+    const bool reverse = juce::String (mode).startsWith ("reverse");
+    PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_cc", { 1, 1, 74, 4 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_loop_length", { 1, 7, 3 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("channel_playback_mode", { 1, mode }));
+    REQUIRE (processor.dispatchUiEngineCommand ("swing", { 43 }));
+    REQUIRE (processor.dispatchUiEngineCommand ("swing_subdivision", { 1 }));
+    EditorController controller (processor);
+    Cell split { .enabled = true, .roll = 2, .nudge = 15, .ccValue = 109, .ccGlide = 1 };
+    split.setSplitControllerValue (1, 81);
+    Cell span { .enabled = true, .roll = 3, .span = 2, .ccValue = 100, .ccGlide = 1 };
+    span.setSplitControllerValue (1, 59);
+    span.setSplitControllerValue (2, 34);
+    controller.begin ("Set CC curve");
+    controller.editCell ({ 0, 2 }, Cell { .enabled = true, .ccValue = 18, .ccGlide = 1 });
+    controller.editCell ({ 0, 4 }, split);
+    controller.editCell ({ 0, 5 }, Cell { .enabled = true, .probability = 0, .ccValue = 115 });
+    controller.editCell ({ 0, 6 }, span);
+    controller.editCell ({ 0, 8 }, Cell { .enabled = true, .ccValue = 42, .ccGlide = 1 });
+    controller.commit();
+
+    PatternGrid grid (controller);
+    // The compact layout removes desktop loop grips. A wider test viewport
+    // gives the individual MIDI holds enough pixels to sample their middles.
+    grid.layout.compact = true;
+    grid.layout.compactWidth = 3.0f * Layout::fullWidth;
+    grid.layout.compactHeight = Layout::fullHeight;
+    grid.setSize (juce::roundToInt (grid.layout.width()), juce::roundToInt (grid.layout.gridHeight()));
+    grid.sync();
+    const auto image = grid.createComponentSnapshot (grid.getLocalBounds());
+    const auto loop = controller.loop (0);
+    const auto first = grid.layout.cell ({ 0, loop.loopStart });
+    const auto body = grid.layout.cellArtwork (first).reduced (0.0f, 3.0f);
+    const auto accent = Palette::channel (0, controller.drumColors);
+
+    auto runner = std::make_unique<MidiPlaybackRunner>();
+    runner->prepare (48000.0);
+    juce::MidiBuffer midi;
+    constexpr int samplesPerStep = 6000;
+    const int end = loop.loopLength * samplesPerStep;
+    runner->processBlock (controller.state.playback, 0.0, 120.0, true, end, midi);
+    std::vector<std::pair<int, int>> events;
+    for (const auto event : midi)
+        if (const auto message = event.getMessage(); message.isController() && message.getControllerNumber() == 74)
+            events.emplace_back (event.samplePosition, message.getControllerValue());
+    REQUIRE (events.size() > 12);
+
+    int comparisons = 0;
+    for (size_t i = 0; i < events.size(); ++i)
+    {
+        const auto [sample, value] = events[i];
+        const int next = i + 1 < events.size() ? events[i + 1].first : end;
+        const float heldWidth = static_cast<float> (next - sample) / samplesPerStep * grid.layout.cellWidth();
+        if (heldWidth < 3.5f)
+            continue;
+        const float step = static_cast<float> (sample + (next - sample) / 2) / samplesPerStep;
+        const int x = static_cast<int> (std::floor (first.getX() + (reverse ? static_cast<float> (loop.loopLength) - step : step) * grid.layout.cellWidth()));
+        const int y = static_cast<int> (std::floor (body.getBottom() - body.getHeight() * static_cast<float> (value) / 127.0f));
+        CAPTURE (mode, sample, next, value, x, y);
+        CHECK (image.getPixelAt (x, y) == accent);
+        ++comparisons;
+    }
+    CHECK (comparisons > 8);
 }
 
 TEST_CASE ("Grid swing and nudge positions match MIDI timing for each roll hit", "[native-ui][swing-display][render]")
@@ -5042,6 +5391,40 @@ TEST_CASE ("Swing display stays fixed through channel loops and directions", "[n
         const double offset = swingDelayStepsForPosition (expected[static_cast<size_t> (mode)], 73, 1);
         CHECK (grid.hitPosition ({ 0, 2 }).x == Catch::Approx (grid.layout.cell ({ 0, 2 }).getX() + offset * grid.layout.cellWidth()));
     }
+}
+
+TEST_CASE ("Swung playback advances the editor playhead without syncing document controls", "[native-ui][swing-display]")
+{
+    struct Transport final : juce::AudioPlayHead
+    {
+        juce::Optional<PositionInfo> getPosition() const override { return position; }
+        PositionInfo position;
+    } transport;
+    PluginProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    processor.setPlayHead (&transport);
+    REQUIRE (processor.dispatchUiEngineCommand ("swing", { 60 }));
+    EditorController controller (processor);
+    int changes = 0;
+    controller.changed = [&] { ++changes; };
+    juce::AudioBuffer<float> audio (2, 512);
+    juce::MidiBuffer midi;
+    transport.position.setBpm (120.0);
+    transport.position.setIsPlaying (true);
+    for (int step = 0; step < 4; ++step)
+    {
+        transport.position.setPpqPosition (step * 0.25);
+        midi.clear();
+        processor.processBlock (audio, midi);
+        CHECK_FALSE (controller.poll());
+        CHECK (controller.playingStep == step + 1);
+        CHECK (controller.playingGlobalStep == step);
+    }
+    CHECK (changes == 0);
+
+    REQUIRE (processor.dispatchUiEngineCommand ("swing", { 35 }));
+    CHECK (controller.poll());
+    CHECK (changes == 1);
 }
 
 TEST_CASE ("Nudge adjusts a selection together, preserves differences, and supports undo and cancel", "[native-ui][nudge]")
@@ -5860,6 +6243,35 @@ TEST_CASE ("Standalone MIDI destination is reachable in full and compact layouts
     }
 }
 
+TEST_CASE ("Popup menu artwork separates the panel from the grid", "[native-ui][render][popup]")
+{
+    LookAndFeel look;
+    constexpr int width = 224, height = 180;
+    juce::Image image (juce::Image::ARGB, width, height, true);
+    juce::Graphics graphics (image);
+    look.drawPopupMenuBackground (graphics, width, height);
+    CHECK (image.getPixelAt (width / 2, 20) != image.getPixelAt (width / 2, height - 20));
+    CHECK (image.getPixelAt (0, 0).isTransparent());
+    const auto glow = image.getPixelAt (4, height / 2);
+    CHECK (glow.getAlpha() > 0);
+    CHECK_FALSE (glow.isOpaque());
+    CHECK (image.getPixelAt (6, height / 2) != image.getPixelAt (16, height / 2));
+}
+
+TEST_CASE ("Popup menu separators stay thin when hovered", "[native-ui][render][popup]")
+{
+    const bool hovered = GENERATE (false, true);
+    LookAndFeel look;
+    juce::PopupMenu::Item separator;
+    separator.isSeparator = true;
+    juce::Image image (juce::Image::ARGB, 224, 8, true);
+    juce::Graphics graphics (image);
+    look.drawPopupMenuItemWithOptions (graphics, image.getBounds(), hovered, separator, {});
+    CHECK (image.getPixelAt (112, 4).getAlpha() > 0);
+    CHECK (image.getPixelAt (112, 2).isTransparent());
+    CHECK (image.getPixelAt (12, 4).isTransparent());
+}
+
 TEST_CASE ("Metronome settings open inside the scaled standalone editor", "[native-ui][metronome]")
 {
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr)
@@ -6222,25 +6634,37 @@ TEST_CASE ("Row controls stay inline and handle gestures retain undoable channel
     CHECK_FALSE (power->getToggleState());
     controller.command ("channel_playback_mode", { 2, "reverse_ping_pong" });
     controller.command ("channel_playback_mode", { 1, "reverse" });
-    const auto swipe = [&] (RowPlaybackButton& button)
+    controller.command ("channel_playback_mode", { 5, "reverse_ping_pong" });
+    const auto mode = [&] (int channel) { return controller.state.playback.channels[static_cast<size_t> (channel)].playbackMode; };
+    for (auto* button : { direction, pingPong })
     {
-        const auto from = button.getLocalBounds().getCentre().toFloat();
-        const auto to = button.getLocalPoint (&grid, grid.layout.cell ({ 0, 0 }).getCentre()).withX (from.x);
-        button.mouseDown (gridEvent (button, from, from, juce::ModifierKeys::leftButtonModifier));
-        button.mouseDrag (gridEvent (button, to, from, juce::ModifierKeys::leftButtonModifier, true));
-        button.mouseUp (gridEvent (button, to, from, 0, true));
-    };
-    swipe (*direction);
-    CHECK (controller.state.playback.channels[0].playbackMode == PlaybackMode::normal);
-    CHECK (controller.state.playback.channels[1].playbackMode == PlaybackMode::ping_pong);
-    CHECK (controller.state.playback.channels[2].playbackMode == PlaybackMode::ping_pong);
-    controller.undo();
-    CHECK (controller.state.playback.channels[0].playbackMode == PlaybackMode::reverse);
-    CHECK (controller.state.playback.channels[1].playbackMode == PlaybackMode::reverse_ping_pong);
-    CHECK (controller.state.playback.channels[2].playbackMode == PlaybackMode::reverse_ping_pong);
-    swipe (*pingPong);
-    for (int ch = 0; ch < 3; ++ch)
-        CHECK (controller.state.playback.channels[static_cast<size_t> (ch)].playbackMode == PlaybackMode::reverse);
+        const auto remaining = button == direction ? PlaybackMode::ping_pong : PlaybackMode::reverse;
+        const auto from = button->getLocalBounds().getCentre().toFloat();
+        const auto point = [&] (int channel)
+        {
+            return button->getLocalPoint (&grid, grid.layout.cell ({ channel, 0 }).getCentre()).withX (from.x);
+        };
+        const int leftButton = juce::ModifierKeys::leftButtonModifier;
+        button->mouseDown (gridEvent (*button, from, from, leftButton));
+        button->mouseDrag (gridEvent (*button, point (0), from, leftButton, true));
+        CHECK (mode (0) == (button == direction ? PlaybackMode::normal : PlaybackMode::reverse));
+        CHECK (mode (1) == remaining);
+        CHECK (mode (2) == remaining);
+        button->mouseDrag (gridEvent (*button, from, from, leftButton));
+        CHECK (mode (0) == PlaybackMode::reverse);
+        CHECK (mode (1) == PlaybackMode::reverse_ping_pong);
+        CHECK (mode (2) == remaining);
+        button->mouseDrag (gridEvent (*button, point (4), from, leftButton, true));
+        CHECK (mode (4) == remaining);
+        button->mouseUp (gridEvent (*button, point (1), from, 0, true));
+        CHECK (mode (0) == PlaybackMode::reverse);
+        CHECK (mode (1) == remaining);
+        CHECK (mode (2) == remaining);
+        CHECK (mode (4) == PlaybackMode::reverse_ping_pong);
+        controller.undo();
+        for (int ch : { 1, 2, 4 })
+            CHECK (mode (ch) == PlaybackMode::reverse_ping_pong);
+    }
     const auto bounds = power->getLocalBounds();
     const auto face = rowControlFace (bounds.toFloat());
     const auto renderPower = [&] (bool active)

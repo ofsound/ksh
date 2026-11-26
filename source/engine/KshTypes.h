@@ -132,6 +132,30 @@ struct Cell
     int span = 1; // Grid steps occupied by this roll.
     std::array<SplitGate, Constants::maxRoll> splitGates {};
     std::array<uint8_t, Constants::maxRoll> splitVelocities {}; // Zero inherits the step velocity.
+    int ccValue = -1; // An unset value inherits velocity when a Note row is switched to CC.
+    std::array<uint8_t, Constants::maxRoll> splitCcValues {}; // Zero inherits the step CC value. Otherwise stores value + 1.
+    int ccGlide = 0; // 0 holds, 1 glides.
+
+    [[nodiscard]] int controllerValue() const { return ccValue < 0 ? velocity : ccValue; }
+    [[nodiscard]] int splitControllerValue (int part) const
+    {
+        const int value = splitCcValues[static_cast<size_t> (part)];
+        return value == 0 ? controllerValue() : value - 1;
+    }
+    void setSplitControllerValue (int part, int value)
+    {
+        splitCcValues[static_cast<size_t> (part)] = static_cast<uint8_t> (clampInt (value, -1, 127) + 1);
+    }
+    [[nodiscard]] bool unconditional() const;
+    [[nodiscard]] bool controllerPointUnconditional (int part) const
+    {
+        if (!unconditional())
+            return false;
+        if (roll == 1)
+            return true;
+        const auto& gate = splitGates[static_cast<size_t> (part)];
+        return gate.probability() == 100 && gate.cycleMask() == (1 << gate.cycle()) - 1;
+    }
 
     [[nodiscard]] int splitVelocity (int part) const
     {
@@ -199,6 +223,11 @@ inline constexpr int maxCycleMaskBits = 30;
     return (pattern & (1 << clampInt (phase, 0, maxCycleMaskBits - 1))) != 0;
 }
 
+inline bool Cell::unconditional() const
+{
+    return probability == 100 && normalizeCycleMask (cycleMask, cycle) == cycleMaskForLength (cycle);
+}
+
 [[nodiscard]] inline Cell cloneCell (const Cell& cell)
 {
     Cell out;
@@ -218,6 +247,9 @@ inline constexpr int maxCycleMaskBits = 30;
     out.source = cell.source;
     out.sourceStep = cell.sourceStep;
     out.span = clampInt (cell.span, 1, Constants::maxSteps);
+    out.ccValue = clampInt (cell.ccValue, -1, 127);
+    out.splitCcValues = cell.splitCcValues;
+    out.ccGlide = clampInt (cell.ccGlide, 0, 1);
     out.splitGates = cell.splitGates;
     for (int i = 0; i < Constants::maxRoll; ++i)
         out.setSplitVelocity (i, cell.splitVelocities[static_cast<size_t> (i)]);
@@ -232,6 +264,9 @@ struct Channel
     int loopStart = 0;
     int loopLength = Constants::maxSteps;
     PlaybackMode playbackMode = PlaybackMode::normal;
+    bool controller = false;
+    int ccNumber = 1;
+    int ccChannel = Constants::defaultMidiChannel;
 
     [[nodiscard]] bool operator== (const Channel&) const = default;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <atomic>
 #include <optional>
 
 namespace ksh::ui
@@ -20,7 +21,8 @@ namespace ksh::ui
 
     enum class SwingFileType { midi, wave };
     std::optional<SwingFileType> swingFileType (const juce::File&);
-    SwingImportResult analyseSwingFile (const juce::File&, SwingFileType, double beatsPerStep, double referenceBpm);
+    SwingImportResult analyseSwingFile (const juce::File&, SwingFileType, double beatsPerStep, double referenceBpm,
+                                        const std::atomic<bool>* cancelled = nullptr);
 
     struct AudioDrumImport
     {
@@ -33,5 +35,6 @@ namespace ksh::ui
     };
 
     bool isDrumAudioFile (const juce::File&);
-    AudioDrumImport importDrumAudio (const juce::File&, const juce::String& originalName, double referenceBpm);
+    AudioDrumImport importDrumAudio (const juce::File&, const juce::String& originalName, double referenceBpm,
+                                        const std::atomic<bool>* cancelled = nullptr);
 }

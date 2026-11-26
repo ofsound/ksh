@@ -272,6 +272,8 @@ namespace ksh::ui
             const auto& pattern = controller.state.playback;
             for (int ch = 0; ch < pattern.channelCount; ++ch)
             {
+                if (controller.isControllerRow (ch))
+                    continue;
                 const auto loop = controller.loop (ch);
                 std::array<Cell, Constants::maxSteps> cells;
                 std::bitset<Constants::maxSteps> openHatSteps;
@@ -282,7 +284,8 @@ namespace ksh::ui
                     auto& cell = row[static_cast<size_t> (step)];
                     cell = generatedDrumCell (ch, step, density, variation, seed);
                     // An open hat takes the place of its closed counterpart.
-                    if (ch == 2 && pattern.channelCount > 3 && generatedDrumCell (3, step, density, variation, seed).enabled)
+                    if (ch == 2 && pattern.channelCount > 3 && !controller.isControllerRow (3)
+                        && generatedDrumCell (3, step, density, variation, seed).enabled)
                     {
                         openHatSteps.set (static_cast<size_t> (step));
                         cell.enabled = false;
