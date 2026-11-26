@@ -6435,8 +6435,9 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         CHECK (numbers->getCurrentState().isChecked() == initialNumbers);
         const auto clickToggle = [popup] (juce::AccessibilityHandler& row)
         {
-            row.getActions().invoke (juce::AccessibilityActionType::press);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+            // The accessibility toggle is synchronous. Pumping the event loop here
+            // lets JUCE dismiss the menu if the test runner is in the background.
+            REQUIRE (row.getActions().invoke (juce::AccessibilityActionType::toggle));
             REQUIRE (juce::Component::getCurrentlyModalComponent() == popup);
         };
         clickToggle (*numbers);
@@ -6463,7 +6464,11 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         auto* audioMenuItem = findSettingsItem (juce::String::fromUTF8 (u8"Audio/MIDI Settings…"));
         CHECK ((audioMenuItem != nullptr) == standalone);
         if (audioMenuItem != nullptr)
-            audioMenuItem->getActions().invoke (juce::AccessibilityActionType::press);
+        {
+            auto* audioButton = dynamic_cast<juce::TextButton*> (&audioMenuItem->getComponent());
+            REQUIRE (audioButton != nullptr);
+            audioButton->onClick();
+        }
         else
             CHECK (popup->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
         juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
