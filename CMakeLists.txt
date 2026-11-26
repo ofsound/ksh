@@ -353,9 +353,10 @@ if (TARGET "${PROJECT_NAME}_Standalone")
                 "SHELL:-Xfrontend -disable-autolink-framework -Xfrontend UIUtilities")
             target_link_libraries("${PROJECT_NAME}_Standalone" PRIVATE KshIPadWindow)
             target_compile_definitions("${PROJECT_NAME}_Standalone" PRIVATE KSH_IPAD_SYSTEM_OVERLAYS)
+            # Xcode may expand TOOLCHAIN_DIR to the Metal toolchain on CI.
             set_target_properties("${PROJECT_NAME}_Standalone" PROPERTIES
                 LINKER_LANGUAGE CXX
-                XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)")
+                XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) \"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)\"")
             if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
                 execute_process(COMMAND xcrun --find swiftc
                     OUTPUT_VARIABLE KSH_SWIFT_COMPILER_PATH OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
