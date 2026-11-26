@@ -40,7 +40,7 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-      - name: Configure and build universal macOS products
+      - name: Build universal macOS Standalone and plug-ins
         run: |
           cmake -S . -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Release \
             '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' \
@@ -77,10 +77,27 @@ jobs:
       - name: Validate the AU MIDI effect in auval
         timeout-minutes: 5
         run: |
-          components="$HOME/Library/Audio/Plug-Ins/Components"
-          mkdir -p "$components"
-          ditto "$PRODUCTS/AU/KSH.component" "$components/KSH.component"
-          auval -v aumi Ksh1 Osnd
+          component="$PRODUCTS/AU/KSH.component"
+          codesign --force --sign - --timestamp=none "$component"
+          codesign --verify --strict "$component"
+
+          # Install into the disposable runner's system scan path and refresh AU discovery.
+          components=/Library/Audio/Plug-Ins/Components
+          sudo -n mkdir -p "$components"
+          sudo -n ditto "$component" "$components/KSH.component"
+          sudo -n killall -TERM AudioComponentRegistrar || true
+
+          for attempt in {1..10}; do
+            if auval -s aumi | awk '$1 == "aumi" && $2 == "Ksh1" && $3 == "Osnd" { found = 1 } END { exit !found }'; then
+              auval -v aumi Ksh1 Osnd
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "KSH AU did not register on the runner after 10 scans." >&2
+          auval -s aumi
+          exit 1
 
       - name: Package the macOS bundles
         run: |
