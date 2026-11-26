@@ -82,8 +82,21 @@ include(PamplejuceLog)
 # JUCE is setup as a submodule in the /JUCE folder
 # Locally, you must run `git submodule update --init --recursive` once
 # and later `git submodule update --remote --merge` to keep it up to date
-# On Github Actions, this is done as a part of actions/checkout
-add_subdirectory(JUCE)
+# On GitHub Actions, this is done as a part of actions/checkout.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # JUCE forwards this value to juceaide, which runs on the build Mac.
+    set(ksh_ios_deployment_target "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "")
+    add_subdirectory(JUCE)
+    if (ksh_ios_deployment_target STREQUAL "$CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}")
+        unset(CMAKE_OSX_DEPLOYMENT_TARGET)
+    else()
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "${ksh_ios_deployment_target}")
+    endif()
+    unset(ksh_ios_deployment_target)
+else()
+    add_subdirectory(JUCE)
+endif()
 
 # Only the regular desktop build uses the CLAP wrapper.
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KSH_MACOS_TESTFLIGHT)
@@ -164,6 +177,20 @@ juce_add_plugin("${PROJECT_NAME}"
     VST3_CATEGORIES Fx Instrument
 
     PRODUCT_NAME "${PRODUCT_NAME}")
+
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(ksh_privacy_manifest "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios/PrivacyInfo.xcprivacy")
+    set_source_files_properties("${ksh_privacy_manifest}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    foreach(format Standalone AUv3)
+        if (TARGET "${PROJECT_NAME}_${format}")
+            target_sources("${PROJECT_NAME}_${format}" PRIVATE "${ksh_privacy_manifest}")
+        endif()
+    endforeach()
+elseif (KSH_MACOS_TESTFLIGHT)
+    set(ksh_privacy_manifest "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/PrivacyInfo.xcprivacy")
+    set_source_files_properties("${ksh_privacy_manifest}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources("${PROJECT_NAME}_Standalone" PRIVATE "${ksh_privacy_manifest}")
+endif()
 
 # This lets us use our code in both the JUCE targets and our Test target
 # Without running into ODR violations

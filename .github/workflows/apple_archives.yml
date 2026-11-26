@@ -1,0 +1,56 @@
+name: Apple archive validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Apple archive to validate
+        type: choice
+        required: true
+        options: [ios, iphone, macos]
+
+permissions:
+  contents: read
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+jobs:
+  archive:
+    name: Validate ${{ inputs.platform }} archive
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      ARCHIVE_PLATFORM: ${{ inputs.platform }}
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build and check the unsigned Xcode archive
+        run: |
+          case "$ARCHIVE_PLATFORM" in
+            ios)
+              preset=ios-xcode
+              build_dir=Builds-iOS
+              destination='generic/platform=iOS'
+              ;;
+            iphone)
+              preset=ios-iphone-release
+              build_dir=Builds-iPhone
+              destination='generic/platform=iOS'
+              ;;
+            macos)
+              preset=macos-testflight
+              build_dir=Builds-native-macos-testflight
+              destination='generic/platform=macOS'
+              ;;
+          esac
+          xcodebuild -version
+          cmake --preset "$preset"
+          xcodebuild -project "$build_dir/KSH.xcodeproj" -scheme KSH_Standalone \
+            -configuration Release -destination "$destination" \
+            -archivePath "$RUNNER_TEMP/KSH.xcarchive" archive CODE_SIGNING_ALLOWED=NO
+          bash scripts/verify-apple-bundle.sh "$ARCHIVE_PLATFORM" "$RUNNER_TEMP/KSH.xcarchive"
