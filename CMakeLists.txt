@@ -115,6 +115,12 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 set(KSH_IOS_PROJECT_OPTIONS)
+set(KSH_APPLE_BUILD_NUMBER "" CACHE STRING "Override CFBundleVersion for Apple release archives")
+set(KSH_APPLE_VERSION_OPTIONS)
+if (NOT KSH_APPLE_BUILD_NUMBER STREQUAL "")
+    list(APPEND KSH_APPLE_VERSION_OPTIONS BUILD_VERSION "${KSH_APPLE_BUILD_NUMBER}")
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     if (NOT KSH_IOS_IPHONE_ONLY)
         # Ask iPadOS to use its full-screen compatibility mode for the standalone app.
@@ -139,6 +145,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 endif()
 
 juce_add_plugin("${PROJECT_NAME}"
+    ${KSH_APPLE_VERSION_OPTIONS}
     ${KSH_IOS_PROJECT_OPTIONS}
     ${KSH_MACOS_APP_OPTIONS}
     # Icons for the standalone app

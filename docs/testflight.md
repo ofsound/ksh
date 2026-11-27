@@ -1,27 +1,49 @@
-# KSH internal TestFlight
+# KSH TestFlight and App Store
 
-| Platform | CMake configure preset | Xcode project | Archive contents |
-| --- | --- | --- | --- |
-| iPhone and iPad | `ios-xcode` | `Builds-iOS/KSH.xcodeproj` | `KSH.app` with the KSH AUv3 extension |
-| macOS 12 or later | `macos-testflight` | `Builds-native-macos-testflight/KSH.xcodeproj` | Sandboxed `KSH.app` only |
+| Target | CMake preset | Delivered product |
+| --- | --- | --- |
+| `ios` | `ios-xcode` | iPhone and iPad app with the embedded KSH AUv3, as an `.ipa` |
+| `macos` | `macos-testflight` | Sandboxed macOS 12+ standalone app for Apple silicon and Intel, as a `.pkg` |
 
-Both apps use `com.ofsound.ksh`. The iOS extension uses `com.ofsound.ksh.kshAUv3`.
-The desktop AU, VST3, CLAP, and AUv3 builds are available through their existing build configurations.
+Both apps use the KSH record for `com.ofsound.ksh` in App Store Connect.
+The iOS extension uses `com.ofsound.ksh.kshAUv3`. Desktop plug-in distribution follows the desktop build.
 
-1. In App Store Connect, create or open the KSH record for `com.ofsound.ksh`. Add the macOS platform to that record for the native Mac build.
-2. Run `cmake --preset ios-xcode` or `cmake --preset macos-testflight`. Open the corresponding project and choose the paid Apple Developer team under Signing & Capabilities. On iOS, set the same team on `KSH_Standalone` and `KSH_AUv3`. To keep signing settings through CMake regeneration, pass `-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=<team-id>` when configuring.
-3. In Xcode, select `KSH_Standalone` and the generic device destination for the platform, then choose **Product → Archive**. The iOS preset targets both iPhone and iPad. Add the optional Ableton LinkKit SDK once the app's provisioning profile supports the multicast entitlement.
-4. Validate the signed archive with the matching command below. The check reads the built app and, on iOS, its embedded AUv3 and privacy manifests.
-5. In Organizer, choose **Distribute App → TestFlight Internal Only**. Apple restricts builds uploaded this way to internal tester groups. Add the processed build to an internal group in App Store Connect.
+## One-time setup
+
+1. Use a Mac with Xcode signed in to your paid Apple Developer team. Set `KSH_APPLE_TEAM_ID` to that team's 10-character ID. Xcode handles signing and provisioning for the app and the iOS extension.
+2. Use Ruby 3.2 or newer and Bundler. Run `bundle install` in the release checkout to install the pinned Fastlane version.
+3. For uploads, use an [App Store Connect team API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) with Developer access or higher. Keep the `.p8` file outside the checkout and set these shell variables.
 
 ```sh
-bash scripts/verify-apple-bundle.sh ios /path/to/KSH.xcarchive
-bash scripts/verify-apple-bundle.sh iphone /path/to/iphone-only/KSH.xcarchive
-bash scripts/verify-apple-bundle.sh macos /path/to/KSH-macOS.xcarchive
+export KSH_APPLE_TEAM_ID='YOUR_TEAM_ID'
+export APP_STORE_CONNECT_API_KEY_KEY_ID='YOUR_KEY_ID'
+export APP_STORE_CONNECT_API_KEY_ISSUER_ID='YOUR_ISSUER_ID'
+export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH="$HOME/path/to/AuthKey_KEY_ID.p8"
 ```
 
-The **Apple archive validation** GitHub Actions workflow runs the same checks on unsigned archives. The checked-in manifests cover KSH's default build. If the archive includes the optional Ableton SDK, review that exact signed archive's privacy report in Xcode Organizer before uploading it.
+## Build once and upload
 
-For terminal uploads, use `xcodebuild -exportArchive` with the signed archive and `-exportOptionsPlist packaging/TestFlightInternalExportOptions.plist`. Xcode can manage build numbers at upload time. Fastlane is optional.
+Use a clean checkout of the CI-validated source with its submodules initialized.
+Check the most recent builds for each platform in App Store Connect and choose an unused, higher build number.
+The marketing version comes from `VERSION`. The build number is stamped into the iOS app and AUv3 together.
 
-For the Mac build, verify MIDI routing, project open and save, and Ableton Link when included. App Sandbox changes the app's access to files outside its container, including projects saved by the regular desktop build.
+```sh
+bundle exec fastlane archive target:ios build_number:8
+bundle exec fastlane archive target:macos build_number:8
+```
+
+Fastlane prints the signed package path under `Builds/apple-release/` along with the version, build number, and source commit. Use the printed package path to upload it.
+
+```sh
+bundle exec fastlane upload target:ios package:/path/to/KSH.ipa
+bundle exec fastlane upload target:macos package:/path/to/KSH.pkg
+```
+
+The archive step runs the same bundle checks as GitHub Actions. To opt into the optional features used by local builds, set `KSH_LINKKIT_SDK_DIR` or `KSH_IOS_ICLOUD_ENABLED=ON` for iOS, or `KSH_ABLETON_LINK_SOURCE_DIR` for macOS before archiving. Use the required provisioning capabilities and review the signed archive's privacy report when including an optional SDK.
+
+## Test and submit
+
+1. After Apple processes each upload, add the build to your internal TestFlight group. On iOS, test the standalone on iPhone and iPad and load the AUv3 in a host. On the Mac, test MIDI routing and project open and save in the sandboxed standalone.
+2. In the App Store Connect version for each platform, select the tested build and complete the required metadata. Use **Add for Review**, then **Submit for Review**. Choose manual release if you want to choose when the approved version goes live.
+
+Xcode Organizer is the window for Xcode's manual archive and distribution flow. **TestFlight Internal Only** in Organizer, or via `packaging/TestFlightInternalExportOptions.plist`, is useful for internal-only builds. Those builds are ineligible for App Review. The Fastlane export above allows the same tested build to be submitted.
