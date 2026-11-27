@@ -3,13 +3,27 @@
 #include "engine/KshPersistence.h"
 #include "ui/KshDrumComputerImport.h"
 #include "ui/KshUiScale.h"
+#if JUCE_IOS
+ #include "platform/KshIOSSafeArea.h"
+#endif
 #if JUCE_MAC || JUCE_LINUX || JUCE_BSD
  #include <unistd.h>
+#endif
+#if JUCE_MAC
+ #include <cstdio>
 #endif
 
 namespace
 {
     constexpr juce::int64 maximumProjectBytes = 16 * 1024 * 1024;
+    const auto zenBackdrop = juce::Colours::black;
+
+    juce::ThreadPool& fileImportPool()
+    {
+        // The worker outlives individual editors. Closing an editor only requests cancellation.
+        static juce::ThreadPool pool (1);
+        return pool;
+    }
 
     std::optional<ksh::ui::ProjectBrowser::Details> projectBrowserDetails (const juce::File& file, const juce::MemoryBlock& data)
     {
@@ -79,7 +93,9 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
    #endif
     nativeView->preferredSizeChanged = [this] { updateNativeSize(); };
     nativeView->zenModeChanged = [this] (bool enabled) { setZenMode (enabled); };
+    nativeView->projectBrowserDismissed = [this] (const juce::File& folder) { projectBrowseFolder = folder; };
     nativeView->projectAction = [this] (int action) {
+        constexpr int restoreAction = ksh::ui::NativeEditor::restorePreviousProjectAction;
         const juce::Component::SafePointer<PluginEditor> safe (this);
         auto completed = [safe, action] (juce::var result) {
             if (safe == nullptr)
@@ -88,12 +104,17 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "KSH project", error);
             safe->nativeView->controller.refresh();
-            if (action == 0 && static_cast<bool> (result["success"]))
+            if ((action == 0 || action == restoreAction) && static_cast<bool> (result["success"]))
                 safe->nativeView->returnToPhoneGrid();
             if ((action == 2 || action == 5) && static_cast<bool> (result["success"]))
                 safe->nativeView->showProjectSaved();
             safe->updateNativeSize();
         };
+        if ((action == 2 || action == 5 || action == 6) && processorRef.hasUnsupportedProjectVersion())
+        {
+            completed (projectOperationResult (false, "Open this project in a compatible version of KSH before saving it."));
+            return;
+        }
        #if JUCE_IOS
         if (action == 6)
         {
@@ -119,6 +140,8 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
                 return;
             if (action == 0)
                 safe->createNewProject (completed);
+            else if (action == restoreAction)
+                safe->restorePreviousProject (completed);
             else
                 safe->cycleProject (action == 3 ? -1 : 1, completed);
         });
@@ -139,14 +162,15 @@ PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : 
 }
 PluginEditor::~PluginEditor()
 {
+    if (fileDropCancellation != nullptr)
+        fileDropCancellation->store (true, std::memory_order_relaxed);
     ksh::ui::Palette::changes().removeChangeListener (this);
     stopTimer();
     fileDropStatusTimer.stopTimer();
    #if JUCE_IOS
     iosFileDrop.reset();
-    iosLibrary->cancel();
+    iosLibrary->cancel (false);
    #endif
-    fileDropWorker.reset();
     nativeView.reset();
 }
 void PluginEditor::setZenMode (bool enabled)
@@ -217,6 +241,13 @@ void PluginEditor::timerCallback()
    #if JUCE_IOS
     if (iosLibrary->busy() && iosOperationEpoch != processorRef.getUiBridge().getDocumentEpoch())
         iosLibrary->cancel();
+    // UIKit can change the insets without resizing JUCE's editor component.
+    if (isShowing())
+    {
+        const auto safeArea = ksh::iosSafeArea (*this);
+        if (safeArea != lastSafeArea)
+            updateViewport (safeArea);
+    }
    #else
     if (zenWindow == nullptr)
     {
@@ -248,7 +279,11 @@ bool PluginEditor::keyPressed (const juce::KeyPress& key)
 bool PluginEditor::usesHostedTabletViewport() const
 {
     return nativeView->layout.touchRows && processorRef.wrapperType == juce::AudioProcessor::wrapperType_AudioUnitv3
+   #if JUCE_IOS
+        && !isIPhone;
+   #else
         && !juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone");
+   #endif
 }
 
 void PluginEditor::updateNativeSize()
@@ -268,7 +303,7 @@ void PluginEditor::updateNativeSize()
         return;
     }
    #if JUCE_IOS
-    if (!fitViewport && juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"))
+    if (!fitViewport && isIPhone)
     {
         setResizeLimits (640, 300, 2048, 1536);
         if (getWidth() == 0 || getHeight() == 0)
@@ -288,14 +323,25 @@ void PluginEditor::updateNativeSize()
         return;
     }
     const auto& layout = nativeView->layout;
-    const float scale = ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent());
+    using ksh::ui::UiScale;
+    float scale = UiScale::factor (processorRef.getProjectUiScalePercent());
+   #if !JUCE_IOS
+    if (!processorRef.hasStandaloneTransport() && processorRef.getUserUiScalePercent() == 0)
+    {
+        const auto& displays = juce::Desktop::getInstance().getDisplays();
+        const auto* display = getPeer() != nullptr ? displays.getDisplayForRect (getScreenBounds()) : displays.getPrimaryDisplay();
+        if (display != nullptr)
+            scale = UiScale::pluginDefaultFactor (layout.width(), layout.height(), display->userBounds.getWidth(), display->userBounds.getHeight());
+    }
+   #endif
+    const juce::ScopedValueSetter<bool> updating (updatingNativeSize, true);
     setResizeLimits (juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)));
     if (auto* limits = getConstrainer())
         limits->setFixedAspectRatio (static_cast<double> (layout.width() / layout.height()));
     setSize (juce::roundToInt (layout.width() * scale), juce::roundToInt (layout.height() * scale));
     resized();
 }
-void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow != nullptr ? juce::Colours::black : ksh::ui::Palette::app); }
+void PluginEditor::paint (juce::Graphics& g) { g.fillAll (zenMode || zenWindow != nullptr ? zenBackdrop : ksh::ui::Palette::app); }
 void PluginEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     // The scaled child editor only repaints inside its own bounds.
@@ -304,6 +350,18 @@ void PluginEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 void PluginEditor::paintOverChildren (juce::Graphics& g)
 {
     using namespace ksh::ui;
+    if (zenMode)
+    {
+        const auto bounds = nativeView->getLocalBounds().toFloat();
+        // The even-odd fill covers only the area outside the curved outline.
+        juce::Path corners;
+        corners.setUsingNonZeroWinding (false);
+        corners.addRectangle (bounds);
+        corners.addRoundedRectangle (bounds, 12.0f);
+        const auto transform = juce::AffineTransform::translation (nativeView->getPosition().toFloat()).followedBy (nativeView->getTransform());
+        g.setColour (zenBackdrop);
+        g.fillPath (corners, transform);
+    }
     if (fileDragOver)
     {
         g.setColour (Palette::accent.withAlpha (0.65f));
@@ -311,9 +369,16 @@ void PluginEditor::paintOverChildren (juce::Graphics& g)
     }
     if (fileDropStatus.isNotEmpty())
     {
+       #if JUCE_IOS
+        const auto bounds = lastSafeArea.getLargestIntegerWithin();
+       #else
+        const auto bounds = getLocalBounds();
+       #endif
+        if (bounds.getWidth() <= 24 || bounds.getHeight() < 44)
+            return;
         const auto fontHeight = 15.0f;
-        const auto width = juce::jmin (getWidth() - 24, 440);
-        const auto area = juce::Rectangle<int> (width, 34).withCentre ({ getWidth() / 2, 27 });
+        const auto width = juce::jmin (bounds.getWidth() - 24, 440);
+        const auto area = juce::Rectangle<int> (width, 34).withCentre ({ bounds.getCentreX(), bounds.getY() + 27 });
         g.setColour (Palette::app.withAlpha (0.96f));
         g.fillRoundedRectangle (area.toFloat(), 6.0f);
         g.setColour (Palette::accent.withAlpha (0.65f));
@@ -329,7 +394,7 @@ bool PluginEditor::isInterestedInFileDrag (const juce::StringArray& files)
     if (files.size() != 1)
         return false;
     const juce::File file (files[0]);
-    return file.hasFileExtension ("sbb") || ksh::ui::isDrumAudioFile (file)
+    return file.hasFileExtension ("kshproject;sbb") || ksh::ui::isDrumAudioFile (file)
         || ksh::ui::swingFileType (file) == ksh::ui::SwingFileType::midi;
 }
 
@@ -351,14 +416,69 @@ void PluginEditor::filesDropped (const juce::StringArray& files, int, int)
     if (isInterestedInFileDrag (files))
     {
         const juce::File file (files[0]);
-        analyseFileDrop (beginFileDrop(), file, file.getFileName());
+        if (file.hasFileExtension ("kshproject"))
+            openDroppedProject (file);
+        else
+            analyseFileDrop (beginFileDrop(), file, file.getFileName());
     }
+}
+
+void PluginEditor::openDroppedProject (const juce::File& file)
+{
+    const auto projectBusy = [] (const PluginEditor& editor)
+    {
+        return editor.projectFileChooser != nullptr || editor.nativeView->isProjectDialogOpen() || editor.nativeView->controller.editing()
+       #if JUCE_IOS
+            || editor.iosLibrary->busy()
+       #endif
+            ;
+    };
+    if (projectBusy (*this))
+    {
+        showFileDropStatus ("Finish the current edit or project dialog, then drop the file again.");
+        return;
+    }
+
+    const auto drop = beginFileDrop();
+    showFileDropStatus ({});
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    confirmDiscardingChanges ([safe, file, drop, projectBusy]
+    {
+        if (safe == nullptr || drop.request != safe->fileDropRequest)
+            return;
+        if (drop.document != safe->processorRef.getUiBridge().getDocumentEpoch() || projectBusy (*safe))
+        {
+            safe->showFileDropStatus ("The project changed. Drop the file again to open it.");
+            return;
+        }
+        const auto complete = [safe] (juce::var result)
+        {
+            if (safe == nullptr)
+                return;
+            if (static_cast<bool> (result["success"]))
+            {
+                safe->nativeView->controller.refresh();
+                safe->updateNativeSize();
+                safe->showFileDropStatus ("Opened " + safe->processorRef.getProjectName());
+            }
+            else
+                safe->showFileDropStatus (result["error"].toString());
+        };
+       #if JUCE_IOS
+        safe->iosProjectAction (1, complete, file);
+       #else
+        juce::String error;
+        const bool loaded = safe->loadProjectFile (file, error);
+        complete (safe->projectOperationResult (loaded, error));
+       #endif
+    });
 }
 
 PluginEditor::FileDrop PluginEditor::beginFileDrop()
 {
-    if (fileDropWorker != nullptr)
-        fileDropWorker->removeAllJobs (false, 0);
+    if (fileDropCancellation != nullptr)
+        fileDropCancellation->store (true, std::memory_order_relaxed);
+    fileDropCancellation = std::make_shared<std::atomic<bool>> (false);
     const auto state = processorRef.nativeUiState();
     showFileDropStatus ("Reading file...", true);
     return { ++fileDropRequest, state.documentEpoch, state.playback.beatsPerStep,
@@ -369,16 +489,17 @@ PluginEditor::FileDrop PluginEditor::beginFileDrop()
 void PluginEditor::analyseFileDrop (FileDrop drop, const juce::File& file, const juce::String& originalName,
                                    std::shared_ptr<juce::TemporaryFile> stagedFile)
 {
-    if (fileDropWorker == nullptr)
-        fileDropWorker = std::make_unique<juce::ThreadPool> (1);
-
     const juce::Component::SafePointer<PluginEditor> safe (this);
+    const auto cancelled = fileDropCancellation;
     const bool isPreset = file.hasFileExtension ("sbb");
     if (isPreset || ksh::ui::isDrumAudioFile (file) || (stagedFile != nullptr && file.hasFileExtension ("audio")))
     {
         showFileDropStatus (isPreset ? "Reading DrumComputer preset..." : "Transcribing drums...", true);
-        fileDropWorker->addJob ([safe, drop, file, originalName, isPreset, staged = std::move (stagedFile)]
+        fileImportPool().addJob ([safe, drop, file, originalName, isPreset, cancelled, staged = std::move (stagedFile)]
         {
+            if (cancelled->load (std::memory_order_relaxed))
+                return;
+
             ProjectDrop converted;
             if (isPreset)
             {
@@ -391,16 +512,19 @@ void PluginEditor::analyseFileDrop (FileDrop drop, const juce::File& file, const
             }
             else
             {
-                auto drums = ksh::ui::importDrumAudio (file, originalName, drop.bpm);
+                auto drums = ksh::ui::importDrumAudio (file, originalName, drop.bpm, cancelled.get());
                 auto summary = juce::String ("Transcribed ") + juce::String (drums.bars)
                              + (drums.bars == 1 ? " bar" : " bars") + ", " + juce::String (drums.hits) + " hits";
                 if (!drums.estimatedTempo)
                     summary += " (current tempo)";
                 converted = { std::move (drums.projectData), drums.error, summary, drums.estimatedTempo ? std::optional<double> (drums.bpm) : std::nullopt };
             }
-            juce::MessageManager::callAsync ([safe, drop, result = std::move (converted)] () mutable
+            if (cancelled->load (std::memory_order_relaxed))
+                return;
+
+            juce::MessageManager::callAsync ([safe, drop, cancelled, result = std::move (converted)] () mutable
             {
-                if (safe != nullptr)
+                if (!cancelled->load (std::memory_order_relaxed) && safe != nullptr)
                     safe->completeProjectDrop (drop, std::move (result));
             });
         });
@@ -410,18 +534,24 @@ void PluginEditor::analyseFileDrop (FileDrop drop, const juce::File& file, const
     const auto type = ksh::ui::swingFileType (file);
     if (type != ksh::ui::SwingFileType::midi)
     {
-        showFileDropStatus ("Drop a DrumComputer preset, MIDI file, or drum recording.");
+        showFileDropStatus ("Drop a KSH project, DrumComputer preset, MIDI file, or drum recording.");
         return;
     }
 
     showFileDropStatus ("Reading groove...", true);
     const auto referenceBpm = processorRef.hasStandaloneTransport() ? drop.bpm : 120.0;
-    fileDropWorker->addJob ([safe, drop, file, fileType = *type, referenceBpm, staged = std::move (stagedFile)]
+    fileImportPool().addJob ([safe, drop, file, fileType = *type, referenceBpm, cancelled, staged = std::move (stagedFile)]
     {
-        const auto result = ksh::ui::analyseSwingFile (file, fileType, drop.beatsPerStep, referenceBpm);
-        juce::MessageManager::callAsync ([safe, drop, result]
+        if (cancelled->load (std::memory_order_relaxed))
+            return;
+
+        const auto result = ksh::ui::analyseSwingFile (file, fileType, drop.beatsPerStep, referenceBpm, cancelled.get());
+        if (cancelled->load (std::memory_order_relaxed))
+            return;
+
+        juce::MessageManager::callAsync ([safe, drop, cancelled, result]
         {
-            if (safe != nullptr)
+            if (!cancelled->load (std::memory_order_relaxed) && safe != nullptr)
                 safe->completeSwingDrop (drop, result);
         });
     });
@@ -465,8 +595,6 @@ void PluginEditor::completeProjectDrop (FileDrop drop, ProjectDrop converted)
             return;
         }
 
-        if (result.bpm && processor.hasStandaloneTransport())
-            processor.setStandaloneTempoBpm (*result.bpm);
         safe->nativeView->controller.refresh();
         safe->updateNativeSize();
 
@@ -548,18 +676,28 @@ void PluginEditor::mouseDown (const juce::MouseEvent& event)
 }
 void PluginEditor::resized()
 {
+   #if JUCE_IOS
+    updateViewport (ksh::iosSafeArea (*this));
+   #else
+    updateViewport (getLocalBounds().toFloat());
+   #endif
+}
+
+void PluginEditor::updateViewport (juce::Rectangle<float> available)
+{
     if (!nativeView)
         return;
-    auto available = getLocalBounds().toFloat();
-    if (fitViewport)
-        if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
-        {
-            const auto safeScreen = display->safeAreaInsets.subtractedFrom (display->userBounds.toNearestInt());
-            available = available.getIntersection (getLocalArea (nullptr, safeScreen).toFloat());
-        }
-    if (available.isEmpty())
-        return;
-    layoutNativeView (available, juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone"));
+   #if JUCE_IOS
+    if (lastSafeArea != available && fileDropStatus.isNotEmpty())
+        repaint();
+    lastSafeArea = available;
+    if (!available.isEmpty())
+        layoutNativeView (available, isIPhone);
+    nativeView->setVisible (!available.isEmpty());
+   #else
+    if (!available.isEmpty())
+        layoutNativeView (available, false);
+   #endif
 }
 
 void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPhone)
@@ -570,7 +708,12 @@ void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPh
    #else
     const bool mobile = fitViewport || hostedTablet;
    #endif
-    const bool compact = mobile && available.getWidth() >= available.getHeight() && available.getHeight() <= 500.0f && available.getWidth() <= 1100.0f;
+    constexpr int compactMinWidth = 814, compactMinHeight = 390, compactMaxHeight = 500;
+    const bool shortLandscape = available.getWidth() >= available.getHeight()
+        && available.getHeight() <= compactMaxHeight && available.getWidth() <= 1100.0f;
+    // Below half the full layout width, compact keeps controls larger in tall AUv3 panes.
+    const bool narrowTablet = hostedTablet && available.getWidth() < ksh::ui::Layout::fullWidth / 2.0f;
+    const bool compact = mobile && (shortLandscape || narrowTablet);
     if (compact && onPhone)
     {
         available.removeFromTop (juce::jmin (10.0f, available.getHeight() * 0.05f));
@@ -580,8 +723,9 @@ void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPh
         if (halfHeight > 0.0f)
             available = available.withY (centreY - halfHeight).withHeight (2.0f * halfHeight);
     }
-    nativeView->setCompactViewport (compact, juce::jmax (814, juce::roundToInt (available.getWidth())), juce::jmax (390, juce::roundToInt (available.getHeight())),
-                                   onPhone);
+    nativeView->setCompactViewport (compact, juce::jmax (compactMinWidth, juce::roundToInt (available.getWidth())),
+                                    juce::jlimit (compactMinHeight, compactMaxHeight, juce::roundToInt (available.getHeight())),
+                                    onPhone);
     const auto& layout = nativeView->layout;
     const float fitScale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
     const bool centered = zenMode || zenWindow != nullptr;
@@ -589,9 +733,9 @@ void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPh
     if (zenMode)
         nativeView->setZenScaleLimit (static_cast<int> (std::floor (fitScale / ksh::ui::UiScale::baseline * 100.0f)));
     const int percent = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
-    if (!centered && !fitViewport && !compact && !hostedTablet && percent != processorRef.getProjectUiScalePercent())
+    if (!centered && !mobile && !updatingNativeSize && percent != processorRef.getUserUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    const auto offset = (centered || fitViewport || compact) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    const auto offset = (centered || mobile) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
     nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
 }
@@ -611,6 +755,15 @@ juce::File PluginEditor::getDefaultProjectsDirectory() const
 {
    #if JUCE_IOS
     return iosLibrary->directory();
+   #else
+    return getLocalProjectsDirectory();
+   #endif
+}
+
+juce::File PluginEditor::getLocalProjectsDirectory() const
+{
+   #if JUCE_IOS
+    return iosLibrary->localDirectory();
    #elif JUCE_MAC
     return ksh::MacProjectFiles::documentsDirectory().getChildFile ("ofsound").getChildFile ("KSH");
    #else
@@ -620,15 +773,48 @@ juce::File PluginEditor::getDefaultProjectsDirectory() const
    #endif
 }
 
-juce::Array<juce::File> PluginEditor::getSiblingProjectFiles() const
+ksh::ui::ProjectBrowser::StorageLocations PluginEditor::projectStorageLocations()
 {
-    const auto currentProjectFile = processorRef.getProjectFile();
-    const auto directory = currentProjectFile.existsAsFile()
-                               ? currentProjectFile.getParentDirectory()
-                               : getDefaultProjectsDirectory();
+    ksh::ui::ProjectBrowser::StorageLocations storage;
+   #if JUCE_IOS
+    storage.projectsName = juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone") ? "On My iPhone / KSH" : "On My iPad / KSH";
+    if (const auto folder = iosLibrary->directory(); folder != iosLibrary->localDirectory())
+        storage.cloudFolder = folder;
+   #elif JUCE_MAC
+    storage.projectsName = "Documents / ofsound / KSH";
+    storage.cloudFolder = ksh::MacProjectFiles::iCloudDriveDirectory();
+    const juce::Component::SafePointer<PluginEditor> safe (this);
+    storage.chooseCloudFolder = [safe, cloud = storage.cloudFolder] (auto done)
+    {
+        if (safe == nullptr || safe->projectFileChooser != nullptr)
+        {
+            done ({});
+            return;
+        }
+        const auto start = cloud.isDirectory() ? cloud : ksh::MacProjectFiles::documentsDirectory();
+        safe->projectFileChooser = std::make_unique<juce::FileChooser> ("Choose a project folder in iCloud Drive", start, juce::String(), true);
+        safe->projectFileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe, complete = std::move (done)] (const juce::FileChooser& chooser)
+            {
+                if (safe == nullptr) return;
+                const auto selected = chooser.getResult();
+                safe->projectFileChooser.reset();
+                complete (selected);
+            });
+    };
+   #endif
+    return storage;
+}
+
+juce::Array<juce::File> PluginEditor::getSiblingProjectFiles (const juce::File& currentProjectFile) const
+{
+    const auto directory = currentProjectFile != juce::File() ? currentProjectFile.getParentDirectory()
+        : projectBrowseFolder != juce::File() ? projectBrowseFolder : getDefaultProjectsDirectory();
     auto files = getProjectFiles (directory);
-    std::sort (files.begin(), files.end(), [] (const juce::File& left, const juce::File& right) {
-        return left.getFileName().compareNatural (right.getFileName(), true) < 0;
+    std::sort (files.begin(), files.end(), [] (const juce::File& left, const juce::File& right)
+    {
+        const auto order = left.getFileName().compareNatural (right.getFileName(), true);
+        return order == 0 ? left.getFullPathName() < right.getFullPathName() : order < 0;
     });
     return files;
 }
@@ -695,11 +881,13 @@ bool PluginEditor::loadProjectFile (const juce::File& file, juce::String& errorM
 
 bool PluginEditor::loadProjectData (const juce::File& file, const juce::MemoryBlock& data, juce::String& errorMessage)
 {
+    bool unsupportedVersion = false;
     const auto parsed = ksh::parsePersistencePayload (
-        std::string_view (static_cast<const char*> (data.getData()), data.getSize()));
+        std::string_view (static_cast<const char*> (data.getData()), data.getSize()), &unsupportedVersion);
     if (!parsed.has_value())
     {
-        errorMessage = "The selected file is not a KSH project.";
+        errorMessage = unsupportedVersion ? "This project needs a compatible version of KSH. The project file was kept intact."
+                                          : "The selected file is not a KSH project.";
         return false;
     }
 
@@ -749,7 +937,10 @@ bool PluginEditor::writeProjectFile (const juce::File& file, const juce::MemoryB
     }
     if (createOnly)
     {
-       #if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+       #if JUCE_MAC
+        if (::renamex_np (temporaryFile.getFile().getFullPathName().toRawUTF8(), file.getFullPathName().toRawUTF8(), RENAME_EXCL) == 0)
+            return true;
+       #elif JUCE_LINUX || JUCE_BSD
         // Publish the completed file only if the destination is still unoccupied.
         if (::link (temporaryFile.getFile().getFullPathName().toRawUTF8(), file.getFullPathName().toRawUTF8()) == 0)
             return true;
@@ -766,12 +957,12 @@ bool PluginEditor::writeProjectFile (const juce::File& file, const juce::MemoryB
     return false;
 }
 
-void PluginEditor::saveCurrentProject()
+void PluginEditor::saveCurrentProject (bool saveAs)
 {
     if (nativeView->isProjectBrowserOpen())
         return;
     nativeView->controller.commit();
-    nativeView->projectAction (2);
+    nativeView->projectAction (saveAs ? 5 : 2);
 }
 
 void PluginEditor::saveProject (std::function<void (juce::var)> complete)
@@ -794,6 +985,11 @@ void PluginEditor::saveProject (std::function<void (juce::var)> complete)
 void PluginEditor::saveProjectTo (const juce::File& file, const ksh::ui::ProjectBrowser::Details& details,
                                   bool createOnly, std::function<void (juce::var)> complete)
 {
+    if (processorRef.hasUnsupportedProjectVersion())
+    {
+        complete (projectOperationResult (false, "Open this project in a compatible version of KSH before saving it."));
+        return;
+    }
    #if JUCE_IOS
     if (iosLibrary->busy())
     {
@@ -870,7 +1066,7 @@ void PluginEditor::showSaveProjectDialog (const juce::Array<juce::var>& args,
     auto name = args.size() > 0 ? args[0].toString().trim() : processorRef.getProjectName();
     if (name.isEmpty()) name = "Untitled Project";
     const auto description = args.size() > 1 ? args[1].toString() : processorRef.getProjectDescription();
-    nativeView->showProjectBrowser (getDefaultProjectsDirectory(), current,
+    nativeView->showProjectBrowser (getLocalProjectsDirectory(), current,
         ksh::ui::ProjectBrowser::Details { name, processorRef.getProjectAuthor(), description },
         [this] (const juce::File& folder) { return getProjectFiles (folder); },
         [safe, epoch, current, projectComplete = std::move (complete)] (const juce::File& file, const ksh::ui::ProjectBrowser::Details& details,
@@ -884,7 +1080,7 @@ void PluginEditor::showSaveProjectDialog (const juce::Array<juce::var>& args,
             }
             safe->saveProjectTo (file, details, file != current,
                                  finishBrowserOperation (std::move (done), projectComplete, "The project could not be saved."));
-        });
+        }, {}, false, {}, projectBrowseFolder, projectStorageLocations());
 }
 
 void PluginEditor::showLoadProjectDialog (std::function<void (juce::var)> complete)
@@ -910,7 +1106,7 @@ void PluginEditor::showLoadProjectDialog (std::function<void (juce::var)> comple
                   ? projectBrowserDetails (file, data) : std::nullopt);
     };
    #endif
-    nativeView->showProjectBrowser (getDefaultProjectsDirectory(), processorRef.getProjectFile(), std::nullopt,
+    nativeView->showProjectBrowser (getLocalProjectsDirectory(), processorRef.getProjectFile(), std::nullopt,
         [this] (const juce::File& folder) { return getProjectFiles (folder); },
         [safe, epoch, revision, complete] (const juce::File& file, const ksh::ui::ProjectBrowser::Details&,
                                            ksh::ui::ProjectBrowser::Completion done)
@@ -932,7 +1128,7 @@ void PluginEditor::showLoadProjectDialog (std::function<void (juce::var)> comple
         },
         [safe, complete] { if (safe != nullptr) safe->confirmDiscardingChanges ([safe, complete]
             { if (safe != nullptr) safe->showExternalProjectDialog (complete); }); }, processorRef.isDocumentModified(),
-        std::move (readDetails));
+        std::move (readDetails), projectBrowseFolder, projectStorageLocations());
 }
 
 void PluginEditor::showExternalProjectDialog (
@@ -994,9 +1190,29 @@ void PluginEditor::createNewProject (
         return;
     }
 
+    if (const auto currentProjectFile = processorRef.getProjectFile(); currentProjectFile != juce::File())
+        projectBrowseFolder = currentProjectFile.getParentDirectory();
     processorRef.resetProject();
     processorRef.setProjectFile ({});
     complete (projectOperationResult (true));
+}
+
+void PluginEditor::restorePreviousProject (std::function<void (juce::var)> complete)
+{
+    if (projectFileChooser != nullptr || nativeView->isProjectBrowserOpen()
+       #if JUCE_IOS
+        || iosLibrary->busy()
+       #endif
+    )
+    {
+        complete (projectOperationResult (false, "Close the open project operation first."));
+        return;
+    }
+
+    const bool restored = processorRef.restorePreviousProject();
+    if (restored)
+        processorRef.setProjectFile ({});
+    complete (projectOperationResult (restored, restored ? juce::String() : "There is no previous project to restore."));
 }
 
 void PluginEditor::cycleProject (
@@ -1004,18 +1220,15 @@ void PluginEditor::cycleProject (
     std::function<void (juce::var)> complete)
 {
     const auto currentProjectFile = processorRef.getProjectFile();
-    const auto files = getSiblingProjectFiles();
+    const auto files = getSiblingProjectFiles (currentProjectFile);
 
-    if (files.size() <= 1)
+    if (files.isEmpty())
     {
-        complete (projectOperationResult (
-            false,
-            files.isEmpty() ? juce::String ("No saved projects were found in the projects folder.")
-                            : juce::String()));
+        complete (projectOperationResult (false, "No saved projects were found in this folder."));
         return;
     }
 
-    auto currentIndex = files.indexOf (currentProjectFile);
+    const auto currentIndex = files.indexOf (currentProjectFile);
     int nextIndex = 0;
 
     if (currentIndex < 0)

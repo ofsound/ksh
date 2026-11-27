@@ -44,7 +44,7 @@ juce::Result writePatternMidiFile (const PlaybackSnapshot& state, int source,
         {
             auto message = event.getMessage();
             const double tick = std::round (static_cast<double> (start + event.samplePosition) * ticksPerQuarter / samplesPerBeat);
-            message.setTimeStamp (juce::jlimit (0.0, message.isNoteOn() ? lengthTicks - 1.0 : lengthTicks, tick));
+            message.setTimeStamp (juce::jlimit (0.0, (message.isNoteOn() || message.isController()) ? lengthTicks - 1.0 : lengthTicks, tick));
             track.addEvent (message);
         }
     }

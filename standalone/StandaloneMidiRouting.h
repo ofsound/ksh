@@ -4,6 +4,15 @@
 
 namespace ksh
 {
+    inline juce::String availableStandaloneMidiOutput (const juce::Array<juce::MidiDeviceInfo>& devices,
+                                                       const juce::String& preferred)
+    {
+        for (const auto& device : devices)
+            if (device.identifier == preferred)
+                return preferred;
+        return {};
+    }
+
    #if JUCE_IOS || defined (KSH_STANDALONE_LINK)
     class StandaloneCoreMidiOutput final : public StandaloneMidiOutput
     {
@@ -22,11 +31,14 @@ namespace ksh
     private:
         struct Impl;
         std::unique_ptr<Impl> impl;
+        std::unique_ptr<Impl> disconnectedOutput;
     };
 
    #endif
    #if JUCE_IOS
-    juce::MidiDeviceInfo enableStandaloneNetworkMidi();
+    /** Inspect the available destination without enabling the shared CoreMIDI session. */
+    juce::MidiDeviceInfo getStandaloneNetworkMidiDestination();
+    juce::String getStandaloneNetworkMidiSourceIdentifier();
 
     // Sends everything published on a local CoreMIDI source to the network session.
     class StandaloneNetworkMidiForwarder
@@ -41,12 +53,14 @@ namespace ksh
 
     private:
         struct Impl;
+        struct Session;
+        std::unique_ptr<Session> session;
         std::unique_ptr<Impl> impl;
     };
    #endif
     // The network session is offered as its own route, so hide any JUCE-listed copy.
     inline juce::Array<juce::MidiDeviceInfo> withoutStandaloneNetworkDestination (juce::Array<juce::MidiDeviceInfo> available,
-                                                                               const juce::String& networkIdentifier)
+                                                                                const juce::String& networkIdentifier)
     {
         if (networkIdentifier.isNotEmpty())
             available.removeIf ([&] (const juce::MidiDeviceInfo& device) { return device.identifier == networkIdentifier; });

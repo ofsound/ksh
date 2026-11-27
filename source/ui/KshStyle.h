@@ -1,6 +1,7 @@
 #pragma once
 #include <melatonin_blur/melatonin_blur.h>
 #include "BinaryData.h"
+#include "KshFooterMenu.h"
 #include "../engine/KshTypes.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -48,6 +49,8 @@ namespace ksh::ui
             juce::Colour (0xff223036), juce::Colour (0xff38535c)
         };
         static constexpr float controlToneStrength = 0.30f;
+        static constexpr int minimumTextBrightness = -40;
+        static constexpr float darkestTextMultiplier = 0.685f;
         static inline const juce::Colour defaultWhite { 0xffffffff }, defaultText { 0xfff4fafb }, defaultMuted { 0xff95b4bb };
         static inline const juce::Colour dimWhite { 0xffc7c7c7 },
             dimText = defaultText.interpolatedWith (juce::Colour (0xff000000), 0.22f),
@@ -78,15 +81,18 @@ namespace ksh::ui
         static int textBrightness() { return brightness; }
         static void setTextBrightness (int value)
         {
-            value = juce::jlimit (-40, 100, value);
+            value = juce::jlimit (minimumTextBrightness, 100, value);
             if (brightness == value)
                 return;
             brightness = value;
             const auto adjust = [value] (juce::Colour dim, juce::Colour bright)
             {
-                const float amount = static_cast<float> (value) / 100.0f;
-                return amount < 0.0f ? dim.interpolatedWith (juce::Colours::black, -amount * 0.36f)
-                                     : dim.interpolatedWith (bright, amount);
+                if (value < 0)
+                {
+                    const float position = static_cast<float> (value) / static_cast<float> (minimumTextBrightness);
+                    return dim.interpolatedWith (juce::Colours::black, position * (1.0f - darkestTextMultiplier));
+                }
+                return dim.interpolatedWith (bright, static_cast<float> (value) / 100.0f);
             };
             white = adjust (dimWhite, defaultWhite);
             text = adjust (dimText, defaultText);
@@ -228,16 +234,33 @@ namespace ksh::ui
         return f;
     }
     inline constexpr int phoneDropdownInsetReduction = 3;
-    inline int dropdownWidth (const juce::String& label)
+    inline int dropdownWidth (const juce::String& label, float fontSize = 13.0f)
     {
-        return juce::jmax (juce::GlyphArrangement::getStringWidthInt (font (13), label),
-                          juce::GlyphArrangement::getStringWidthInt (font (13, true), label)) + 40;
+        return juce::jmax (juce::GlyphArrangement::getStringWidthInt (font (fontSize), label),
+                          juce::GlyphArrangement::getStringWidthInt (font (fontSize, true), label)) + 40;
     }
     inline void text (juce::Graphics& g, const juce::String& value, juce::Rectangle<float> bounds, float size = 12.0f, juce::Colour colour = Palette::text, bool bold = false, juce::Justification align = juce::Justification::centred)
     {
         g.setColour (colour);
         g.setFont (font (size, bold));
         g.drawText (value, bounds, align, true);
+    }
+    inline void drawGridHeaderValue (juce::Graphics& g, const juce::Component& control, const juce::String& value,
+                                     juce::Rectangle<float> bounds, float size, juce::Colour ink, bool centred)
+    {
+        const auto type = font (size, true);
+        juce::GlyphArrangement glyphs;
+        glyphs.addCurtailedLineOfText (type, value, 0.0f, 0.0f, bounds.getWidth(), true);
+        const auto line = glyphs.getBoundingBox (0, -1, true);
+        const float x = centred ? bounds.getCentreX() - line.getCentreX() : bounds.getX() - line.getX();
+        const float baseline = bounds.getCentreY() + (type.getAscent() - type.getDescent()) * 0.5f;
+        // Snap both labels to the same pixel grid even when the editor is scaled.
+        const auto origin = control.getPosition().toFloat();
+        const float pixelScale = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const auto pixelPosition = (origin + juce::Point<float> (x, baseline)) * pixelScale;
+        const auto offset = pixelPosition.roundToInt().toFloat() / pixelScale - origin;
+        g.setColour (ink);
+        glyphs.draw (g, juce::AffineTransform::translation (offset));
     }
     inline void drawShortcutHint (juce::Graphics& g, const juce::String& hint, juce::Rectangle<float> bounds,
                                   int controlHeight, juce::Justification alignment, float opacity = 1.0f)
@@ -252,6 +275,59 @@ namespace ksh::ui
         const auto top = colours.raised.interpolatedWith (colours.surface, 0.4f);
         const auto bottom = colours.app.interpolatedWith (colours.surface, 0.3f);
         return { tone (hover ? top.brighter (0.08f) : top), bounds.getTopLeft(), tone (bottom), bounds.getBottomLeft(), false };
+    }
+
+    inline juce::Path popupPanelOutline (juce::Rectangle<float> body, float radius, juce::Rectangle<float> anchorBounds = {})
+    {
+        const auto target = anchorBounds.getCentre();
+        const std::array distances { body.getY() - target.y, target.x - body.getRight(),
+                                     target.y - body.getBottom(), body.getX() - target.x };
+        const auto nearestEdge = std::ranges::max_element (distances);
+        juce::Path outline;
+        if (anchorBounds.isEmpty() || *nearestEdge <= 0.0f)
+        {
+            outline.addRoundedRectangle (body, radius);
+            return outline;
+        }
+
+        const auto pointerEdge = static_cast<size_t> (nearestEdge - distances.begin());
+        const std::array corners { body.getTopLeft(), body.getTopRight(), body.getBottomRight(), body.getBottomLeft() };
+        constexpr float pointerHalfWidth = 8.0f, pointerHeight = 6.0f;
+        radius = juce::jmin (radius, 0.5f * juce::jmin (body.getWidth(), body.getHeight()));
+        outline.startNewSubPath (corners[0].translated (radius, 0.0f));
+        for (size_t i = 0; i < corners.size(); ++i)
+        {
+            const auto end = (i + 1) % corners.size();
+            const juce::Line<float> edge (corners[i], corners[end]);
+            const float length = edge.getLength();
+            const float clearance = radius + pointerHalfWidth;
+            if (i == pointerEdge && length > 2.0f * clearance)
+            {
+                const float position = juce::jlimit (clearance, length - clearance, length * edge.findNearestProportionalPositionTo (target));
+                outline.lineTo (edge.getPointAlongLine (position - pointerHalfWidth));
+                outline.lineTo (edge.getPointAlongLine (position, -pointerHeight));
+                outline.lineTo (edge.getPointAlongLine (position + pointerHalfWidth));
+            }
+            outline.lineTo (edge.getPointAlongLine (length - radius));
+            const juce::Line<float> next (corners[end], corners[(end + 1) % corners.size()]);
+            outline.quadraticTo (corners[end], next.getPointAlongLine (radius));
+        }
+        outline.closeSubPath();
+        return outline;
+    }
+
+    inline void paintPopupPanel (juce::Graphics& g, const juce::Path& outline, juce::Colour accent, melatonin::DropShadow& glow,
+                                 float accentTint = 0.08f)
+    {
+        glow.setColor (accent.brighter (0.2f).withAlpha (0.82f));
+        glow.render (g, outline);
+        g.setGradientFill (surfaceGradient (outline.getBounds(), Palette::backgrounds, false, [accent, accentTint] (juce::Colour colour)
+        {
+            return colour.interpolatedWith (accent, accentTint);
+        }));
+        g.fillPath (outline);
+        g.setColour (accent.interpolatedWith (Palette::text, 0.22f));
+        g.strokePath (outline, juce::PathStrokeType (1.5f));
     }
 
     /** tone maps every colour drawn, e.g. to fade the surface toward a known backdrop. */
@@ -280,21 +356,22 @@ namespace ksh::ui
     }
     inline void paintGridSlot (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour backdrop, bool beatStart, float radius = 5.0f)
     {
-        surface (g, bounds, false, false, [backdrop, beatStart] (juce::Colour ink)
-        {
-            const auto base = ink.interpolatedWith (backdrop, 0.35f);
-            return (beatStart ? base.darker (0.30f) : base).withAlpha (ink.getFloatAlpha());
-        }, radius);
+        const auto base = backdrop.interpolatedWith (Palette::app, 0.30f);
+        const auto floor = beatStart ? base.darker (0.42f) : base.brighter (0.025f);
+        g.setGradientFill ({ floor.darker (0.35f), bounds.getTopLeft(), floor, bounds.getBottomLeft(), false });
+        g.fillRoundedRectangle (bounds, radius);
+        g.setColour (Palette::text.withAlpha (0.08f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), radius, 1.0f);
     }
     inline void paintGridHitFill (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour colour, int velocity, float radius = 5.0f)
     {
-        const auto light = colour.brighter (0.1f);
-        const auto bottom = colour.interpolatedWith (Palette::app, 0.1f);
+        const auto light = colour.brighter (0.28f);
+        const auto bottom = colour.brighter (0.08f);
         juce::ColourGradient fill (light, bounds.getTopLeft(), bottom, bounds.getBottomLeft(), false);
         if (velocity < 127)
         {
             // The unlit share of the cell becomes a hard-edged band above the velocity fill.
-            const auto dark = colour.interpolatedWith (Palette::app, 0.48f);
+            const auto dark = colour.interpolatedWith (Palette::app, 0.32f);
             const double shade = 1.0 - velocity / 127.0;
             const double edge = juce::jmin (1.0, shade + 0.5 / juce::jmax (1.0, static_cast<double> (bounds.getHeight())));
             fill.clearColours();
@@ -306,12 +383,20 @@ namespace ksh::ui
         g.setGradientFill (fill);
         g.fillRoundedRectangle (bounds, radius);
     }
+    inline void paintGridHitEdge (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour colour, float radius = 5.0f)
+    {
+        const auto light = colour.interpolatedWith (Palette::text, 0.34f);
+        g.setGradientFill ({ light.withAlpha (0.74f), bounds.getTopLeft(),
+                             light.withAlpha (0.32f), bounds.getBottomLeft(), false });
+        g.drawRoundedRectangle (bounds.reduced (0.75f), radius, 1.5f);
+    }
     inline juce::Colour footerInk (bool active, bool enabled)
     {
         return (active ? Palette::accent : Palette::text).withMultipliedAlpha (enabled ? 1.0f : 0.4f);
     }
     inline constexpr float footerArtworkScale = 0.85f;
     inline constexpr int footerArtworkInset = 5;
+    inline float projectActionLabelSize (int height) { return (height >= 60 ? 18.0f : 16.0f) * footerArtworkScale; }
     inline juce::Rectangle<float> footerArtworkBounds (juce::Rectangle<float> bounds)
     {
         return bounds.reduced (static_cast<float> (footerArtworkInset));
@@ -505,8 +590,25 @@ namespace ksh::ui
 
     class LookAndFeel final : public juce::LookAndFeel_V4
     {
-        static constexpr int popupLabelInset = 14;
+        static constexpr int popupBorderSize = 14;
+        static constexpr int popupContentInset = popupBorderSize + popupMenuRowPadding;
         static constexpr float popupHeaderFontSize = 13.0f;
+        static constexpr float popupGlowInset = 10.5f;
+        melatonin::DropShadow popupGlow { juce::Colours::transparentBlack, 10, {}, 1 };
+        melatonin::DropShadow popupButtonGlow { juce::Colours::transparentBlack, 5, {}, 1 };
+
+        void paintMenuBackground (juce::Graphics& g, int width, int height, juce::Colour accent, juce::Rectangle<float> anchorBounds = {})
+        {
+            const auto bounds = juce::Rectangle<float> (static_cast<float> (width), static_cast<float> (height)).reduced (popupGlowInset);
+            paintPopupPanel (g, popupPanelOutline (bounds, 7.0f, anchorBounds), accent, popupGlow);
+        }
+
+        static juce::Colour popupAccent (const juce::PopupMenu::Options& options)
+        {
+            const auto* anchor = options.getTopLevelTargetComponent();
+            return anchor != nullptr && anchor->isColourSpecified (juce::PopupMenu::highlightedTextColourId)
+                ? anchor->findColour (juce::PopupMenu::highlightedTextColourId) : Palette::accent;
+        }
 
         static bool isFooterMenu (const juce::PopupMenu::Options& options)
         {
@@ -654,7 +756,7 @@ namespace ksh::ui
             // the white backing JUCE paints for an opaque menu window.
             window.setOpaque (false);
         }
-        int getPopupMenuBorderSizeWithOptions (const juce::PopupMenu::Options& options) override { return usesMutedMenuHeader (options) ? popupLabelInset : 6; }
+        int getPopupMenuBorderSizeWithOptions (const juce::PopupMenu::Options&) override { return popupBorderSize; }
         void getIdealPopupMenuSectionHeaderSizeWithOptions (const juce::String& label, int standardHeight, int& width, int& height,
                                                             const juce::PopupMenu::Options& options) override
         {
@@ -663,8 +765,8 @@ namespace ksh::ui
                 juce::LookAndFeel_V4::getIdealPopupMenuSectionHeaderSizeWithOptions (label, standardHeight, width, height, options);
                 return;
             }
-            width = juce::GlyphArrangement::getStringWidthInt (font (popupHeaderFontSize, true), label) + 2 * popupLabelInset;
-            height = 30;
+            width = juce::GlyphArrangement::getStringWidthInt (font (popupHeaderFontSize, true), label) + 2 * popupContentInset;
+            height = 38;
         }
         void drawPopupMenuSectionHeaderWithOptions (juce::Graphics& g, const juce::Rectangle<int>& area, const juce::String& label,
                                                     const juce::PopupMenu::Options& options) override
@@ -674,25 +776,40 @@ namespace ksh::ui
                 juce::LookAndFeel_V4::drawPopupMenuSectionHeaderWithOptions (g, area, label, options);
                 return;
             }
-            // JUCE already insets the header component horizontally by the menu border.
-            text (g, label, area.toFloat(), popupHeaderFontSize, Palette::muted, true, juce::Justification::centredLeft);
+            // JUCE already applies the outer menu border to headers and custom rows.
+            text (g, label, area.toFloat().reduced (popupMenuRowPadding, 0.0f), popupHeaderFontSize, Palette::muted, true, juce::Justification::centredLeft);
         }
         void getIdealPopupMenuItemSizeWithOptions (const juce::String& label, bool separator, int standardHeight, int& width, int& height, const juce::PopupMenu::Options& options) override
         {
-            width = juce::GlyphArrangement::getStringWidthInt (font (labelFontSize, !isFooterMenu (options)), label) + 40;
+            width = juce::GlyphArrangement::getStringWidthInt (font (labelFontSize, !isFooterMenu (options)), label) + 2 * popupContentInset + 20;
             height = separator ? 8 : standardHeight > 0 ? standardHeight : 30;
         }
         void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
         {
-            const auto bounds = juce::Rectangle<float> (0, 0, static_cast<float> (width), static_cast<float> (height)).reduced (0.5f);
-            g.setColour (Palette::shell);
-            g.fillRoundedRectangle (bounds, 7.0f);
-            g.setColour (Palette::border.withAlpha (0.8f));
-            g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
+            paintMenuBackground (g, width, height, Palette::accent);
+        }
+        void drawPopupMenuBackgroundWithOptions (juce::Graphics& g, int width, int height, const juce::PopupMenu::Options& options) override
+        {
+            if (auto* anchor = options.getTargetComponent())
+                if (const auto* popup = openAnchoredPopup (*anchor))
+                {
+                    paintMenuBackground (g, width, height, popupAccent (options), popup->getLocalArea (anchor, anchor->getLocalBounds()).toFloat());
+                    return;
+                }
+            paintMenuBackground (g, width, height, popupAccent (options));
         }
         void drawPopupMenuItemWithOptions (juce::Graphics& g, const juce::Rectangle<int>& area, bool highlighted, const juce::PopupMenu::Item& item, const juce::PopupMenu::Options& options) override
         {
-            const auto bounds = area.toFloat().reduced (6.0f, 1.0f);
+            const auto content = area.toFloat().reduced (popupContentInset, 0.0f);
+            if (item.isSeparator)
+            {
+                g.setColour (Palette::controls.border.withMultipliedAlpha (0.8f));
+                g.drawHorizontalLine (area.getCentreY(), content.getX(), content.getRight());
+                return;
+            }
+
+            const auto bounds = area.toFloat().reduced (popupContentInset - 8.0f, 1.0f);
+            const auto accent = popupAccent (options);
             if (highlighted && item.isEnabled)
             {
                 g.setColour (Palette::controls.raised);
@@ -700,25 +817,25 @@ namespace ksh::ui
             }
             else if (item.isTicked)
             {
-                g.setColour (Palette::accent.withAlpha (0.08f));
+                g.setColour (accent.withAlpha (0.08f));
                 g.fillRoundedRectangle (bounds, 4.0f);
             }
-            text (g, item.text, bounds.withLeft (static_cast<float> (area.getX() + popupLabelInset)).withTrimmedRight (20), labelFontSize,
-                  !item.isEnabled ? Palette::faint : item.isTicked ? Palette::accent : Palette::text,
+            text (g, item.text, content.withTrimmedRight (20), labelFontSize,
+                  !item.isEnabled ? Palette::faint : item.isTicked ? accent : Palette::text,
                   item.isTicked && !isFooterMenu (options), juce::Justification::centredLeft);
             if (item.isTicked)
             {
-                const float x = bounds.getRight() - 14, y = bounds.getCentreY();
+                const float x = content.getRight() - 9, y = content.getCentreY();
                 juce::Path tick;
                 tick.startNewSubPath (x, y);
                 tick.lineTo (x + 3, y + 3);
                 tick.lineTo (x + 9, y - 4);
-                g.setColour (Palette::accent);
+                g.setColour (accent);
                 g.strokePath (tick, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
             else if (item.subMenu != nullptr)
             {
-                const float x = bounds.getRight() - 10, y = bounds.getCentreY();
+                const float x = content.getRight() - 3, y = content.getCentreY();
                 juce::Path chevron;
                 chevron.startNewSubPath (x - 3, y - 4);
                 chevron.lineTo (x + 1, y);
@@ -729,7 +846,7 @@ namespace ksh::ui
         }
         juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font (juce::jmin (height >= 60 ? 18.0f : 14.0f, static_cast<float> (height) * 0.45f), true); }
         static void paintToolbarButton (juce::Graphics& g, const juce::Path& outline, juce::Rectangle<float> bounds,
-                                        bool highlighted, bool active, float opacity = 1.0f)
+                                        bool highlighted, bool active, float opacity = 1.0f, juce::Colour accent = Palette::accent)
         {
             const auto top = highlighted ? Palette::controls.raised.brighter (0.12f) : Palette::controls.raised;
             g.setGradientFill (juce::ColourGradient (top.withAlpha (opacity), bounds.getTopLeft(),
@@ -737,17 +854,35 @@ namespace ksh::ui
             g.fillPath (outline);
             if (active)
             {
-                g.setColour (Palette::accent.withAlpha (0.24f * opacity));
+                g.setColour (accent.withAlpha (0.24f * opacity));
                 g.fillPath (outline);
             }
-            g.setColour ((active ? Palette::accent : Palette::controls.border).withAlpha (opacity));
+            g.setColour ((active ? accent : Palette::controls.border).withAlpha (opacity));
             g.strokePath (outline, juce::PathStrokeType (1));
+        }
+        static void paintToolbarSegment (juce::Graphics& g, juce::Rectangle<float> bounds, bool roundLeft, bool roundRight,
+                                         bool highlighted, bool active, juce::Colour accent = Palette::accent)
+        {
+            juce::Path outline;
+            outline.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), 7, 7,
+                                         roundLeft, roundRight, roundLeft, roundRight);
+            paintToolbarButton (g, outline, bounds, highlighted, active, 1.0f, accent);
         }
         void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down) override
         {
             hover = hover && b.isEnabled();
             down = down && b.isEnabled();
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+            if (openAnchoredPopup (b) != nullptr || static_cast<bool> (b.getProperties()["tempoPopupOpen"]))
+            {
+                const auto face = static_cast<bool> (b.getProperties()["insetFooterArtwork"]) ? footerArtworkBounds (r) : r.reduced (3.5f);
+                const float activity = juce::jmax (static_cast<float> (b.getProperties()["midiActivity"]),
+                                                   static_cast<float> (b.getProperties()["tempoPulse"]));
+                juce::Path outline;
+                outline.addRoundedRectangle (face, 5.0f);
+                paintPopupPanel (g, outline, Palette::accent, popupButtonGlow, 0.08f + activity * 0.18f);
+                return;
+            }
             if (b.isEnabled() && static_cast<bool> (b.getProperties()["clearPrompt"]))
             {
                 g.setColour (Palette::recording.withAlpha (0.18f));
@@ -830,10 +965,7 @@ namespace ksh::ui
                                            : b.getProperties().contains ("layerSegment") && static_cast<int> (b.getProperties()["layerSegment"]) == 0;
                 const bool last = history ? static_cast<int> (b.getProperties()["historySegment"]) == 1
                                           : b.getProperties().contains ("selectMode");
-                juce::Path outline;
-                outline.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), 7, 7,
-                                             first || stepPage, last || stepPage, first || stepPage, last || stepPage);
-                paintToolbarButton (g, outline, r, hover || down, b.getToggleState());
+                paintToolbarSegment (g, r, first || stepPage, last || stepPage, hover || down, b.getToggleState());
                 return;
             }
             const auto icon = b.getProperties()["icon"].toString();
@@ -927,9 +1059,13 @@ namespace ksh::ui
                 const auto insetReduction = static_cast<float> (b.getProperties()["dropdownInsetReduction"]);
                 const auto label = patternNumber ? bounds.withTrimmedLeft (6).withTrimmedRight (22)
                                                  : bounds.withTrimmedLeft (14 - insetReduction).withTrimmedRight (26 - insetReduction);
-                const float fontSize = patternNumber ? 20.5f : (b.getHeight() >= 60 ? 18.0f : 13.0f);
-                text (g, b.getButtonText(), label, fontSize, b.isEnabled() ? Palette::text : Palette::faint,
-                      true, patternNumber ? juce::Justification::centred : juce::Justification::centredLeft);
+                const float defaultSize = b.getHeight() >= 60 ? 18.0f : 13.0f;
+                const float fontSize = patternNumber ? 20.5f : static_cast<float> (b.getProperties().getWithDefault ("dropdownFontSize", defaultSize));
+                const auto ink = b.isEnabled() ? Palette::text : Palette::faint;
+                if (static_cast<bool> (b.getProperties()["gridHeaderValue"]))
+                    drawGridHeaderValue (g, b, b.getButtonText(), label, fontSize, ink, false);
+                else
+                    text (g, b.getButtonText(), label, fontSize, ink, true, patternNumber ? juce::Justification::centred : juce::Justification::centredLeft);
                 const float x = bounds.getRight() - 14 + insetReduction, y = bounds.getCentreY();
                 const float direction = b.getToggleState() ? -1.0f : 1.0f;
                 juce::Path chevron;
@@ -1017,8 +1153,10 @@ namespace ksh::ui
                 const bool outlinedIcon = static_cast<bool> (b.getProperties()["outlinedIcon"]);
                 const bool patternEditIcon = outlinedIcon && (icon == "clear" || icon == "previous" || icon == "next");
                 const bool rowClear = static_cast<bool> (b.getProperties()["rowClear"]);
+                const bool keyboardArrow = icon == "keyboardPrevious" || icon == "keyboardNext";
                 const float iconSize = insetFooterArtwork ? 30.0f
                                   : rowClear ? juce::jmin (20.0f, r.getHeight() * 0.65f)
+                                  : keyboardArrow ? 28.0f
                                   : icon == "eye" ? 20.0f
                                   : icon == "gear" ? 24.0f
                                   : icon == "recordLock" ? juce::jmin (40.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.9f)
@@ -1114,7 +1252,7 @@ namespace ksh::ui
                     g.drawText ("Q", juce::Rectangle<int> (6, 11, 12, 10), juce::Justification::centred);
                     return;
                 }
-                else if (icon == "projectPrevious" || icon == "projectNext" || icon == "keyboardPrevious" || icon == "keyboardNext")
+                else if (icon == "projectPrevious" || icon == "projectNext" || keyboardArrow)
                 {
                     const bool next = icon == "projectNext" || icon == "keyboardNext";
                     const float tail = next ? 9.0f : 15.0f;
@@ -1171,7 +1309,9 @@ namespace ksh::ui
                 const auto bounds = b.getLocalBounds().toFloat();
                 const auto ink = footerInk (b.getToggleState(), b.isEnabled());
                 const float fontSize = b.getHeight() >= 60 ? 18.0f : 12.0f;
-                if (insetFooterArtwork || insetProjectArtwork)
+                if (insetProjectArtwork)
+                    text (g, b.getButtonText(), footerArtworkBounds (bounds), projectActionLabelSize (b.getHeight()), ink, true);
+                else if (insetFooterArtwork)
                     text (g, b.getButtonText(), footerArtworkBounds (bounds), fontSize * footerArtworkScale, ink, true);
                 else
                     text (g, b.getButtonText(), bounds, fontSize, ink, true);
@@ -1200,15 +1340,21 @@ namespace ksh::ui
                     text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 12.0f, ink, true);
                 return;
             }
-            if (static_cast<bool> (b.getProperties()["tempoStepper"]))
+            if (b.getProperties().contains ("tempoStepper"))
             {
-                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), 26.0f,
-                      !b.isEnabled() ? Palette::faint : down ? Palette::accent : Palette::text, true);
+                const auto bounds = b.getLocalBounds().toFloat();
+                const auto centre = bounds.getCentre();
+                const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
+                const float halfSpan = size * 0.2508f;
+                const float thickness = size * 0.09f;
+                g.setColour (!b.isEnabled() ? Palette::faint : down ? Palette::accent : Palette::text);
+                g.drawLine (centre.x - halfSpan, centre.y, centre.x + halfSpan, centre.y, thickness);
+                if (b.getButtonText() == "+")
+                    g.drawLine (centre.x, centre.y - halfSpan, centre.x, centre.y + halfSpan, thickness);
                 return;
             }
             const auto bounds = b.getLocalBounds().toFloat();
-            const float fontSize = b.getButtonText() == "M" ? 30.0f
-                : b.getProperties().contains ("tempoStepper") ? 24.0f : b.getHeight() >= 60 ? 18.0f : b.getWidth() < 32 ? 10.0f : 12.0f;
+            const float fontSize = b.getButtonText() == "M" ? 30.0f : b.getHeight() >= 60 ? 18.0f : b.getWidth() < 32 ? 10.0f : 12.0f;
             text (g, b.getButtonText(), bounds, fontSize,
                   !b.isEnabled() ? Palette::faint : (b.getToggleState() || down ? Palette::controls.app : Palette::text), true);
         }
@@ -1739,7 +1885,7 @@ namespace ksh::ui
             else if (getButtonText().isNotEmpty())
                 ksh::ui::text (g, getButtonText(), face, 18.0f, Palette::text.withMultipliedAlpha (alpha), true);
             else
-                drawShortcutHint (g, keyLabel + "  " + noteLabel, face.withTrimmedBottom (7),
+                drawShortcutHint (g, keyLabel.isEmpty() ? noteLabel : keyLabel + "  " + noteLabel, face.withTrimmedBottom (7),
                                   getHeight(), juce::Justification::centredBottom, alpha);
         }
 
@@ -1791,7 +1937,7 @@ namespace ksh::ui
         int valueWidth = 0;
         juce::String suffix, caption;
         bool reserveDigitSlots = true;
-        bool mixed = false, showAdjustmentHintAtZero = false, horizontalAdjustment = false, gestureOnly = false;
+        bool mixed = false, showAdjustmentArrows = false, horizontalAdjustment = false, gestureOnly = false;
         bool horizontalDragOnTouch = false, insetRowArtwork = false;
         bool alwaysShowHorizontalArrows = false;
         std::function<juce::String (int)> format;
@@ -1889,7 +2035,7 @@ namespace ksh::ui
             }
             else
                 controlSurface (g, r.reduced (0.5f), dragging || input.isVisible(), isEnabled() && (isMouseOver() || hasKeyboardFocus (false)));
-            if (gestureOnly || alwaysShowHorizontalArrows || (showAdjustmentHintAtZero && value == 0 && !mixed))
+            if (gestureOnly || alwaysShowHorizontalArrows || showAdjustmentArrows)
             {
                 const auto centre = r.getCentre();
                 const float halfHeight = juce::jmin (9.0f, r.getHeight() * 0.25f);
@@ -1912,12 +2058,18 @@ namespace ksh::ui
                 return;
             }
             const auto label = mixed ? juce::String::fromUTF8 ("—") : format ? format (value) : valueText (value) + suffix;
+            const float displayFontSize = insetFooterArtwork ? valueFontSize * footerArtworkScale : valueFontSize;
+            const auto ink = footerControl ? footerInk (false, isEnabled()) : isEnabled() ? Palette::text : Palette::faint;
+            if (static_cast<bool> (getProperties()["gridHeaderValue"]))
+            {
+                drawGridHeaderValue (g, *this, label, r, displayFontSize, ink, true);
+                return;
+            }
             // Reserve the whole numeric range for plain values, so suffixes stay
             // anchored even across 9/10 and 99/100. Formatted labels also use
             // equal-width digits without changing their nonnumeric text.
             const int slots = reserveDigitSlots && !mixed && !format && displayDecimalPlaces == 0
                 ? juce::jmax (2, juce::String (minimum).length(), juce::String (maximum).length()) : 0;
-            const float displayFontSize = insetFooterArtwork ? valueFontSize * footerArtworkScale : valueFontSize;
             const float displaySuffixScale = slots > 0 && suffix.isNotEmpty() ? suffixFontScale : 1.0f;
             if (numericText != label || numericSlots != slots || std::abs (numericSuffixScale - displaySuffixScale) > 0.001f
                 || std::abs (numericFontSize - displayFontSize) > 0.001f)
@@ -1959,7 +2111,7 @@ namespace ksh::ui
                     }
                 }
             }
-            g.setColour (footerControl ? footerInk (false, isEnabled()) : isEnabled() ? Palette::text : Palette::faint);
+            g.setColour (ink);
             const float labelScale = insetFooterArtwork && numericWidth > 0
                 ? juce::jlimit (0.0f, 1.0f, (r.getWidth() - 4.0f) / numericWidth) : 1.0f;
             numericGlyphs.draw (g, juce::AffineTransform::scale (labelScale)
@@ -1996,12 +2148,13 @@ namespace ksh::ui
             }
             if (isShowing())
                 grabKeyboardFocus();
+            const bool touchOrPen = e.source.isTouch() || e.source.isPen();
             start = value;
-            draggingHorizontally = horizontalAdjustment || (horizontalDragOnTouch && e.source.isTouch());
+            draggingHorizontally = horizontalAdjustment || (horizontalDragOnTouch && touchOrPen);
             dragging = true;
             if (onBegin)
                 onBegin();
-            if (onContextMenu && e.source.isTouch())
+            if (onContextMenu && touchOrPen)
                 startTimer (450);
             repaint();
         }

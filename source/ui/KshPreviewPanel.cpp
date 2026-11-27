@@ -4,9 +4,9 @@ namespace ksh::ui
 {
     namespace
     {
-        Cell withInspectorOffset (const Cell& cell, Layer layer, int offset)
+        Cell withInspectorOffset (const Cell& cell, Layer layer, int offset, bool cc)
         {
-            auto next = withValue (cell, layer, cellValue (cell, layer) + offset);
+            auto next = withValue (cell, layer, cellValue (cell, layer, cc) + offset, cc);
             if (cell.roll < 2 || offset == 0)
                 return next;
 
@@ -15,7 +15,9 @@ namespace ksh::ui
                 const auto index = static_cast<size_t> (part);
                 if (layer == Layer::chance)
                     next.splitGates[index].setProbability (cell.splitGates[index].probability() + offset);
-                else if (layer == Layer::velocity && cell.splitVelocities[index] != 0)
+                else if (layer == Layer::velocity && cc && cell.splitCcValues[index] != 0)
+                    next.setSplitControllerValue (part, juce::jlimit (0, 127, cell.splitControllerValue (part) + offset));
+                else if (layer == Layer::velocity && !cc && cell.splitVelocities[index] != 0)
                     next.setSplitVelocity (part, juce::jlimit (1, 127, cell.splitVelocity (part) + offset));
             }
             return next;
@@ -312,6 +314,15 @@ namespace ksh::ui
             wordmark.onTextBrightnessEdited = [this] (int value) { if (onTextBrightnessEdited) onTextBrightnessEdited (value); };
         }
         addAndMakeVisible (velocity);
+        addChildComponent (glide);
+        glide.setTitle ("Glide to next");
+        glide.setToggleable (true);
+        glide.setTooltip ("Glide from this CC step to the next");
+        glide.onClick = [this]
+        {
+            controller.refresh();
+            controller.toggleCcGlide (controller.selection (true));
+        };
         addAndMakeVisible (probability);
         addAndMakeVisible (nudge);
         addAndMakeVisible (span);
@@ -365,18 +376,28 @@ namespace ksh::ui
         probability.maximum = 100;
         for (auto* control : { &velocity, &probability })
         {
-            control->showAdjustmentHintAtZero = true;
+            control->showAdjustmentArrows = true;
             control->horizontalDragOnTouch = true;
         }
         span.minimum = span.resetValue = CellDefaults::span;
         span.horizontalDragOnTouch = true;
         roll.minimum = roll.resetValue = CellDefaults::roll;
         roll.maximum = Constants::maxRoll;
-        velocity.onBegin = [this] { beginRelative ("Selected velocity"); };
+        velocity.onBegin = [this] { beginRelative (ccValueInspector ? "Selected CC value" : "Selected velocity"); };
         probability.onBegin = [this] { beginRelative ("Selected probability"); };
         span.onBegin = [this] { controller.begin ("Selected span"); };
         roll.onBegin = [this] { controller.begin ("Selected split"); };
-        velocity.onChange = [this] (int v) { applyRelative (Layer::velocity, v); };
+        velocity.onChange = [this] (int v)
+        {
+            if (!ccValueInspector)
+            {
+                applyRelative (Layer::velocity, v);
+                return;
+            }
+            for (const auto& [p, cell] : valueStarts)
+                controller.editCell (p, withInspectorOffset (cell, Layer::velocity, v - cell.controllerValue(), true));
+            controller.notify();
+        };
         probability.onChange = [this] (int v) { applyRelative (Layer::chance, v); };
         span.onChange = [this] (int length)
         {
@@ -391,8 +412,17 @@ namespace ksh::ui
             }
             controller.notify();
         };
-        roll.onChange = [this] (int v) { for (auto p : controller.selection (true)) { auto cell = controller.cell (p); cell.roll = juce::jlimit (1, Constants::maxRoll, v); controller.editCell (p, cell); } controller.notify(); };
-        velocity.onDoubleClick = [this] { resetSelectedValue ("Reset velocity", &Cell::velocity, CellDefaults::velocity); };
+        roll.onChange = [this] (int v)
+        {
+            for (auto p : controller.selection (true))
+            {
+                auto cell = controller.cell (p);
+                cell.roll = juce::jlimit (1, Constants::maxRoll, v);
+                controller.editCell (p, cell);
+            }
+            controller.notify();
+        };
+        velocity.onDoubleClick = [this] { resetSelectedValue (ccValueInspector ? "Reset CC value" : "Reset velocity", &Cell::velocity, CellDefaults::velocity); };
         probability.onDoubleClick = [this] { resetSelectedValue ("Reset probability", &Cell::probability, CellDefaults::probability); };
         nudge.onDoubleClick = [this] { resetSelectedValue ("Reset nudge", &Cell::nudge, CellDefaults::nudge); };
         span.onDoubleClick = [this] { resetSelectedValue ("Reset span", &Cell::span, CellDefaults::span); };
@@ -472,7 +502,7 @@ namespace ksh::ui
             return;
         }
         for (auto [control, layer] : { std::pair<juce::Component*, Layer> { &velocity, Layer::velocity },
-                 { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::chance } })
+                 { &glide, Layer::velocity }, { &probability, Layer::chance }, { &nudge, Layer::nudge }, { &roll, Layer::roll }, { &cycle, Layer::chance } })
         {
             auto bounds = control->getBounds();
             if (control == &cycle && !compact)
@@ -514,7 +544,7 @@ namespace ksh::ui
     void PreviewPanel::applyRelative (Layer layer, int offset)
     {
         for (const auto& [p, c] : valueStarts)
-            controller.editCell (p, withInspectorOffset (c, layer, offset));
+            controller.editCell (p, withInspectorOffset (c, layer, offset, controller.isControllerRow (p.channel)));
         controller.notify();
     }
     void PreviewPanel::resetSelectedValue (const juce::String& label, int Cell::* field, int value)
@@ -522,10 +552,15 @@ namespace ksh::ui
         controller.begin (label);
         for (auto location : controller.selection (true))
         {
+            const bool cc = controller.isControllerRow (location.channel);
             auto cell = controller.cell (location);
             if (field == &Cell::velocity || field == &Cell::probability)
-                cell = withInspectorOffset (cell, field == &Cell::velocity ? Layer::velocity : Layer::chance, value - cell.*field);
-            cell.*field = value;
+            {
+                const auto layer = field == &Cell::velocity ? Layer::velocity : Layer::chance;
+                cell = withInspectorOffset (cell, layer, value - cellValue (cell, layer, cc), cc);
+            }
+            else
+                cell.*field = value;
             controller.editCell (location, cell);
         }
         controller.commit();
@@ -596,6 +631,25 @@ namespace ksh::ui
         xyPad.setBounds (bounds.withTrimmedBottom (seedGap));
     }
 
+    void PreviewPanel::GlideButton::paintButton (juce::Graphics& g, bool hover, bool down)
+    {
+        const auto face = getLocalBounds().toFloat().reduced (0.5f);
+        const bool checked = getToggleState();
+        controlSurface (g, face, down || checked, hover || hasKeyboardFocus (false));
+        const auto box = face.withSizeKeepingCentre (19.0f, 19.0f);
+        g.setColour (checked ? accent : Palette::muted);
+        g.drawRoundedRectangle (box, 3.0f, 1.4f);
+        if (checked)
+        {
+            juce::Path tick;
+            const auto centre = box.getCentre();
+            tick.startNewSubPath (centre.x - 5.0f, centre.y);
+            tick.lineTo (centre.x - 1.5f, centre.y + 3.5f);
+            tick.lineTo (centre.x + 5.5f, centre.y - 4.0f);
+            g.strokePath (tick, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    }
+
     void PreviewPanel::resized()
     {
         wordmark.setVisible (!compact && !randomSection);
@@ -620,6 +674,13 @@ namespace ksh::ui
                 const int width = control->captionWidth + side;
                 control->setBounds (inputX, inputY, width, side);
                 inputX += width + 10;
+                if (control == &velocity && glide.isVisible())
+                {
+                    const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font (velocity.captionFontSize, true), "Glide") + 6;
+                    glideCaptionBounds = { inputX, inputY, captionWidth, side };
+                    glide.setBounds (glideCaptionBounds.getRight(), inputY, side, side);
+                    inputX = glide.getRight() + 10;
+                }
             }
             remove.setBounds (getWidth() - 6 - side, inputY, side, side);
             cycle.captionHeight = 0;
@@ -632,8 +693,10 @@ namespace ksh::ui
         constexpr int captionHeight = 24;
         constexpr int minimumGap = 10;
         const auto inputs = std::array { &velocity, &probability, &nudge, &span, &roll };
-        constexpr int inputCount = static_cast<int> (inputs.size());
-        constexpr int gapCount = inputCount + 1; // Include the gaps before Cycle and Delete.
+        constexpr int glideSide = 42;
+        const bool showGlide = glide.isVisible();
+        const int inputCount = static_cast<int> (inputs.size()) + (showGlide ? 1 : 0);
+        const int gapCount = inputCount + 1; // Include the gaps before Cycle and Delete.
         const int captionY = inspectorBounds.getCentreY() - (captionHeight + inputHeight) / 2 - 2;
         const int inputY = captionY + captionHeight;
         const int left = inspectorBounds.getX() + 16;
@@ -641,18 +704,26 @@ namespace ksh::ui
         int inputWidth = inputHeight;
         for (const auto* control : inputs)
             inputWidth = juce::jmax (inputWidth, juce::GlyphArrangement::getStringWidthInt (font (control->captionFontSize, true), control->caption));
-        const int cycleSpace = remove.getX() - left - inputCount * inputWidth;
+        const int cycleSpace = remove.getX() - left - static_cast<int> (inputs.size()) * inputWidth - (showGlide ? glideSide : 0);
         const int cycleWidth = juce::jlimit (0, cycle.preferredWidth (inputHeight + 8), cycleSpace - gapCount * minimumGap);
         const int gapSpace = juce::jmax (0, cycleSpace - cycleWidth);
-        const auto inputX = [left, inputWidth, gapSpace] (int index)
+        const auto inputX = [left, inputWidth, gapSpace, gapCount, showGlide] (int index)
         {
-            return left + index * inputWidth + index * gapSpace / gapCount;
+            const int reserved = showGlide && index > 1 ? inputWidth - glideSide : 0;
+            return left + index * inputWidth + index * gapSpace / gapCount - reserved;
         };
-        for (int index = 0; index < inputCount; ++index)
+        for (size_t index = 0; index < inputs.size(); ++index)
         {
-            auto* control = inputs[static_cast<size_t> (index)];
+            auto* control = inputs[index];
+            const int slot = static_cast<int> (index) + (showGlide && index != 0 ? 1 : 0);
             control->valueWidth = inputHeight;
-            control->setBounds (inputX (index), captionY, inputWidth, captionHeight + inputHeight);
+            control->setBounds (inputX (slot), captionY, inputWidth, captionHeight + inputHeight);
+        }
+        if (showGlide)
+        {
+            const juce::Rectangle<int> slot { inputX (1), inputY, glideSide, inputHeight };
+            glide.setBounds (slot.withSizeKeepingCentre (glideSide, glideSide));
+            glideCaptionBounds = slot.withY (captionY).withHeight (18);
         }
         cycle.captionHeight = captionHeight - 4;
         cycle.setBounds (inputX (inputCount), captionY, cycleWidth, inputHeight + 8 + cycle.captionHeight);
@@ -662,6 +733,45 @@ namespace ksh::ui
         const auto& p = controller.state.playback;
         const auto selected = controller.selection (true);
         const bool active = !selected.empty();
+        const auto ccCount = std::ranges::count_if (selected, [this] (Location location) { return controller.isControllerRow (location.channel); });
+        const bool ccOnly = active && ccCount == static_cast<ptrdiff_t> (selected.size());
+        const bool mixedTypes = ccCount > 0 && !ccOnly;
+        const bool showGlide = ccCount > 0 && !randomSection;
+        if (glide.isVisible() != showGlide)
+        {
+            glide.setVisible (showGlide);
+            resized();
+            repaint();
+        }
+        if (showGlide)
+            glide.setToggleState (std::ranges::all_of (selected, [this] (Location location)
+                { return !controller.isControllerRow (location.channel) || controller.glidesToNext (location); }), juce::dontSendNotification);
+        if (std::exchange (ccValueInspector, ccOnly) != ccOnly)
+        {
+            velocity.minimum = ccOnly ? 0 : -127;
+            velocity.setTitle (ccOnly ? "Selected CC value" : "Selected velocity offset");
+            velocity.setTooltip (ccOnly ? "Set the selected CC values from 0 to 127" : "Offsets selected step and split velocities together");
+            velocity.setValue (0);
+        }
+        const juce::String valueCaption = ccOnly || mixedTypes ? "Value" : "Velocity";
+        if (velocity.caption != valueCaption)
+        {
+            velocity.caption = valueCaption;
+            if (velocity.horizontalDragMultiplier > 1.0f)
+                velocity.captionWidth = juce::GlyphArrangement::getStringWidthInt (font (velocity.captionFontSize, true), valueCaption) + 7;
+            resized();
+            velocity.repaint();
+        }
+        if (ccOnly)
+        {
+            const int value = controller.cell (selected.front()).controllerValue();
+            velocity.setValue (value);
+            const bool mixed = std::ranges::any_of (selected, [this, value] (Location location) { return controller.cell (location).controllerValue() != value; });
+            if (std::exchange (velocity.mixed, mixed) != mixed)
+                velocity.repaint();
+        }
+        else if (std::exchange (velocity.mixed, false))
+            velocity.repaint();
         if (!active)
             setHoverLayer (std::nullopt);
         std::optional<juce::Colour> accent;
@@ -673,6 +783,9 @@ namespace ksh::ui
         }
         if (std::exchange (rowAccent, accent) != accent)
             repaint();
+        const auto glideAccent = rowAccent.value_or (Palette::accent);
+        if (std::exchange (glide.accent, glideAccent) != glideAccent)
+            glide.repaint();
         cycle.setBeatAccent (rowAccent);
         const float inspectorAlpha = active ? 1.0f : 0.25f;
         for (auto* control : { &velocity, &probability, &nudge, &roll })
@@ -705,7 +818,7 @@ namespace ksh::ui
             nudge.mixed = std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).nudge != controller.cell (selected.front()).nudge; });
             const int value = controller.cell (selected.front()).roll;
             roll.setValue (value);
-            roll.mixed = std::any_of (selected.begin(), selected.end(), [&] (auto loc) { return controller.cell (loc).roll != value; });
+            roll.mixed = std::ranges::any_of (selected, [&] (auto loc) { return controller.cell (loc).roll != value; });
         }
         else
         {
@@ -740,8 +853,10 @@ namespace ksh::ui
                     if (!cell.enabled)
                         continue;
 
+                    const bool cc = p.channels[ch].controller;
                     const bool fits = cell.span > 1 && step + cell.span <= end && rollSpanFits (row, loop, step, cell.span);
-                    next.hits[ch][index] = { static_cast<uint8_t> (cell.velocity), static_cast<uint8_t> (cell.roll),
+                    next.hits[ch][index] = { static_cast<uint8_t> (cc ? juce::jmax (1, cell.controllerValue()) : cell.velocity),
+                                            static_cast<uint8_t> (cell.roll),
                                             static_cast<uint8_t> (fits ? cell.span : 1), cell.splitVelocities };
                 }
             }
@@ -849,10 +964,7 @@ namespace ksh::ui
                     g.fillRoundedRectangle (cell, radius);
                 }
                 if (!narrowCells || hit.span > 1)
-                {
-                    g.setColour (Palette::text.withAlpha (0.14f));
-                    g.drawRoundedRectangle (cell.reduced (0.5f), radius, 1);
-                }
+                    paintGridHitEdge (g, cell, colour, radius);
             }
         }
     }
@@ -886,6 +998,8 @@ namespace ksh::ui
         if (compact)
         {
             surface (g, getLocalBounds().toFloat().reduced (1));
+            if (glide.isVisible())
+                text (g, "Glide", glideCaptionBounds.toFloat(), velocity.captionFontSize, Palette::text, true, juce::Justification::centredLeft);
             return;
         }
         g.setColour (Palette::raised);
@@ -897,6 +1011,8 @@ namespace ksh::ui
         surface (g, inspectorBounds.toFloat());
         const auto selectedCount = controller.selection (true).size();
         const auto labelColour = Palette::text.withAlpha (selectedCount == 0 ? 0.25f : 1.0f);
+        if (glide.isVisible())
+            text (g, "Glide", glideCaptionBounds.toFloat(), velocity.captionFontSize, labelColour, true);
         text (g, "Cycle", cycle.getBounds().withY (velocity.getY()).withHeight (18).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
         text (g, "Delete", remove.getBounds().withY (velocity.getY()).withHeight (18).withWidth (76).toFloat(), velocity.captionFontSize, labelColour, true, juce::Justification::centredLeft);
     }

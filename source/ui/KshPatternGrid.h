@@ -63,6 +63,7 @@ namespace ksh::ui
         Location coveringSpan (Location) const;
         int displayedSpan (Location) const;
         juce::Rectangle<float> cellPaintBounds (Location) const;
+        juce::Path makeControllerCurve (int channel) const;
         juce::Rectangle<float> emptyStepBounds (Location) const;
         int playbackPositionForCell (Location) const;
         double displayedSwingDelay (Location, double part = 0.0) const;
@@ -97,22 +98,29 @@ namespace ksh::ui
             juce::TextButton more { "..." };
         };
         std::array<Row, 8> rows;
-        static constexpr int soloHoldMs = 450;
-        int pendingMute = -1, muteGestureRow = -1, lastMutePaintRow = -1, gestureSource = -1;
-        uint64_t mutePress = 0, gestureEpoch = 0;
-        bool extendSoloOnRelease = false;
-        void holdMute (int channel);
-        void paintMute (int channel);
-        bool muteGestureCurrent() const;
-        struct DirectionSwipe
+        enum class RowControl { power, reverse, pingPong };
+        struct RowSwipe
         {
-            int channel, lastRow, source;
+            juce::MouseInputSource pointer;
+            int channel, source;
             uint64_t epoch;
-            bool reverse, value, painting = false;
+            RowControl control;
+            bool extendSolo;
+            bool clickPending = true;
+            int endRow = -1;
+            std::array<bool, Constants::maxChannels> initialValues {};
         };
-        std::optional<DirectionSwipe> directionSwipe;
+        std::optional<RowSwipe> rowSwipe;
+        static constexpr int soloHoldMs = 450;
+        uint64_t soloPress = 0;
+        void beginRowSwipe (int channel, RowControl, const juce::MouseEvent&);
+        void updateRowSwipe (const juce::MouseEvent&);
+        void endRowSwipe (const juce::MouseEvent&, const RowPlaybackButton&);
+        bool rowSwipeMatches (int channel, RowControl, const juce::MouseEvent&) const;
+        bool rowSwipeCurrent (const RowSwipe&) const;
+        void holdRowSolo();
+        bool rowControlValue (const RowSwipe&, int channel) const;
         void setDirection (int channel, bool reverse, bool enabled);
-        bool directionSwipeCurrent() const;
         int displayedSource = -2;
         uint64_t displayedEpoch = 0;
         std::optional<EditorController::SplitCycleSelection> displayedSplitCycle;
@@ -176,7 +184,7 @@ namespace ksh::ui
         };
         std::optional<SplitPress> splitPress;
         bool beginSplitPress (const PresetPress&, int selectionDelay);
-        void setSplitValue (Location, int, Layer, int);
+        void setSplitProbability (Location, int, int);
         void dragSplitValue (const juce::MouseEvent&);
         bool canClickCycleStrip (const juce::ModifierKeys&) const;
         bool cycleStripContains (Location, juce::Point<float>) const;
@@ -211,8 +219,16 @@ namespace ksh::ui
         std::optional<HandleClick> lastHandleClick;
         juce::ModifierKeys modifiers;
         std::array<std::array<bool, Constants::maxSteps>, Constants::maxChannels> lastFlash {};
-        bool mutePainting = false, muteValue = false;
         std::array<Cell, Constants::cellsPerPattern> displayedCells {};
+        std::array<int, Constants::maxChannels> displayedCcModes {};
+        struct ControllerCurve
+        {
+            juce::Path path;
+            LoopRange loop;
+            int mode = 0;
+        };
+        std::array<ControllerCurve, Constants::maxChannels> controllerCurves;
+        double controllerCurveRate = 0.0;
         std::array<juce::Rectangle<float>, Constants::cellsPerPattern> displayedPaintBounds {};
         std::pair<int, int> displayedSwing { -1, -1 };
         Selection displayedSelection;
@@ -220,6 +236,7 @@ namespace ksh::ui
         std::array<std::pair<float, float>, 8> displayedLoopEdges {};
         std::array<bool, 8> displayedMutes {};
         int displayedSteps = -1;
+        int displayedBeatStride = 4;
         int displayedFirstStep = -1;
         Layer displayedLayer = Layer::velocity;
         bool displayedColors = true, displayedNames = true, displayedGraphicalValues = false;

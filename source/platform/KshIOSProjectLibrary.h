@@ -21,10 +21,11 @@ namespace ksh
         IOSProjectLibrary();
         ~IOSProjectLibrary();
         juce::File directory() const;
+        juce::File localDirectory() const;
         juce::File currentFile() const;
         juce::Array<juce::File> files (const juce::File& directory) const;
         bool busy() const;
-        void cancel();
+        void cancel (bool notify = true);
         void acceptFile (const juce::File&);
         void chooseOpen (juce::Component&, Completion);
         void read (const juce::File&, Completion);

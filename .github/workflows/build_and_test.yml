@@ -1,189 +1,151 @@
-name: KSH
+name: KSH CI
 
 on:
-  workflow_dispatch: # lets you run a build from the UI
-  workflow_call: # lets other workflows (like nightly.yml) call this one
-  push:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-# When pushing new commits, cancel any running builds on that branch
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  BUILD_TYPE: Release
-  BUILD_DIR: Builds
-  DISPLAY: :0 # linux pluginval needs this
-  HOMEBREW_NO_INSTALL_CLEANUP: 1
-  SCCACHE_GHA_ENABLED: true
-  SCCACHE_CACHE_MULTIARCH: 1
-  # IPP_DIR: C:\Program Files (x86)\Intel\oneAPI\ipp\latest\lib\cmake\ipp
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
-defaults:
-  run:
-    shell: bash
-
-# jobs are run in parallel on different machines
-# all steps run in series
 jobs:
-  build_and_test:
-    # don't double run on PRs
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
-      matrix:
-        include:
-          # Re-enable Linux / Windows when preparing a cross-platform release.
-          # - name: Linux
-          #   os: ubuntu-22.04
-          #   pluginval-binary: ./pluginval
-          #   extra-flags: -G Ninja -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld
-          - name: macOS
-            os: macos-14
-            pluginval-binary: pluginval.app/Contents/MacOS/pluginval
-            extra-flags: -G Ninja -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          # - name: Windows
-          #   os: windows-latest
-          #   pluginval-binary: ./pluginval.exe
-          #   extra-flags: -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+  macos:
+    name: macOS build and tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_CACHE_MULTIARCH: '1'
+      PRODUCTS: Builds/KSH_artefacts/Release
 
     steps:
-      # Setup MSVC toolchain and developer command prompt (Windows)
-      - uses: ilammy/msvc-dev-cmd@v1
-
-      # Use clang on Linux (all three platforms now use Clang)
-      - name: Set up Clang
-        if: runner.os == 'Linux'
-        uses: egor-tensin/setup-clang@v2
-
-      # This also starts up our "fake" display (Xvfb), needed for pluginval
-      # - name: Install JUCE's Linux Deps
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     sudo apt-get update && sudo apt install libasound2-dev libx11-dev libxinerama-dev libxext-dev libfreetype6-dev libwebkit2gtk-4.1-dev libglu1-mesa-dev xvfb ninja-build
-      #     sudo /usr/bin/Xvfb $DISPLAY &
-
-      # - name: Install IPP (Windows)
-      #   if: (runner.os == 'Windows')
-      #   run: |
-      #     nuget install intelipp.static.win-x64 -Version 2026.0.0.712
-
-      - name: Install Ninja (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ninja
-
-      - name: Install macOS Deps
-        if: ${{ runner.os == 'macOS' }}
-        run: brew install ninja osxutils
-
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - name: Cache the build
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Configure
-        run: cmake -B ${{ env.BUILD_DIR }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE}} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ matrix.extra-flags }} .
-
-      - name: Build
-        run: cmake --build ${{ env.BUILD_DIR }} --config ${{ env.BUILD_TYPE }}
-
-      - name: Test & Benchmarks
-        working-directory: ${{ env.BUILD_DIR }}
-        run: ctest --verbose --output-on-failure
-
-      - name: Read in .env from CMake # see GitHubENV.cmake
+      - name: Show toolchain
         run: |
-          cat .env # show us the config
-          cat .env >> $GITHUB_ENV # pull in our PRODUCT_NAME, etc
+          xcodebuild -version
+          cmake --version
+          ninja --version
 
-      - name: Set additional env vars for next steps
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Build universal macOS Standalone and plug-ins
+        id: desktop_build
         run: |
-          ARTIFACTS_PATH=${{ env.BUILD_DIR }}/${{ env.PROJECT_NAME }}_artefacts/${{ env.BUILD_TYPE }}
-          echo "ARTIFACTS_PATH=$ARTIFACTS_PATH" >> $GITHUB_ENV
-          echo "VST3_PATH=$ARTIFACTS_PATH/VST3/${{ env.PRODUCT_NAME }}.vst3" >> $GITHUB_ENV
-          echo "AU_PATH=$ARTIFACTS_PATH/AU/${{ env.PRODUCT_NAME }}.component" >> $GITHUB_ENV
-          echo "AUV3_PATH=$ARTIFACTS_PATH/AUv3/${{ env.PRODUCT_NAME }}.appex" >> $GITHUB_ENV
-          echo "CLAP_PATH=$ARTIFACTS_PATH/CLAP/${{ env.PRODUCT_NAME }}.clap" >> $GITHUB_ENV
-          echo "STANDALONE_PATH=$ARTIFACTS_PATH/Standalone/${{ env.PRODUCT_NAME }}.app" >> $GITHUB_ENV
-          echo "ARTIFACT_NAME=${{ env.PRODUCT_NAME }}-${{ env.VERSION }}-${{ runner.os }}" >> $GITHUB_ENV
+          cmake -S . -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' \
+            -DKSH_COPY_PLUGIN_AFTER_BUILD=OFF \
+            -DKSH_BUILD_BENCHMARKS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build Builds --parallel 4
 
-      - name: Pluginval
+      - name: Run CTest
         run: |
-          curl -LO "https://github.com/Tracktion/pluginval/releases/download/v1.0.3/pluginval_${{ runner.os }}.zip"
-          7z x pluginval_${{ runner.os }}.zip
-          ${{ matrix.pluginval-binary }} --strictness-level 10 --verbose --validate "${{ env.VST3_PATH }}"
+          ctest --test-dir Builds --output-on-failure --no-tests=error \
+            --output-junit "$RUNNER_TEMP/ksh-ctest.xml"
 
-      # Code signing / notarization — enable when distributing (see melatonin.dev manuals).
-      # - name: Import Certificates (macOS)
-      #   uses: sudara/basic-macos-keychain-action@v1
-      #   ...
-
-      - name: Zip
-        if: ${{ runner.os == 'Linux' }}
-        working-directory: ${{ env.ARTIFACTS_PATH }}
-        run: 7z a -tzip "${{ env.ARTIFACT_NAME }}.zip" "-xr!lib${{ env.PRODUCT_NAME }}_SharedCode.a" .
-
-      - name: Generate Installer
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          iscc "packaging\installer.iss"
-          mv "packaging/Output/${{ env.ARTIFACT_NAME }}.exe" "${{ env.ARTIFACTS_PATH }}/"
-
-      # - name: Codesign with Azure Trusted Signing
-      #   if: ${{ runner.os == 'Windows' }}
-      #   uses: azure/artifact-signing-action@v2
-      #   ...
-
-      - name: Upload Exe (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        uses: actions/upload-artifact@v7
+      - name: Upload CTest results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ${{ env.ARTIFACT_NAME }}.exe
-          path: "${{ env.ARTIFACTS_PATH }}/${{ env.ARTIFACT_NAME }}.exe"
+          name: macos-ctest
+          path: ${{ runner.temp }}/ksh-ctest.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Upload Zip (Linux)
-        if: ${{ runner.os == 'Linux' }}
-        uses: actions/upload-artifact@v7
+      - name: Validate the VST3 in pluginval
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          curl --fail --show-error --silent --location --retry 3 \
+            https://github.com/Tracktion/pluginval/releases/download/v1.0.3/pluginval_macOS.zip \
+            -o "$RUNNER_TEMP/pluginval.zip"
+          ditto -x -k "$RUNNER_TEMP/pluginval.zip" "$RUNNER_TEMP"
+          "$RUNNER_TEMP/pluginval.app/Contents/MacOS/pluginval" \
+            --strictness-level 10 --verbose --validate "$PRODUCTS/VST3/KSH.vst3"
+
+      - name: Validate the AU MIDI effect in auval
+        id: au_validation
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          component="$PRODUCTS/AU/KSH.component"
+          codesign --force --sign - --timestamp=none "$component"
+          codesign --verify --strict "$component"
+
+          # Install into the disposable runner's system scan path and refresh AU discovery.
+          components=/Library/Audio/Plug-Ins/Components
+          sudo -n mkdir -p "$components"
+          sudo -n ditto "$component" "$components/KSH.component"
+          sudo -n killall -TERM AudioComponentRegistrar || true
+
+          for attempt in {1..10}; do
+            if auval -s aumi | awk '$1 == "aumi" && $2 == "Ksh1" && $3 == "Osnd" { found = 1 } END { exit !found }'; then
+              auval -v aumi Ksh1 Osnd
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "KSH AU did not register on the runner after 10 scans." >&2
+          auval -s aumi
+          exit 1
+
+      - name: Package the macOS bundles
+        if: ${{ !cancelled() && steps.au_validation.outcome == 'success' }}
+        run: |
+          bundles=(Standalone/KSH.app AU/KSH.component VST3/KSH.vst3 CLAP/KSH.clap)
+          for bundle in "${bundles[@]}"; do
+            binary="$PRODUCTS/$bundle/Contents/MacOS/KSH"
+            if [[ ! -x "$binary" ]]; then
+              echo "Missing executable: $binary" >&2
+              exit 1
+            fi
+            if ! lipo "$binary" -verify_arch arm64 x86_64; then
+              echo "Expected arm64 and x86_64 in $binary" >&2
+              lipo -info "$binary"
+              exit 1
+            fi
+          done
+          tar -czf "$RUNNER_TEMP/KSH-macOS-universal.tar.gz" -C "$PRODUCTS" "${bundles[@]}"
+
+      - name: Upload macOS bundles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ${{ env.ARTIFACT_NAME }}.zip
-          path: "${{ env.ARTIFACTS_PATH }}/${{ env.ARTIFACT_NAME }}.zip"
+          path: ${{ runner.temp }}/KSH-macOS-universal.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
 
-      # - name: Upload pkg (macOS)
-      #   if: ${{ runner.os == 'macOS' }}
-      #   uses: actions/upload-artifact@v7
-      #   with:
-      #     name: ${{ env.ARTIFACT_NAME }}.pkg
-      #     path: packaging/${{ env.ARTIFACT_NAME }}.pkg
-
-      - name: Upload build artefacts (macOS)
-        if: ${{ runner.os == 'macOS' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.ARTIFACTS_PATH }}
-
-  release:
-    if: contains(github.ref, 'tags/v')
-    runs-on: ubuntu-latest
-    needs: build_and_test
+  ios:
+    name: iOS build and AUv3 packaging
+    runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
-      - name: Get Artifacts
-        uses: actions/download-artifact@v8
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          prerelease: true
-          # download-artifact puts these files in their own dirs...
-          # Using globs sidesteps having to pass the version around
-          files: |
-            */*.exe
-            */*.zip
-            */*.dmg
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build unsigned iPhone and iPad app
+        run: |
+          xcodebuild -version
+          cmake --preset ios-xcode
+          cmake --build Builds-iOS --config Release --target KSH_Standalone \
+            --parallel 4 -- CODE_SIGNING_ALLOWED=NO
+
+      - name: Check the iOS app and embedded AUv3
+        run: bash scripts/verify-apple-bundle.sh ios Builds-iOS/KSH_artefacts/Release/Standalone/KSH.app

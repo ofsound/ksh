@@ -36,7 +36,7 @@ public:
 
     void showSaveProjectDialog (const juce::Array<juce::var>& args,
         std::function<void (juce::var)> complete);
-    void saveCurrentProject();
+    void saveCurrentProject (bool saveAs = false);
     void saveProject (std::function<void (juce::var)> complete);
     void showLoadProjectDialog (std::function<void (juce::var)> complete);
     void createNewProject (std::function<void (juce::var)> complete);
@@ -49,11 +49,14 @@ private:
    #if JUCE_IOS
     std::shared_ptr<ksh::IOSProjectLibrary> iosLibrary;
     std::unique_ptr<ksh::IOSFileDrop> iosFileDrop;
+    juce::Rectangle<float> lastSafeArea;
+    const bool isIPhone = juce::SystemStats::getDeviceDescription().startsWithIgnoreCase ("iPhone");
     uint64_t iosOperationEpoch = 0;
     void iosProjectAction (int action, std::function<void (juce::var)>, juce::File target = {});
    #endif
     PluginProcessor& processorRef;
     const bool fitViewport;
+    bool updatingNativeSize = false;
     bool zenMode = false, zenFullscreenSeen = false, zenExitRequested = false;
     juce::Component::SafePointer<juce::DocumentWindow> zenWindow;
     juce::Rectangle<int> windowBoundsBeforeZen;
@@ -64,9 +67,12 @@ private:
     void finishZenExit();
 
     void confirmDiscardingChanges (std::function<void()> proceed);
+    void restorePreviousProject (std::function<void (juce::var)> complete);
     juce::File getDefaultProjectsDirectory() const;
+    juce::File getLocalProjectsDirectory() const;
+    ksh::ui::ProjectBrowser::StorageLocations projectStorageLocations();
     juce::Array<juce::File> getProjectFiles (const juce::File&) const;
-    juce::Array<juce::File> getSiblingProjectFiles() const;
+    juce::Array<juce::File> getSiblingProjectFiles (const juce::File& currentProjectFile) const;
     void showExternalProjectDialog (std::function<void (juce::var)>);
     void saveProjectTo (const juce::File&, const ksh::ui::ProjectBrowser::Details&, bool createOnly,
                         std::function<void (juce::var)>);
@@ -78,9 +84,11 @@ private:
 
     std::unique_ptr<ksh::ui::NativeEditor> nativeView;
     bool usesHostedTabletViewport() const;
+    void updateViewport (juce::Rectangle<float>);
     void layoutNativeView (juce::Rectangle<float>, bool onPhone);
     void updateNativeSize();
     std::unique_ptr<juce::FileChooser> projectFileChooser;
+    juce::File projectBrowseFolder;
 
     struct FileDrop
     {
@@ -95,6 +103,7 @@ private:
         std::optional<double> bpm;
     };
     FileDrop beginFileDrop();
+    void openDroppedProject (const juce::File&);
     void analyseFileDrop (FileDrop, const juce::File&, const juce::String& originalName,
                           std::shared_ptr<juce::TemporaryFile> stagedFile = {});
     void completeProjectDrop (FileDrop, ProjectDrop);
@@ -104,7 +113,7 @@ private:
     bool fileDragOver = false;
     juce::String fileDropStatus;
     juce::TimedCallback fileDropStatusTimer { [this] { showFileDropStatus ({}); } };
-    std::unique_ptr<juce::ThreadPool> fileDropWorker;
+    std::shared_ptr<std::atomic<bool>> fileDropCancellation;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

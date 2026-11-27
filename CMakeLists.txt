@@ -18,6 +18,9 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else()
     # Configures universal binaries and decides which version of macOS to support
     include(PamplejuceMacOS)
+    if (KSH_MACOS_TESTFLIGHT)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version for TestFlight" FORCE)
+    endif()
 endif()
 
 # Couple tweaks that IMO should be JUCE defaults
@@ -79,8 +82,21 @@ include(PamplejuceLog)
 # JUCE is setup as a submodule in the /JUCE folder
 # Locally, you must run `git submodule update --init --recursive` once
 # and later `git submodule update --remote --merge` to keep it up to date
-# On Github Actions, this is done as a part of actions/checkout
-add_subdirectory(JUCE)
+# On GitHub Actions, this is done as a part of actions/checkout.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # JUCE forwards this value to juceaide, which runs on the build Mac.
+    set(ksh_ios_deployment_target "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "")
+    add_subdirectory(JUCE)
+    if (ksh_ios_deployment_target STREQUAL "$CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}")
+        unset(CMAKE_OSX_DEPLOYMENT_TARGET)
+    else()
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "${ksh_ios_deployment_target}")
+    endif()
+    unset(ksh_ios_deployment_target)
+else()
+    add_subdirectory(JUCE)
+endif()
 
 # Only the regular desktop build uses the CLAP wrapper.
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KSH_MACOS_TESTFLIGHT)
@@ -118,6 +134,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     file(READ "${CMAKE_CURRENT_BINARY_DIR}/ios-projects.plist" KSH_IOS_PROJECT_PLIST)
     list(APPEND KSH_IOS_PROJECT_OPTIONS PLIST_TO_MERGE "${KSH_IOS_PROJECT_PLIST}")
     list(APPEND KSH_IOS_PROJECT_OPTIONS ICLOUD_PERMISSIONS_ENABLED ${KSH_IOS_ICLOUD_ENABLED})
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    list(APPEND KSH_MACOS_APP_OPTIONS DOCUMENT_EXTENSIONS kshproject)
 endif()
 
 juce_add_plugin("${PROJECT_NAME}"
@@ -160,6 +178,20 @@ juce_add_plugin("${PROJECT_NAME}"
 
     PRODUCT_NAME "${PRODUCT_NAME}")
 
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(ksh_privacy_manifest "${CMAKE_CURRENT_SOURCE_DIR}/packaging/ios/PrivacyInfo.xcprivacy")
+    set_source_files_properties("${ksh_privacy_manifest}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    foreach(format Standalone AUv3)
+        if (TARGET "${PROJECT_NAME}_${format}")
+            target_sources("${PROJECT_NAME}_${format}" PRIVATE "${ksh_privacy_manifest}")
+        endif()
+    endforeach()
+elseif (KSH_MACOS_TESTFLIGHT)
+    set(ksh_privacy_manifest "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/PrivacyInfo.xcprivacy")
+    set_source_files_properties("${ksh_privacy_manifest}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources("${PROJECT_NAME}_Standalone" PRIVATE "${ksh_privacy_manifest}")
+endif()
+
 # This lets us use our code in both the JUCE targets and our Test target
 # Without running into ODR violations
 add_library(SharedCode INTERFACE)
@@ -195,7 +227,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     enable_language(OBJCXX)
     set(KSH_IOS_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSProjectLibrary.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSFileDrop.mm")
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSFileDrop.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/platform/KshIOSSafeArea.mm")
     set_source_files_properties(${KSH_IOS_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_sources(SharedCode INTERFACE ${KSH_IOS_SOURCES})
     target_compile_definitions(SharedCode INTERFACE KSH_IOS_ICLOUD_ENABLED=$<BOOL:${KSH_IOS_ICLOUD_ENABLED}>)
@@ -320,9 +353,10 @@ if (TARGET "${PROJECT_NAME}_Standalone")
                 "SHELL:-Xfrontend -disable-autolink-framework -Xfrontend UIUtilities")
             target_link_libraries("${PROJECT_NAME}_Standalone" PRIVATE KshIPadWindow)
             target_compile_definitions("${PROJECT_NAME}_Standalone" PRIVATE KSH_IPAD_SYSTEM_OVERLAYS)
+            # Xcode may expand TOOLCHAIN_DIR to the Metal toolchain on CI.
             set_target_properties("${PROJECT_NAME}_Standalone" PROPERTIES
                 LINKER_LANGUAGE CXX
-                XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)")
+                XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) \"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)\"")
             if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
                 execute_process(COMMAND xcrun --find swiftc
                     OUTPUT_VARIABLE KSH_SWIFT_COMPILER_PATH OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
@@ -345,11 +379,10 @@ endif()
 # project avoids non-app targets that Xcode cannot sign or run on an iPad.
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(Tests)
-endif()
-
-# A separate target for Benchmarks (keeps the Tests target fast)
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    include(Benchmarks)
+    option(KSH_BUILD_BENCHMARKS "Build the desktop benchmarks" ON)
+    if (KSH_BUILD_BENCHMARKS)
+        include(Benchmarks)
+    endif()
 endif()
 
 # Output some config for CI (like our PRODUCT_NAME)

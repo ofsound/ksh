@@ -82,21 +82,17 @@ namespace ksh
             // Match JUCE's full identifier, including external-device connections;
             // never guess from a display name (two keyboards can share a name).
             for (ItemCount i = 0; i < MIDIGetNumberOfDestinations(); ++i)
-                if (const auto endpoint = MIDIGetDestination (i); getConnectedEndpointInfo (endpoint).identifier == info.identifier)
+            {
+                const auto endpoint = MIDIGetDestination (i);
+                SInt32 offline = 0;
+                MIDIObjectGetIntegerProperty (endpoint, kMIDIPropertyOffline, &offline);
+                if (offline == 0 && getConnectedEndpointInfo (endpoint).identifier == info.identifier)
                     return endpoint;
+            }
             return 0;
         }
 
        #if JUCE_IOS
-        MIDINetworkSession* enableSession()
-        {
-            // CoreMIDI owns this shared session. Keep it enabled for other MIDI apps after KSH closes.
-            MIDINetworkSession* session = [MIDINetworkSession defaultSession];
-            session.connectionPolicy = MIDINetworkConnectionPolicy_Anyone;
-            session.enabled = YES;
-            return session;
-        }
-
         // The session can report no endpoint while its driver port already exists.
         MIDIEndpointRef findNetworkDestination (MIDINetworkSession* session)
         {
@@ -132,9 +128,9 @@ namespace ksh
     }
 
    #if JUCE_IOS
-    juce::MidiDeviceInfo enableStandaloneNetworkMidi()
+    juce::MidiDeviceInfo getStandaloneNetworkMidiDestination()
     {
-        const auto endpoint = findNetworkDestination (enableSession());
+        const auto endpoint = findNetworkDestination ([MIDINetworkSession defaultSession]);
         if (endpoint == 0)
             return {};
         auto info = getJuceEndpointInfo (endpoint);
@@ -142,6 +138,12 @@ namespace ksh
             return {};
         info.name = "Network Session";
         return info;
+    }
+
+    juce::String getStandaloneNetworkMidiSourceIdentifier()
+    {
+        const auto source = [[MIDINetworkSession defaultSession] sourceEndpoint];
+        return source != 0 ? getConnectedEndpointInfo (source).identifier : juce::String();
     }
 
    #endif
@@ -156,7 +158,9 @@ namespace ksh
         uint8_t group = 0;
         mach_timebase_info_data_t timebase {};
         StandaloneMidiClock clock;
+        StandaloneMidiHeldNotes heldNotes;
         MIDITimeStamp lastScheduledTime = 0;
+        MIDITimeStamp pendingReleaseTime = 0;
 
         ~Impl()
         {
@@ -167,28 +171,38 @@ namespace ksh
         }
 
         API_AVAILABLE (macos (11.0))
-        void submit (const MIDIEventList* events) const
+        OSStatus submit (const MIDIEventList* events) const
         {
             if (virtualSource)
-                MIDIReceivedEventList (endpoint, events);
-            else
-                MIDISendEventList (port, endpoint, events);
+                return MIDIReceivedEventList (endpoint, events);
+            return MIDISendEventList (port, endpoint, events);
         }
 
         API_AVAILABLE (macos (11.0))
-        void silence (MIDITimeStamp time) const
+        bool silence (MIDITimeStamp time, const StandaloneMidiHeldNotes& notes, MIDITimeStamp cutoff) const
         {
             alignas (MIDIEventList) std::byte storage[1024] {};
             auto* events = reinterpret_cast<MIDIEventList*> (storage);
             auto* packet = MIDIEventListInit (events, kMIDIProtocol_1_0);
-            for (UInt32 channel = 0; channel < 16; ++channel)
+            bool sent = true;
+            const auto append = [&] (UInt32 word)
             {
-                // Sustain off before all-notes-off, including MIDI thru notes.
-                const UInt32 words[] { 0x20b04000u | (UInt32 (group) << 24) | (channel << 16),
-                                       0x20b07b00u | (UInt32 (group) << 24) | (channel << 16) };
-                packet = MIDIEventListAdd (events, sizeof (storage), packet, time, 2, words);
-            }
-            submit (events);
+                word |= UInt32 (group) << 24;
+                if (auto* next = MIDIEventListAdd (events, sizeof (storage), packet, time, 1, &word))
+                    packet = next;
+                else
+                {
+                    sent = (submit (events) == noErr) && sent;
+                    packet = MIDIEventListInit (events, kMIDIProtocol_1_0);
+                    packet = MIDIEventListAdd (events, sizeof (storage), packet, time, 1, &word);
+                }
+            };
+            for (UInt32 channel = 0; channel < 16; ++channel)
+                append (0x20b04000u | (channel << 16)); // Sustain off before the note-offs.
+            notes.forEachHeld (cutoff, append);
+            for (UInt32 channel = 0; channel < 16; ++channel)
+                append (0x20b07b00u | (channel << 16));
+            return (submit (events) == noErr) && sent;
         }
     };
 
@@ -211,6 +225,8 @@ namespace ksh
     juce::String StandaloneCoreMidiOutput::open (const juce::MidiDeviceInfo& info, bool virtualSource)
     {
         stop();
+        if (impl != nullptr && impl->pendingReleaseTime != 0)
+            disconnectedOutput = std::move (impl);
         impl.reset();
         auto next = std::make_unique<Impl>();
         next->info = info;
@@ -235,6 +251,15 @@ namespace ksh
                             next->group = group;
                             break;
                         }
+            }
+        }
+        if (@available (macOS 11.0, *))
+        {
+            if (!virtualSource && disconnectedOutput != nullptr && disconnectedOutput->info.identifier == info.identifier)
+            {
+                if (!next->silence (mach_absolute_time(), disconnectedOutput->heldNotes, disconnectedOutput->pendingReleaseTime))
+                    return "Could not release held MIDI notes on " + info.name;
+                disconnectedOutput.reset();
             }
         }
         impl = std::move (next);
@@ -278,6 +303,8 @@ namespace ksh
                 }
                 jassert (added != nullptr); // A UMP is at most 16 bytes.
                 end = added;
+                if (juce::ump::Utils::getMessageType (*words) == juce::ump::Utils::MessageKind::channelVoice1)
+                    impl->heldNotes.observe (*words, time);
                 impl->lastScheduledTime = juce::jmax (impl->lastScheduledTime, time);
             });
             if (events->numPackets != 0)
@@ -294,15 +321,46 @@ namespace ksh
             MIDIFlushOutput (impl->endpoint);
         if (@available (macOS 11.0, *))
         {
-            impl->silence (now);
+            const auto released = impl->silence (now, impl->heldNotes, now);
+            if (!impl->virtualSource && (!released || findDestination (impl->info) != impl->endpoint))
+                impl->pendingReleaseTime = now;
             // Published virtual events cannot be recalled from other clients.
-            if (impl->lastScheduledTime > now)
-                impl->silence (impl->lastScheduledTime + 1);
+            if (impl->virtualSource && impl->lastScheduledTime > now)
+                impl->silence (impl->lastScheduledTime + 1, impl->heldNotes, now);
         }
+        if (impl->pendingReleaseTime == 0)
+            impl->heldNotes.clear();
         impl->lastScheduledTime = 0;
     }
 
    #if JUCE_IOS
+    struct StandaloneNetworkMidiForwarder::Session
+    {
+        MIDINetworkSession* midi = [MIDINetworkSession defaultSession];
+        const bool enabledByKsh = !midi.isEnabled;
+        const MIDINetworkConnectionPolicy previousPolicy = midi.connectionPolicy;
+
+        Session()
+        {
+            if (enabledByKsh)
+            {
+                // The user selected Network Session. A peer can now connect
+                // from Audio MIDI Setup without a contact configured on iOS.
+                midi.connectionPolicy = MIDINetworkConnectionPolicy_Anyone;
+                midi.enabled = YES;
+            }
+        }
+
+        ~Session()
+        {
+            if (enabledByKsh && midi.connectionPolicy == MIDINetworkConnectionPolicy_Anyone)
+            {
+                midi.enabled = NO;
+                midi.connectionPolicy = previousPolicy;
+            }
+        }
+    };
+
     // JUCE 8 on iOS 18+ treats the session's port as a multi-group UMP device
     // and gives it no MIDI 1.0 identifier, so MidiOutput cannot open it.
     struct StandaloneNetworkMidiForwarder::Impl
@@ -329,13 +387,16 @@ namespace ksh
 
     juce::String StandaloneNetworkMidiForwarder::start (const juce::MidiDeviceInfo& source)
     {
-        stop();
-        const auto destination = findNetworkDestination (enableSession());
-        if (destination == 0)
-            return "Network Session destination not found";
+        if (impl != nullptr)
+            return {};
         const auto sourceEndpoint = findSource (source);
         if (sourceEndpoint == 0)
             return "Source not found: " + source.name + " (" + source.identifier + ")";
+        if (session == nullptr)
+            session = std::make_unique<Session>();
+        const auto destination = findNetworkDestination (session->midi);
+        if (destination == 0)
+            return "Network Session destination not found";
 
         auto next = std::make_unique<Impl>();
         next->source = sourceEndpoint;
@@ -360,6 +421,7 @@ namespace ksh
 
     void StandaloneNetworkMidiForwarder::stop()
     {
+        const juce::ScopeGuard releaseSession { [this] { session.reset(); } };
         if (impl == nullptr)
             return;
         MIDIPortDisconnectSource (impl->input, impl->source);

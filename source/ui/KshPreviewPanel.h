@@ -100,7 +100,16 @@ namespace ksh::ui
         std::array<juce::TextButton, generatorSeedCount> xySeeds;
         juce::Rectangle<int> inspectorBounds;
         juce::TextButton remove { juce::String::fromUTF8 ("×") };
+        class GlideButton final : public juce::TextButton
+        {
+        public:
+            void paintButton (juce::Graphics&, bool hover, bool down) override;
+            juce::Colour accent;
+        };
+        GlideButton glide;
+        juce::Rectangle<int> glideCaptionBounds;
         ValueControl velocity, probability, nudge, span, roll;
+        bool ccValueInspector = false;
         CycleEditor cycle;
         std::optional<juce::Colour> rowAccent;
         std::vector<std::pair<Location, Cell>> valueStarts;

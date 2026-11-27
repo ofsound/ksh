@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace ksh
 {
@@ -45,9 +46,21 @@ struct GeneratedSourcesFrame
     unsigned long basisVersion = 0; ///< Engine generation the audio thread had adopted.
 };
 
+/** Values the host can automate at the start of a playback callback. */
+struct PlaybackMacros
+{
+    double beatsPerStep = 0.25;
+    int swing = 0;
+    int velocityHumanize = 0;
+    int timingHumanize = 0;
+    bool deviceActive = true;
+    std::optional<int> patternSource; ///< Empty follows the manual selection and generation mode.
+    uint32_t mutedRows = 0; ///< Host mutes layer over the saved pattern mutes.
+};
+
 /** Immutable, realtime-safe view of everything the audio thread needs to evaluate steps live.
     Built on the message thread and handed to the audio thread via a lock-free mailbox. */
-struct PlaybackSnapshot
+struct PlaybackSnapshot : PlaybackMacros
 {
     /** Bumped when the message thread deliberately chooses new generated sources;
         the audio thread then adopts {@link generated} instead of its own choices. */
@@ -59,18 +72,14 @@ struct PlaybackSnapshot
     std::array<Channel, Constants::maxChannels> channels {};
     GenerationMode generationMode = GenerationMode::staticSource;
     int staticSource = 0;
+    uint64_t patternSelectionRevision = 0;
     int stepCount = 16;
     int generatedStepCount = 16;
     int channelCount = Constants::defaultChannelCount;
     int refreshSteps = 16;
-    double beatsPerStep = 0.25;
     double tempo = 120.0;
     double stepIntervalMs = 125.0;
-    int swing = 0;
     int swingSubdivisionIndex = Constants::defaultSwingSubdivisionIndex;
-    int velocityHumanize = 0;
-    int timingHumanize = 0;
-    bool deviceActive = true;
     bool hasEarlyCells = false;
     bool hasSpannedCells = false;
 };

@@ -87,6 +87,7 @@ class MidiPlaybackRunner
 public:
     void prepare (double sampleRateIn);
     void reset (bool clearAuditions = true);
+    void resetForAudioDeviceRestart();
     void queueAuditionNote (const MidiNoteEvent& note);
     /** Audio thread: avoid replaying this take's cell attack after it was already monitored.
         The deadline is relative to the beginning of the next processBlock call. */
@@ -109,7 +110,8 @@ public:
                                      const HostLoopRange& hostLoop = {},
                                      double callbackTimeMs = 0.0,
                                      std::optional<int> endGlobalStepExclusive = std::nullopt,
-                                     int firstPlaybackSample = 0);
+                                     int firstPlaybackSample = 0,
+                                     const PlaybackMacros* blockMacros = nullptr);
 
     /** Sources currently chosen for generative modes, tagged with the engine generation they extend. */
     [[nodiscard]] GeneratedSourcesFrame generatedSourcesFrame() const;
@@ -118,25 +120,43 @@ private:
     static constexpr size_t cycleCounterSlots =
         static_cast<size_t> (Constants::sourceCount) * Constants::maxChannels * Constants::maxSteps;
 
-    struct PendingNoteOff
+    struct BlockAttack
     {
-        int64_t samplePosition = 0;
-        int midiChannel = 1;
-        int pitch = 0;
+        int sampleOffset;
+        int durationSamples;
+        size_t order;
+        size_t key;
+        juce::uint8 velocity;
     };
 
     struct PendingNoteOn
     {
-        int64_t samplePosition = 0;
+        double beat = 0.0;
         NativeHit hit {};
         int span = 1;
+        int roll = 1;
     };
 
-    static constexpr size_t maxPendingNoteOffs =
-        static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
+    struct ControllerPoint
+    {
+        double beat = 0.0, endBeat = 0.0;
+        int row = 0, source = -1, step = 0, number = 0, channel = 1, value = 0;
+        int part = 0, roll = 1, span = 1;
+        int endStep = 0, endPart = 0, endRoll = 1, endValue = 0, intervals = 0;
+        uint64_t order = 0;
+    };
+
+    struct ControllerRamp
+    {
+        ControllerPoint point;
+        int next = 0;
+    };
 
     static constexpr size_t maxPendingNoteOns =
         static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * 16;
+    static constexpr size_t maxBlockAttacks = maxPendingNoteOns
+        + static_cast<size_t> (Constants::maxChannels) * Constants::maxRoll * Constants::maxSteps * 2;
+    static constexpr size_t midiKeyCount = 16 * 128;
 
     double sampleRate = 44100.0;
     // Monotonic callback sample timeline, independent of host seeks and block size.
@@ -145,13 +165,26 @@ private:
     bool wasPlaying = false;
     double expectedNextPpq = 0.0;
     double previousBeatsPerStep = 0.0;
+    double blockStartBeat = 0.0;
+    double beatsPerSample = 0.0;
+    double loopBeatOffset = 0.0;
     std::optional<int> lastEmittedGlobalStep;
     std::optional<int> lastScheduledGlobalStep;
     std::optional<int> anticipatedLoopStep;
-    std::array<PendingNoteOff, maxPendingNoteOffs> pendingNoteOffs {};
-    size_t pendingNoteOffCount = 0;
+    const std::unique_ptr<BlockAttack[]> blockAttacks = std::make_unique<BlockAttack[]> (maxBlockAttacks);
+    size_t blockAttackCount = 0;
+    std::array<int64_t, midiKeyCount> gateDeadlines {};
+    std::array<size_t, midiKeyCount> activeKeys {};
+    std::array<size_t, midiKeyCount> restartNoteOffKeys {};
+    size_t restartNoteOffCount = 0;
+    size_t activeKeyCount = 0;
     std::array<PendingNoteOn, maxPendingNoteOns> pendingNoteOns {};
     size_t pendingNoteOnCount = 0;
+    using ControllerPoints = std::array<ControllerPoint, Constants::maxChannels * Constants::maxSteps * Constants::maxRoll * 2>;
+    const std::unique_ptr<ControllerPoints> controllerPoints = std::make_unique<ControllerPoints>();
+    size_t controllerPointCount = 0;
+    uint64_t controllerPointOrder = 0;
+    std::array<ControllerRamp, Constants::maxChannels> controllerRamps {};
     std::array<int64_t, cycleCounterSlots> recordedHitSamples {};
     int recordingSuppressionTolerance = 2;
     [[nodiscard]] bool wasRecordedHit (const NativeHit&, int64_t sample) const;
@@ -176,52 +209,52 @@ private:
     GeneratedSources generatedSources {};
     std::optional<unsigned long> adoptedGenerationVersion;
     uint32_t rngState = 0x12345678u;
+    uint32_t controllerRngState = 0x12345678u;
     static constexpr int noStaticSourceOverride = Constants::mutedStaticSource - 1;
     int pendingStaticSourceOverride = noStaticSourceOverride;
+    uint64_t adoptedPatternSelectionRevision = 0;
+    std::optional<int> previousHostPattern;
 
-    [[nodiscard]] int sampleOffsetForGlobalStep (const PlaybackSnapshot& snapshot,
-                                                 double blockStartPpq,
-                                                 double bpm,
-                                                 int globalStep,
-                                                 int numSamples) const;
+    [[nodiscard]] int sampleOffsetForBeat (double beat) const;
 
     void clearPending();
     void dropPendingNoteOnsAtOrAfter (int sampleOffset);
     void resetCycleCounters();
     [[nodiscard]] double nextRandomUnit();
-    [[nodiscard]] double nextTimingOffsetMs (double rangeMs);
+    [[nodiscard]] double nextTimingOffset (double range);
     void adoptGeneratedSources (const PlaybackSnapshot& snapshot);
     [[nodiscard]] bool regenerateWindowIfDue (const PlaybackSnapshot& snapshot, int globalStep);
     [[nodiscard]] Cell generatedCellForStep (const PlaybackSnapshot& snapshot, int channel, int playbackStep) const;
-    [[nodiscard]] int staticSourceForStep (const PlaybackSnapshot& snapshot,
-                                           const MidiPatternSelectionBlock& patternSelections,
-                                           int stepSampleOffset);
+    [[nodiscard]] std::pair<int, Cell> playbackCell (const PlaybackSnapshot&, int channel, int source, int globalStep) const;
     void evaluateGlobalStep (const PlaybackSnapshot& snapshot,
+                             const PlaybackMacros& macros,
                              int globalStep,
-                             int stepSampleOffset,
+                             double stepBeat,
                              int numSamples,
-                             juce::MidiBuffer& midiOut,
                              MidiPlaybackResult& result,
-                             int staticSourceOverride,
-                             double stepDurationMs,
+                             MidiPatternSelectionEvent selection,
+                             double beatsPerStep,
                              int earliestHitSample,
-                             int spanEndSample);
-    void scheduleHit (int stepSampleOffset,
+                             int spanEndSample,
+                             bool skipElapsedHits = false);
+    void scheduleHit (double beat,
                       int numSamples,
                       const NativeHit& hit,
-                      juce::MidiBuffer& midiOut,
                       MidiPlaybackResult& result,
                       int earliestHitSample,
-                      int span);
-    void emitHitAtSample (int onSample,
-                          int numSamples,
-                          const NativeHit& hit,
-                          juce::MidiBuffer& midiOut,
-                          MidiPlaybackResult& result);
-    void flushPendingNoteOns (const PlaybackSnapshot&, int activeSource, int numSamples, juce::MidiBuffer& midiOut, MidiPlaybackResult& result);
-    void flushPendingNoteOffs (int numSamples, juce::MidiBuffer& midi);
-    void flushAuditionNotes (int numSamples, juce::MidiBuffer& midi, double callbackTimeMs);
-    void addPendingNoteOff (int sampleOffset, int midiChannel, int pitch);
+                      int span,
+                      int roll,
+                      bool rowMuted);
+    void collectPendingNoteOns (const PlaybackSnapshot&, const PlaybackMacros&, int activeSource, int numSamples,
+                                double stepDurationMs, MidiPlaybackResult&);
+    void collectAuditionNotes (int numSamples, double callbackTimeMs);
+    void emitRestartNoteOffs (juce::MidiBuffer&);
+    bool collectAttack (int onSample, int midiChannel, int pitch, int velocity, int durationMs);
+    void renderAttacksAndGates (int numSamples, juce::MidiBuffer&);
+    void scheduleController (const PlaybackSnapshot&, const PlaybackMacros&, const Cell&, int part, int row, int source,
+                             int globalStep, double stepBeat, double beatsPerStep, double beat, int earliestSample, int endSample);
+    void renderControllers (const PlaybackSnapshot&, const PlaybackMacros&, const MidiPatternSelectionBlock&, int sourceAtStart,
+                            int numSamples, int endSample, juce::MidiBuffer&);
 
     moodycamel::ReaderWriterQueue<MidiNoteEvent> pendingAuditions { 64 };
 };

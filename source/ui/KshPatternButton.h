@@ -15,20 +15,31 @@ namespace ksh::ui
             if (std::exchange (occupied, value) != value)
                 repaint();
         }
+        void setQueued (bool value)
+        {
+            if (std::exchange (queued, value) != value)
+                repaint();
+        }
         bool showsCopyDestination() const { return copyDestination && isEnabled() && isOver(); }
         void paintButton (juce::Graphics& g, bool hover, bool down) override
         {
             juce::TextButton::paintButton (g, hover, down);
-            const float diameter = occupied ? 4.0f : 3.0f;
-            const auto led = juce::Rectangle<float> (diameter, diameter).withCentre ({ getWidth() * 0.5f, getHeight() - 9.0f });
-            const auto ink = getToggleState() ? Palette::text : Palette::accent;
-            g.setColour (ink.withAlpha (occupied ? 0.85f : 0.32f));
             if (occupied)
+            {
+                const auto led = juce::Rectangle<float> (4.0f, 4.0f).withCentre ({ getWidth() * 0.5f, getHeight() - 9.0f });
+                const auto ink = getToggleState() ? Palette::text : Palette::accent;
+                const auto centre = led.getCentre();
+                g.setGradientFill ({ ink.interpolatedWith (juce::Colours::white, 0.28f), centre,
+                                     ink.withAlpha (0.82f), centre.withX (led.getRight()), true });
                 g.fillEllipse (led);
-            else
-                g.drawEllipse (led, 0.8f);
+            }
             if (showsCopyDestination())
                 paintPatternCopyOutline (g, getLocalBounds().toFloat());
+            else if (queued)
+            {
+                g.setColour (Palette::accent);
+                g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 4.0f, 1.0f);
+            }
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -61,6 +72,6 @@ namespace ksh::ui
         }
 
     private:
-        bool armed = false, dragged = false, occupied = false;
+        bool armed = false, dragged = false, occupied = false, queued = false;
     };
 }

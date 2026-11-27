@@ -13,10 +13,10 @@ KSH has a dedicated compact native editor optimized for the iPhone 14 Pro Max in
 - **Pads** opens eight large performance pads in two rows below a read-only preview of the current pattern. The preview shows all steps, the playhead and activity while the pads are open. Tap **Pads** again to return to grid editing. You can play the pads with recording off.
 - Pattern 1/2/etc. replaces the grid and inspector with an eight-by-two pattern bank, leaving the toolbar accessible. Each slot shows its note count or Empty, and the current pattern has a colored marker. A pattern tap always selects, regardless of cell-selection mode. Duplicate Pn explicitly starts a copy: choose a destination and confirm Copy to Pn. Cancel copy returns to navigation; the close button, the toolbar Pattern button or Escape dismisses without copying. Mute patterns is a separate labeled action. Replacing the document or resizing dismisses a pending copy.
 - Settings opens Project, Pattern, Feel, Generate, View and Help pages and remembers the last tab. These pages replace the grid and selection inspector, leaving transport and undo/redo accessible. Channel settings opens contextually from a row and has no unrelated tabs. Generate scrolls to its output preview; View groups channel colors, graphical values, row order, accent and hardware-keyboard preferences. Done returns to the grid. Pattern settings separates grid length/division, recording/quantization and shift/clear actions. Timing options opens recording strength/offset choices without requiring a secondary click. Clearing a pattern requires a second, explicitly labeled confirmation; changing the pattern or document cancels that confirmation.
-- The project browser handles Open, first Save, and Save As inside KSH. Use **New Folder** to create a folder at the current location and **Favorites** to find starred projects. Save As collects the project name, author, and description before writing the file. **Browse Files** opens projects from other document providers.
-- The standalone defaults to `KSH Output`. Choose that MIDI source in a receiving app on the same device. For Network MIDI, USB or another destination, use **Settings → View → MIDI Output** on iPhone, or **MIDI Out** in the full layout's footer on iPad/desktop. Choose the network session on iOS to send to a connected Mac. The Mac's receiving app listens to its Network Session. Output selection is saved with standalone device settings. KSH excludes its own output from input discovery and forwarding to prevent a MIDI feedback loop. External controller inputs remain available. AUv3 uses its host's transport and MIDI routing.
+- The project browser handles Open, first Save, and Save As inside KSH. Use **New Folder** to create a folder at the current location and **Favorites** to find starred projects. Save As collects the project name, author, and description before writing the file. **Files / iCloud** opens projects from other document providers.
+- The standalone defaults to `KSH Output`. Choose that MIDI source in a receiving app on the same device. For Network MIDI, USB or another destination, use **Settings → View → MIDI Output** on iPhone, or **MIDI Out** in the full layout's footer on iPad/desktop. Select **Network Session** on iOS to opt in to Network MIDI and connect from the Mac's Audio MIDI Setup. Opening the menu alone leaves Network MIDI off. While the route is selected, a session KSH starts accepts connections from peers on the local network. Choose **KSH Output** or another destination to leave the session. The Mac's receiving app listens to its Network Session. Output selection is saved with standalone device settings. KSH excludes its own output from input discovery and forwarding to prevent a MIDI feedback loop. External controller inputs remain available. AUv3 uses its host's transport and MIDI routing.
 
-Compact geometry is independent of saved desktop UI/pattern zoom and is not persisted in the musical project. Wide desktop/iPad geometry is retained. On iOS a landscape editor viewport up to 1100 × 500 points chooses the compact layout; smaller landscape views scale down from its minimum 814 × 390 design area. The standalone respects the safe area in both landscape orientations. AUv3 follows the bounds supplied by its host.
+Compact geometry is independent of saved desktop UI/pattern zoom. On iOS, landscape viewports up to 1100 × 500 points and iPad AUv3 panes narrower than 700 points use the compact layout. Smaller windows scale down from the 814 × 390 minimum compact design area. The iPad standalone requests full-screen compatibility. Both standalone and AUv3 fit their content inside their view's safe area.
 
 Resize, page changes, auxiliary panel switches and focus loss cancel active editing gestures through the existing conflict-aware controller. External recording and document replacement retain the existing conflict rules.
 
@@ -26,20 +26,27 @@ iCloud is disabled by default (`KSH_IOS_ICLOUD_ENABLED=OFF`) so both the app
 and AUv3 can use a free Personal Team. Default project storage is the app's
 local Documents/KSH folder, visible in Files under On My iPhone/iPad. The app
 does not request an iCloud container, observe account changes or run cloud
-library discovery in this mode. Browse Files and Share can reach other
-document providers using the system interfaces.
+library discovery in this mode. Use **Files / iCloud** in the Open dialog to
+open a project from iCloud Drive, or **Share / Save to Files** in Project Details
+to save a copy there.
 
 To restore the shared library later, configure the relevant preset with
 `-DKSH_IOS_ICLOUD_ENABLED=ON` and use a paid Apple Developer Program team.
 With that option enabled, the iPhone and iPad app, including AUv3, use the fixed document container
 `iCloud.com.ofsound.ksh`. Open and first Save / Save As start in its Documents
-folder, shown as **KSH** in iCloud Drive. Devices signed into the same Apple
+folder for new projects, shown as **KSH** in iCloud Drive. Use **Local Projects**
+and **iCloud Drive** to switch between locations. Devices signed into the same Apple
 account with iCloud Drive enabled see the same library. The iPhone-only preset
 uses this same container; it does not create a separate phone library.
 
 When iCloud is unavailable, the default is the local app Documents/KSH folder,
 visible through Files under On My iPhone/iPad. Existing local projects stay
-local. When iCloud becomes available, open a local project with Browse Files, then use Save As in the project browser to copy it into the shared library.
+local. When iCloud becomes available, open a local project and choose
+**Save As → iCloud Drive** to copy it into the shared library.
+
+On Mac, choose **Save As → iCloud Drive** and select the destination folder.
+Choose **KSH** in iCloud Drive to use the same project files as an iPhone or iPad
+with the shared library enabled.
 
 Cloud discovery uses a metadata query so the library includes files that have
 not downloaded yet. Downloads, coordinated reads and coordinated atomic writes

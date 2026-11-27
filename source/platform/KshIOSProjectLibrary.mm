@@ -3,6 +3,8 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
+#include <cstdio>
+#include <cerrno>
 
 @interface KSHProjectPickerDelegate : NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, copy) void (^picked) (NSURL*);
@@ -61,7 +63,8 @@ namespace
 
 struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
 {
-    juce::File library = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KSH");
+    const juce::File localFolder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KSH");
+    juce::File library = localFolder;
     juce::Array<juce::File> cloudFiles;
     NSURL* currentURL = nil;
     NSURL* pendingURL = nil;
@@ -112,10 +115,11 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
             }];
     }
 
-    void cancel()
+    void cancel (bool notify = true)
     {
         ++generation;
         whenReady = {};
+        if (!notify) completion = {};
         delegate.picked = nil;
         [picker dismissViewControllerAnimated:YES completion:nil];
         [activity dismissViewControllerAnimated:YES completion:nil];
@@ -127,7 +131,7 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
         auto self = shared_from_this();
         const auto discovery = ++discoveryGeneration;
         dispatch_async (queue, ^{
-            auto directory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KSH");
+            auto directory = self->localFolder;
            #if KSH_IOS_ICLOUD_ENABLED
             auto* manager = [NSFileManager defaultManager];
             NSURL* root = [manager URLForUbiquityContainerIdentifier:containerID];
@@ -136,7 +140,7 @@ struct IOSProjectLibrary::State : std::enable_shared_from_this<State>
             const bool cloud = documents != nil && [manager createDirectoryAtURL:documents withIntermediateDirectories:YES attributes:nil error:&error];
             if (cloud) directory = file (documents);
            #endif
-            directory.createDirectory();
+            self->localFolder.createDirectory();
             dispatch_async (dispatch_get_main_queue(), ^{
                 if (self->discoveryGeneration != discovery) return;
                 self->library = directory;
@@ -286,6 +290,7 @@ IOSProjectLibrary::IOSProjectLibrary() : state (std::make_shared<State>())
 }
 IOSProjectLibrary::~IOSProjectLibrary() = default;
 juce::File IOSProjectLibrary::directory() const { return state->library; }
+juce::File IOSProjectLibrary::localDirectory() const { return state->localFolder; }
 juce::File IOSProjectLibrary::currentFile() const { return file (state->currentURL); }
 bool IOSProjectLibrary::busy() const { return static_cast<bool> (state->completion); }
 juce::Array<juce::File> IOSProjectLibrary::files (const juce::File& directory) const
@@ -297,7 +302,7 @@ juce::Array<juce::File> IOSProjectLibrary::files (const juce::File& directory) c
         result.addIfNotAlreadyThere (f);
     return result;
 }
-void IOSProjectLibrary::cancel() { state->cancel(); }
+void IOSProjectLibrary::cancel (bool notify) { state->cancel (notify); }
 void IOSProjectLibrary::acceptFile (const juce::File& accepted)
 {
     // Only the editor can accept a fully validated load or a save of the same document epoch.
@@ -345,49 +350,55 @@ void IOSProjectLibrary::save (const juce::File& f, juce::MemoryBlock data, bool 
     auto* selected = createOnly ? url (f) : state->currentURL;
     const auto expected = state->baseline;
     const auto operation = state->generation;
+    const bool local = f.isAChildOf (state->localFolder);
+    const auto destination = f;
     dispatch_async (state->queue, ^{
-        Access access (selected);
+        Result result;
+        result.file = destination;
         if (createOnly)
-        {
-            if (const auto folder = f.getParentDirectory().createDirectory(); folder.failed())
-            {
-                const auto error = folder.getErrorMessage();
-                dispatch_async (dispatch_get_main_queue(), ^{
-                    if (self->generation == operation) self->finish ({ {}, {}, error });
-                });
-                return;
-            }
-        }
-        NSError* error = nil;
+            result.error = destination.getParentDirectory().createDirectory().getErrorMessage();
         __block bool saved = false;
         __block juce::String failure;
-        auto* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-        const auto options = createOnly ? NSFileCoordinatorWritingOptions (0) : NSFileCoordinatorWritingForReplacing;
-        [coordinator coordinateWritingItemAtURL:selected options:options error:&error byAccessor:^(NSURL* coordinated) {
+        auto write = ^(NSURL* target) {
             if (createOnly)
             {
-                if (auto* path = coordinated.path; path != nil && [[NSFileManager defaultManager] fileExistsAtPath:path])
-                {
-                    failure = "That project name is already in use.";
+                const auto targetFile = file (target);
+                juce::TemporaryFile temporary (targetFile);
+                const auto& staged = temporary.getFile();
+                if (![payload writeToURL:url (staged) options:0 error:nil])
                     return;
-                }
-                saved = [payload writeToURL:coordinated options:NSDataWritingAtomic error:nil];
+                saved = ::renamex_np (staged.getFullPathName().toRawUTF8(), targetFile.getFullPathName().toRawUTF8(), RENAME_EXCL) == 0;
+                if (!saved && errno == EEXIST)
+                    failure = "That project name is already in use.";
                 return;
             }
             NSNumber* size = nil;
-            [coordinated getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+            [target getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
             auto* previous = size != nil && size.unsignedLongLongValue <= maximumProjectBytes
-                               ? [NSData dataWithContentsOfURL:coordinated options:0 error:nil] : nil;
-            if ([NSFileVersion unresolvedConflictVersionsOfItemAtURL:coordinated].count > 0 || digest (previous) != expected)
+                               ? [NSData dataWithContentsOfURL:target options:0 error:nil] : nil;
+            if ((!local && [NSFileVersion unresolvedConflictVersionsOfItemAtURL:target].count > 0) || digest (previous) != expected)
             {
                 failure = "This project changed on another device or app. Use Save As to keep your edits, then reopen the original.";
                 return;
             }
-            saved = [payload writeToURL:coordinated options:NSDataWritingAtomic error:nil];
-        }];
-        Result result;
-        result.file = f;
-        if (!saved || error != nil) result.error = failure.isNotEmpty() ? failure : "The project could not be saved. Check file access or use Save As.";
+            saved = [payload writeToURL:target options:NSDataWritingAtomic error:nil];
+        };
+        if (result.error.isEmpty())
+        {
+            NSError* error = nil;
+            if (local)
+                write (selected);
+            else
+            {
+                Access access (selected);
+                auto* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+                const auto options = createOnly ? NSFileCoordinatorWritingOptions (0) : NSFileCoordinatorWritingForReplacing;
+                [coordinator coordinateWritingItemAtURL:selected options:options error:&error byAccessor:write];
+            }
+            if (!saved)
+                result.error = failure.isNotEmpty() ? failure
+                    : error != nil ? string (error.localizedDescription) : "The project could not be saved. Check file access or use Save As.";
+        }
         dispatch_async (dispatch_get_main_queue(), ^{
             if (self->generation != operation) return;
             if (result.error.isEmpty())

@@ -12,6 +12,7 @@
 #include "engine/KshPatternRecording.h"
 
 #include <atomic>
+#include <bitset>
 #include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <mutex>
@@ -25,7 +26,7 @@
 
 class PluginProcessor : public juce::AudioProcessor,
                         private juce::Timer,
-                        private juce::AudioProcessorValueTreeState::Listener
+                        private juce::AudioProcessorParameter::Listener
 {
 public:
     PluginProcessor();
@@ -60,6 +61,9 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
     /** Reports whether the project was restored. Imported projects start with unsaved changes. */
     [[nodiscard]] bool loadStateFromData (const void* data, int sizeInBytes, bool imported = false);
+    [[nodiscard]] bool hasUnsupportedProjectVersion() const { return unsupportedProjectVersion.load (std::memory_order_acquire); }
+    [[nodiscard]] bool canRestorePreviousProject() const;
+    [[nodiscard]] bool restorePreviousProject();
 
     /** True after an in-app edit since the last load, save, or new project. */
     [[nodiscard]] bool isDocumentModified() const { return documentModified.load (std::memory_order_acquire); }
@@ -108,6 +112,8 @@ public:
     /** UI-owned host gesture. Engine-driven parameter writes inside it do not open nested gestures. */
     void beginUiParameterGesture (const juce::String& parameterID);
     void endUiParameterGesture (const juce::String& parameterID);
+    [[nodiscard]] bool queueLivePatternLaunch (int source, int currentSource);
+    int getQueuedPatternForUi() const { return livePatternLaunch.load (std::memory_order_acquire); }
 
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
         When pattern recording is armed, also enqueues a cell write with captured timing. */
@@ -130,6 +136,9 @@ public:
     std::function<juce::String()> standaloneMidiOutputName;
     // Call only from the standalone holder, off the audio thread.
     void setStandaloneMidiOutput (ksh::StandaloneMidiOutput*);
+    void flushStandaloneMidiOutput();
+    void setStandaloneMidiThru (bool enabled) { standaloneMidiThru.store (enabled, std::memory_order_relaxed); }
+    bool isStandaloneMidiThruEnabled() const { return standaloneMidiThru.load (std::memory_order_relaxed); }
     void setStandaloneTransportPlaying (bool shouldPlay, bool shareWithPeers = true);
     bool isStandaloneTransportPlaying() const;
     double getStandaloneTransportPpqForUi() const { return standaloneTransportPpqPosition.load (std::memory_order_relaxed); }
@@ -146,7 +155,12 @@ public:
     int getMetronomePitch() const { return metronomePitch.load (std::memory_order_relaxed); }
     uint32_t getStandaloneMidiActivity() const { return standaloneMidiActivity.load (std::memory_order_relaxed); }
 
-    int getProjectUiScalePercent() const noexcept { return projectUiScalePercent; }
+    int getUserUiScalePercent() const noexcept { return projectUiScalePercent.load (std::memory_order_relaxed); }
+    int getProjectUiScalePercent() const noexcept
+    {
+        const int requested = getUserUiScalePercent();
+        return requested == 0 ? 100 : requested;
+    }
     void setProjectUiScalePercent (int uiScalePercent);
     void setPatternRecordingEnabled (bool shouldRecord, int source);
     [[nodiscard]] bool isPatternRecordingEnabled() const;
@@ -194,11 +208,17 @@ public:
    #endif
 
 private:
-    bool loadStateFromDataInternal (const void*, int, bool imported, bool restoreStandaloneRecovery);
+    enum class ProjectLoad { host, project, importedProject, recovery };
+    bool loadStateFromDataInternal (const void*, int, ProjectLoad, uint64_t recoveryEpoch = 0);
+    nlohmann::json persistenceState (bool includeHostPlayback);
+    nlohmann::json persistenceStateLocked (bool includeHostPlayback);
+    void clearUnsupportedProjectStateLocked();
    #if JUCE_MAC
     ksh::MacProjectFiles macProjectFiles;
    #endif
     ksh::StandaloneMidiOutput* standaloneMidiOutput = nullptr;
+    void updateStandaloneMidiThruNotes (juce::MidiBuffer&, bool enabled);
+    void applyStandaloneMidiThru (juce::MidiBuffer&);
     void sendStandaloneMidiOutput (const juce::MidiBuffer&, int numSamples, juce::Optional<juce::uint64> presentationTimeNs = {});
     void renderStandaloneMetronome (juce::AudioBuffer<float>&, double ppq, double bpm, bool playing, bool reset, int firstPlaybackSample);
     friend class PluginProcessorTestPeer;
@@ -252,24 +272,27 @@ private:
     void runMessageThreadWork();
     void requestMessageThreadWork() { messageThreadWorkPending.store (true, std::memory_order_release); }
     void timerCallback() override;
-    void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void parameterValueChanged (int parameterIndex, float normalizedValue) override;
+    void parameterGestureChanged (int, bool) override {}
     void publishPlaybackSnapshot();
     void publishPlaybackSnapshotLocked();
-    void requestPlaybackReset() { playbackResetRequested.store (true, std::memory_order_release); }
     void applyPendingMacroParametersLocked();
     void publishPlaybackSnapshotIfChangedLocked();
     void addMacroParameterListeners();
     void removeMacroParameterListeners();
-    void applyMacroParametersToEngineLocked (uint32_t parameterMask);
-    void syncMacroParametersFromEngineLocked (bool notifyHost);
+    void acknowledgeHostMacrosLocked();
+    uint32_t syncMacroParametersFromEngineLocked();
+    void notifyMacroParameterChanges (uint32_t, bool useGestures = true);
     void adoptGeneratedSourcesLocked();
     void markDocumentModified();
     void notifyHostOfStateChangeIfDue();
     void applyPendingHostTempoLocked();
     void flagMidiInputNoteForUi (int note, int velocity);
     /** Reads pattern selections and record hits; returns whether selection notes must be filtered. */
+    struct ProcessorPlaybackSnapshot;
     bool consumeMidiInput (const juce::MidiBuffer& midiMessages,
-                           const ksh::PlaybackSnapshot& snapshot,
+                           const ProcessorPlaybackSnapshot& snapshot,
+                           const ksh::PlaybackMacros& macros,
                            double ppqPosition,
                            double bpm,
                            bool isPlaying,
@@ -279,7 +302,7 @@ private:
                                                juce::Optional<juce::uint64> presentationTimeNs, int firstPlaybackSample);
     void consumeStandaloneRecording (const ksh::PlaybackSnapshot&);
     void applyRecordingMonitors (double ppq, double bpm, ksh::HostLoopRange loop);
-    void drainPendingMidiPatternSelectionsLocked();
+    uint32_t drainPendingMidiPatternSelectionsLocked();
     void drainPendingPatternRecordEventsLocked();
     void recordPatternCellLocked (int source, int channel, int step, int velocity, int nudge);
     [[nodiscard]] static bool enqueuePatternRecordEvent (moodycamel::ReaderWriterQueue<PatternRecordEvent>& queue,
@@ -300,17 +323,40 @@ private:
     std::atomic<bool> suppressEngineCallbacks { false };
 
     // Message thread builds the engine + snapshot; the audio thread only reads the published snapshot.
-    const std::unique_ptr<RealtimeMailbox<ksh::PlaybackSnapshot>> playbackMailbox =
-        std::make_unique<RealtimeMailbox<ksh::PlaybackSnapshot>>();
+    struct ProcessorPlaybackSnapshot : ksh::PlaybackSnapshot
+    {
+        uint64_t documentEpoch = 0;
+        std::array<uint64_t, 5> appliedHostMacros {};
+        uint64_t hostRateBaseline = 0;
+        std::optional<int> restoredHostRate;
+    };
+    uint32_t hostMutedRows() const;
+    std::optional<int> hostRateOverride (uint64_t baseline, std::optional<int> restoredRate) const;
+    ksh::PlaybackMacros playbackMacrosForBlock (const ProcessorPlaybackSnapshot&) const;
+    const std::unique_ptr<RealtimeMailbox<ProcessorPlaybackSnapshot>> playbackMailbox =
+        std::make_unique<RealtimeMailbox<ProcessorPlaybackSnapshot>>();
     unsigned long lastPublishedSnapshotVersion = 0; // message-thread only
+    uint64_t patternSelectionRevision = 0; // engineStateMutex
+    uint64_t playbackDocumentEpoch = 1; // audio-thread only
 
-    // Audio -> message-thread handoff (drained in runMessageThreadWork / polled by the editor).
-    moodycamel::ReaderWriterQueue<ksh::NativeHit> noteHitsForUi { 1024 };
-    moodycamel::ReaderWriterQueue<ksh::NativeCycleVisit> cycleVisitsForUi { 1024 };
+    template <typename Event>
+    struct PlaybackUiEvent
+    {
+        uint64_t documentEpoch;
+        Event event;
+    };
+    // The message thread alone drains these queues, including after host state restore.
+    moodycamel::ReaderWriterQueue<PlaybackUiEvent<ksh::NativeHit>> noteHitsForUi { 1024 };
+    moodycamel::ReaderWriterQueue<PlaybackUiEvent<ksh::NativeCycleVisit>> cycleVisitsForUi { 1024 };
     // Audio and MIDI driver threads can both publish. Only the latest velocity per pitch is needed each UI frame.
     std::array<std::atomic<int>, 128> midiInputNotesForUi {};
     std::atomic<bool> midiInputNotesPending { false };
-    moodycamel::ReaderWriterQueue<int> pendingMidiPatternSelections { 128 };
+    struct PendingPatternSelection
+    {
+        uint64_t documentEpoch, revision;
+        int source;
+    };
+    moodycamel::ReaderWriterQueue<PendingPatternSelection> pendingMidiPatternSelections { 128 };
     // Each queue has exactly one producer; only the message thread drains them.
     moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingMidiPatternRecordEvents { 256 }; // audio -> message
     moodycamel::ReaderWriterQueue<PatternRecordEvent> pendingUiPatternRecordEvents { 256 }; // message -> message
@@ -318,17 +364,32 @@ private:
     moodycamel::ReaderWriterQueue<ksh::GeneratedSourcesFrame> generatedSourcesForEngine { 16 };
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<int> globalStepForUi { 0 };
+    static constexpr int noLivePatternLaunch = ksh::Constants::mutedStaticSource - 1;
+    std::atomic<int> livePatternLaunch { noLivePatternLaunch };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
     double lastHostTempoApplyMs = 0.0; // message-thread only
     std::atomic<uint32_t> uiGestureParameters { 0 }; // one bit per kMacroParameterIDs entry
 
     std::atomic<bool> messageThreadWorkPending { false };
-    std::atomic<bool> playbackResetRequested { false };
-    // One bit per kMacroParameterIDs entry, set by host/UI parameter changes.
-    std::atomic<uint32_t> dirtyMacroParameters { 0 };
-    std::atomic<bool> suppressParameterCallbacks { false };
+    // Each atomic carries a host value and its generation together. Snapshot
+    // acknowledgements protect newer document and pattern state from old events.
+    std::array<std::atomic<uint64_t>, 5> hostMacroChanges {};
+    std::array<uint64_t, 5> appliedHostMacros {}; // engineStateMutex
+    std::array<juce::RangedAudioParameter*, 5> macroParameters {};
+    juce::AudioParameterChoice* hostPatternParameter = nullptr;
+    std::array<juce::AudioParameterBool*, ksh::Constants::maxChannels> hostRowMuteParameters {};
+    uint64_t hostRateBaseline = 0; // engineStateMutex
+    std::optional<int> restoredHostRate; // engineStateMutex
     std::atomic<bool> documentModified { false };
+    std::string previousProject; // engineStateMutex
+    juce::MemoryBlock unsupportedProjectState; // engineStateMutex
+    std::atomic<bool> unsupportedProjectVersion { false };
+    std::atomic<bool> standaloneMidiThru { false };
+    std::array<std::bitset<128>, 16> standaloneMidiThruNotes;
+    std::bitset<16> standaloneMidiThruSustain;
+    bool standaloneMidiThruPlaying = false;
+    bool standaloneMidiThruWasEnabled = false;
     std::atomic<bool> hostStateChangePending { false };
     double lastHostStateChangeNotifyMs = 0.0; // message-thread only
     ksh::StandaloneSync* standaloneSync = nullptr;
@@ -387,7 +448,7 @@ private:
     std::array<juce::MidiBuffer, 2> midiOutputBuffers;
     std::array<const juce::uint8*, 2> reservedMidiStorage {};
 
-    int projectUiScalePercent = 100;
+    std::atomic<int> projectUiScalePercent { 0 }; // 0 uses the default editor size
 
     mutable std::mutex projectMetadataMutex;
     juce::String projectName { "Untitled Project" };

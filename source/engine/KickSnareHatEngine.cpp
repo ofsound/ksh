@@ -1,6 +1,7 @@
 #include "KickSnareHatEngine.h"
 #include "KshJson.h"
 #include "KshMath.h"
+#include "KshPersistence.h"
 
 #include <algorithm>
 #include <cmath>
@@ -462,6 +463,15 @@ void KickSnareHatEngine::setChannelLock (int channel, int lock)
     status ([&] { return "channel_lock " + std::to_string (channel + 1) + " " + (locked < 0 ? "random" : std::to_string (locked + 1)); });
 }
 
+void KickSnareHatEngine::setChannelController (int channel, bool enabled, int number, int midiChannel)
+{
+    auto& row = channels[static_cast<size_t> (clampChannel (channel))];
+    row.controller = enabled;
+    row.ccNumber = clampInt (number, 0, 127);
+    row.ccChannel = clampInt (midiChannel, 1, 16);
+    ++playbackSnapshotVersion_;
+}
+
 void KickSnareHatEngine::setChannelLoopLength (int channel, int loopLength, int loopStart)
 {
     channel = clampChannel (channel);
@@ -768,6 +778,11 @@ void KickSnareHatEngine::replaceActivePattern (const SourcePattern& pattern, int
     for (int channel = 0; channel < channelCount; ++channel)
     {
         const auto row = static_cast<size_t> (channel);
+        if (channels[row].controller)
+        {
+            clampLoopRange (settings.loopRanges[row], settings.stepCount);
+            continue;
+        }
         sources[source][row] = pattern[row];
         settings.loopRanges[row] = { 0, settings.stepCount };
         settings.playbackModes[row] = PlaybackMode::normal;
@@ -1011,6 +1026,8 @@ std::optional<MidiNoteEvent> KickSnareHatEngine::auditionChannel (int channel)
         return std::nullopt;
 
     channel = clampInt (channel, 0, channelCount - 1);
+    if (channels[static_cast<size_t> (channel)].controller)
+        return std::nullopt;
 
     const MidiNoteEvent note {
         channels[static_cast<size_t> (channel)].note,
@@ -1141,6 +1158,10 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentSettings& setti
     nlohmann::json nudges = nlohmann::json::array();
     nlohmann::json spans = nlohmann::json::array();
     nlohmann::json splitGates = nlohmann::json::array();
+    nlohmann::json ccValues = nlohmann::json::array();
+    nlohmann::json ccGlides = nlohmann::json::array();
+    nlohmann::json splitCcValues = nlohmann::json::array();
+    nlohmann::json ccRows = nlohmann::json::array();
     nlohmann::json channelsOut = nlohmann::json::array();
     nlohmann::json sourceSettingsOut = nlohmann::json::array();
     nlohmann::json mutes = nlohmann::json::array();
@@ -1160,11 +1181,17 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentSettings& setti
                     nudges.push_back ({ source, channel, step, cell.nudge });
                 if (cell.span != CellDefaults::span)
                     spans.push_back ({ source, channel, step, cell.span });
+                if (cell.ccValue >= 0)
+                    ccValues.push_back ({ source, channel, step, cell.ccValue });
+                if (cell.ccGlide != 0)
+                    ccGlides.push_back ({ source, channel, step, cell.ccGlide });
                 for (int split = 0; split < Constants::maxRoll; ++split)
                 {
                     const auto part = static_cast<size_t> (split);
                     const auto& gate = cell.splitGates[part];
                     const auto velocity = cell.splitVelocities[part];
+                    if (cell.splitCcValues[part] != 0)
+                        splitCcValues.push_back ({ source, channel, step, split, cell.splitControllerValue (split) });
                     if (gate != SplitGate {} || velocity != 0)
                         splitGates.push_back ({ source, channel, step, split, gate.probability(), gate.cycle(), gate.cycleMask(), velocity });
                 }
@@ -1197,6 +1224,10 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentSettings& setti
     for (int channel = 0; channel < Constants::maxChannels; ++channel)
     {
         const auto& channelState = settingsIn.channels[static_cast<size_t> (channel)];
+        if (channelState.controller || channelState.ccNumber != 1
+            || channelState.ccChannel != Constants::defaultMidiChannel)
+            // Keep the retired row Glide field at zero for existing v1 readers.
+            ccRows.push_back ({ channel, channelState.controller ? 1 : 0, channelState.ccNumber, channelState.ccChannel, 0 });
         channelsOut.push_back (nlohmann::json::array ({
             channelState.label,
             channelState.note,
@@ -1257,12 +1288,20 @@ nlohmann::json KickSnareHatEngine::documentToJson (const DocumentSettings& setti
         state["cellSpans"] = std::move (spans);
     if (! splitGates.empty())
         state["splitGates"] = std::move (splitGates);
+    if (! ccRows.empty())
+        state["ccRows"] = std::move (ccRows);
+    if (! ccValues.empty())
+        state["ccValues"] = std::move (ccValues);
+    if (! ccGlides.empty())
+        state["ccGlides"] = std::move (ccGlides);
+    if (! splitCcValues.empty())
+        state["splitCcValues"] = std::move (splitCcValues);
     return state;
 }
 
 bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
 {
-    if (! state.is_object())
+    if (! persistenceJsonLooksValid (state))
         return false;
 
     const auto keyIs = [&state] (const char* key, bool (nlohmann::json::*predicate)() const noexcept)
@@ -1280,9 +1319,6 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
         return values.is_array()
                && std::all_of (values.begin(), values.end(), [] (const nlohmann::json& value) { return value.is_number(); });
     };
-
-    if (! keyIs ("v", &nlohmann::json::is_number_integer) || state.at ("v").get<int>() != 1)
-        return false;
 
     for (const auto* key : { "stepCount", "channelCount", "refreshSteps", "staticSource", "swing", "velocityHumanize", "timingHumanize" })
     {
@@ -1324,7 +1360,7 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
             return false;
     }
 
-    for (const auto* key : { "cellNudges", "cellSpans" })
+    for (const auto& [key, fields] : { std::pair { "cellNudges", 4u }, { "cellSpans", 4u }, { "ccValues", 4u }, { "ccGlides", 4u }, { "ccRows", 5u }, { "splitCcValues", 5u } })
     {
         const auto entries = state.find (key);
         if (entries == state.end())
@@ -1332,7 +1368,7 @@ bool KickSnareHatEngine::isValidPersistenceState (const nlohmann::json& state)
         if (! entries->is_array())
             return false;
         for (const auto& entry : *entries)
-            if (! entry.is_array() || entry.size() != 4
+            if (! entry.is_array() || entry.size() != fields
                 || ! std::all_of (entry.begin(), entry.end(), [] (const auto& value) { return value.is_number_integer(); }))
                 return false;
     }
@@ -1518,6 +1554,18 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         clampChannelLoopRange (channels[static_cast<size_t> (channel)], stepCount);
     }
 
+    if (const auto rows = state.find ("ccRows"); rows != state.end())
+        for (const auto& row : *rows)
+        {
+            const int index = row[0].get<int>();
+            if (index < 0 || index >= Constants::maxChannels)
+                continue;
+            auto& channel = channels[static_cast<size_t> (index)];
+            channel.controller = row[1].get<int>() != 0;
+            channel.ccNumber = clampInt (row[2].get<int>(), 0, 127);
+            channel.ccChannel = clampInt (row[3].get<int>(), 1, 16);
+        }
+
     for (int source = 0; source < Constants::sourceCount; ++source)
     {
         auto& settings = sourceSettings[static_cast<size_t> (source)];
@@ -1621,7 +1669,9 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
 
     for (const auto& [key, field, minimum, maximum] : {
              std::tuple { "cellNudges", &Cell::nudge, -100, 100 },
-             std::tuple { "cellSpans", &Cell::span, 1, Constants::maxSteps } })
+             std::tuple { "cellSpans", &Cell::span, 1, Constants::maxSteps },
+             std::tuple { "ccValues", &Cell::ccValue, 0, 127 },
+             std::tuple { "ccGlides", &Cell::ccGlide, 0, 1 } })
     {
         const auto entries = state.find (key);
         if (entries == state.end())
@@ -1653,6 +1703,19 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
                 gate.setCycle (entry[5].get<int>(), entry[6].get<int>());
                 cell.setSplitVelocity (split, entry.size() == 8 ? entry[7].get<int>() : 0);
             }
+        }
+
+    if (const auto entries = state.find ("splitCcValues"); entries != state.end())
+        for (const auto& entry : *entries)
+        {
+            const int source = entry[0].get<int>();
+            const int channel = entry[1].get<int>();
+            const int step = entry[2].get<int>();
+            const int split = entry[3].get<int>();
+            if (source >= 0 && source < Constants::sourceCount && channel >= 0 && channel < Constants::maxChannels
+                && step >= 0 && step < Constants::maxSteps && split >= 0 && split < Constants::maxRoll)
+                sources[static_cast<size_t> (source)][static_cast<size_t> (channel)][static_cast<size_t> (step)]
+                    .setSplitControllerValue (split, clampInt (entry[4].get<int>(), 0, 127));
         }
 
     if (keepGeneratedSources)

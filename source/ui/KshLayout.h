@@ -1,5 +1,6 @@
 #pragma once
 #include "KshEditorController.h"
+#include "../engine/KshMath.h"
 namespace ksh::ui
 {
     struct Layout
@@ -46,6 +47,11 @@ namespace ksh::ui
         bool operator== (const Layout&) const = default;
         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
         int visibleSteps() const { return compact ? juce::jmin (compactStepsPerPage, steps - firstStep) : steps; }
+        static int beatAccentStride (double beatsPerStep)
+        {
+            const int stepsPerBeat = gridSpanForBeats (1.0, beatsPerStep);
+            return stepsPerBeat > 0 ? stepsPerBeat : juce::jmax (1, gridSpanForBeats (2.0, beatsPerStep));
+        }
         bool stepVisible (int step) const { return step >= firstStep && step < firstStep + visibleSteps(); }
         float toolbarY() const { return compact ? 0.0f : static_cast<float> (headerHeight); }
         int compactHeaderBottom() const { return compactHeaderHeight + compactHeaderTopInset; }

@@ -53,6 +53,40 @@ namespace ksh
         juce::uint64 nextBlockNs = 0;
     };
 
+    // Keep note-offs that are still queued as well as notes without a scheduled release.
+    // Flushing a port can cancel a queued release for a note that already reached the synth.
+    class StandaloneMidiHeldNotes
+    {
+    public:
+        void observe (uint32_t word, juce::uint64 time)
+        {
+            const auto status = (word >> 20) & 0xf;
+            if (status != 8 && status != 9)
+                return;
+            const auto channel = (word >> 16) & 0xf;
+            const auto note = (word >> 8) & 0x7f;
+            auto& release = releases[channel][note];
+            if (status == 9 && (word & 0x7f) != 0)
+                release = std::numeric_limits<juce::uint64>::max();
+            else if (release != 0)
+                release = time;
+        }
+
+        template <typename Emit>
+        void forEachHeld (juce::uint64 now, Emit&& emit) const
+        {
+            for (size_t channel = 0; channel < releases.size(); ++channel)
+                for (size_t note = 0; note < releases[channel].size(); ++note)
+                    if (releases[channel][note] > now)
+                        emit (0x20800000u | (static_cast<uint32_t> (channel) << 16) | (static_cast<uint32_t> (note) << 8));
+        }
+
+        void clear() { releases = {}; }
+
+    private:
+        std::array<std::array<juce::uint64, 128>, 16> releases {};
+    };
+
     // Raw-byte conversion avoids MidiMessage's allocating SysEx copy. Pad short
     // messages because JUCE's converter reads three bytes before masking them.
     template <typename Emit>

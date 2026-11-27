@@ -117,6 +117,27 @@ TEST_CASE ("MIDI export humanizes both sides of the beat within a single pass", 
     CHECK (midi.getLastTimestamp() == Catch::Approx (3840));
 }
 
+TEST_CASE ("MIDI export ends the former gate at a same-pitch retrigger", "[engine][midi-export][retrigger]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    fixture.engine.setChannelCount (1);
+    fixture.engine.setRate ("32n");
+    fixture.engine.setTempo (120);
+    fixture.engine.setCell (0, 0, 0, true, 90);
+    fixture.engine.setCell (0, 0, 1, true, 110);
+    const auto midi = exportedPattern (fixture.engine.makePlaybackSnapshot());
+    const auto& track = *midi.getTrack (0);
+    std::vector<std::pair<int, bool>> events;
+    for (int i = 0; i < track.getNumEvents(); ++i)
+    {
+        const auto& message = track.getEventPointer (i)->message;
+        if (message.isNoteOnOrOff())
+            events.emplace_back (static_cast<int> (message.getTimeStamp()), message.isNoteOn());
+    }
+    CHECK (events == std::vector<std::pair<int, bool>> { { 0, true }, { 120, false }, { 120, true }, { 312, false } });
+}
+
 TEST_CASE ("MIDI export respects channel loops direction mutes and cycle gates", "[engine][midi-export]")
 {
     EngineFixture fixture;

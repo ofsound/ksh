@@ -9,6 +9,45 @@
 using namespace ksh;
 using ksh::test::EngineFixture;
 
+TEST_CASE ("CC row settings and zero values round trip without replacing note data", "[engine][persistence][cc]")
+{
+    EngineFixture fixture;
+    fixture.clearAll();
+    auto legacy = fixture.engine.serializeForPersistence();
+    CHECK_FALSE (legacy.contains ("ccRows"));
+    CHECK_FALSE (legacy.contains ("ccValues"));
+    CHECK_FALSE (legacy.contains ("ccGlides"));
+    CHECK_FALSE (legacy.contains ("splitCcValues"));
+    fixture.engine.setChannelNote (0, 51);
+    fixture.engine.setChannelController (0, true, 74, 8);
+    Cell original { .enabled = true, .velocity = 81, .roll = 3, .span = 2, .ccValue = 37, .ccGlide = 1 };
+    original.setSplitVelocity (0, 82);
+    original.setSplitControllerValue (0, 0);
+    original.setSplitControllerValue (2, 127);
+    fixture.engine.setCell (0, 0, 0, original);
+    const auto mixed = fixture.engine.serializeForPersistence();
+    REQUIRE (mixed["v"] == 1);
+    CHECK (nlohmann::json (original).get<Cell>() == original);
+    REQUIRE (fixture.engine.deserializeForPersistence (legacy));
+    CHECK_FALSE (fixture.engine.channelAt (0).controller);
+    REQUIRE (fixture.engine.deserializeForPersistence (mixed));
+    const auto& row = fixture.engine.channelAt (0);
+    CHECK (row.note == 51);
+    CHECK (row.controller);
+    CHECK (row.ccNumber == 74);
+    CHECK (row.ccChannel == 8);
+    CHECK (fixture.engine.sourceCellAt (0, 0, 0) == original);
+    fixture.engine.setChannelController (0, false, 74, 8);
+    REQUIRE (fixture.engine.deserializeForPersistence (fixture.engine.serializeForPersistence()));
+    CHECK_FALSE (fixture.engine.channelAt (0).controller);
+    CHECK (fixture.engine.sourceCellAt (0, 0, 0) == original);
+    auto oldRowGlide = mixed;
+    oldRowGlide.erase ("ccGlides");
+    oldRowGlide["ccRows"][0][4] = 1;
+    REQUIRE (fixture.engine.deserializeForPersistence (oldRowGlide));
+    CHECK (fixture.engine.sourceCellAt (0, 0, 0).ccGlide == 0);
+}
+
 TEST_CASE ("Roll spans round trip as sparse v1 data", "[engine][persistence][triplets]")
 {
     EngineFixture original, restored;

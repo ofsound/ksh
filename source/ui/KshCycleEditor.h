@@ -96,9 +96,9 @@ namespace ksh::ui
                     const auto& phases = controller.sourceSplitCycleSteps[row][step];
                     if (split)
                         return phases[static_cast<size_t> (*split)] == i + 1;
-                    if (editAllSplits && controller.cell (p).roll > 1)
+                    if (editAllSplits && controller.splitCount (p) > 1)
                     {
-                        const auto end = phases.begin() + controller.cell (p).roll;
+                        const auto end = phases.begin() + controller.splitCount (p);
                         return std::find (phases.begin(), end, i + 1) != end;
                     }
                     return controller.sourceCycleSteps[row][step] == i + 1;

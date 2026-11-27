@@ -81,3 +81,5 @@ Warnings are treated as errors. After a rebuild, quit and reopen the standalone 
 ```sh
 cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ```
+
+GitHub Actions runs **KSH CI** for pull requests and pushes to `main`. The macOS job runs CTest, pluginval and `auval`, then uploads the universal standalone, AU, VST3 and CLAP bundles. The iOS job builds the iPhone/iPad standalone and checks the embedded AUv3. The manually triggered **Apple archive validation** workflow checks unsigned release archives for iOS, iPhone-only and macOS TestFlight. See [TestFlight](docs/testflight.md) for signed archive verification.
