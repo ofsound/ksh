@@ -4142,6 +4142,17 @@ namespace
         }
         return nullptr;
     }
+
+    bool waitForChooserScroll (const auto& hasScrolled)
+    {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 1000.0;
+        while (!hasScrolled() && juce::Time::getMillisecondCounterHiRes() < deadline)
+        {
+            juce::Thread::sleep (10);
+            juce::Timer::callPendingTimersSynchronously();
+        }
+        return hasScrolled();
+    }
 }
 
 TEST_CASE ("Piano note chooser browses without editing and assigns one undoable note", "[native-ui][note-chooser]")
@@ -4187,10 +4198,11 @@ TEST_CASE ("Piano note chooser browses without editing and assigns one undoable 
     const auto beforeScroll = chooser->getLocalArea (middleC, middleC->getLocalBounds());
     click ("Scroll keyboard right");
     CHECK (chooser->getLocalArea (middleC, middleC->getLocalBounds()) == beforeScroll);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+    REQUIRE (waitForChooserScroll ([&]
+    {
+        return chooserButton (*chooser, "C1") == nullptr && chooserButton (*chooser, "C5") != nullptr;
+    }));
     CHECK (chooser->getLocalArea (middleC, middleC->getLocalBounds()).getX() < beforeScroll.getX());
-    CHECK (chooserButton (*chooser, "C1") == nullptr);
-    CHECK (chooserButton (*chooser, "C5") != nullptr);
     CHECK (editor.controller.state.playback.channels[0].note == initial);
     CHECK_FALSE (processor.isDocumentModified());
     const auto directory = juce::SystemStats::getEnvironmentVariable ("KSH_NATIVE_CAPTURE_DIR", "");
@@ -4414,16 +4426,14 @@ TEST_CASE ("Piano note chooser covers MIDI endpoints without duplicate entry con
     for (int i = 0; i < 2; ++i)
         button ("Scroll keyboard left")->onClick();
     CHECK_FALSE (button ("Scroll keyboard left")->isEnabled());
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
-    REQUIRE (button ("C-1") != nullptr);
+    REQUIRE (waitForChooserScroll ([&] { return button ("C-1") != nullptr; }));
     button ("C-1")->onClick();
     CHECK (assigned == 0);
     open();
     for (int i = 0; i < 7; ++i)
         button ("Scroll keyboard right")->onClick();
     CHECK_FALSE (button ("Scroll keyboard right")->isEnabled());
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
-    REQUIRE (button ("G9") != nullptr);
+    REQUIRE (waitForChooserScroll ([&] { return button ("G9") != nullptr; }));
     button ("G9")->onClick();
     CHECK (assigned == 127);
     open();
