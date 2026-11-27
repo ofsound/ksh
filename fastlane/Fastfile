@@ -33,7 +33,9 @@ lane :archive do |options|
   release = ksh_release(target)
   number = options[:build_number].to_s
   team = ENV.fetch("KSH_APPLE_TEAM_ID", "")
-  UI.user_error!("Set build_number to an unused positive integer (up to four digits).") unless number.match?(/\A[1-9][0-9]{0,3}\z/)
+  unless number.match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)
+    UI.user_error!("Set build_number to one to three dot-separated integers, such as 8 or 0.0.2.")
+  end
   UI.user_error!("Set KSH_APPLE_TEAM_ID to your 10-character Apple Developer team ID.") unless team.match?(/\A[A-Z0-9]{10}\z/)
 
   Dir.chdir(KSH_ROOT) do

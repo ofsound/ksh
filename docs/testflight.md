@@ -24,12 +24,12 @@ export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH="$HOME/path/to/AuthKey_KEY_ID.p8"
 ## Build once and upload
 
 Use a clean checkout of the CI-validated source with its submodules initialized.
-Check the most recent builds for each platform in App Store Connect and choose an unused, higher build number.
+Check the most recent builds for each platform in App Store Connect and choose an unused, higher build number, such as `0.0.2` after `0.0.1`.
 The marketing version comes from `VERSION`. The build number is stamped into the iOS app and AUv3 together.
 
 ```sh
-bundle exec fastlane archive target:ios build_number:8
-bundle exec fastlane archive target:macos build_number:8
+bundle exec fastlane archive target:ios build_number:0.0.2
+bundle exec fastlane archive target:macos build_number:0.0.2
 ```
 
 Fastlane prints the signed package path under `Builds/apple-release/` along with the version, build number, and source commit. Use the printed package path to upload it.
