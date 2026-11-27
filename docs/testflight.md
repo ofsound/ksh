@@ -41,6 +41,8 @@ bundle exec fastlane upload target:macos package:/path/to/KSH.pkg
 
 The archive step runs the same bundle checks as GitHub Actions. To opt into the optional features used by local builds, set `KSH_LINKKIT_SDK_DIR` or `KSH_IOS_ICLOUD_ENABLED=ON` for iOS, or `KSH_ABLETON_LINK_SOURCE_DIR` for macOS before archiving. Use the required provisioning capabilities and review the signed archive's privacy report when including an optional SDK.
 
+The standard iOS and Mac App Store builds include `ITSAppUsesNonExemptEncryption=false` in the standalone app's `Info.plist`. If you build with Ableton Link, review that build's encryption use and answer the export compliance questions in App Store Connect.
+
 ## Test and submit
 
 1. After Apple processes each upload, add the build to your internal TestFlight group. On iOS, test the standalone on iPhone and iPad and load the AUv3 in a host. On the Mac, test MIDI routing and project open and save in the sandboxed standalone.

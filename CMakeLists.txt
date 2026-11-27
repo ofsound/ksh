@@ -332,6 +332,13 @@ endif()
 
 if (TARGET "${PROJECT_NAME}_Standalone")
     ksh_configure_standalone_link("${PROJECT_NAME}_Standalone")
+    # Record the reviewed export compliance answer for standard App Store builds.
+    if ((CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KSH_LINKKIT_SDK_DIR)
+        OR (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND KSH_MACOS_TESTFLIGHT AND NOT KSH_ABLETON_LINK_SOURCE_DIR))
+        get_target_property(ksh_standalone_plist "${PROJECT_NAME}_Standalone" MACOSX_BUNDLE_INFO_PLIST)
+        execute_process(COMMAND /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false"
+                        "${ksh_standalone_plist}" COMMAND_ERROR_IS_FATAL ANY)
+    endif()
     if (KSH_MACOS_TESTFLIGHT)
         set_target_properties("${PROJECT_NAME}" "${PROJECT_NAME}_Standalone" PROPERTIES
             XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS YES
