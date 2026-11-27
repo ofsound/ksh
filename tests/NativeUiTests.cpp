@@ -6463,6 +6463,11 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
             CHECK (zenItem->getCurrentState().isChecked());
         auto* audioMenuItem = findSettingsItem (juce::String::fromUTF8 (u8"Audio/MIDI Settings…"));
         CHECK ((audioMenuItem != nullptr) == standalone);
+        const auto popupCompletionPending = [&]
+        {
+            return settingsButton->getProperties().contains (anchoredPopupProperty);
+        };
+        REQUIRE (popupCompletionPending());
         if (audioMenuItem != nullptr)
         {
             auto* audioButton = dynamic_cast<juce::TextButton*> (&audioMenuItem->getComponent());
@@ -6471,8 +6476,12 @@ TEST_CASE ("Shared desktop and iPad controls fit the full layout on a small tabl
         }
         else
             CHECK (popup->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
         CHECK (juce::Component::getCurrentlyModalComponent() == nullptr);
+        // JUCE leaves modal state before delivering the result callback.
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+        while (popupCompletionPending() && juce::Time::getMillisecondCounterHiRes() < deadline)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+        REQUIRE_FALSE (popupCompletionPending());
         CHECK (audioSettingsOpens == (standalone ? 1 : 0));
     }
     REQUIRE (footer.size() == (standalone ? 4 : 1));
