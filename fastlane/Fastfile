@@ -37,8 +37,7 @@ lane :archive do |options|
   UI.user_error!("Set KSH_APPLE_TEAM_ID to your 10-character Apple Developer team ID.") unless team.match?(/\A[A-Z0-9]{10}\z/)
 
   Dir.chdir(KSH_ROOT) do
-    changes = sh("git", "status", "--porcelain", "--ignore-submodules=none", "--",
-                 ".", ":(exclude)Gemfile.lock", ":(exclude)fastlane/report.xml", log: false)
+    changes = sh("git", "status", "--porcelain", "--ignore-submodules=none", log: false)
     UI.user_error!("Use a clean checkout of the CI-validated source before archiving.") unless changes.strip.empty?
     revision = sh("git", "rev-parse", "--short=12", "HEAD", log: false).strip
     version = File.read("VERSION").strip

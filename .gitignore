@@ -34,3 +34,7 @@ packaging/Output/*
 
 # Independent native verification builds
 Builds-native-*/
+
+# Fastlane generates these when running a lane.
+/fastlane/README.md
+/fastlane/report.xml
