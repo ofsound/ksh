@@ -83,11 +83,13 @@ def ksh_archive(target, team, version, number, revision)
   cmake_flags = ["-DKSH_APPLE_BUILD_NUMBER=#{number}", "-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=#{team}"]
   if target == "macos"
     cmake_flags.push("-DKSH_BUILD_BENCHMARKS=OFF", "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
+  else
+    # An empty cache override prevents CMake from discovering a local LinkKit SDK.
+    cmake_flags << "-DKSH_LINKKIT_SDK_DIR:PATH=#{ENV.fetch('KSH_LINKKIT_SDK_DIR', '')}"
   end
-  optional_flags = target == "ios" ? %w[KSH_IOS_ICLOUD_ENABLED KSH_LINKKIT_SDK_DIR] : %w[KSH_ABLETON_LINK_SOURCE_DIR]
-  optional_flags.each do |name|
-    cmake_flags << "-D#{name}=#{ENV[name]}" unless ENV[name].to_s.empty?
-  end
+  optional_flag = target == "ios" ? "KSH_IOS_ICLOUD_ENABLED" : "KSH_ABLETON_LINK_SOURCE_DIR"
+  optional_value = ENV[optional_flag]
+  cmake_flags << "-D#{optional_flag}=#{optional_value}" unless optional_value.to_s.empty?
   sh("cmake", "--preset", release[:preset], "-B", project_dir, *cmake_flags)
   sh("xcodebuild", "-project", File.join(project_dir, "KSH.xcodeproj"), "-scheme", "KSH_Standalone",
      "-configuration", "Release", "-destination", "generic/platform=#{release[:destination]}",
