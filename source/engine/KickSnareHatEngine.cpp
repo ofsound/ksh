@@ -1427,7 +1427,11 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         return false;
 
     stepCount = clampInt (state["stepCount"].get<int>(), 1, Constants::maxSteps);
-    channelCount = clampInt (state["channelCount"].get<int>(), 1, Constants::maxChannels);
+    const auto& channelsIn = state["channels"];
+    constexpr int originalRowCapacity = 8;
+    const int savedRowCount = state["channelCount"].get<int>();
+    const bool expandOriginalRows = savedRowCount == originalRowCapacity && channelsIn.size() == originalRowCapacity;
+    channelCount = expandOriginalRows ? Constants::maxChannels : clampInt (savedRowCount, 1, Constants::maxChannels);
     const int previousGeneratedStepCount = generatedStepCount;
     generatedStepCount = clampInt (state.value ("generatedStepCount", stepCount), 1, Constants::maxSteps);
     refreshSteps = clampInt (state["refreshSteps"].get<int>(), 1, generatedStepCount);
@@ -1531,7 +1535,6 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
     for (auto& source : sources)
         source = makeEmptySourcePattern();
 
-    const auto& channelsIn = state["channels"];
     initChannels();
 
     for (int channel = 0; channel < Constants::maxChannels; ++channel)
@@ -1572,6 +1575,11 @@ bool KickSnareHatEngine::deserializeForPersistence (const nlohmann::json& state,
         for (int channel = 0; channel < Constants::maxChannels; ++channel)
         {
             auto& range = settings.loopRanges[static_cast<size_t> (channel)];
+            if (expandOriginalRows && channel >= originalRowCapacity)
+            {
+                range = { 0, settings.stepCount };
+                continue;
+            }
 
             // Older v1 payloads stored one shared range on each channel. Keep
             // those projects working by using that range for every pattern.

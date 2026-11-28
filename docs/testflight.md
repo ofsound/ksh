@@ -12,7 +12,7 @@ The iOS extension uses `com.ofsound.ksh.kshAUv3`. Desktop plug-in distribution f
 
 1. Use a Mac with Xcode signed in to your paid Apple Developer team. Set `KSH_APPLE_TEAM_ID` to that team's 10-character ID. Xcode handles signing and provisioning for the app and the iOS extension.
 2. Use Ruby 3.2 or newer and Bundler. Run `bundle install` in the release checkout to install the pinned Fastlane version.
-3. For uploads, use an [App Store Connect team API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) with Developer access or higher. Keep the `.p8` file outside the checkout and set these shell variables.
+3. For archiving and uploading, use an [App Store Connect team API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) with Developer access or higher. Keep the `.p8` file outside the checkout and set these shell variables.
 
 ```sh
 export KSH_APPLE_TEAM_ID='YOUR_TEAM_ID'
@@ -24,15 +24,15 @@ export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH="$HOME/path/to/AuthKey_KEY_ID.p8"
 ## Build once and upload
 
 Use a clean checkout of the CI-validated source with its submodules initialized.
-Check the most recent builds for each platform in App Store Connect and choose an unused, higher build number, such as `0.0.2` after `0.0.1`.
-The marketing version comes from `VERSION`. The build number is stamped into the iOS app and AUv3 together.
+The root `VERSION` file sets the shared release version for the iOS app and AUv3, the macOS app, and the desktop plug-ins. Update and commit it when starting a new release. Keep the same `VERSION` when uploading another beta for that release.
 
 ```sh
-bundle exec fastlane archive target:ios build_number:0.0.2
-bundle exec fastlane archive target:macos build_number:0.0.2
+bundle exec fastlane archive
 ```
 
-Fastlane prints the signed package path under `Builds/apple-release/` along with the version, build number, and source commit. Use the printed package path to upload it.
+Fastlane reads the build history across iOS and macOS in App Store Connect, reserves the next integer above that history and any local reservations, and archives both platforms from the same checkout with that number. For example, a release can go from `0.1.0 (3)` to `0.1.0 (4)` without editing `VERSION`. A failed archive can leave a gap in the counter. Use one release checkout for allocation and upload older builds first if you have more than one pair waiting. To archive a single platform with a fresh number, pass `target:ios` or `target:macos`.
+
+Fastlane prints the signed package paths under `Builds/apple-release/` with the version, build number, and source commit. Use the printed paths to upload the packages.
 
 ```sh
 bundle exec fastlane upload target:ios package:/path/to/KSH.ipa

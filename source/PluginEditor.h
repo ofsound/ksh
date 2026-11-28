@@ -12,14 +12,15 @@
 //==============================================================================
 class PluginEditor : public juce::AudioProcessorEditor, private juce::Timer, private juce::ChangeListener, public juce::FileDragAndDropTarget
 {
+   #if JUCE_IOS
+    static constexpr bool standaloneUsesFixedViewport = true;
+   #else
+    static constexpr bool standaloneUsesFixedViewport = false;
+   #endif
+
 public:
-    explicit PluginEditor (PluginProcessor&, bool fitStandaloneToViewport =
-                         #if JUCE_IOS
-                             true
-                         #else
-                             false
-                         #endif
-    );
+    explicit PluginEditor (PluginProcessor&, bool fitStandaloneToViewport = standaloneUsesFixedViewport,
+                           std::shared_ptr<juce::PropertiesFile> preferences = {});
     ~PluginEditor() override;
 
     void paint (juce::Graphics&) override;
@@ -57,6 +58,7 @@ private:
     PluginProcessor& processorRef;
     const bool fitViewport;
     bool updatingNativeSize = false;
+    bool windowTallMode = false;
     bool zenMode = false, zenFullscreenSeen = false, zenExitRequested = false;
     juce::Component::SafePointer<juce::DocumentWindow> zenWindow;
     juce::Rectangle<int> windowBoundsBeforeZen;

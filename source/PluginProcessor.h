@@ -112,8 +112,6 @@ public:
     /** UI-owned host gesture. Engine-driven parameter writes inside it do not open nested gestures. */
     void beginUiParameterGesture (const juce::String& parameterID);
     void endUiParameterGesture (const juce::String& parameterID);
-    [[nodiscard]] bool queueLivePatternLaunch (int source, int currentSource);
-    int getQueuedPatternForUi() const { return livePatternLaunch.load (std::memory_order_acquire); }
 
     /** Low-latency QWERTY / pad trigger: queues MIDI audition without taking the engine lock.
         When pattern recording is armed, also enqueues a cell write with captured timing. */
@@ -364,8 +362,6 @@ private:
     moodycamel::ReaderWriterQueue<ksh::GeneratedSourcesFrame> generatedSourcesForEngine { 16 };
     std::atomic<int> currentStepForUi { 0 };
     std::atomic<int> globalStepForUi { 0 };
-    static constexpr int noLivePatternLaunch = ksh::Constants::mutedStaticSource - 1;
-    std::atomic<int> livePatternLaunch { noLivePatternLaunch };
     std::atomic<double> pendingHostBpm { 0.0 };
     std::atomic<bool> hostBpmChangePending { false };
     double lastHostTempoApplyMs = 0.0; // message-thread only

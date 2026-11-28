@@ -64,13 +64,14 @@ namespace
     }
 }
 
-PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport) : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
+PluginEditor::PluginEditor (PluginProcessor& p, bool fitStandaloneToViewport, std::shared_ptr<juce::PropertiesFile> preferences)
+    : AudioProcessorEditor (&p), processorRef (p), fitViewport (fitStandaloneToViewport && p.hasStandaloneTransport())
 {
    #if JUCE_IOS
     iosLibrary = p.getIOSProjectLibrary();
     startTimerHz (10);
    #endif
-    nativeView = std::make_unique<ksh::ui::NativeEditor> (p);
+    nativeView = std::make_unique<ksh::ui::NativeEditor> (p, std::move (preferences), !fitViewport);
     addAndMakeVisible (*nativeView);
    #if JUCE_IOS
     iosFileDrop = std::make_unique<ksh::IOSFileDrop> (*this, [this]
@@ -231,6 +232,7 @@ void PluginEditor::finishZenExit()
     // Restoring native chrome resizes the editor. Keep the centered viewport
     // active until that is finished so it cannot overwrite the chosen zoom.
     zenWindow = nullptr;
+    windowTallMode = nativeView->layout.tallMode;
     updateNativeSize();
     if (window != nullptr)
         window->setTopLeftPosition (windowBoundsBeforeZen.getPosition());
@@ -334,6 +336,9 @@ void PluginEditor::updateNativeSize()
             scale = UiScale::pluginDefaultFactor (layout.width(), layout.height(), display->userBounds.getWidth(), display->userBounds.getHeight());
     }
    #endif
+    const bool tallModeChanged = std::exchange (windowTallMode, layout.tallMode) != layout.tallMode;
+    if (tallModeChanged && getWidth() > 0)
+        scale = static_cast<float> (getWidth()) / layout.width();
     const juce::ScopedValueSetter<bool> updating (updatingNativeSize, true);
     setResizeLimits (juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::minimumPercent)), juce::roundToInt (layout.width() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)), juce::roundToInt (layout.height() * ksh::ui::UiScale::factor (ksh::ui::UiScale::maximumPercent)));
     if (auto* limits = getConstrainer())
@@ -479,11 +484,12 @@ PluginEditor::FileDrop PluginEditor::beginFileDrop()
     if (fileDropCancellation != nullptr)
         fileDropCancellation->store (true, std::memory_order_relaxed);
     fileDropCancellation = std::make_shared<std::atomic<bool>> (false);
-    const auto state = processorRef.nativeUiState();
+    const auto state = std::make_unique<PluginProcessor::UiState>();
+    processorRef.copyNativeUiState (*state);
     showFileDropStatus ("Reading file...", true);
-    return { ++fileDropRequest, state.documentEpoch, state.playback.beatsPerStep,
-             processorRef.hasStandaloneTransport() ? processorRef.getStandaloneTempoBpm() : state.playback.tempo,
-             state.playback.swing, state.playback.swingSubdivisionIndex };
+    return { ++fileDropRequest, state->documentEpoch, state->playback.beatsPerStep,
+             processorRef.hasStandaloneTransport() ? processorRef.getStandaloneTempoBpm() : state->playback.tempo,
+             state->playback.swing, state->playback.swingSubdivisionIndex };
 }
 
 void PluginEditor::analyseFileDrop (FileDrop drop, const juce::File& file, const juce::String& originalName,
@@ -617,7 +623,9 @@ void PluginEditor::completeSwingDrop (FileDrop drop, const ksh::ui::SwingImportR
     }
 
     auto& controller = nativeView->controller;
-    const auto current = processorRef.nativeUiState();
+    const auto currentState = std::make_unique<PluginProcessor::UiState>();
+    processorRef.copyNativeUiState (*currentState);
+    const auto& current = *currentState;
     const bool applyTempo = result.bpm.has_value() && processorRef.hasStandaloneTransport();
     const auto tempoChange = applyTempo ? std::abs (processorRef.getStandaloneTempoBpm() - *result.bpm) : 0.0;
     if (drop.document != current.documentEpoch || controller.editing()
@@ -727,7 +735,9 @@ void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPh
                                     juce::jlimit (compactMinHeight, compactMaxHeight, juce::roundToInt (available.getHeight())),
                                     onPhone);
     const auto& layout = nativeView->layout;
-    const float fitScale = juce::jmin (available.getWidth() / layout.width(), available.getHeight() / layout.height());
+    const int nativeWidth = juce::roundToInt (layout.width()), nativeHeight = juce::roundToInt (layout.height());
+    const float width = static_cast<float> (nativeWidth), height = static_cast<float> (nativeHeight);
+    const float fitScale = juce::jmin (available.getWidth() / width, available.getHeight() / height);
     const bool centered = zenMode || zenWindow != nullptr;
     const float scale = centered ? juce::jmin (fitScale, ksh::ui::UiScale::factor (processorRef.getProjectUiScalePercent())) : fitScale;
     if (zenMode)
@@ -735,9 +745,9 @@ void PluginEditor::layoutNativeView (juce::Rectangle<float> available, bool onPh
     const int percent = juce::jlimit (ksh::ui::UiScale::minimumPercent, ksh::ui::UiScale::maximumPercent, juce::roundToInt (scale / ksh::ui::UiScale::baseline * 100));
     if (!centered && !mobile && !updatingNativeSize && percent != processorRef.getUserUiScalePercent())
         processorRef.setProjectUiScalePercent (percent);
-    const auto offset = (centered || mobile) ? available.getCentre() - juce::Point<float> (layout.width() * scale, layout.height() * scale) * 0.5f : juce::Point<float>();
+    const auto offset = (centered || mobile) ? available.getCentre() - juce::Point<float> (width * scale, height * scale) * 0.5f : juce::Point<float>();
     nativeView->setTransform (juce::AffineTransform::scale (scale).translated (offset));
-    nativeView->setBounds (0, 0, juce::roundToInt (layout.width()), juce::roundToInt (layout.height()));
+    nativeView->setBounds (0, 0, nativeWidth, nativeHeight);
 }
 
 void PluginEditor::confirmDiscardingChanges (std::function<void()> proceed)

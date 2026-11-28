@@ -9,6 +9,20 @@ namespace ksh::ui
             phoneMenu::folder, phoneMenu::grid, phoneMenu::timing, phoneMenu::gear, phoneMenu::info
         };
 
+        void setPhoneHeaderFaded (juce::Component& control, bool faded)
+        {
+            auto& properties = control.getProperties();
+            constexpr auto fadeProperty = "phoneHeaderFaded";
+            if (faded == properties.contains (fadeProperty))
+                return;
+            if (faded)
+                properties.set (fadeProperty, true);
+            else
+                properties.remove (fadeProperty);
+            control.setAlpha (faded ? 0.10f : 1.0f);
+            control.setInterceptsMouseClicks (!faded, !faded);
+        }
+
         struct PhoneMenuLayout
         {
             PhoneMenuLayout (juce::Rectangle<int> bounds, bool patternPage)
@@ -36,7 +50,7 @@ namespace ksh::ui
     void NativeEditor::setupCompactControls()
     {
         for (auto* button : { &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls, &closePanel, &deselect, &page, &duplicate,
-                              static_cast<juce::TextButton*> (&tempoButton), &metronomeOptions, &channelReverse, &channelPing, &channelSolo })
+                              static_cast<juce::TextButton*> (&tempoButton), &metronomeOptions, &channelDirection, &channelSolo })
             addChildComponent (*button);
         addChildComponent (phoneAboutWordmark);
         phoneAboutWordmark.onAccentSelected = preview.onAccentSelected;
@@ -116,6 +130,8 @@ namespace ksh::ui
         }
         tempoDown.onClick = [this] { tempoFader.setValue (tempoFader.getValue() - 1, juce::sendNotificationSync); };
         tempoUp.onClick = [this] { tempoFader.setValue (tempoFader.getValue() + 1, juce::sendNotificationSync); };
+        tapTempo.getProperties().set ("tempoTap", true);
+        tapTempo.setTitle ("Tap Tempo");
         tapTempo.setTooltip ("Tap once per beat. Tempo updates after three taps.");
         tapTempo.onClick = [this] { registerTempoTap(); };
         metronomeOptions.onClick = [this] { metronomeMenu (metronomeOptions); };
@@ -124,18 +140,16 @@ namespace ksh::ui
         visibleRows.setTooltip ("Scroll to reach hidden rows");
         visibleRows.onClick = [this] { visibleRowsMenu(); };
         addChildComponent (rowScroll);
+        rowScroll.setLookAndFeel (&rowScrollLook);
         rowScroll.setTitle ("Scroll rows");
         rowScroll.setSingleStepSize (1);
         rowScroll.addListener (this);
-        grid.scrollRows = [this] (int delta) { scrollCompactRows (delta); };
+        grid.scrollRows = [this] (int delta) { scrollGridRows (delta); };
         grid.revealKeyboardCell = [this] (Location location)
         {
-            if (!layout.compact)
-                return;
-
-            const int row = layout.displayRow (location.channel);
-            layout.firstRow = juce::jlimit (row - layout.compactVisibleRows + 1, row, layout.firstRow);
-            layout.firstStep = location.step / Layout::compactStepsPerPage * Layout::compactStepsPerPage;
+            layout.firstRow = layout.firstRowToReveal (location.channel);
+            if (layout.compact)
+                layout.firstStep = location.step / Layout::compactStepsPerPage * Layout::compactStepsPerPage;
             sync();
         };
        #if JUCE_IOS
@@ -201,10 +215,6 @@ namespace ksh::ui
             showPanel (panel == Panel::none || panel == Panel::generate ? firstPage : Panel::none);
         };
         closePanel.onClick = [this] { showPanel (Panel::none); };
-        addChildComponent (noteChooserBack);
-        noteChooserBack.setTitle ("Back from MIDI chooser");
-        noteChooserBack.getProperties().set ("phoneMenuIcon", static_cast<int> (phoneMenu::previous));
-        noteChooserBack.onClick = [this] { noteChooser.dismiss(); };
         deselect.onClick = [this]
         {
             grid.cancelGesture();
@@ -235,9 +245,14 @@ namespace ksh::ui
         }
         grid.channelSettings = [this] (int channel)
         {
+            const bool closing = showingPhoneChannelSettings() && selectedChannel == channel;
             selectedChannel = channel;
-            showPanel (Panel::channel);
+            showPanel (closing ? Panel::none : Panel::channel);
+            if (!closing)
+                showNoteChooser (channel, channelNote);
         };
+        addChildComponent (channelOverlay);
+        channelOverlay.dismiss = [this] { showPanel (Panel::none); };
         for (auto* value : { &loopStart, &loopLength })
         {
             addChildComponent (*value);
@@ -257,7 +272,13 @@ namespace ksh::ui
             return controller.isControllerRow (selectedChannel) ? "CC " + juce::String (note)
                 : juce::MidiMessage::getMidiNoteName (note, true, true, 4) + " / " + juce::String (note);
         };
-        channelNote.onChoose = [this] { showNoteChooser (selectedChannel, channelNote); };
+        channelNote.onChoose = [this]
+        {
+            if (!showingPhoneNoteChooser())
+                showNoteChooser (selectedChannel, channelNote);
+            else if (noteChooser.isShowing())
+                noteChooser.grabKeyboardFocus();
+        };
         loopStart.caption = "Loop start";
         loopStart.setTitle ("Channel loop start");
         loopStart.minimum = 1;
@@ -270,9 +291,18 @@ namespace ksh::ui
         loopLength.setTitle ("Channel loop length");
         loopLength.minimum = 1;
         loopLength.onChange = [this] (int v) { controller.command ("channel_loop_length", { selectedChannel + 1, v, controller.loop (selectedChannel).loopStart + 1 }); };
-        channelReverse.onClick = [this] { grid.toggleDirection (selectedChannel, true); };
-        channelPing.onClick = [this] { grid.toggleDirection (selectedChannel, false); };
+        channelDirection.setTitle ("Playback direction");
+        channelDirection.setTooltip ("Tap to advance to the next playback direction.");
+        channelDirection.onClick = [this] { grid.advanceDirection (selectedChannel); };
         channelSolo.onClick = [this] { controller.toggleSolo (selectedChannel); };
+        addChildComponent (channelClear);
+        channelClear.setTitle ("Clear track");
+        channelClear.setTooltip ("Double-tap to clear this track");
+        channelClear.onClick = [this]
+        {
+            if (channelClearFlash.confirm())
+                controller.clearRow (selectedChannel);
+        };
     }
 
     void NativeEditor::setCompactViewport (bool compact, int width, int height, bool phone)
@@ -303,8 +333,13 @@ namespace ksh::ui
             patternPicker.dismiss();
         trackColourPopup.reset();
         trackColourContent.reset();
+        if (layout.phoneRowControls && !usePhoneLayout)
+            for (auto* control : getChildren())
+                setPhoneHeaderFaded (*control, false);
         layout.compact = compact;
         layout.phoneRowControls = usePhoneLayout;
+        if (showingPhoneNoteChooser())
+            selectedChannel = noteChooserChannel;
         noteChooser.setMenuPage (usePhoneLayout);
         layout.compactOnPhone = onPhone;
         layout.compactHeaderTopInset = usePhoneLayout && auv3 ? 4 : 0;
@@ -349,6 +384,7 @@ namespace ksh::ui
         styleMenuButton (dc, phoneMenu::palette);
         styleMenuButton (cellDisplay, phoneMenu::values, "Show values");
         styleMenuButton (rowOrder, phoneMenu::rows);
+        styleMenuButton (show16Rows, phoneMenu::grid);
         styleMenuButton (compactAccent, phoneMenu::palette);
         styleMenuButton (modifierToggle, phoneMenu::keyboard);
         styleMenuButton (visibleRows, phoneMenu::grid);
@@ -372,8 +408,8 @@ namespace ksh::ui
         chanceLayer.setButtonText (usePhoneLayout ? "Prob" : "Chance");
         chanceLayer.setTooltip (usePhoneLayout ? "Hold for temporary Prob" : "Hold here or hold Option for temporary Chance");
         configureSelectButton();
-        layout.compactVisibleRows = onPhone ? preferredPhoneRows : 8;
-        layout.firstRow = 0;
+        layout.compactVisibleRows = onPhone ? preferredPhoneRows : Layout::defaultVisibleRows;
+        layout.firstRow = layout.reverseRows ? layout.maxFirstRow() : 0;
         layout.compactWidth = static_cast<float> (width);
         layout.compactHeight = static_cast<float> (height);
         layout.firstStep = 0;
@@ -407,9 +443,9 @@ namespace ksh::ui
                 button.setVisible (true);
 
             const auto compactOnly = std::initializer_list<juce::Component*> {
-                &visibleRows, &rowScroll, &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls,
-                &closePanel, &noteChooserBack, &deselect, &page, &duplicate, &modifierToggle, &channelNote, &loopStart, &loopLength,
-                &aboutViewport, &phoneAboutWordmark, &metronomeOptions, &channelReverse, &channelPing, &channelSolo
+                &show16Rows, &visibleRows, &compactAccent, &compactClear, &recordOptions, &compactPattern, &controls,
+                &closePanel, &deselect, &page, &duplicate, &modifierToggle, &channelNote, &loopStart, &loopLength,
+                &aboutViewport, &phoneAboutWordmark, &metronomeOptions, &channelDirection, &channelSolo, &channelClear
             };
             for (auto* control : compactOnly)
                 control->setVisible (false);
@@ -426,8 +462,11 @@ namespace ksh::ui
             return;
         cancelCompactGestures();
         noteChooser.dismiss();
+        const int previousVisibleRows = layout.visibleRows();
         preferredPhoneRows = juce::jlimit (4, 8, count);
         layout.compactVisibleRows = preferredPhoneRows;
+        if (layout.reverseRows)
+            layout.firstRow += previousVisibleRows - layout.visibleRows();
        #if JUCE_IOS
         uiPreferences->setValue ("iphoneVisibleRows", preferredPhoneRows);
         uiPreferences->saveIfNeeded();
@@ -453,11 +492,9 @@ namespace ksh::ui
         });
     }
 
-    void NativeEditor::scrollCompactRows (int delta)
+    void NativeEditor::scrollGridRows (int delta)
     {
-        if (!layout.compact || !layout.phoneRowControls)
-            return;
-        const int next = juce::jlimit (0, juce::jmax (0, layout.channels - layout.compactVisibleRows), layout.firstRow + delta);
+        const int next = juce::jlimit (0, layout.maxFirstRow(), layout.firstRow + delta);
         if (next == layout.firstRow)
             return;
         cancelCompactGestures();
@@ -469,7 +506,33 @@ namespace ksh::ui
     void NativeEditor::scrollBarMoved (juce::ScrollBar* bar, double start)
     {
         if (bar == &rowScroll)
-            scrollCompactRows (juce::roundToInt (start) - layout.firstRow);
+            scrollGridRows (juce::roundToInt (start) - layout.firstRow);
+    }
+
+    void NativeEditor::RowScrollLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar& bar, int x, int y, int width, int height,
+                                                          bool vertical, int thumbStart, int thumbSize, bool hovered, bool pressed)
+    {
+        juce::LookAndFeel_V4::drawScrollbar (g, bar, x + artworkInset, y, juce::jmin (artworkWidth, width), height,
+                                            vertical, thumbStart, thumbSize, hovered, pressed);
+    }
+
+    int NativeEditor::RowScrollLookAndFeel::getMinimumScrollbarThumbSize (juce::ScrollBar& bar)
+    {
+        return 2 * juce::jmin (artworkWidth, bar.getHeight());
+    }
+
+    void NativeEditor::layoutRowScroll()
+    {
+        const int padding = layout.rowEndPadding();
+        const int width = padding + (layout.compact ? Layout::compactRowClearTrailingGap : 0);
+        rowScrollLook.artworkWidth = juce::jmin (Layout::rowScrollWidth, padding);
+        const int clearInkInset = (Layout::rowClearWidth - 20) / 2;
+        rowScrollLook.artworkInset = layout.compact ? (width - rowScrollLook.artworkWidth) / 2
+                                                   : (width - rowScrollLook.artworkWidth - clearInkInset) / 2;
+        const int top = juce::roundToInt (layout.gridY() + layout.cellsY());
+        const int bottom = juce::roundToInt (layout.gridY() + layout.cellsY()
+                                           + (layout.visibleRows() - 1) * layout.rowHeight() + layout.cellHeight());
+        rowScroll.setBounds (getWidth() - width, top, width, bottom - top);
     }
 
     void NativeEditor::cancelCompactGestures()
@@ -486,10 +549,13 @@ namespace ksh::ui
     {
         cancelCompactGestures();
         controller.commit();
+        if (showingPhoneNoteChooser())
+            noteChooser.dismiss();
         if (patternPicker.isVisible())
             patternPicker.dismiss();
         confirmPatternClear = false;
         compactClearFlash.cancel();
+        channelClearFlash.cancel();
         setTempoOpen (false);
         panel = next;
         if (next == Panel::generate)
@@ -505,6 +571,22 @@ namespace ksh::ui
     bool NativeEditor::phonePatternPanel() const
     {
         return layout.phoneRowControls && panel == Panel::pattern;
+    }
+
+    void NativeEditor::ChannelOverlay::mouseDown (const juce::MouseEvent& event)
+    {
+        if (!card.contains (event.getPosition()))
+            dismiss();
+    }
+
+    void NativeEditor::ChannelOverlay::paint (juce::Graphics& g)
+    {
+        {
+            const juce::Graphics::ScopedSaveState clip (g);
+            g.excludeClipRegion (opener);
+            g.fillAll (juce::Colours::black.withAlpha (0.65f));
+        }
+        phoneMenu::card (g, card.toFloat());
     }
 
     void NativeEditor::returnToPhoneGrid()
@@ -652,18 +734,21 @@ namespace ksh::ui
         loopLength.setValue (loop.loopLength);
         loopStart.setEnabled (controller.source() >= 0);
         loopLength.setEnabled (controller.source() >= 0);
-        channelReverse.setToggleState (channel.playbackMode == PlaybackMode::reverse || channel.playbackMode == PlaybackMode::reverse_ping_pong, juce::dontSendNotification);
-        channelPing.setToggleState (channel.playbackMode == PlaybackMode::ping_pong || channel.playbackMode == PlaybackMode::reverse_ping_pong, juce::dontSendNotification);
+        const auto* direction = playbackDirectionLabel (channel.playbackMode);
+        channelDirection.setButtonText (direction);
+        channelDirection.setDescription (direction);
+        channelDirection.setToggleState (channel.playbackMode != PlaybackMode::normal, juce::dontSendNotification);
         const bool solo = controller.soloedChannels().test (static_cast<size_t> (selectedChannel));
         channelSolo.setButtonText (solo ? "Exit solo" : "Solo");
         channelSolo.setToggleState (solo, juce::dontSendNotification);
-        for (auto* button : { &channelReverse, &channelPing, &channelSolo })
+        for (auto* button : { &channelDirection, &channelSolo })
             button->setEnabled (controller.source() >= 0);
     }
 
     bool NativeEditor::showingCompactPadPreview() const
     {
-        return layout.phoneRowControls && panel == Panel::none && showingRecordingPads() && !patternPicker.isVisible();
+        return layout.phoneRowControls && panel == Panel::none && showingRecordingPads()
+            && !patternPicker.isVisible() && !showingPhoneNoteChooser();
     }
 
     bool NativeEditor::showingRecordingPads() const
@@ -762,22 +847,26 @@ namespace ksh::ui
         };
         const int w = getWidth();
         const bool phone = layout.phoneRowControls;
-        const bool gridHeader = panel == Panel::none || panel == Panel::generate;
-        const bool patternOpen = phonePatternPanel();
-        const bool menuOpen = phone && !patternOpen && panel >= Panel::project && panel <= Panel::help;
+        const bool projectDialog = isProjectDialogOpen();
+        if (projectDialog && phone)
+        {
+            finish();
+            return;
+        }
+        const bool phoneChooser = !projectDialog && showingPhoneNoteChooser();
+        const bool rowSettings = showingPhoneChannelSettings();
+        const bool gridHeader = projectDialog || phoneChooser || rowSettings || panel == Panel::none || panel == Panel::generate;
+        const bool patternOpen = !projectDialog && phonePatternPanel();
+        const bool menuOpen = !projectDialog && phone && !patternOpen && panel >= Panel::project && panel <= Panel::help;
         auto& patternButton = panelTabs[1];
         const int toolbarInset = phone ? 0 : 2;
         const int toolbarY = toolbarInset + layout.compactHeaderTopInset;
         const int toolbarHeight = Layout::compactHeaderHeight - 2 * toolbarInset;
         const int headerBottom = layout.compactHeaderBottom();
-        if (showingNoteChooserPage())
-        {
-            const PhoneMenuLayout menu (getLocalBounds(), true);
-            place (noteChooserBack, menu.body.getX(), toolbarY, 88, toolbarHeight);
-            noteChooser.setBounds (menu.body);
-            finish();
-            return;
-        }
+        channelNote.setBounds (28, 106, 152, 68);
+        channelNote.setLayerHighlighted (phoneChooser);
+        for (int channel = 0; channel < Constants::maxChannels; ++channel)
+            grid.rowSettingsButton (channel).setToggleState (rowSettings && selectedChannel == channel, juce::dontSendNotification);
         controls.setToggleState (menuOpen, juce::dontSendNotification);
         generate.setToggleState (panel == Panel::generate, juce::dontSendNotification);
         if (phone)
@@ -835,7 +924,7 @@ namespace ksh::ui
                 { patternButton, patternWidth },
                 { controls, menuWidth },
             };
-            juce::Component* headerOnly = patternOpen ? &patternButton : menuOpen ? &controls : patternBankOpen ? &compactPattern : nullptr;
+            const juce::Component* opener = patternOpen ? &patternButton : menuOpen ? &controls : patternBankOpen ? &compactPattern : nullptr;
             int freeWidth = w, gaps = -1;
             for (const auto& item : header)
             {
@@ -849,6 +938,7 @@ namespace ksh::ui
             int x = 0, gapIndex = 0, distributed = 0;
             for (const auto& item : header)
             {
+                setPhoneHeaderFaded (item.component, opener != nullptr && opener != &item.component);
                 if (item.width == 0)
                     continue;
                 if (x != 0 && item.startsGroup)
@@ -870,16 +960,15 @@ namespace ksh::ui
                         distributed = next;
                     }
                 }
-                if (headerOnly == nullptr || headerOnly == &item.component)
-                    place (item.component, x, toolbarY, item.width, toolbarHeight);
+                place (item.component, x, toolbarY, item.width, toolbarHeight);
                 x += item.width;
             }
-            if (standalone && headerOnly == nullptr)
+            if (standalone)
                 (&transport == &play ? stop : play).setBounds (transport.getBounds());
         }
         if (gridHeader)
         {
-            if (patternBankOpen)
+            if (!projectDialog && patternBankOpen)
             {
                 finish();
                 return;
@@ -925,14 +1014,14 @@ namespace ksh::ui
                     place (generate, showPads.getX() - 78, toolbarY, 74, toolbarHeight);
                 }
             }
-            if (panel == Panel::generate)
+            if (!projectDialog && panel == Panel::generate)
             {
                 place (aboutViewport, 12, headerBottom + 8, w - 24, getHeight() - headerBottom - 16);
                 randomPanel.setSize (aboutViewport.getWidth(), aboutViewport.getHeight());
                 finish();
                 return;
             }
-            if (showingCompactPadPreview())
+            if (!projectDialog && showingCompactPadPreview())
             {
                 const auto bounds = compactPadPreviewBounds();
                 place (recordingStrip, 0, bounds.getBottom(), w, getHeight() - bounds.getBottom());
@@ -941,7 +1030,7 @@ namespace ksh::ui
                 finish();
                 return;
             }
-            if (showingRecordingPads())
+            if (!projectDialog && !phoneChooser && !rowSettings && showingRecordingPads())
             {
                 place (recordingStrip, 0, juce::roundToInt (layout.previewY()), w, Layout::compactInspectorHeight);
                 layoutRecordingPads();
@@ -951,10 +1040,52 @@ namespace ksh::ui
                 place (preview, 0, juce::roundToInt (layout.previewY()), w, Layout::compactInspectorHeight);
                 preview.setInspectorBounds (preview.getLocalBounds());
             }
-            const bool scrolling = layout.phoneRowControls && layout.compactVisibleRows < layout.channels;
-            place (grid, 0, juce::roundToInt (layout.gridY()), w - (scrolling ? 24 : 0), juce::roundToInt (layout.gridHeight()));
-            if (scrolling)
-                place (rowScroll, w - 24, juce::roundToInt (layout.gridY() + layout.cellsY()), 24, juce::roundToInt (layout.gridHeight() - layout.cellsY()));
+            place (grid, 0, juce::roundToInt (layout.gridY()), w, juce::roundToInt (layout.gridHeight()));
+            if (layout.maxFirstRow() > 0)
+            {
+                layoutRowScroll();
+                visible.push_back (&rowScroll);
+            }
+            if (rowSettings)
+            {
+                const auto area = grid.getBounds();
+                const auto opener = grid.rowSettingsButton (selectedChannel).getBounds();
+                channelOverlay.opener = opener;
+                channelOverlay.card = area.withZeroOrigin().reduced (8, 4).withLeft (opener.getRight() + 12);
+                channelOverlay.setBounds (area);
+                channelOverlay.toFront (false);
+                channelOverlay.repaint();
+                visible.push_back (&channelOverlay);
+
+                auto content = getLocalArea (&channelOverlay, channelOverlay.card).reduced (14, 12);
+                auto settingsArea = content.removeFromLeft (192);
+                content.removeFromLeft (16);
+                if (phoneChooser)
+                {
+                    noteChooser.setMenuArea (content);
+                    noteChooser.toFront (false);
+                }
+                const auto placeControl = [&place] (juce::Component& component, juce::Rectangle<int> bounds)
+                {
+                    place (component, bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight());
+                    component.toFront (false);
+                };
+                placeControl (channelNote, settingsArea.removeFromTop (56));
+                settingsArea.removeFromTop (8);
+                auto loop = settingsArea.removeFromTop (58);
+                placeControl (loopStart, loop.removeFromLeft (loop.getWidth() / 2).withTrimmedRight (4));
+                placeControl (loopLength, loop.withTrimmedLeft (4));
+                settingsArea.removeFromTop (12);
+                auto actions = settingsArea.removeFromTop (44);
+                placeControl (channelDirection, actions.removeFromLeft (128).withTrimmedRight (8));
+                placeControl (channelSolo, actions);
+                settingsArea.removeFromTop (8);
+                if (layout.clearInRowSettings())
+                {
+                    channelClear.setEnabled (controller.source() >= 0);
+                    placeControl (channelClear, settingsArea.removeFromTop (44));
+                }
+            }
             finish();
             return;
         }
@@ -1019,8 +1150,7 @@ namespace ksh::ui
                 place (rowOrder, 396, 130, 168, 48);
                 place (compactAccent, 580, 130, 206, 48);
                 place (modifierToggle, 28, 224, 208, 44);
-                if (layout.phoneRowControls)
-                    place (visibleRows, 260, 224, 180, 44);
+                place (show16Rows, 260, 224, 180, 44);
                 if (phone && layout.standalone)
                     place (metronomeOptions, 464, 224, 220, 44);
                 if (layout.standalone && controller.processor.showStandaloneLinkSettings)
@@ -1029,14 +1159,13 @@ namespace ksh::ui
                     place (midiOutput, 28, 292, controller.processor.showStandaloneLinkSettings ? w / 2 - 36 : w - 56, 44);
                 break;
             case Panel::channel:
-                place (channelNote, 28, 106, 152, 68);
+                visible.push_back (&channelNote);
                 place (loopStart, 28, 206, 156, 68);
                 place (loopLength, 200, 206, 156, 68);
                 if (phone)
                 {
-                    place (channelReverse, 372, 226, 118, 48);
-                    place (channelPing, 502, 226, 118, 48);
-                    place (channelSolo, 632, 226, 118, 48);
+                    place (channelDirection, 372, 226, 176, 48);
+                    place (channelSolo, 560, 226, 118, 48);
                 }
                 break;
             case Panel::help:
@@ -1112,11 +1241,12 @@ namespace ksh::ui
             {
                 row (leftControls.withHeight (buttonHeight), { &dc, &cellDisplay });
                 const auto rowSettings = leftControls.withTrimmedTop (rowStride).withHeight (buttonHeight);
+                row (rowSettings, { &rowOrder, &show16Rows });
+                const auto interactionSettings = leftControls.withTrimmedTop (2 * rowStride).withHeight (buttonHeight);
                 if (layout.compactOnPhone)
-                    row (rowSettings, { &rowOrder, &visibleRows });
+                    row (interactionSettings, { &modifierToggle, &visibleRows });
                 else
-                    place (rowOrder, rowSettings);
-                place (modifierToggle, leftControls.withTrimmedTop (2 * rowStride).withHeight (buttonHeight));
+                    place (modifierToggle, interactionSettings);
                 const auto settingsRow = [&] (juce::Component& component)
                 {
                     place (component, rightControls.removeFromTop (rowStride).withHeight (buttonHeight));
@@ -1147,8 +1277,7 @@ namespace ksh::ui
 
     void NativeEditor::paintPhoneMenu (juce::Graphics& g) const
     {
-        const bool notePage = showingNoteChooserPage();
-        const bool singleHeader = phonePatternPanel() || notePage;
+        const bool singleHeader = phonePatternPanel();
         const PhoneMenuLayout menu (getLocalBounds(), singleHeader);
         const auto body = menu.body.toFloat();
         const auto leftCard = menu.left.toFloat();
@@ -1162,15 +1291,6 @@ namespace ksh::ui
         const int navHeight = singleHeader ? 42 : 94;
         g.setColour (Palette::border.withAlpha (0.48f));
         g.drawHorizontalLine (navHeight, body.getX(), body.getRight());
-        if (notePage)
-        {
-            const auto title = noteChooserBack.getBounds().withX (noteChooserBack.getRight() + 12).toFloat().withRight (body.getRight());
-            text (g, "Track " + juce::String (noteChooserChannel + 1), title, 15,
-                  Palette::channel (noteChooserChannel, controller.drumColors), true, juce::Justification::centredLeft);
-            phoneMenu::card (g, body);
-            return;
-        }
-
         switch (panel)
         {
             case Panel::project:

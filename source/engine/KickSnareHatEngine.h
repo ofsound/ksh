@@ -54,7 +54,13 @@ struct DocumentSettings
     int velocityHumanize = 0;
     int timingHumanize = 0;
     bool deviceActive = true;
-    std::array<Channel, Constants::maxChannels> channels {};
+    std::array<Channel, Constants::maxChannels> channels = []
+    {
+        std::array<Channel, Constants::maxChannels> defaults;
+        for (size_t index = 0; index < defaults.size(); ++index)
+            defaults[index] = defaultChannel (static_cast<int> (index));
+        return defaults;
+    }();
     std::array<SourceSettings, Constants::sourceCount> sourceSettings {};
     std::array<std::array<bool, Constants::maxChannels>, Constants::sourceCount> sourceChannelMutes {};
 
@@ -266,7 +272,7 @@ public:
 
     /** Immutable view for the audio thread. Built on the message thread. */
     [[nodiscard]] PlaybackSnapshot makePlaybackSnapshot() const;
-    /** Same as makePlaybackSnapshot, written into existing storage so no ~140 KB temporary is copied. */
+    /** Same as makePlaybackSnapshot, written directly into existing storage. */
     void fillPlaybackSnapshot (PlaybackSnapshot& snapshot) const;
 
     /** Bumped whenever playback-affecting state changes; lets owners publish only on change. */

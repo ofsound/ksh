@@ -506,8 +506,7 @@ namespace ksh::ui
             notify();
             return;
         }
-        const bool copying = copySource >= 0 && index >= 0;
-        if (copying)
+        if (copySource >= 0 && index >= 0)
         {
             command ("source_pattern_copy", { copySource + 1, index + 1 }, "Copy pattern");
             copySource = -1;
@@ -515,12 +514,6 @@ namespace ksh::ui
         selected.reset();
         if (source() != index)
             exitSolo();
-        if (!copying && state.playback.generationMode == GenerationMode::staticSource
-            && processor.queueLivePatternLaunch (index, source()))
-        {
-            notify();
-            return;
-        }
         command ("static_source", index < 0 ? nlohmann::json::array ({ "mute" }) : nlohmann::json::array ({ index + 1 }));
     }
     void EditorController::deleteSelection()

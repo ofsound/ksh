@@ -97,7 +97,7 @@ TEST_CASE ("An iPad AUv3 viewport transition preserves modal state and restores 
         REQUIRE (grid.rowTitle (0) != nullptr);
         grid.noteChooserRequested (0, *grid.rowTitle (0));
         REQUIRE (chooser->isVisible());
-        CHECK_FALSE (grid.isVisible());
+        CHECK (grid.isVisible());
         CHECK_FALSE (chooser->isAlwaysOnTop());
         setCompact (false);
         CHECK (chooser->isVisible());
@@ -222,7 +222,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
             {
                 CHECK (editor.getLocalBounds().contains (child->getBounds()));
                 if (child->getY() < Layout::compactHeaderHeight)
-                    CHECK (child == &menu);
+                    CHECK (child->getAlpha() == Catch::Approx (child == &menu ? 1.0f : 0.10f).margin (0.002f));
             }
         capturePhone (editor, "iphone-panel-" + juce::String (tab).toLowerCase());
     }
@@ -234,14 +234,22 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (grid.isVisible());
     CHECK_FALSE (menu.getToggleState());
     grid.channelSettings (1);
-    CHECK_FALSE (grid.isVisible());
-    phoneButton (editor, "Reverse").onClick();
-    phoneButton (editor, "Ping-pong").onClick();
-    CHECK (editor.controller.state.playback.channels[1].playbackMode == PlaybackMode::reverse_ping_pong);
-    CHECK (phoneButton (editor, "Reverse").getX() > 356);
-    CHECK (phoneButton (editor, "Ping-pong").getToggleState());
+    CHECK (grid.isVisible());
+    auto& rowSettings = phoneButton (editor, "Settings channel 2");
+    auto& direction = phoneButton (editor, "Playback direction");
+    CHECK (direction.getX() > rowSettings.getRight());
+    for (const auto& [mode, label] : std::array {
+             std::pair { PlaybackMode::reverse, "Reverse" },
+             std::pair { PlaybackMode::ping_pong, "Forward ping-pong" },
+             std::pair { PlaybackMode::reverse_ping_pong, "Reverse ping-pong" },
+             std::pair { PlaybackMode::normal, "Forward" } })
+    {
+        direction.onClick();
+        CHECK (editor.controller.state.playback.channels[1].playbackMode == mode);
+        CHECK (direction.getButtonText() == label);
+    }
     capturePhone (editor, "iphone-panel-channel");
-    phoneButton (editor, "Done").onClick();
+    rowSettings.onClick();
     auto& patternBank = phoneButton (editor, "Pattern bank");
     const auto patternBankBounds = patternBank.getBounds();
     patternBank.onClick();
@@ -249,7 +257,7 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     CHECK (patternBank.getToggleState());
     for (auto* child : editor.getChildren())
         if (child->isVisible() && child->getY() < Layout::compactHeaderHeight)
-            CHECK (child == &patternBank);
+            CHECK (child->getAlpha() == Catch::Approx (child == &patternBank ? 1.0f : 0.10f).margin (0.002f));
     CHECK_FALSE (grid.isVisible());
     CHECK (phoneButton (editor, "Muted Pattern").getButtonText() == "Muted Pattern");
     auto* bank = phoneButton (editor, "Choose pattern 1").getParentComponent();
@@ -316,7 +324,9 @@ TEST_CASE ("iPhone landscape fits eight channels sixteen steps and the inspector
     for (auto* child : editor.getChildren())
         if (child->getTitle() == "Open controls" || child->getTitle() == "Pattern picker")
             CHECK_FALSE (child->isVisible());
-    CHECK (grid.layout.gridLeft() == Catch::Approx (Layout {}.gridLeft()));
+    Layout fullLayout;
+    fullLayout.channels = Layout::defaultVisibleRows;
+    CHECK (grid.layout.gridLeft() == Catch::Approx (fullLayout.gridLeft()));
 }
 
 TEST_CASE ("iPhone Jam opens the pads and exposes a larger target to finish the take", "[native-ui][iphone][jam]")
@@ -324,7 +334,8 @@ TEST_CASE ("iPhone Jam opens the pads and exposes a larger target to finish the 
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Standalone);
     PluginProcessor processor;
     juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
-    NativeEditor editor (processor);
+    juce::TemporaryFile settingsFile (".settings");
+    NativeEditor editor (processor, std::make_shared<juce::PropertiesFile> (settingsFile.getFile(), juce::PropertiesFile::Options {}));
     editor.setCompactViewport (true, 814, 390);
     editor.setSize (814, 390);
     auto& generate = phoneButton (editor, "Generate");
@@ -647,6 +658,7 @@ TEST_CASE ("Desktop and iPad standalone share a tempo popup", "[native-ui][tempo
     auto& plus = phoneButton (editor, "Increase tempo by 1 BPM");
     auto& minus = phoneButton (editor, "Decrease tempo by 1 BPM");
     auto& tap = phoneButton (editor, "Tap Tempo");
+    CHECK (tap.getButtonText() == "Tap");
     auto* popup = plus.getParentComponent();
     REQUIRE (popup != nullptr);
     CHECK (popup->isVisible());
@@ -1343,12 +1355,14 @@ TEST_CASE ("iPhone step pages edit the correct cells and cancel a resized gestur
 TEST_CASE ("Grid arrow keys reveal pages and rows and Return toggles the focused step", "[native-ui][iphone]")
 {
     PluginProcessor processor;
+    REQUIRE (processor.dispatchUiEngineCommand ("channels", { 8 }));
     REQUIRE (processor.dispatchUiEngineCommand ("source_steps", { 1, 32 }));
     NativeEditor editor (processor);
     editor.setCompactViewport (true, 814, 409);
     editor.setSize (814, 409);
     editor.setCompactVisibleRows (4);
     editor.layout.reverseRows = true;
+    editor.layout.firstRow = 0;
     editor.sync();
     auto& grid = phoneGrid (editor);
     const auto point = grid.layout.cell ({ 4, 15 }).getCentre();
@@ -1673,28 +1687,73 @@ TEST_CASE ("iPhone and compact AUv3 can edit a CC row through the note chooser",
     editor.controller.editCell ({ 0, 6 }, Cell { .enabled = true, .velocity = 36 });
     editor.controller.commit();
 
-    phoneButton (editor, "Settings channel 1").onClick();
+    editor.setVisible (true);
     NoteInput* input = nullptr;
     NoteChooser* chooser = nullptr;
+    PreviewPanel* inspector = nullptr;
+    std::vector<std::pair<juce::Component*, juce::Rectangle<int>>> header;
     for (auto* child : editor.getChildren())
     {
         if (auto* choice = dynamic_cast<NoteInput*> (child)) input = choice;
         if (auto* overlay = dynamic_cast<NoteChooser*> (child)) chooser = overlay;
+        if (auto* preview = dynamic_cast<PreviewPanel*> (child)) inspector = preview;
+        if (child->isVisible() && !child->getBounds().isEmpty() && child->getBottom() <= editor.layout.compactHeaderBottom())
+            header.emplace_back (child, child->getBounds());
     }
     REQUIRE (input != nullptr);
-    REQUIRE (input->isVisible());
     REQUIRE (chooser != nullptr);
+    REQUIRE (inspector != nullptr);
+    REQUIRE (inspector->isVisible());
+    REQUIRE_FALSE (header.empty());
+    const auto inspectorBounds = inspector->getBounds();
+
+    auto& opener = phoneButton (editor, "Settings channel 1");
+    const auto openerBounds = editor.getLocalArea (&grid, opener.getBounds());
+    opener.onClick();
+    REQUIRE (input->isVisible());
+    REQUIRE (chooser->isVisible());
+    CHECK (opener.getToggleState());
+    CHECK (editor.getComponentAt (openerBounds.getCentre()) == &opener);
+    CHECK (input->getX() > openerBounds.getRight());
+    CHECK (input->getBottom() < inspectorBounds.getY());
+    CHECK (inspector->isVisible());
+    for (const auto& [control, bounds] : header)
+    {
+        CHECK (control->isVisible());
+        CHECK (control->getBounds() == bounds);
+    }
+    capturePhone (editor, phone ? "iphone-row-settings" : "compact-auv3-row-settings");
+    const auto openerPoint = opener.getLocalBounds().getCentre().toFloat();
+    editor.mouseDown (phoneEvent (opener, openerPoint, openerPoint));
+    opener.onClick();
+    CHECK_FALSE (input->isVisible());
+    CHECK_FALSE (opener.getToggleState());
+    opener.onClick();
+    REQUIRE (input->isVisible());
+    const auto inputBounds = input->getBounds();
     input->onChoose();
     REQUIRE (chooser->isVisible());
     CHECK_FALSE (chooser->isAlwaysOnTop());
-    CHECK_FALSE (input->isVisible());
-    CHECK_FALSE (grid.isVisible());
-    auto& back = phoneButton (editor, "Back from MIDI chooser");
-    CHECK (back.getBottom() < chooser->getY());
+    CHECK (input->isVisible());
+    CHECK (input->getBounds() == inputBounds);
+    CHECK (editor.getComponentAt (inputBounds.getCentre()) == input);
+    CHECK (editor.getComponentAt (openerBounds.getCentre()) == &opener);
+    CHECK (grid.isVisible());
+    CHECK (inspector->isVisible());
+    CHECK (inspector->getBounds() == inspectorBounds);
+    CHECK (chooser->getY() > editor.layout.compactHeaderBottom());
+    CHECK (chooser->getBottom() < inspectorBounds.getY());
+    CHECK (chooser->getX() > inputBounds.getRight());
+    for (const auto& [control, bounds] : header)
+    {
+        CHECK (control->isVisible());
+        CHECK (control->getBounds() == bounds);
+    }
     auto& noteMode = phoneButton (editor, "Note mode");
     auto& ccMode = phoneButton (editor, "CC mode");
     const auto switchBounds = noteMode.getBounds().getUnion (ccMode.getBounds());
     CHECK (chooser->getLocalBounds().contains (switchBounds));
+    CHECK (editor.getLocalArea (chooser, switchBounds).getX() > inputBounds.getRight());
     CHECK (noteMode.getRight() == ccMode.getX() + 1);
     CHECK (noteMode.getHeight() >= 42);
     CHECK (noteMode.getToggleState());
@@ -1717,11 +1776,14 @@ TEST_CASE ("iPhone and compact AUv3 can edit a CC row through the note chooser",
     CHECK_FALSE (editor.controller.glidesToNext ({ 0, 0 }));
     CHECK (std::ranges::none_of (chooser->getChildren(), [] (auto* child) { return child->getTitle().containsIgnoreCase ("Glide"); }));
     capturePhone (editor, phone ? "iphone-cc-chooser" : "compact-auv3-cc-chooser");
-    back.onClick();
-    CHECK_FALSE (chooser->isVisible());
-    CHECK_FALSE (back.isVisible());
+    input->onChoose();
+    CHECK (chooser->isVisible());
     CHECK (input->isVisible());
-    phoneButton (editor, "Done").onClick();
+    auto& menu = phoneButton (editor, "Open menu");
+    const auto menuPoint = menu.getLocalBounds().getCentre().toFloat();
+    editor.mouseDown (phoneEvent (menu, menuPoint, menuPoint));
+    CHECK_FALSE (chooser->isVisible());
+    CHECK (inspector->isVisible());
     REQUIRE (grid.isVisible());
 
     editor.controller.selected.set (0);
@@ -1763,7 +1825,8 @@ TEST_CASE ("iPhone and compact AUv3 can edit a CC row through the note chooser",
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 81);
     CHECK (editor.controller.cell ({ 0, 0 }).roll == 3);
     REQUIRE (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
-    CHECK (input->isVisible());
+    CHECK_FALSE (input->isVisible());
+    CHECK_FALSE (chooser->isVisible());
 }
 
 TEST_CASE ("Compact Copy toggle stays available outside iPhone mode", "[native-ui][iphone]")
@@ -1807,8 +1870,12 @@ TEST_CASE ("iPhone pattern navigation ignores selection mode and closes when the
     auto& grid = phoneGrid (editor);
     phoneButton (editor, "Pattern bank").onClick();
     CHECK_FALSE (grid.isVisible());
+    CHECK (phoneButton (editor, "Pattern bank").getAlpha() == Catch::Approx (1.0f));
+    CHECK (phoneButton (editor, "Open menu").isVisible());
+    CHECK (phoneButton (editor, "Open menu").getAlpha() == Catch::Approx (0.10f).margin (0.002f));
     phoneButton (editor, "Choose pattern 3").onClick();
     CHECK (grid.isVisible());
+    CHECK (phoneButton (editor, "Open menu").getAlpha() == Catch::Approx (1.0f));
     CHECK (editor.controller.source() == 2);
     CHECK (editor.controller.copySource == -1);
     CHECK (editor.controller.cell ({ 0, 0 }).velocity == 44);
@@ -1862,14 +1929,22 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     CHECK (recordButton.isVisible());
     auto& pattern = phoneButton (editor, "Open pattern settings");
     const auto patternBounds = pattern.getBounds();
+    const auto recordBounds = recordButton.getBounds();
+    const auto menuBounds = menuButton.getBounds();
     CHECK (pattern.getProperties().contains ("dropdown"));
     CHECK (pattern.getWidth() < dropdownWidth (pattern.getButtonText()));
     CHECK (menuButton.getWidth() < dropdownWidth (menuButton.getButtonText()));
     pattern.onClick();
     CHECK (pattern.getBounds() == patternBounds);
     CHECK (pattern.getToggleState());
-    CHECK_FALSE (recordButton.isVisible());
-    CHECK_FALSE (menuButton.isVisible());
+    CHECK (pattern.getAlpha() == Catch::Approx (1.0f));
+    CHECK (recordButton.isVisible());
+    CHECK (recordButton.getAlpha() == Catch::Approx (0.10f).margin (0.002f));
+    CHECK (recordButton.getBounds() == recordBounds);
+    CHECK (editor.getComponentAt (recordBounds.getCentre()) != &recordButton);
+    CHECK (menuButton.isVisible());
+    CHECK (menuButton.getAlpha() == Catch::Approx (0.10f).margin (0.002f));
+    CHECK (menuButton.getBounds() == menuBounds);
     auto& clearButton = phoneButton (editor, "Clear pattern");
     CHECK (clearButton.isVisible());
     capturePhone (editor, "iphone-panel-pattern");
@@ -1886,7 +1961,9 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     CHECK (editor.controller.cell ({ 0, 0 }).enabled);
     CHECK (phoneButton (editor, "Arm Record").isVisible());
     phoneButton (editor, "Open menu").onClick();
-    CHECK_FALSE (pattern.isVisible());
+    CHECK (pattern.isVisible());
+    CHECK (pattern.getAlpha() == Catch::Approx (0.10f).margin (0.002f));
+    CHECK (menuButton.getAlpha() == Catch::Approx (1.0f));
     CHECK_FALSE (clearButton.isVisible());
     phoneButton (editor, "Feel").onClick();
     ValueControl* swingTarget = nullptr;
@@ -1905,11 +1982,13 @@ TEST_CASE ("iPhone settings remember context and pattern clearing requires the s
     phoneButton (editor, "Open menu").onClick();
     CHECK (phoneButton (editor, "Feel").getToggleState());
     phoneButton (editor, "Close menu").onClick();
-    phoneGrid (editor).channelSettings (1);
-    for (auto* child : editor.getChildren())
-        if (child->getTitle() == "Open menu" || dynamic_cast<PreviewPanel*> (child) != nullptr)
-            CHECK_FALSE (child->isVisible());
-    phoneButton (editor, "Done").onClick();
+    auto& rowSettings = phoneButton (editor, "Settings channel 2");
+    rowSettings.onClick();
+    CHECK (rowSettings.getToggleState());
+    CHECK (menuButton.isVisible());
+    CHECK (menuButton.getAlpha() == Catch::Approx (1.0f));
+    rowSettings.onClick();
+    CHECK_FALSE (rowSettings.getToggleState());
     phoneButton (editor, "Open menu").onClick();
     CHECK (phoneButton (editor, "Feel").getToggleState());
 }
@@ -2098,25 +2177,29 @@ TEST_CASE ("iPhone toolbar avoids overlapping page recording and selection contr
     CHECK (editor.controller.cell ({ 0, 16 }).enabled);
     CHECK (editor.controller.cell ({ 0, 48 }).enabled);
     pad->mouseUp (phoneEvent (*pad, centre, centre, 0));
-    const auto firstSeedPattern = editor.controller.state.playback.sources[0];
-    auto& firstSeed = phoneButton (editor, "Generator seed A");
-    auto& nextSeed = phoneButton (editor, "Generator seed B");
-    CHECK (firstSeed.getButtonText() == "A");
-    CHECK (phoneButton (editor, "Generator seed E").getButtonText() == "E");
-    CHECK (firstSeed.getToggleState());
-    CHECK (nextSeed.getY() - pad->getBottom() >= 16);
+    const auto firstGroovePattern = editor.controller.state.playback.sources[0];
+    auto& firstGroove = phoneButton (editor, "Groove A, Four on the Floor");
+    auto& nextGroove = phoneButton (editor, "Groove B, Half-Time");
+    CHECK (firstGroove.getButtonText() == "A");
+    CHECK (phoneButton (editor, "Groove C, Broken Beat").getButtonText() == "C");
+    const auto grooveButtonCount = std::count_if (generator->getChildren().begin(), generator->getChildren().end(),
+                                                 [] (juce::Component* child) { return child->getTitle().startsWith ("Groove "); });
+    CHECK (grooveButtonCount == 3);
+    CHECK (firstGroove.getToggleState());
+    CHECK (nextGroove.getY() - pad->getBottom() >= 16);
     capturePhone (editor, "iphone-generate");
-    nextSeed.onClick();
-    CHECK (nextSeed.getToggleState());
-    CHECK_FALSE (firstSeed.getToggleState());
-    CHECK (editor.controller.state.playback.sources[0] != firstSeedPattern);
+    nextGroove.onClick();
+    CHECK (nextGroove.getToggleState());
+    CHECK_FALSE (firstGroove.getToggleState());
+    CHECK (editor.controller.state.playback.sources[0] != firstGroovePattern);
     editor.controller.undo();
-    CHECK (editor.controller.state.playback.sources[0] == firstSeedPattern);
+    CHECK (editor.controller.state.playback.sources[0] == firstGroovePattern);
     editor.controller.undo();
     CHECK_FALSE (editor.controller.cell ({ 0, 0 }).enabled);
     generate.onClick();
     phoneButton (editor, "Open menu").onClick();
-    CHECK_FALSE (generate.isVisible());
+    CHECK (generate.isVisible());
+    CHECK (generate.getAlpha() == Catch::Approx (0.10f).margin (0.002f));
     phoneButton (editor, "Settings").onClick();
     auto& metronome = phoneButton (editor, "Metronome");
     const auto& metronomeSound = phoneButton (editor, "Metronome sound...");
@@ -2165,7 +2248,8 @@ TEST_CASE ("iOS performance pads replace the inspector independently of record a
             if ((step + ch) % (ch % 4 + 2) == 0)
                 REQUIRE (processor.dispatchUiEngineCommand ("cell", { 1, ch + 1, step + 1, 1, 80 + step % 40 }));
     }
-    NativeEditor editor (processor);
+    juce::TemporaryFile settingsFile (".settings");
+    NativeEditor editor (processor, std::make_shared<juce::PropertiesFile> (settingsFile.getFile(), juce::PropertiesFile::Options {}));
     editor.layout.touchRows = true;
     editor.layout.reverseRows = reversed;
     editor.setCompactViewport (compact, 814, 409);
@@ -2440,7 +2524,9 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
     editor.controller.selected.set (0);
     editor.controller.selectLatched = true;
     editor.sync();
-    const auto before = processor.editorDocument();
+    const auto before = std::make_unique<DocumentState>();
+    const auto current = std::make_unique<DocumentState>();
+    processor.copyEditorDocument (*before);
     auto& rowNumber = *phoneGrid (editor).rowTitle (2);
     const auto rowPoint = rowNumber.getLocalBounds().toFloat().getCentre();
     rowNumber.mouseDown (phoneEvent (rowNumber, rowPoint, rowPoint));
@@ -2463,7 +2549,8 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
             practiceNotes.push_back (event.getMessage().getNoteNumber());
     CHECK (practiceNotes == std::vector<int> { 65, 72 });
     editor.controller.poll();
-    CHECK (processor.editorDocument() == before);
+    processor.copyEditorDocument (*current);
+    CHECK (*current == *before);
 
     editor.controller.command ("pattern_record_enabled", { 1, 2 });
     midi.clear();
@@ -2484,11 +2571,12 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
         }
     CHECK (notes == std::vector<int> { 65, 72 });
     editor.controller.poll();
-    const auto recorded = processor.editorDocument();
-    CHECK (recorded.sources[1][2][0].enabled);
-    CHECK (recorded.sources[1][2][0].velocity == 100);
-    CHECK (recorded.sources[1][5][0].enabled);
-    CHECK (recorded.sources[0] == before.sources[0]);
+    const auto recorded = std::make_unique<DocumentState>();
+    processor.copyEditorDocument (*recorded);
+    CHECK (recorded->sources[1][2][0].enabled);
+    CHECK (recorded->sources[1][2][0].velocity == 100);
+    CHECK (recorded->sources[1][5][0].enabled);
+    CHECK (recorded->sources[0] == before->sources[0]);
     CHECK (editor.controller.selected.test (0));
     CHECK (editor.controller.selectLatched);
     first.mouseUp (phoneEvent (first, firstPoint, firstPoint));
@@ -2513,9 +2601,11 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
     CHECK (repeats == 1);
     editor.controller.command ("pattern_record_enabled", { 0, 2 });
     editor.controller.undo();
-    CHECK (processor.editorDocument() == before);
+    processor.copyEditorDocument (*current);
+    CHECK (*current == *before);
     editor.controller.redo();
-    CHECK (processor.editorDocument() == recorded);
+    processor.copyEditorDocument (*current);
+    CHECK (*current == *recorded);
     playHead.playing = false;
     midi.clear();
     processor.processBlock (audio, midi);
@@ -2535,7 +2625,8 @@ TEST_CASE ("iOS row pads audition on touch down and record into the armed patter
         }
     CHECK (stoppedHits == 1);
     editor.controller.poll();
-    CHECK (processor.editorDocument() == recorded);
+    processor.copyEditorDocument (*current);
+    CHECK (*current == *recorded);
     velocityMode.setToggleState (true, juce::sendNotificationSync);
     for (const int velocity : { 127, 1 })
     {

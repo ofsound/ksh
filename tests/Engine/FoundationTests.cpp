@@ -5,12 +5,12 @@
 
 using namespace ksh;
 
-TEST_CASE ("Constants match M4L device limits", "[engine][foundation]")
+TEST_CASE ("Constants match KSH grid limits", "[engine][foundation]")
 {
     REQUIRE (Constants::maxSteps == 64);
-    REQUIRE (Constants::maxChannels == 8);
+    REQUIRE (Constants::maxChannels == 16);
     REQUIRE (Constants::sourceCount == 16);
-    REQUIRE (Constants::defaultChannelCount == 8);
+    REQUIRE (Constants::defaultChannelCount == 16);
     REQUIRE (Constants::maxRoll == 8);
     REQUIRE (std::string { Constants::defaultRate } == "16n");
     REQUIRE (std::string { Constants::defaultGenerationMode } == "static");

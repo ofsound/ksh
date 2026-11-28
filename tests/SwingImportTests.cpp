@@ -227,7 +227,7 @@ TEST_CASE ("A drum recording drop creates a new sequenced project with the sourc
     CHECK (current.settings.swing == Catch::Approx (48).margin (6));
     CHECK (current.settings.swingSubdivisionIndex == 0);
     CHECK (processor.getStandaloneTempoBpm() == Catch::Approx (131).margin (1));
-    CHECK (current.settings.channelCount == 3);
+    CHECK (current.settings.channelCount == Constants::maxChannels);
     CHECK (current.settings.stepCount == 32);
     CHECK (current.settings.channels[0].note == 36);
     CHECK (current.settings.channels[1].note == 38);

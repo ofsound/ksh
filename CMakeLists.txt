@@ -2,7 +2,16 @@ cmake_minimum_required(VERSION 3.25)
 
 # This tells cmake we have goodies in the /cmake folder
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" "${CMAKE_CURRENT_SOURCE_DIR}/cmake_project")
-include (PamplejuceVersion)
+
+# Reconfigure all formats when the shared release version changes.
+configure_file(VERSION VERSION COPYONLY)
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/VERSION" CURRENT_VERSION)
+string(REGEX REPLACE "\n+$" "" CURRENT_VERSION "${CURRENT_VERSION}")
+if (NOT CURRENT_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "VERSION must contain a single major.minor.patch version, got: ${CURRENT_VERSION}")
+endif()
+string(REGEX MATCH "^[0-9]+" MAJOR_VERSION "${CURRENT_VERSION}")
+message(STATUS "Version: ${CURRENT_VERSION}")
 
 # Modern concise way to add dependencies to your project
 include (CPM)
@@ -76,6 +85,11 @@ set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded CACHE STRING "" FORCE)
 # For simplicity, the name of the CMake project is also the name of the target
 project(${PROJECT_NAME} VERSION ${CURRENT_VERSION})
 
+# JUCE packs Audio Unit versions into a signed integer with one byte each for minor and patch.
+if (PROJECT_VERSION_MAJOR GREATER 32767 OR PROJECT_VERSION_MINOR GREATER 255 OR PROJECT_VERSION_PATCH GREATER 255)
+    message(FATAL_ERROR "VERSION cannot be represented as an Audio Unit version: ${PROJECT_VERSION}")
+endif()
+
 # Log build environment info (after project() so compiler info is available)
 include(PamplejuceLog)
 
@@ -115,11 +129,6 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 set(KSH_IOS_PROJECT_OPTIONS)
-set(KSH_APPLE_BUILD_NUMBER "" CACHE STRING "Override CFBundleVersion for Apple release archives")
-set(KSH_APPLE_VERSION_OPTIONS)
-if (NOT KSH_APPLE_BUILD_NUMBER STREQUAL "")
-    list(APPEND KSH_APPLE_VERSION_OPTIONS BUILD_VERSION "${KSH_APPLE_BUILD_NUMBER}")
-endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     if (NOT KSH_IOS_IPHONE_ONLY)
@@ -144,8 +153,19 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND KSH_MACOS_APP_OPTIONS DOCUMENT_EXTENSIONS kshproject)
 endif()
 
+set(KSH_APPLE_BUILD_NUMBER "" CACHE STRING "Integer build number for App Store Connect archives")
+set(KSH_BUNDLE_BUILD_VERSION "${PROJECT_VERSION}")
+if (NOT KSH_APPLE_BUILD_NUMBER STREQUAL "")
+    if (NOT (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR KSH_MACOS_TESTFLIGHT)
+        OR NOT KSH_APPLE_BUILD_NUMBER MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "KSH_APPLE_BUILD_NUMBER must be a positive integer for an iOS or macOS TestFlight build")
+    endif()
+    set(KSH_BUNDLE_BUILD_VERSION "${KSH_APPLE_BUILD_NUMBER}")
+endif()
+
 juce_add_plugin("${PROJECT_NAME}"
-    ${KSH_APPLE_VERSION_OPTIONS}
+    VERSION "${PROJECT_VERSION}"
+    BUILD_VERSION "${KSH_BUNDLE_BUILD_VERSION}"
     ${KSH_IOS_PROJECT_OPTIONS}
     ${KSH_MACOS_APP_OPTIONS}
     # Icons for the standalone app
@@ -286,7 +306,7 @@ target_compile_definitions(SharedCode
 
     # lets the app known if we're Debug or Release
     CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-    VERSION="${CURRENT_VERSION}"
+    VERSION="${PROJECT_VERSION}"
 
     # JucePlugin_Name is for some reason doesn't use the nicer PRODUCT_NAME
     PRODUCT_NAME_WITHOUT_VERSION="KSH"

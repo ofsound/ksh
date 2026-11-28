@@ -229,6 +229,10 @@ namespace ksh::ui
         // Outlined from the app icon so letter shapes and spacing never depend on UI fonts.
         static const auto artwork = juce::Drawable::createFromImageData (BinaryData::KshWordmark_svg, BinaryData::KshWordmark_svgSize);
         text (g, "OFSOUND", makerBounds, 13, Palette::text, true, juce::Justification::centredLeft);
+        static const auto version = "v" + juce::String (VERSION);
+        const auto makerWidth = juce::GlyphArrangement::getStringWidth (font (13, true), "OFSOUND");
+        text (g, version, makerBounds.withTrimmedLeft (makerWidth + 4.0f).translated (0, 1.0f),
+              10, Palette::text.withMultipliedAlpha (0.50f), false, juce::Justification::centredLeft);
         if (artwork == nullptr)
             return;
 
@@ -288,18 +292,20 @@ namespace ksh::ui
         if (randomSection)
         {
             addAndMakeVisible (xyPad);
-            for (size_t i = 0; i < xySeeds.size(); ++i)
+            for (size_t i = 0; i < grooveButtons.size(); ++i)
             {
-                auto& button = xySeeds[i];
+                auto& button = grooveButtons[i];
                 addAndMakeVisible (button);
                 button.setButtonText (juce::String::charToString ('A' + static_cast<int> (i)));
-                button.setTitle ("Generator seed " + button.getButtonText());
+                button.setTitle ("Groove " + button.getButtonText() + ", " + drumGrooves[i].name);
+                button.setTooltip (drumGrooves[i].name);
                 button.setToggleState (i == 0, juce::dontSendNotification);
                 button.onClick = [this, i]
                 {
-                    xyPad.selectSeed (static_cast<int> (i));
-                    for (size_t seed = 0; seed < xySeeds.size(); ++seed)
-                        xySeeds[seed].setToggleState (seed == i, juce::dontSendNotification);
+                    xyPad.selectGroove (static_cast<int> (i));
+                    for (size_t index = 0; index < grooveButtons.size(); ++index)
+                        grooveButtons[index].setToggleState (index == i, juce::dontSendNotification);
+                    repaint();
                 };
             }
         }
@@ -623,12 +629,12 @@ namespace ksh::ui
     {
         constexpr int buttonHeight = 42, gap = 5;
         const auto buttons = bounds.removeFromBottom (buttonHeight);
-        const int side = juce::jmax (0, juce::jmin (48, (buttons.getWidth() - gap * (generatorSeedCount - 1)) / generatorSeedCount));
-        const int start = buttons.getCentreX() - (side * generatorSeedCount + gap * (generatorSeedCount - 1)) / 2;
-        for (int i = 0; i < generatorSeedCount; ++i)
-            xySeeds[static_cast<size_t> (i)].setBounds (start + i * (side + gap), buttons.getY(), side, buttonHeight);
-        constexpr int seedGap = 17;
-        xyPad.setBounds (bounds.withTrimmedBottom (seedGap));
+        constexpr int count = static_cast<int> (drumGrooves.size());
+        const int width = juce::jmax (0, juce::jmin (48, (buttons.getWidth() - gap * (count - 1)) / count));
+        const int start = buttons.getCentreX() - (width * count + gap * (count - 1)) / 2;
+        for (int i = 0; i < count; ++i)
+            grooveButtons[static_cast<size_t> (i)].setBounds (start + i * (width + gap), buttons.getY(), width, buttonHeight);
+        xyPad.setBounds (bounds.withTrimmedBottom (20));
     }
 
     void PreviewPanel::GlideButton::paintButton (juce::Graphics& g, bool hover, bool down)
@@ -832,7 +838,7 @@ namespace ksh::ui
         if (randomSection)
         {
             next.source = controller.source();
-            next.channelCount = p.channelCount;
+            next.channelCount = juce::jmin (p.channelCount, xyPad.rowLimit);
             next.stepCount = p.stepCount;
             next.drumColors = controller.drumColors;
             for (int channel = 0; channel < next.channelCount; ++channel)
@@ -855,9 +861,16 @@ namespace ksh::ui
 
                     const bool cc = p.channels[ch].controller;
                     const bool fits = cell.span > 1 && step + cell.span <= end && rollSpanFits (row, loop, step, cell.span);
-                    next.hits[ch][index] = { static_cast<uint8_t> (cc ? juce::jmax (1, cell.controllerValue()) : cell.velocity),
-                                            static_cast<uint8_t> (cell.roll),
-                                            static_cast<uint8_t> (fits ? cell.span : 1), cell.splitVelocities };
+                    auto& hit = next.hits[ch][index];
+                    hit = { static_cast<uint8_t> (cc ? juce::jmax (1, cell.controllerValue()) : cell.velocity),
+                            static_cast<uint8_t> (cell.roll), static_cast<uint8_t> (fits ? cell.span : 1) };
+                    if (cell.roll > 1)
+                        for (int part = 0; part < cell.roll; ++part)
+                        {
+                            const auto split = static_cast<size_t> (part);
+                            if (cell.splitGates[split].probability() > 0)
+                                hit.splitVelocities[split] = static_cast<uint8_t> (juce::jmax (1, splitValue (cell, part, cc)));
+                        }
                 }
             }
         }
@@ -881,7 +894,7 @@ namespace ksh::ui
         const int stepCount = painted->stepCount;
         const int channelCount = painted->channelCount;
         const float cellWidth = area.getWidth() / static_cast<float> (stepCount);
-        const float rowHeight = area.getHeight() / static_cast<float> (Constants::maxChannels);
+        const float rowHeight = area.getHeight() / static_cast<float> (juce::jmax (Layout::defaultVisibleRows, channelCount));
         const float firstY = area.getCentreY() - rowHeight * static_cast<float> (channelCount) * 0.5f;
         const float insetX = juce::jmin (1.5f, cellWidth * 0.09f);
         const float insetY = juce::jmin (1.5f, rowHeight * 0.08f);
@@ -949,7 +962,13 @@ namespace ksh::ui
                     for (size_t part = 0; part < hit.roll; ++part)
                     {
                         const auto split = cell.withX (cell.getX() + static_cast<float> (part) * splitWidth).withWidth (splitWidth);
-                        if (const auto value = hit.splitVelocities[part]; value > 0 && value != hit.velocity)
+                        const auto value = hit.splitVelocities[part];
+                        if (value == 0)
+                        {
+                            g.setColour (quietSlot);
+                            g.fillRect (split);
+                        }
+                        else if (value != hit.velocity)
                             paintGridHitFill (g, split, colour, value, 0.0f);
                         if (part % 2 != 0)
                         {

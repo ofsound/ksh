@@ -254,6 +254,11 @@ private:
         const Component::SafePointer<Component> menuTarget (&target);
        #endif
         const WeakReference<KshStandalonePluginHolder> weak (this);
+       #if JUCE_IOS
+        constexpr bool consumeOutsideClick = true;
+       #else
+        constexpr bool consumeOutsideClick = false;
+       #endif
         ksh::ui::showAnchoredPopup (menu, ksh::ui::footerMenuOptions (target), [weak, destinations
                                      #if JUCE_IOS
                                       , menuTarget
@@ -292,7 +297,7 @@ private:
                 return;
             const auto identifier = result == 1 || useNetwork ? String() : destinations[result - 2].identifier;
             weak->selectMidiOutput (identifier, useNetwork);
-        });
+        }, consumeOutsideClick);
     }
 
     void selectMidiOutput (const String& identifier, [[maybe_unused]] bool network)

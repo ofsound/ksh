@@ -11,7 +11,7 @@ namespace ksh::ui
                          private juce::ScrollBar::Listener, private juce::FocusChangeListener, private juce::KeyListener
     {
     public:
-        explicit NativeEditor (PluginProcessor&, std::shared_ptr<juce::PropertiesFile> preferences = {});
+        explicit NativeEditor (PluginProcessor&, std::shared_ptr<juce::PropertiesFile> preferences = {}, bool windowCanGrow = true);
         ~NativeEditor() override;
         EditorController controller;
         Layout layout;
@@ -21,6 +21,9 @@ namespace ksh::ui
         std::function<void (bool)> zenModeChanged;
         std::function<void (const juce::File&)> projectBrowserDismissed;
         void setZenMode (bool);
+       #if JUCE_MAC
+        void setTallMode (bool);
+       #endif
         void setZenScaleLimit (int);
         juce::String projectTitle() const { return controller.processor.getProjectName(); }
         juce::String projectDescription() const { return controller.processor.getProjectDescription(); }
@@ -48,6 +51,16 @@ namespace ksh::ui
     private:
         LookAndFeel look;
         std::shared_ptr<juce::PropertiesFile> uiPreferences;
+       #if JUCE_MAC
+        const bool allowTallMode;
+        bool tallModeAvailable() const
+        {
+            const auto wrapper = controller.processor.wrapperType;
+            return allowTallMode && !layout.compact
+                && (layout.standalone || wrapper == juce::AudioProcessor::wrapperType_AudioUnit
+                    || wrapper == juce::AudioProcessor::wrapperType_VST3);
+        }
+       #endif
         struct Theme
         {
             bool blue;
@@ -63,6 +76,7 @@ namespace ksh::ui
         void finishThemeGesture();
         FooterHelp footerHelp { *this };
         juce::TextButton rowOrder { "Reverse rows" }, cellDisplay { "Show values" };
+        juce::TextButton show16Rows { "16 Tracks" };
         juce::TextButton modifierToggle { "Shift/Option shortcuts" };
         juce::TextButton midiOutput { "MIDI Output" };
         juce::TextButton settings;
@@ -74,10 +88,20 @@ namespace ksh::ui
         double lastMidiActivityMs = 0.0;
         PatternGrid grid;
         juce::TextButton visibleRows { "Rows: 8" };
+        struct RowScrollLookAndFeel final : juce::LookAndFeel_V4
+        {
+            int artworkInset = 0, artworkWidth = Layout::rowScrollWidth;
+            void drawScrollbar (juce::Graphics&, juce::ScrollBar&, int, int, int, int, bool, int, int, bool, bool) override;
+            int getMinimumScrollbarThumbSize (juce::ScrollBar&) override;
+        } rowScrollLook;
         juce::ScrollBar rowScroll { true };
         int preferredPhoneRows = 8;
+       #if JUCE_MAC
+        int firstRowBeforeTallMode = 0;
+       #endif
         void scrollBarMoved (juce::ScrollBar*, double) override;
-        void scrollCompactRows (int);
+        void scrollGridRows (int);
+        void layoutRowScroll();
         void visibleRowsMenu();
         juce::Label layerHint;
         PreviewPanel preview, randomPanel;
@@ -88,7 +112,7 @@ namespace ksh::ui
         std::array<juce::TextButton, 6> projectButtons;
         juce::TimedCallback projectSavedTimer { [this] { projectSavedTimer.stopTimer(); repaint(); } };
         juce::Component recordingStrip;
-        std::array<RowTriggerButton, 8> recordingPads;
+        std::array<RowTriggerButton, Constants::maxChannels> recordingPads;
         PadVelocitySwitch padVelocityMode;
         void syncRecordingPads();
         void layoutRecordingPads();
@@ -97,13 +121,12 @@ namespace ksh::ui
         ProjectHeader projectHeader;
         ProjectBrowser projectBrowser;
         NoteChooser noteChooser;
-        juce::TextButton noteChooserBack { "Back" };
         bool noteChooserEditing = false;
         uint64_t noteChooserEpoch = 0;
         int noteChooserChannel = -1;
         Channel noteChooserOriginal;
         void showNoteChooser (int, juce::Component&);
-        bool showingNoteChooserPage() const { return layout.phoneRowControls && noteChooser.isVisible(); }
+        bool showingPhoneNoteChooser() const { return layout.phoneRowControls && noteChooser.isVisible(); }
         void syncNoteChooserGrid();
         void syncNoteChooserControls();
         void applyNoteChooserPreset (const NoteChooser::RowNotes&, const juce::String& undoLabel);
@@ -157,7 +180,7 @@ namespace ksh::ui
         std::optional<TempoScrub> tempoScrub;
         juce::Slider tempoFader { juce::Slider::LinearHorizontal, juce::Slider::TextBoxAbove };
         juce::TextButton tempoDown { juce::String::fromUTF8 ("−") }, tempoUp { "+" };
-        juce::TextButton tapTempo { "Tap Tempo" };
+        juce::TextButton tapTempo { "Tap" };
         class TempoOverlay : public juce::Component
         {
         public:
@@ -170,6 +193,8 @@ namespace ksh::ui
             melatonin::DropShadow panelGlow { juce::Colours::transparentBlack, 10, {}, 1 };
         } tempoOverlay;
         bool tempoOpen = false;
+        std::optional<double> optionTapStarted;
+        bool lastOptionDown = false;
         bool warnedUnsupportedProjectVersion = false;
         static constexpr int minimumTempoBpm = 20, maximumTempoBpm = 300;
         struct TempoTaps
@@ -187,7 +212,21 @@ namespace ksh::ui
         std::array<juce::TextButton, 5> panelTabs;
         ValueControl loopStart, loopLength;
         NoteInput channelNote;
-        juce::TextButton channelReverse { "Reverse" }, channelPing { "Ping-pong" }, channelSolo { "Solo" };
+        juce::TextButton channelDirection { "Forward" }, channelSolo { "Solo" }, channelClear { "Clear Track" };
+        ClearFlash channelClearFlash { channelClear };
+        class ChannelOverlay : public juce::Component
+        {
+        public:
+            std::function<void()> dismiss;
+            juce::Rectangle<int> opener, card;
+            bool hitTest (int x, int y) override { return !opener.contains (x, y); }
+            void mouseDown (const juce::MouseEvent& event) override;
+            void paint (juce::Graphics&) override;
+        } channelOverlay;
+        bool showingPhoneChannelSettings() const
+        {
+            return layout.phoneRowControls && panel == Panel::channel && !isProjectDialogOpen();
+        }
         bool showingCompactPadPreview() const;
         bool showingRecordingPads() const;
         juce::Rectangle<int> compactPadPreviewBounds() const;

@@ -50,6 +50,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build Builds --parallel 4
+          bash scripts/verify-apple-bundle.sh desktop "$PRODUCTS"
 
       - name: Run CTest
         run: |

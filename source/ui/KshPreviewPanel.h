@@ -78,6 +78,7 @@ namespace ksh::ui
         void setCompact (bool, bool usePhoneLayout = false, bool onPhone = false);
         void setDisplayedLayer (Layer);
         void cancelGesture();
+        void setGeneratorRowLimit (int limit) { xyPad.rowLimit = limit; }
         void commitPendingCycleEdit() { cycle.commitPendingBeatClick(); }
         bool reverseRows = false;
 
@@ -97,7 +98,7 @@ namespace ksh::ui
         bool compact = false;
         int randomizerRightInset = 0;
         PatternXYPad xyPad { controller };
-        std::array<juce::TextButton, generatorSeedCount> xySeeds;
+        std::array<juce::TextButton, drumGrooves.size()> grooveButtons;
         juce::Rectangle<int> inspectorBounds;
         juce::TextButton remove { juce::String::fromUTF8 ("×") };
         class GlideButton final : public juce::TextButton
@@ -127,8 +128,8 @@ namespace ksh::ui
             size_t selectedCount = 0;
             int channelCount = 0, stepCount = 0, source = -1;
             bool reverseRows = false, drumColors = true;
-            std::array<juce::Colour, 8> channelColours {};
-            std::array<std::string, 8> labels {};
+            std::array<juce::Colour, Constants::maxChannels> channelColours {};
+            std::array<std::string, Constants::maxChannels> labels {};
             std::array<std::array<GridHit, Constants::maxSteps>, Constants::maxChannels> hits {};
             bool operator== (const Painted&) const = default;
         };

@@ -168,7 +168,9 @@ namespace ksh::ui
         static const TrackColours& defaultTrackColours()
         {
             static const TrackColours colours { juce::Colour (0xffdb4047), orangeAccent, juce::Colour (0xffd1a866), blueAccent,
-                                                juce::Colour (0xff52b89c), juce::Colour (0xff8cb852), juce::Colour (0xffebad24), juce::Colour (0xffa66e3b) };
+                                                juce::Colour (0xff52b89c), juce::Colour (0xff8cb852), juce::Colour (0xffebad24), juce::Colour (0xffa66e3b),
+                                                juce::Colour (0xffc266ab), juce::Colour (0xffed875f), juce::Colour (0xff9d8cdb), juce::Colour (0xff58abc1),
+                                                juce::Colour (0xff78bd78), juce::Colour (0xffade06a), juce::Colour (0xffd9bf6c), juce::Colour (0xffb78e7b) };
             return colours;
         }
         static const TrackColours& trackColours() { return editableTrackColours(); }
@@ -319,7 +321,7 @@ namespace ksh::ui
     inline void paintPopupPanel (juce::Graphics& g, const juce::Path& outline, juce::Colour accent, melatonin::DropShadow& glow,
                                  float accentTint = 0.08f)
     {
-        glow.setColor (accent.brighter (0.2f).withAlpha (0.82f));
+        glow.setColor (accent.brighter (0.2f).withAlpha (0.82f * 0.8f));
         glow.render (g, outline);
         g.setGradientFill (surfaceGradient (outline.getBounds(), Palette::backgrounds, false, [accent, accentTint] (juce::Colour colour)
         {
@@ -757,6 +759,12 @@ namespace ksh::ui
             window.setOpaque (false);
         }
         int getPopupMenuBorderSizeWithOptions (const juce::PopupMenu::Options&) override { return popupBorderSize; }
+        void drawResizableFrame (juce::Graphics& g, int width, int height, const juce::BorderSize<int>& border) override
+        {
+            // Embedded JUCE menus draw this extra frame around the glow padding.
+            if (border != juce::BorderSize<int> (popupBorderSize))
+                juce::LookAndFeel_V4::drawResizableFrame (g, width, height, border);
+        }
         void getIdealPopupMenuSectionHeaderSizeWithOptions (const juce::String& label, int standardHeight, int& width, int& height,
                                                             const juce::PopupMenu::Options& options) override
         {
@@ -936,7 +944,7 @@ namespace ksh::ui
                 controlSurface (g, r, down || b.getToggleState(), hover);
                 return;
             }
-            if (static_cast<bool> (b.getProperties()["tempoStepper"]))
+            if (static_cast<bool> (b.getProperties()["tempoStepper"]) || b.getProperties().contains ("tempoTap"))
             {
                 controlSurface (g, r, down || b.hasKeyboardFocus (false), hover, b.isEnabled() ? 1.0f : 0.45f);
                 return;
@@ -1353,6 +1361,12 @@ namespace ksh::ui
                     g.drawLine (centre.x, centre.y - halfSpan, centre.x, centre.y + halfSpan, thickness);
                 return;
             }
+            if (b.getProperties().contains ("tempoTap"))
+            {
+                text (g, b.getButtonText(), b.getLocalBounds().toFloat(), b.getHeight() >= 60 ? 24.0f : 17.0f,
+                      !b.isEnabled() ? Palette::faint : down ? Palette::accent : Palette::text, true);
+                return;
+            }
             const auto bounds = b.getLocalBounds().toFloat();
             const float fontSize = b.getButtonText() == "M" ? 30.0f : b.getHeight() >= 60 ? 18.0f : b.getWidth() < 32 ? 10.0f : 12.0f;
             text (g, b.getButtonText(), bounds, fontSize,
@@ -1585,12 +1599,38 @@ namespace ksh::ui
                 juce::TextButton::mouseUp (e);
         }
     };
+    inline const char* playbackDirectionLabel (PlaybackMode mode)
+    {
+        switch (mode)
+        {
+            case PlaybackMode::normal: return "Forward";
+            case PlaybackMode::reverse: return "Reverse";
+            case PlaybackMode::ping_pong: return "Forward ping-pong";
+            case PlaybackMode::reverse_ping_pong: return "Reverse ping-pong";
+        }
+        return "Forward";
+    }
+
     class RowPlaybackButton : public GestureButton
     {
     public:
         explicit RowPlaybackButton (const juce::String& label) : GestureButton (label)
         {
             setMouseClickGrabsKeyboardFocus (false);
+        }
+
+        void showDirection (PlaybackMode mode)
+        {
+            const bool backwards = mode == PlaybackMode::reverse || mode == PlaybackMode::reverse_ping_pong;
+            const auto* icon = playbackModeIsPingPong (mode) ? (backwards ? "reversePing" : "ping") : (backwards ? "reverse" : "forward");
+            if (getProperties().set ("icon", icon))
+            {
+                const juce::String label = playbackDirectionLabel (mode);
+                setDescription (label);
+                setTooltip (label + ". Click to advance to the next direction. Drag across rows to apply it.");
+                repaint();
+            }
+            setToggleState (mode != PlaybackMode::normal, juce::dontSendNotification);
         }
 
         void paintButton (juce::Graphics& g, bool hover, bool down) override
@@ -1642,7 +1682,7 @@ namespace ksh::ui
                 path.startNewSubPath (12, 2);
                 path.lineTo (12, 11);
             }
-            else if (icon == "ping")
+            else if (icon == "ping" || icon == "reversePing")
             {
                 path.startNewSubPath (4, 11);
                 path.lineTo (4, 10);
@@ -1658,6 +1698,8 @@ namespace ksh::ui
                 path.startNewSubPath (7, 14);
                 path.lineTo (4, 17);
                 path.lineTo (7, 20);
+                if (icon == "reversePing")
+                    path.applyTransform (juce::AffineTransform::scale (-1, 1).translated (24, 0));
             }
             else
             {
@@ -1923,9 +1965,25 @@ namespace ksh::ui
             input.setJustification (juce::Justification::centred);
             input.setInputRestrictions (12, "-0123456789");
             input.onReturnKey = [this] { acceptInput(); };
-            input.onEscapeKey = [this] { input.setVisible (false); grabKeyboardFocus(); };
-            input.onFocusLost = [this] { if (input.isVisible()) acceptInput(); };
+            input.onEscapeKey = [this]
+            {
+                setTextEditing (false);
+                if (isShowing())
+                    grabKeyboardFocus();
+            };
+            input.onFocusLost = [this] { if (isTextEditing()) acceptInput(); };
             addChildComponent (input);
+        }
+        void useInlineTextDisplay()
+        {
+            // Use the same text layout and bounds for idle, selection and typing.
+            inlineTextDisplay = true;
+            input.setBorder ({});
+            input.setIndents (0, 0);
+            input.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+            input.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+            input.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+            setTextEditing (false);
         }
         int value = 0, minimum = 0, maximum = 100, resetValue = 0;
         float sensitivity = 4, horizontalDragMultiplier = 1.0f;
@@ -1960,12 +2018,12 @@ namespace ksh::ui
         std::function<void()> onContextMenu;
         void cancelGesture()
         {
-            const bool wasActive = dragging || wheeling || input.isVisible();
+            const bool wasActive = dragging || wheeling || isTextEditing();
             dragging = wheeling = false;
             stopTimer();
             if (pendingWheel == this)
                 pendingWheel = nullptr;
-            input.setVisible (false);
+            setTextEditing (false);
             if (wasActive && onCancel)
                 onCancel();
             repaint();
@@ -1983,9 +2041,11 @@ namespace ksh::ui
         }
         void setValue (int v)
         {
-            if (!dragging && !wheeling && !input.isVisible() && value != v)
+            if (!dragging && !wheeling && !isTextEditing() && value != v)
             {
                 value = v;
+                if (inlineTextDisplay)
+                    input.setText (valueText (value), false);
                 repaint();
             }
         }
@@ -2021,7 +2081,7 @@ namespace ksh::ui
             const bool footerControl = static_cast<bool> (getProperties()["footerControl"]);
             const bool insetFooterArtwork = static_cast<bool> (getProperties()["insetFooterArtwork"]);
             if (footerControl)
-                footerSurface (g, r.reduced (0.5f), false, isMouseOver() || hasKeyboardFocus (true), dragging || input.isVisible(), isEnabled());
+                footerSurface (g, r.reduced (0.5f), false, isMouseOver() || hasKeyboardFocus (true), dragging || isTextEditing(), isEnabled());
             else if (layerHighlighted && isEnabled())
             {
                 const auto bounds = r.reduced (0.5f);
@@ -2034,7 +2094,9 @@ namespace ksh::ui
                 g.drawRoundedRectangle (bounds.reduced (0.5f), 5.0f, 1.0f);
             }
             else
-                controlSurface (g, r.reduced (0.5f), dragging || input.isVisible(), isEnabled() && (isMouseOver() || hasKeyboardFocus (false)));
+                controlSurface (g, r.reduced (0.5f), dragging || isTextEditing(), isEnabled() && (isMouseOver() || hasKeyboardFocus (false)));
+            if (inlineTextDisplay)
+                return;
             if (gestureOnly || alwaysShowHorizontalArrows || showAdjustmentArrows)
             {
                 const auto centre = r.getCentre();
@@ -2121,7 +2183,7 @@ namespace ksh::ui
         {
             const bool insetFooterArtwork = static_cast<bool> (getProperties()["insetFooterArtwork"]);
             input.setBounds (valueFaceBounds().toNearestInt());
-            input.setFont (font (insetFooterArtwork ? valueFontSize * footerArtworkScale : valueFontSize));
+            input.applyFontToAllText (font (insetFooterArtwork ? valueFontSize * footerArtworkScale : valueFontSize, inlineTextDisplay));
         }
         void focusGained (FocusChangeType) override { repaint(); }
         void focusLost (FocusChangeType) override { repaint(); }
@@ -2201,7 +2263,7 @@ namespace ksh::ui
                 }
                 return;
             }
-            if (gestureOnly)
+            if (gestureOnly || !isEnabled())
                 return;
             endWheelGesture();
             dragging = false;
@@ -2209,8 +2271,9 @@ namespace ksh::ui
                 onEnd();
             input.setInputRestrictions (12, displayDecimalPlaces > 0 ? "-0123456789." : "-0123456789");
             input.setText (valueText (value), false);
-            input.setVisible (true);
-            input.grabKeyboardFocus();
+            setTextEditing (true);
+            if (input.isShowing())
+                input.grabKeyboardFocus();
             input.selectAll();
         }
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
@@ -2309,6 +2372,7 @@ namespace ksh::ui
         float numericFontSize = 0, numericWidth = 0, numericBaseline = 0;
         float numericSuffixScale = 1.0f;
         bool layerHighlighted = false;
+        bool inlineTextDisplay = false;
         std::optional<juce::Colour> highlightAccent;
         bool dragging = false, wheeling = false;
        #if JUCE_IOS
@@ -2317,6 +2381,26 @@ namespace ksh::ui
         bool draggingHorizontally = false;
        #endif
         int start = 0;
+        bool isTextEditing() const { return input.isVisible() && !input.isReadOnly(); }
+        void setTextEditing (bool editing)
+        {
+            if (inlineTextDisplay)
+            {
+                input.setReadOnly (!editing);
+                input.setInterceptsMouseClicks (editing, editing);
+                input.setWantsKeyboardFocus (editing);
+                input.setAccessible (editing);
+                if (!editing)
+                {
+                    input.setText (valueText (value), false);
+                    input.setHighlightedRegion ({});
+                    if (input.hasKeyboardFocus (false))
+                        grabKeyboardFocus();
+                }
+            }
+            input.setVisible (editing || inlineTextDisplay);
+            repaint();
+        }
         void timerCallback() override
         {
             if (!dragging)
@@ -2340,6 +2424,8 @@ namespace ksh::ui
             {
                 value = next;
                 mixed = false;
+                if (inlineTextDisplay)
+                    input.setText (valueText (value), false);
                 if (onChange)
                     onChange (next);
                 repaint();
@@ -2348,7 +2434,7 @@ namespace ksh::ui
         void acceptInput()
         {
             const int next = valueFromDisplay (input.getText().getDoubleValue());
-            input.setVisible (false);
+            setTextEditing (false);
             endWheelGesture();
             if (onBegin)
                 onBegin();

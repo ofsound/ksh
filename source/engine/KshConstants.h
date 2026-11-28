@@ -20,9 +20,9 @@ struct Constants
     static constexpr bool debug = false;
 
     static constexpr int maxSteps = 64;
-    static constexpr int maxChannels = 8;
+    static constexpr int maxChannels = 16;
     static constexpr int cellsPerPattern = maxChannels * maxSteps;
-    static constexpr int defaultChannelCount = 8;
+    static constexpr int defaultChannelCount = maxChannels;
     static constexpr int mutedStaticSource = -1;
     static constexpr int sourceCount = 16;
     static constexpr int maxRoll = 8;
@@ -36,11 +36,13 @@ struct Constants
     static constexpr int phaseEarlyMsMax = 80;
 
     static constexpr std::array<std::string_view, maxChannels> defaultChannelLabels {
-        "1", "2", "3", "4", "5", "6", "7", "8"
+        "1", "2", "3", "4", "5", "6", "7", "8",
+        "9", "10", "11", "12", "13", "14", "15", "16"
     };
 
     static constexpr std::array<int, maxChannels> defaultChannelNotes {
-        36, 37, 38, 39, 40, 41, 42, 43
+        36, 37, 38, 39, 40, 41, 42, 43,
+        44, 45, 46, 47, 48, 49, 50, 51
     };
 
     static constexpr std::array<std::string_view, 8> rates {

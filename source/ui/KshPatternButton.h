@@ -15,11 +15,6 @@ namespace ksh::ui
             if (std::exchange (occupied, value) != value)
                 repaint();
         }
-        void setQueued (bool value)
-        {
-            if (std::exchange (queued, value) != value)
-                repaint();
-        }
         bool showsCopyDestination() const { return copyDestination && isEnabled() && isOver(); }
         void paintButton (juce::Graphics& g, bool hover, bool down) override
         {
@@ -35,11 +30,6 @@ namespace ksh::ui
             }
             if (showsCopyDestination())
                 paintPatternCopyOutline (g, getLocalBounds().toFloat());
-            else if (queued)
-            {
-                g.setColour (Palette::accent);
-                g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 4.0f, 1.0f);
-            }
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -72,6 +62,6 @@ namespace ksh::ui
         }
 
     private:
-        bool armed = false, dragged = false, occupied = false, queued = false;
+        bool armed = false, dragged = false, occupied = false;
     };
 }

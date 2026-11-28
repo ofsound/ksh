@@ -1,3 +1,4 @@
+#include "helpers/test_helpers.h"
 #include <PluginProcessor.h>
 
 #include <KshUiBridge.h>
@@ -687,32 +688,36 @@ TEST_CASE ("Dense CC glides at a fast tempo fit the preallocated MIDI output buf
     plugin.setPlayHead (nullptr);
 }
 
-TEST_CASE ("Live pattern buttons cue to the upcoming host downbeat", "[plugin][bridge][offline-automation]")
+TEST_CASE ("Pattern buttons switch immediately at the current transport phase", "[plugin][bridge]")
 {
     PluginProcessor plugin;
     FixedPlayHead playHead;
     playHead.setTimeSignature (3, 4);
     plugin.setPlayHead (&playHead);
-    plugin.prepareToPlay (48000.0, 12000);
+    plugin.prepareToPlay (48000.0, 6000);
+    REQUIRE (plugin.dispatchUiEngineCommand ("source_steps", { 2, 8 }));
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 11, 1, 80 }));
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 12, 1, 80 }));
-    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 13, 1, 80 }));
-    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 12, 1, 110 }));
-    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 13, 1, 110 }));
-    juce::AudioBuffer<float> buffer (2, 12000);
+    REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 2, 1, 4, 1, 110 }));
+    juce::AudioBuffer<float> buffer (2, 6000);
     juce::MidiBuffer midi;
-    playHead.setPpqPosition (2.125);
+    playHead.setPpqPosition (2.375);
     plugin.processBlock (buffer, midi);
+    REQUIRE (containsNoteOnWithVelocity (midi, 36, 80));
+
     auto editor = std::make_unique<ksh::ui::EditorController> (plugin);
     editor->selectSource (1);
-    REQUIRE (plugin.getQueuedPatternForUi() == 1);
+    CHECK (editor->source() == 1);
+    CHECK (plugin.engineStateSnapshot().staticSource == 1);
+
     playHead.setPpqPosition (2.625);
     midi.clear();
     plugin.processBlock (buffer, midi);
-    CHECK (containsNoteOnWithVelocity (midi, 36, 80));
     CHECK (containsNoteOnWithVelocity (midi, 36, 110));
-    CHECK (countNoteOns (midi) == 2);
-    PluginProcessorTestPeer::tick (plugin);
-    CHECK (plugin.engineStateSnapshot().staticSource == 1);
+    REQUIRE (countNoteOns (midi) == 1);
+    for (const auto event : midi)
+        if (event.getMessage().isNoteOn())
+            CHECK (event.samplePosition == 3000);
     plugin.setPlayHead (nullptr);
 }
 
@@ -1027,7 +1032,7 @@ TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterati
     REQUIRE (plugin.dispatchUiEngineCommand ("source_steps", { 1, steps }));
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 72, 63, 4, 5, 3 }));
     ksh::ui::EditorController controller (plugin);
-    const auto original = plugin.editorDocument();
+    const auto original = snapshotEditorDocument (plugin);
     juce::AudioBuffer<float> buffer (2, 512);
     const auto midiHit = [&] (double beat, int note, int velocity)
     {
@@ -1058,29 +1063,29 @@ TEST_CASE ("Recording passes undo MIDI and keyboard overdubs across loop iterati
     controller.commit();
     midiHit (loopBeats * 2.0 + 0.5, 36, 80); // Still queued when Record is clicked off.
     controller.command ("pattern_record_enabled", { 0, 1 });
-    const auto recorded = plugin.editorDocument();
-    CHECK (recorded.sources[0][0][0].velocity == 110);
-    CHECK (recorded.sources[0][0][1].enabled);
-    CHECK (recorded.sources[0][0][2].enabled);
-    CHECK (recorded.sources[0][0][static_cast<size_t> (steps - 1)].velocity == 92);
-    CHECK (recorded.sources[0][2][0].enabled);
+    const auto recorded = snapshotEditorDocument (plugin);
+    CHECK (recorded->sources[0][0][0].velocity == 110);
+    CHECK (recorded->sources[0][0][1].enabled);
+    CHECK (recorded->sources[0][0][2].enabled);
+    CHECK (recorded->sources[0][0][static_cast<size_t> (steps - 1)].velocity == 92);
+    CHECK (recorded->sources[0][2][0].enabled);
     CHECK_FALSE (plugin.isPatternRecordingEnabled());
 
     controller.undo();
-    auto expected = original;
-    expected.sources[0][1][5] = manual;
-    CHECK (plugin.editorDocument() == expected);
+    const auto expected = std::make_unique<ksh::DocumentState> (*original);
+    expected->sources[0][1][5] = manual;
+    CHECK (*snapshotEditorDocument (plugin) == *expected);
     controller.redo();
-    CHECK (plugin.editorDocument() == recorded);
+    CHECK (*snapshotEditorDocument (plugin) == *recorded);
     controller.undo();
     controller.undo();
-    CHECK (plugin.editorDocument() == original);
+    CHECK (*snapshotEditorDocument (plugin) == *original);
     CHECK_FALSE (controller.canUndo());
 
     // An in-flight audio block cannot resurrect a stopped take after undo.
     REQUIRE (PluginProcessorTestPeer::enqueueLateRecord (plugin, session));
     PluginProcessorTestPeer::tick (plugin);
-    CHECK (plugin.editorDocument() == original);
+    CHECK (*snapshotEditorDocument (plugin) == *original);
 }
 
 TEST_CASE ("Recording undo separates passes and supports undo while still armed", "[plugin][record][record-undo]")
@@ -1090,7 +1095,7 @@ TEST_CASE ("Recording undo separates passes and supports undo while still armed"
     plugin.setPlayHead (&playHead);
     plugin.prepareToPlay (44100.0, 512);
     ksh::ui::EditorController controller (plugin);
-    const auto original = plugin.editorDocument();
+    const auto original = snapshotEditorDocument (plugin);
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
     plugin.processBlock (buffer, midi);
@@ -1100,8 +1105,8 @@ TEST_CASE ("Recording undo separates passes and supports undo while still armed"
     controller.command ("pattern_record_enabled", { 1, 1 });
     REQUIRE (plugin.triggerRowFromUi (0, 90));
     controller.command ("pattern_record_enabled", { 0, 1 });
-    const auto firstPass = plugin.editorDocument();
-    REQUIRE (firstPass != original);
+    const auto firstPass = snapshotEditorDocument (plugin);
+    REQUIRE (*firstPass != *original);
 
     controller.command ("pattern_record_enabled", { 1, 1 });
     REQUIRE (plugin.triggerRowFromUi (1, 80));
@@ -1109,17 +1114,17 @@ TEST_CASE ("Recording undo separates passes and supports undo while still armed"
     if (stopBeforeUndo)
         controller.command ("pattern_record_enabled", { 0, 1 });
     controller.undo();
-    CHECK (plugin.editorDocument() == firstPass);
+    CHECK (*snapshotEditorDocument (plugin) == *firstPass);
     CHECK (plugin.isPatternRecordingEnabled() == !stopBeforeUndo);
     if (!stopBeforeUndo)
     {
         REQUIRE (plugin.triggerRowFromUi (2, 70));
         controller.command ("pattern_record_enabled", { 0, 1 });
         controller.undo();
-        CHECK (plugin.editorDocument() == firstPass);
+        CHECK (*snapshotEditorDocument (plugin) == *firstPass);
     }
     controller.undo();
-    CHECK (plugin.editorDocument() == original);
+    CHECK (*snapshotEditorDocument (plugin) == *original);
 }
 
 TEST_CASE ("Recording undo preserves intervening and later edits to the same cell", "[plugin][record][record-undo]")
@@ -1130,7 +1135,7 @@ TEST_CASE ("Recording undo preserves intervening and later edits to the same cel
     plugin.prepareToPlay (44100.0, 512);
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 1, 1, 72, 63, 4, 5, 3 }));
     ksh::ui::EditorController controller (plugin);
-    auto expected = plugin.editorDocument();
+    auto expected = snapshotEditorDocument (plugin);
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
     plugin.processBlock (buffer, midi);
@@ -1138,27 +1143,27 @@ TEST_CASE ("Recording undo preserves intervening and later edits to the same cel
     REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 1, 90 }));
     if (GENERATE (false, true))
         (void) controller.poll();
-    const auto previous = plugin.editorDocument().sources[0][0][0];
+    const auto previous = snapshotEditorDocument (plugin)->sources[0][0][0];
     auto external = previous;
     external.velocity = 55;
     external.probability = 33;
     REQUIRE (plugin.applyNativeCellEdits ({ { 0, 0, 0, previous, external } }, controller.state.documentEpoch));
     REQUIRE (plugin.dispatchUiEngineCommand ("pattern_record_row", { 1, 110 }));
     controller.command ("pattern_record_enabled", { 0, 1 });
-    const auto recorded = plugin.editorDocument();
-    expected.sources[0][0][0].velocity = 55;
-    expected.sources[0][0][0].probability = 33;
+    const auto recorded = snapshotEditorDocument (plugin);
+    expected->sources[0][0][0].velocity = 55;
+    expected->sources[0][0][0].probability = 33;
     controller.undo();
-    CHECK (plugin.editorDocument() == expected);
+    CHECK (*snapshotEditorDocument (plugin) == *expected);
     controller.redo();
-    CHECK (plugin.editorDocument() == recorded);
+    CHECK (*snapshotEditorDocument (plugin) == *recorded);
 
-    auto later = recorded.sources[0][0][0];
+    auto later = recorded->sources[0][0][0];
     later.probability = 41;
-    REQUIRE (plugin.applyNativeCellEdits ({ { 0, 0, 0, recorded.sources[0][0][0], later } }, controller.state.documentEpoch));
+    REQUIRE (plugin.applyNativeCellEdits ({ { 0, 0, 0, recorded->sources[0][0][0], later } }, controller.state.documentEpoch));
     controller.undo();
-    expected.sources[0][0][0].probability = 41;
-    CHECK (plugin.editorDocument() == expected);
+    expected->sources[0][0][0].probability = 41;
+    CHECK (*snapshotEditorDocument (plugin) == *expected);
 }
 
 TEST_CASE ("Replacing the project discards recording history and in-flight hits", "[plugin][record][record-undo]")
@@ -1806,7 +1811,7 @@ TEST_CASE ("Captured nudges survive deferred application overwrites undo and sav
     REQUIRE (plugin.dispatchUiEngineCommand ("cell", { 1, 1, 2, 1, 72, 100, 1 }));
     REQUIRE (plugin.dispatchUiEngineCommand ("cell_nudge", { 1, 1, 2, -30 }));
     ksh::ui::EditorController controller (plugin);
-    const auto before = plugin.editorDocument();
+    const auto before = snapshotEditorDocument (plugin);
     plugin.setPatternRecordingQuantized (false);
     controller.command ("pattern_record_enabled", { 1, 1 });
     juce::AudioBuffer<float> buffer (2, 64);
@@ -1821,17 +1826,17 @@ TEST_CASE ("Captured nudges survive deferred application overwrites undo and sav
     plugin.setPatternRecordingQuantized (true);
     controller.command ("pattern_record_enabled", { 0, 1 });
     (void) controller.poll();
-    const auto recorded = plugin.editorDocument();
-    CHECK (recorded.sources[0][0][1].nudge == 20);
-    CHECK (recorded.sources[0][0][1].velocity == 95);
+    const auto recorded = snapshotEditorDocument (plugin);
+    CHECK (recorded->sources[0][0][1].nudge == 20);
+    CHECK (recorded->sources[0][0][1].velocity == 95);
     controller.undo();
-    CHECK (plugin.editorDocument() == before);
+    CHECK (*snapshotEditorDocument (plugin) == *before);
     controller.redo();
-    CHECK (plugin.editorDocument() == recorded);
+    CHECK (*snapshotEditorDocument (plugin) == *recorded);
     const auto saved = plugin.enginePersistenceState().dump();
     PluginProcessor restored;
     REQUIRE (restored.loadStateFromData (saved.data(), static_cast<int> (saved.size())));
-    CHECK (restored.editorDocument() == recorded);
+    CHECK (*snapshotEditorDocument (restored) == *recorded);
 }
 
 TEST_CASE ("Transport seeks invalidate queued and already scheduled recording monitors", "[plugin][record][record-timing]")

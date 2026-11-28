@@ -152,14 +152,8 @@ double clampStandaloneTempoBpm (double bpm)
 
 nlohmann::json makeDefaultPersistenceState()
 {
-    ksh::KickSnareHatEngine defaults;
-    defaults.setGenerationMode (ksh::GenerationMode::staticSource);
-    defaults.setStaticSource (0);
-    defaults.setStepCount (16);
-    defaults.setChannelCount (ksh::Constants::defaultChannelCount);
-    defaults.setRate ("16n");
-    defaults.setTempo (120.0);
-    return defaults.serializeForPersistence();
+    const auto defaults = std::make_unique<ksh::DocumentState>();
+    return ksh::KickSnareHatEngine::documentToJson (*defaults);
 }
 } // namespace
 
@@ -206,9 +200,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParameterID { hostPatternParameterID, 2 }, "Pattern", patterns, 0));
 
+    // Keep the original mute automation ahead of the new tracks in Audio Unit parameter order.
+    constexpr int originalMuteParameters = 8;
     for (int row = 0; row < ksh::Constants::maxChannels; ++row)
         params.push_back (std::make_unique<juce::AudioParameterBool> (
-            ParameterID { rowMuteParameterID (row), 2 }, "Row " + juce::String (row + 1) + " Mute", false));
+            ParameterID { rowMuteParameterID (row), row < originalMuteParameters ? 2 : 3 },
+            "Row " + juce::String (row + 1) + " Mute", false));
 
     return { params.begin(), params.end() };
 }
@@ -928,8 +925,6 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     double ppqPosition = 0.0;
     double bpm = snapshot->tempo;
     bool isPlaying = false;
-    double barLength = 4.0;
-    double barOrigin = 0.0;
     ksh::HostLoopRange hostLoop;
     ksh::StandaloneSyncBlock sync;
 
@@ -979,11 +974,6 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
             isPlaying = position->getIsPlaying();
 
-            if (const auto meter = position->getTimeSignature(); meter && meter->numerator > 0 && meter->denominator > 0)
-                barLength = 4.0 * meter->numerator / meter->denominator;
-            if (const auto lastBar = position->getPpqPositionOfLastBarStart(); lastBar && std::isfinite (*lastBar))
-                barOrigin = *lastBar;
-
             if (position->getIsLooping())
             {
                 if (const auto loopPoints = position->getLoopPoints())
@@ -997,8 +987,6 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         expectedRecordingPpq = recordingBeat (expectedRecordingPpq, 0.0, hostLoop);
     const double clockTolerance = 64.0 * (bpm / 60.0) / recordingSampleRate;
     const bool seeked = std::abs (ppqPosition - expectedRecordingPpq) > clockTolerance;
-    const bool wrapped = hostLoop.active && recordingExpectedNextPpq >= hostLoop.endPpq
-                         && ppqPosition < recordingExpectedNextPpq - clockTolerance;
     if (!recordingClockInitialized || playbackReset || standaloneReset || isPlaying != recordingClockWasPlaying
         || (isPlaying && seeked))
     {
@@ -1016,39 +1004,6 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     // Consume input before adding generated MIDI so our note-offs are never mistaken for pattern selections.
     ksh::MidiPatternSelectionBlock midiPatternSelections;
     const bool filterSelectionNotes = consumeMidiInput (midiMessages, *snapshot, macros, ppqPosition, bpm, isPlaying, midiPatternSelections, hostLoop);
-
-    bool liveSelectionApplied = false;
-    int liveSource = livePatternLaunch.load (std::memory_order_acquire);
-    if (liveSource != noLivePatternLaunch && midiPatternSelections.count != 0)
-    {
-        livePatternLaunch.compare_exchange_strong (liveSource, noLivePatternLaunch);
-    }
-    else if (liveSource != noLivePatternLaunch)
-    {
-        const double beatsPerSample = (bpm / 60.0) / recordingSampleRate;
-        const bool validClock = std::isfinite (ppqPosition) && std::isfinite (beatsPerSample) && beatsPerSample > 0.0;
-        int launchSample = 0;
-        bool downbeatInBlock = false;
-        if (validClock)
-        {
-            const double firstBeat = (wrapped ? std::min (ppqPosition, hostLoop.startPpq) : ppqPosition)
-                                     + sync.firstPlaybackSample * beatsPerSample;
-            const double downbeat = barOrigin + std::ceil ((firstBeat - barOrigin - beatsPerSample) / barLength) * barLength;
-            const double offset = (downbeat - ppqPosition) / beatsPerSample;
-            downbeatInBlock = offset < numSamples - 0.5 && (!hostLoop.active || downbeat < hostLoop.endPpq);
-            if (downbeatInBlock)
-                launchSample = juce::roundToInt (std::max (static_cast<double> (sync.firstPlaybackSample), offset));
-        }
-        if (!isPlaying || macros.patternSource || downbeatInBlock)
-        {
-            if (livePatternLaunch.compare_exchange_strong (liveSource, noLivePatternLaunch))
-            {
-                if (!macros.patternSource)
-                    midiPatternSelections.add (isPlaying ? launchSample : 0, liveSource);
-                liveSelectionApplied = pendingMidiPatternSelections.try_enqueue ({ snapshot->documentEpoch, snapshot->patternSelectionRevision, liveSource });
-            }
-        }
-    }
 
     auto& midiOut = reservedMidiOutputBuffer();
     midiOut.clear();
@@ -1114,7 +1069,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     currentStepForUi.store (playback.currentStepOneBased, std::memory_order_relaxed);
     globalStepForUi.store (playback.latestGlobalStep, std::memory_order_relaxed);
 
-    bool notify = midiPatternSelections.count > 0 || liveSelectionApplied;
+    bool notify = midiPatternSelections.count > 0;
 
     if (playback.generatedSourcesChanged)
         notify = generatedSourcesForEngine.try_enqueue (midiPlayback.generatedSourcesFrame()) || notify;
@@ -1728,6 +1683,8 @@ bool PluginProcessor::loadStateFromDataInternal (const void* data, int sizeInByt
         try
         {
             restored = engine.deserializeForPersistence (*payload);
+            if (restored && engine.getChannelCount() < ksh::Constants::defaultChannelCount)
+                engine.setChannelCount (ksh::Constants::defaultChannelCount);
         }
         catch (...)
         {
@@ -1779,7 +1736,6 @@ bool PluginProcessor::loadStateFromDataInternal (const void* data, int sizeInByt
         patternRecordingEdits.cells.clear();
         recordingMonitorSession.store (0, std::memory_order_release);
         uiBridge.documentReplaced();
-        livePatternLaunch.store (noLivePatternLaunch, std::memory_order_release);
         publishPlaybackSnapshotLocked();
     }
 
@@ -1919,25 +1875,12 @@ bool PluginProcessor::applyPersistenceFromUi (const nlohmann::json& state)
         return false;
 
     if (engine.getStaticSource() != previousSource)
-    {
         ++patternSelectionRevision;
-        livePatternLaunch.store (noLivePatternLaunch, std::memory_order_release);
-    }
     const auto changedMacros = syncMacroParametersFromEngineLocked();
     publishPlaybackSnapshotLocked();
     markDocumentModified();
     lock.unlock();
     notifyMacroParameterChanges (changedMacros);
-    return true;
-}
-
-bool PluginProcessor::queueLivePatternLaunch (int source, int currentSource)
-{
-    if (source < 0 || source >= ksh::Constants::sourceCount
-        || (!hasStandaloneTransport() && hostPatternParameter->getIndex() != 0) || getCurrentStepForUi() == 0)
-        return false;
-
-    livePatternLaunch.store (source == currentSource ? noLivePatternLaunch : source, std::memory_order_release);
     return true;
 }
 
@@ -1997,10 +1940,7 @@ bool PluginProcessor::dispatchUiEngineCommand (std::string_view selector, const 
         return false;
 
     if (selector == "static_source")
-    {
         ++patternSelectionRevision;
-        livePatternLaunch.store (noLivePatternLaunch, std::memory_order_release);
-    }
 
     if (selector != "reset")
         markDocumentModified();
@@ -2419,7 +2359,6 @@ void PluginProcessor::resetProject()
         patternRecordingEdits.cells.clear();
         recordingMonitorSession.store (0, std::memory_order_release);
         uiBridge.documentReplaced();
-        livePatternLaunch.store (noLivePatternLaunch, std::memory_order_release);
         publishPlaybackSnapshotLocked();
     }
 

@@ -3,6 +3,7 @@
 #include "KshStyle.h"
 #include "KshNoteChooser.h"
 #include <melatonin_blur/melatonin_blur.h>
+#include <variant>
 namespace ksh::ui
 {
     class PatternGrid : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
@@ -22,11 +23,13 @@ namespace ksh::ui
         bool copySelection = false;
         juce::Component* openPresetMenu() const;
         void sync();
+        void setRowOutlinesVisible (bool);
         juce::Rectangle<float> loopHandleBounds (int channel, bool end) const;
         void updatePlayback();
         void refreshAccent();
-        void toggleDirection (int channel, bool flipReverse);
+        void advanceDirection (int channel);
         NoteInput& rowNoteInput (int channel) { return rows[static_cast<size_t> (channel)].note; }
+        juce::TextButton& rowSettingsButton (int channel) { return rows[static_cast<size_t> (channel)].more; }
         juce::Component* rowTitle (int channel) { return juce::isPositiveAndBelow (channel, static_cast<int> (rows.size())) ? &rows[static_cast<size_t> (channel)].label : nullptr; }
         void paint (juce::Graphics&) override;
         void paintOverChildren (juce::Graphics&) override;
@@ -41,6 +44,7 @@ namespace ksh::ui
         void mouseMove (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override;
         void modifierKeysChanged (const juce::ModifierKeys&) override;
+        void updateModifiers (const juce::ModifierKeys&);
         void cancelGesture();
         void finishVelocityDrawing();
         bool handleCellPopupMouseDown (const juce::Component* clicked);
@@ -91,14 +95,15 @@ namespace ksh::ui
         struct Row
         {
             juce::TextButton clear { juce::String::fromUTF8 ("×") };
-            RowPlaybackButton reverse { juce::String::fromUTF8 ("→") }, ping { juce::String::fromUTF8 ("↩") }, mute { juce::String::fromUTF8 ("⏻") };
+            RowPlaybackButton direction { "Direction" }, mute { juce::String::fromUTF8 ("⏻") };
             RowTriggerButton label;
             ClearFlash clearFlash { clear };
             NoteInput note;
             juce::TextButton more { "..." };
         };
-        std::array<Row, 8> rows;
-        enum class RowControl { power, reverse, pingPong };
+        std::array<Row, Constants::maxChannels> rows;
+        enum class RowControl { power, direction };
+        using RowControlValue = std::variant<bool, PlaybackMode>;
         struct RowSwipe
         {
             juce::MouseInputSource pointer;
@@ -108,7 +113,7 @@ namespace ksh::ui
             bool extendSolo;
             bool clickPending = true;
             int endRow = -1;
-            std::array<bool, Constants::maxChannels> initialValues {};
+            std::array<RowControlValue, Constants::maxChannels> initialValues {};
         };
         std::optional<RowSwipe> rowSwipe;
         static constexpr int soloHoldMs = 450;
@@ -119,8 +124,8 @@ namespace ksh::ui
         bool rowSwipeMatches (int channel, RowControl, const juce::MouseEvent&) const;
         bool rowSwipeCurrent (const RowSwipe&) const;
         void holdRowSolo();
-        bool rowControlValue (const RowSwipe&, int channel) const;
-        void setDirection (int channel, bool reverse, bool enabled);
+        RowControlValue rowControlValue (const RowSwipe&, int channel) const;
+        void setDirection (int channel, PlaybackMode);
         int displayedSource = -2;
         uint64_t displayedEpoch = 0;
         std::optional<EditorController::SplitCycleSelection> displayedSplitCycle;
@@ -201,6 +206,7 @@ namespace ksh::ui
                 repaint (juce::Rectangle<float> (34.0f, 34.0f).withCentre (hoverMarkerPoint()).getSmallestIntegerContainer());
         } };
         bool pointerInGrid = false;
+        bool rowOutlinesVisible = true;
         juce::Point<float> origin, current;
         double velocityAnchorPulseStarted = 0.0;
         juce::TimedCallback velocityAnchorPulseTimer { [this] { updateVelocityAnchorPulse(); } };
@@ -232,9 +238,9 @@ namespace ksh::ui
         std::array<juce::Rectangle<float>, Constants::cellsPerPattern> displayedPaintBounds {};
         std::pair<int, int> displayedSwing { -1, -1 };
         Selection displayedSelection;
-        std::array<int, 8> displayedLoopStart {}, displayedLoopLength {};
-        std::array<std::pair<float, float>, 8> displayedLoopEdges {};
-        std::array<bool, 8> displayedMutes {};
+        std::array<int, Constants::maxChannels> displayedLoopStart {}, displayedLoopLength {};
+        std::array<std::pair<float, float>, Constants::maxChannels> displayedLoopEdges {};
+        std::array<bool, Constants::maxChannels> displayedMutes {};
         int displayedSteps = -1;
         int displayedBeatStride = 4;
         int displayedFirstStep = -1;

@@ -49,8 +49,8 @@ jobs:
               ;;
           esac
           xcodebuild -version
-          cmake --preset "$preset"
+          cmake --preset "$preset" -DKSH_APPLE_BUILD_NUMBER=1
           xcodebuild -project "$build_dir/KSH.xcodeproj" -scheme KSH_Standalone \
             -configuration Release -destination "$destination" \
             -archivePath "$RUNNER_TEMP/KSH.xcarchive" archive CODE_SIGNING_ALLOWED=NO
-          bash scripts/verify-apple-bundle.sh "$ARCHIVE_PLATFORM" "$RUNNER_TEMP/KSH.xcarchive"
+          bash scripts/verify-apple-bundle.sh "$ARCHIVE_PLATFORM" "$RUNNER_TEMP/KSH.xcarchive" 1

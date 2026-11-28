@@ -212,7 +212,7 @@ namespace ksh::ui
         const std::unique_ptr<GestureDocuments> documents = std::make_unique<GestureDocuments>();
         juce::String gestureLabel, gestureParameter;
         bool transaction = false;
-        std::array<bool, 8> soloRestore {};
+        std::array<bool, Constants::maxChannels> soloRestore {};
         SoloChannels soloChannels;
         int soloSource = -1;
         uint64_t epoch = 0;

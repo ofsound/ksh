@@ -9,6 +9,30 @@
 using namespace ksh;
 using ksh::test::EngineFixture;
 
+TEST_CASE ("Original eight-row projects gain eight empty rows on load", "[engine][persistence]")
+{
+    EngineFixture original, restored;
+    original.clearAll();
+    original.engine.setChannelCount (8);
+    original.engine.setStepCount (32);
+    original.engine.setChannelNote (7, 81);
+    const Cell hit { .enabled = true, .velocity = 73 };
+    original.engine.setCell (0, 7, 4, hit);
+    auto payload = original.engine.serializeForPersistence();
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.getChannelCount() == 8);
+
+    auto& channels = payload["channels"];
+    channels.erase (channels.begin() + 8, channels.end());
+    REQUIRE (restored.engine.deserializeForPersistence (payload));
+    CHECK (restored.engine.getChannelCount() == Constants::maxChannels);
+    CHECK (restored.engine.channelAt (7).note == 81);
+    CHECK (restored.engine.sourceCellAt (0, 7, 4) == hit);
+    CHECK (restored.engine.channelAt (15).note == Constants::defaultChannelNotes[15]);
+    CHECK_FALSE (restored.engine.sourceCellAt (0, 15, 4).enabled);
+    CHECK (restored.engine.makePlaybackSnapshot().sourceSettings[0].loopRanges[15].loopLength == 32);
+}
+
 TEST_CASE ("CC row settings and zero values round trip without replacing note data", "[engine][persistence][cc]")
 {
     EngineFixture fixture;

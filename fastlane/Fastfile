@@ -2,6 +2,8 @@ require "fileutils"
 require "tmpdir"
 
 KSH_ROOT = File.expand_path("..", __dir__)
+KSH_APP_ID = "com.ofsound.ksh"
+KSH_RELEASE_OUTPUT = File.join(KSH_ROOT, "Builds", "apple-release")
 KSH_RELEASES = {
   "ios" => { preset: "ios-xcode", destination: "iOS", pilot: "ios", package: :ipa },
   "macos" => { preset: "macos-testflight", destination: "macOS", pilot: "osx", package: :pkg }
@@ -11,31 +13,48 @@ def ksh_release(target)
   KSH_RELEASES.fetch(target) { UI.user_error!("Set target:ios or target:macos.") }
 end
 
-def ksh_verify_archive_version(archive, target, version, build_number)
-  app = File.join(archive, "Products", "Applications", "KSH.app")
-  plists = if target == "ios"
-             [File.join(app, "Info.plist"), File.join(app, "PlugIns", "KSH.appex", "Info.plist")]
-           else
-             [File.join(app, "Contents", "Info.plist")]
-           end
+def ksh_app_store_connect_key
+  key_id = ENV.fetch("APP_STORE_CONNECT_API_KEY_KEY_ID", "")
+  issuer_id = ENV.fetch("APP_STORE_CONNECT_API_KEY_ISSUER_ID", "")
+  key_path = File.expand_path(ENV.fetch("APP_STORE_CONNECT_API_KEY_KEY_FILEPATH", ""), KSH_ROOT)
+  if key_id.empty? || issuer_id.empty? || !File.file?(key_path)
+    UI.user_error!("Set the App Store Connect team API key ID, issuer ID, and .p8 file path. See docs/testflight.md.")
+  end
 
-  plists.each do |plist|
-    { "CFBundleShortVersionString" => version, "CFBundleVersion" => build_number }.each do |key, expected|
-      actual = sh("plutil", "-extract", key, "raw", "-o", "-", plist, log: false).strip
-      UI.user_error!("#{plist}: expected #{key} #{expected}, found #{actual}.") unless actual == expected
+  app_store_connect_api_key(key_id: key_id, issuer_id: issuer_id, key_filepath: key_path, set_spaceship_token: true)
+end
+
+def ksh_reserve_build_number
+  app = Spaceship::ConnectAPI::App.find(KSH_APP_ID)
+  UI.user_error!("Could not find #{KSH_APP_ID} in App Store Connect.") unless app
+
+  uploads = Spaceship::ConnectAPI.get_build_uploads(app_id: app.id, limit: 200).all_pages.flat_map(&:to_models)
+  builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, includes: nil, limit: 200)
+  remote_numbers = uploads.map(&:cf_build_version) + builds.map(&:version)
+  # A larger first component sorts above any legacy dotted build number.
+  uploaded_max = remote_numbers.map { |number| number.to_s.split(".").first.to_i }.max || 0
+
+  reservations = File.join(KSH_RELEASE_OUTPUT, "build-numbers")
+  FileUtils.mkdir_p(reservations)
+  local_max = Dir.children(reservations).filter_map { |entry| Integer(entry, 10, exception: false) }.max || 0
+  number = [uploaded_max, local_max].max + 1
+  loop do
+    begin
+      Dir.mkdir(File.join(reservations, number.to_s))
+      return number
+    rescue Errno::EEXIST
+      number += 1
     end
   end
 end
 
-desc "Archive, verify, and export a signed KSH package for App Store Connect"
+desc "Archive, verify, and export signed KSH packages with one shared TestFlight build number"
 lane :archive do |options|
-  target = options[:target]
-  release = ksh_release(target)
-  number = options[:build_number].to_s
+  target = options[:target] || "both"
+  targets = target == "both" ? KSH_RELEASES.keys : [target]
+  targets.each { |platform| ksh_release(platform) }
+  UI.user_error!("Fastlane assigns build_number automatically. Omit build_number.") if options.key?(:build_number)
   team = ENV.fetch("KSH_APPLE_TEAM_ID", "")
-  unless number.match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)
-    UI.user_error!("Set build_number to one to three dot-separated integers, such as 8 or 0.0.2.")
-  end
   UI.user_error!("Set KSH_APPLE_TEAM_ID to your 10-character Apple Developer team ID.") unless team.match?(/\A[A-Z0-9]{10}\z/)
 
   Dir.chdir(KSH_ROOT) do
@@ -43,39 +62,48 @@ lane :archive do |options|
     UI.user_error!("Use a clean checkout of the CI-validated source before archiving.") unless changes.strip.empty?
     revision = sh("git", "rev-parse", "--short=12", "HEAD", log: false).strip
     version = File.read("VERSION").strip
-    output_root = File.join(KSH_ROOT, "Builds", "apple-release", target)
-    FileUtils.mkdir_p(output_root)
-    output = Dir.mktmpdir("#{version}-#{number}-#{revision}-", output_root)
-    project_dir = File.join(output, "cmake")
-    archive = File.join(output, "KSH.xcarchive")
-    export = File.join(output, "export")
-
-    cmake_flags = ["-DKSH_APPLE_BUILD_NUMBER=#{number}", "-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=#{team}"]
-    if target == "macos"
-      cmake_flags.push("-DKSH_BUILD_BENCHMARKS=OFF", "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
+    ksh_app_store_connect_key
+    number = ksh_reserve_build_number
+    UI.message("Archiving KSH #{version} (#{number}) for #{targets.join(' and ')}")
+    targets.each do |platform|
+      ksh_archive(platform, team, version, number, revision)
     end
-    optional_flags = target == "ios" ? %w[KSH_IOS_ICLOUD_ENABLED KSH_LINKKIT_SDK_DIR] : %w[KSH_ABLETON_LINK_SOURCE_DIR]
-    optional_flags.each do |name|
-      cmake_flags << "-D#{name}=#{ENV[name]}" unless ENV[name].to_s.empty?
-    end
-    sh("cmake", "--preset", release[:preset], "-B", project_dir, *cmake_flags)
-    sh("xcodebuild", "-project", File.join(project_dir, "KSH.xcodeproj"), "-scheme", "KSH_Standalone",
-       "-configuration", "Release", "-destination", "generic/platform=#{release[:destination]}",
-       "-derivedDataPath", File.join(output, "DerivedData"), "-archivePath", archive,
-       "-allowProvisioningUpdates", "archive", "CODE_SIGN_STYLE=Automatic")
-    sh("bash", "scripts/verify-apple-bundle.sh", target, archive)
-    ksh_verify_archive_version(archive, target, version, number)
-    if target == "macos"
-      binary = File.join(archive, "Products", "Applications", "KSH.app", "Contents", "MacOS", "KSH")
-      sh("xcrun", "lipo", binary, "-verify_arch", "arm64", "x86_64")
-    end
-    sh("xcodebuild", "-exportArchive", "-archivePath", archive, "-exportPath", export,
-       "-exportOptionsPlist", "packaging/AppStoreConnectExportOptions.plist", "-allowProvisioningUpdates")
-
-    packages = Dir.glob(File.join(export, "*.#{release[:package]}")).select { |path| File.file?(path) }
-    UI.user_error!("Expected one .#{release[:package]} in #{export}, found #{packages.length}.") unless packages.length == 1
-    UI.success("KSH #{target} #{version} (#{number}), commit #{revision}: #{packages.first}")
   end
+end
+
+def ksh_archive(target, team, version, number, revision)
+  release = ksh_release(target)
+  output_root = File.join(KSH_RELEASE_OUTPUT, target)
+  FileUtils.mkdir_p(output_root)
+  output = Dir.mktmpdir("#{version}-#{number}-#{revision}-", output_root)
+  project_dir = File.join(output, "cmake")
+  archive = File.join(output, "KSH.xcarchive")
+  export = File.join(output, "export")
+
+  cmake_flags = ["-DKSH_APPLE_BUILD_NUMBER=#{number}", "-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=#{team}"]
+  if target == "macos"
+    cmake_flags.push("-DKSH_BUILD_BENCHMARKS=OFF", "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
+  end
+  optional_flags = target == "ios" ? %w[KSH_IOS_ICLOUD_ENABLED KSH_LINKKIT_SDK_DIR] : %w[KSH_ABLETON_LINK_SOURCE_DIR]
+  optional_flags.each do |name|
+    cmake_flags << "-D#{name}=#{ENV[name]}" unless ENV[name].to_s.empty?
+  end
+  sh("cmake", "--preset", release[:preset], "-B", project_dir, *cmake_flags)
+  sh("xcodebuild", "-project", File.join(project_dir, "KSH.xcodeproj"), "-scheme", "KSH_Standalone",
+     "-configuration", "Release", "-destination", "generic/platform=#{release[:destination]}",
+     "-derivedDataPath", File.join(output, "DerivedData"), "-archivePath", archive,
+     "-allowProvisioningUpdates", "archive", "CODE_SIGN_STYLE=Automatic")
+  sh("bash", "scripts/verify-apple-bundle.sh", target, archive, number.to_s)
+  if target == "macos"
+    binary = File.join(archive, "Products", "Applications", "KSH.app", "Contents", "MacOS", "KSH")
+    sh("xcrun", "lipo", binary, "-verify_arch", "arm64", "x86_64")
+  end
+  sh("xcodebuild", "-exportArchive", "-archivePath", archive, "-exportPath", export,
+     "-exportOptionsPlist", "packaging/AppStoreConnectExportOptions.plist", "-allowProvisioningUpdates")
+
+  packages = Dir.glob(File.join(export, "*.#{release[:package]}")).select { |path| File.file?(path) }
+  UI.user_error!("Expected one .#{release[:package]} in #{export}, found #{packages.length}.") unless packages.length == 1
+  UI.success("KSH #{target} #{version} (#{number}), commit #{revision}: #{packages.first}")
 end
 
 desc "Upload a signed KSH package to App Store Connect"
@@ -86,15 +114,8 @@ lane :upload do |options|
     UI.user_error!("Set package: to the exported .#{release[:package]} file.")
   end
 
-  key_id = ENV.fetch("APP_STORE_CONNECT_API_KEY_KEY_ID", "")
-  issuer_id = ENV.fetch("APP_STORE_CONNECT_API_KEY_ISSUER_ID", "")
-  key_path = File.expand_path(ENV.fetch("APP_STORE_CONNECT_API_KEY_KEY_FILEPATH", ""), KSH_ROOT)
-  if key_id.empty? || issuer_id.empty? || !File.file?(key_path)
-    UI.user_error!("Set the App Store Connect team API key ID, issuer ID, and .p8 file path. See docs/testflight.md.")
-  end
-
-  api_key = app_store_connect_api_key(key_id: key_id, issuer_id: issuer_id, key_filepath: key_path)
-  upload_to_testflight(api_key: api_key, app_identifier: "com.ofsound.ksh",
+  api_key = ksh_app_store_connect_key
+  upload_to_testflight(api_key: api_key, app_identifier: KSH_APP_ID,
                        app_platform: release[:pilot], release[:package] => package,
                        skip_submission: true, skip_waiting_for_build_processing: true)
 end

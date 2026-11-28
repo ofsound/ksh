@@ -7,179 +7,281 @@
 
 namespace ksh::ui
 {
-    // Stable priorities describe drum roles across a sixteen-step phrase. Increasing
-    // density adds supporting hits while the kick/downbeat and snare/backbeat remain.
-    inline constexpr int generatorSeedCount = 5;
+    inline constexpr int generatorDrumRows = 6;
+    inline constexpr int closedHatRow = 2;
+    inline constexpr int openHatRow = 3;
 
-    inline float drumPatternNoise (int channel, int step, int seed, int family)
+    struct DrumFill
     {
-        auto value = static_cast<juce::uint32> (channel * 193 + step * 977 + family * 7919 + seed * 104729 + 12345);
+        int row;
+        double beatsBeforeEnd, duration;
+        float variation;
+        int splits;
+        std::array<int, 4> velocities;
+    };
+
+    struct DrumGroove
+    {
+        const char* name;
+        std::array<std::string_view, generatorDrumRows> parts;
+        DrumFill answer;
+        std::array<DrumFill, 2> turnaround;
+    };
+
+    // Each group is one beat of sixteenths. X is the foundation, x and + are
+    // density layers, g is a ghost note, and a plays on the answering bar.
+    inline constexpr std::array drumGrooves {
+        DrumGroove { "Four on the Floor",
+                     { "X... X... X... X...", ".... X... ...g X...", "x.X+ x.Xg x.X+ x.Xg",
+                       "..x. ..+. ..a. ..x.", ".... ..x. .... .a+.", ".... ...+ .... .xg." },
+                     { 2, 1.0, 0.5, 0.45f, 2, { 54, 28 } },
+                     { DrumFill { 5, 0.5, 0.5, 0.34f, 4, { 0, 32, 55, 91 } },
+                       DrumFill { 2, 1.0, 0.5, 0.63f, 4, { 49, 26, 63, 36 } } } },
+        DrumGroove { "Half-Time",
+                     { "X... ..x. ..X. .a+.", "...g .... X... ..g.", "X.x. ..Xg x.X. X.x+",
+                       "..x. .... ...+ ....", ".... ..a. .... .x..", ".... .... .x.. ..+." },
+                     { 2, 0.5, 0.5, 0.45f, 3, { 55, 26, 68 } },
+                     { DrumFill { 2, 1.0, 1.0, 0.32f, 3, { 79, 30, 57 } },
+                       DrumFill { 1, 0.5, 0.5, 0.62f, 3, { 0, 0, 85 } } } },
+        DrumGroove { "Broken Beat",
+                     { "X..X ..X. ...X ..a.", "...g X... ..g. .X..", "x.X. .x+X .xX. x.g+",
+                       ".... ..x. .... ..x.", "...x .... a... ..+.", ".... .+.x .... x..." },
+                     { 4, 0.5, 0.5, 0.45f, 2, { 61, 39 } },
+                     { DrumFill { 1, 0.5, 0.5, 0.37f, 4, { 0, 22, 45, 98 } },
+                       DrumFill { 5, 0.75, 0.5, 0.61f, 3, { 71, 31, 64 } } } }
+    };
+
+    inline float drumPatternNoise (int channel, int step, int groove, int family)
+    {
+        auto value = static_cast<juce::uint32> (channel * 193 + step * 977 + family * 7919 + groove * 104729 + 12345);
         value ^= value >> 16;
         value *= 0x7feb352dU;
         value ^= value >> 15;
         return static_cast<float> (value % 1000) / 999.0f;
     }
 
-    inline Cell generatedDrumCell (int channel, int step, float density, float variation, int seed = 0)
+    struct DrumGenerator
     {
-        static constexpr int priorities[8][16] {
-            { 0, 95, 72, 48, 62, 92, 38, 78, 12, 90, 55, 32, 60, 85, 42, 70 },
-            { 95, 90, 80, 64, 0, 85, 74, 56, 90, 82, 68, 54, 0, 78, 62, 44 },
-            { 20, 76, 8, 66, 25, 70, 10, 58, 18, 72, 6, 62, 26, 68, 12, 52 },
-            { 100, 100, 66, 100, 100, 100, 46, 100, 100, 100, 64, 100, 100, 100, 38, 90 },
-            { 100, 100, 92, 90, 45, 100, 86, 78, 100, 100, 90, 80, 36, 96, 78, 68 },
-            { 100, 100, 94, 100, 100, 92, 100, 82, 100, 100, 88, 76, 98, 65, 54, 42 },
-            { 90, 74, 88, 48, 92, 62, 86, 58, 94, 66, 82, 44, 90, 56, 78, 50 },
-            { 62, 100, 100, 100, 100, 100, 94, 100, 85, 100, 100, 100, 100, 100, 90, 100 }
-        };
-        static constexpr int phaseOffsets[generatorSeedCount][8] {
-            { 0, 0, 0, 0, 0, 0, 0, 0 },
-            { 3, 1, 1, 3, 1, 4, 2, 3 },
-            { 6, 3, 2, 1, 4, 2, 5, 1 },
-            { 9, 7, 3, 5, 2, 6, 3, 5 },
-            { 12, 5, 5, 2, 7, 3, 6, 6 }
-        };
-        const int phase = step % 16;
-        const auto hash = [channel, step, seed] (int family)
-        {
-            return drumPatternNoise (channel, step, seed, family);
-        };
-        const float position = juce::jlimit (0.0f, 1.0f, variation) * 15.0f;
-        const int family = static_cast<int> (position);
-        const float blend = position - static_cast<float> (family);
-        const auto variationNoise = [&] (int offset)
-        {
-            return juce::jmap (blend, hash (family + offset), hash (family + offset + 1));
-        };
-        const float noise = variationNoise (0);
-        const float chaos = juce::jlimit (0.0f, 1.0f, (variation - 0.8f) * 5.0f);
-        const int priority = priorities[channel][phase];
-        const bool anchor = priority == 0;
-        const int shifted = priorities[channel][(phase + phaseOffsets[seed][channel]) % 16];
-        // Change supporting rhythms while retaining the kick and snare anchors.
-        const float seededPriority = seed == 0 ? static_cast<float> (priority)
-            : 0.30f * static_cast<float> (priority) + 0.70f * static_cast<float> (shifted);
-        const float structured = anchor ? -12.0f : seededPriority + (noise - 0.5f) * variation * 65.0f;
-        // At the top of the pad, even the kick and snare anchors give way to independent hits.
-        const float threshold = juce::jmap (chaos, structured, 100.0f * variationNoise (101));
-        Cell result;
-        result.enabled = threshold < 8.0f + juce::jlimit (0.0f, 1.0f, density) * 78.0f;
-        const bool strong = anchor || phase % 4 == 0;
-        const float roleVelocity = (strong ? 100.0f : phase % 2 == 0 ? 77.0f : 48.0f)
-                                   + density * 12.0f + (noise - 0.5f) * 16.0f;
-        result.velocity = juce::jlimit (30, 120, juce::roundToInt (juce::jmap (chaos, roleVelocity, 30.0f + 90.0f * variationNoise (211))));
-        result.nudge = juce::roundToInt (chaos * (variationNoise (307) - 0.5f) * 90.0f);
-        constexpr float chanceStart = 0.7f;
-        if (result.enabled && variation > chanceStart)
-        {
-            const float amount = juce::jmin (1.0f, (variation - chanceStart) / (1.0f - chanceStart));
-            // Fixed per-step thresholds bring in each modifier independently as variation rises.
-            if (hash (401) <= amount)
-                result.probability = 100 - juce::jmax (1, juce::roundToInt (amount * juce::jmap (hash (409), 5.0f, 45.0f)));
-            if (hash (419) <= amount)
-            {
-                result.cycle = 2 + juce::roundToInt (hash (421) * 4.0f);
-                const int skippedBeat = juce::roundToInt (hash (431) * static_cast<float> (result.cycle - 1));
-                result.cycleMask = cycleMaskForLength (result.cycle) & ~(1 << skippedBeat);
-            }
-        }
-        return result;
-    }
+        int groove;
+        float density, variation;
+        double beatsPerStep;
 
-    inline void addGeneratedDrumRolls (std::span<Cell> row, int channel, int seed, float variation, double beatsPerStep,
-                                       const std::bitset<Constants::maxSteps>& openHatSteps)
-    {
-        constexpr float tripletStart = 0.10f;
-        constexpr float chaosStart = 0.8f;
-        const bool tripletSeed = seed == 1 || seed == 3;
-        const bool coreTriplets = tripletSeed && channel == 2 && variation >= tripletStart;
-        if (row.empty() || (variation <= chaosStart && !coreTriplets))
-            return;
+        using Steps = std::bitset<Constants::maxSteps>;
+        static constexpr float chaosStart = 0.8f;
 
-        const float amount = juce::jlimit (0.0f, 1.0f, (variation - chaosStart) / (1.0f - chaosStart));
-        constexpr std::array rollCounts { 2, 4, 5, 6, 7, 8 };
-        const int maxRollIndex = juce::roundToInt (amount * static_cast<float> (rollCounts.size() - 1));
-        const int length = static_cast<int> (row.size());
-        const std::array tripletSpans { gridSpanForBeats (0.5, beatsPerStep), gridSpanForBeats (1.0, beatsPerStep), gridSpanForBeats (2.0, beatsPerStep) };
-        const int phraseLength = juce::jlimit (1, length, gridSpanForBeats (4.0, beatsPerStep));
-        int coreSpan = 0;
-        if (coreTriplets)
+        void generateRow (std::span<Cell> row, int channel, const Steps& openHats = {}) const
         {
-            // B uses a short hat fill. D lets it carry the whole beat.
-            const auto order = seed == 1 ? std::array { 0, 1, 2 } : std::array { 1, 0, 2 };
-            for (const int index : order)
+            const int length = static_cast<int> (row.size());
+            const int barSteps = juce::jmax (1, gridSpanForBeats (4.0, beatsPerStep));
+            const float chaos = juce::jlimit (0.0f, 1.0f, (variation - chaosStart) / (1.0f - chaosStart));
+            Steps anchors;
+            if (channel < generatorDrumRows)
+                writeGroove (row, channel, barSteps, anchors);
+
+            // Bring in the two nearby percussion rows first, then open up the
+            // rest of the kit in the last stretch of the pad.
+            const float extraStart = channel < 8 ? chaosStart + (channel - generatorDrumRows) * 0.025f
+                                                 : 0.87f + (channel - 8) * 0.008f;
+            const float extraAmount = juce::jlimit (0.0f, 1.0f, (variation - extraStart) / (1.0f - extraStart));
+            for (int step = 0; step < length; ++step)
             {
-                const int span = tripletSpans[static_cast<size_t> (index)];
-                if (span > 0 && span <= phraseLength)
+                const auto index = static_cast<size_t> (step);
+                auto& cell = row[index];
+                if (openHats[index])
                 {
-                    coreSpan = span;
-                    break;
+                    cell = {};
+                    continue;
+                }
+
+                const auto noise = [=, this] (int family) { return drumPatternNoise (channel, step, groove, family); };
+                if (channel >= generatorDrumRows)
+                    cell.enabled = noise (101) < extraAmount * (0.06f + 0.86f * density);
+                else if (chaos > 0.0f && noise (103) <= chaos)
+                {
+                    anchors.reset (index);
+                    cell.enabled = noise (101) < 0.06f + 0.86f * density;
+                }
+                else
+                    continue;
+
+                if (cell.enabled)
+                    cell.velocity = juce::roundToInt (26.0f + 95.0f * noise (211));
+                else
+                    cell = {};
+            }
+
+            Steps fills;
+            if (chaos < 0.5f && channel < generatorDrumRows)
+            {
+                const auto& part = drumGrooves[static_cast<size_t> (groove)];
+                for (const auto& fill : part.turnaround)
+                    writeFill (row, channel, length, fill, anchors, openHats, fills);
+
+                // Give two-bar loops a smaller fill at the midpoint, and longer
+                // loops an answer every two bars before the final turnaround.
+                const int firstAnswer = length < 3 * barSteps ? barSteps : 2 * barSteps;
+                for (int end = firstAnswer; end < length; end += 2 * barSteps)
+                    writeFill (row, channel, end, part.answer, anchors, openHats, fills);
+            }
+            if (chaos > 0.0f)
+                addChaos (row, channel, chaos, openHats | fills);
+        }
+
+    private:
+        void writeGroove (std::span<Cell> row, int channel, int barSteps, Steps& anchors) const
+        {
+            const auto pattern = drumGrooves[static_cast<size_t> (groove)].parts[static_cast<size_t> (channel)];
+            constexpr std::array accentVelocities { 112, 108, 76, 82, 80, 88 };
+            const int accent = accentVelocities[static_cast<size_t> (channel)];
+            const int length = static_cast<int> (row.size());
+            for (int bar = 0, start = 0; start < length; ++bar, start += barSteps)
+            {
+                for (int pulse = 0; pulse < 16; ++pulse)
+                {
+                    const char note = pattern[static_cast<size_t> (pulse + pulse / 4)];
+                    if (note == '.' || (note == 'a' && bar % 2 == 0))
+                        continue;
+
+                    const int step = start + (pulse * barSteps + 8) / 16;
+                    if (step >= juce::jmin (length, start + barSteps))
+                        continue;
+
+                    const float priority = drumPatternNoise (channel, pulse + 16 * bar, groove, 0);
+                    const bool anchor = note == 'X';
+                    const bool ghost = note == 'g';
+                    const float threshold = ghost ? 0.43f - 0.30f * variation
+                                                   : note == '+' ? 0.53f : 0.15f;
+                    if (!anchor && density < threshold + 0.18f * priority)
+                        continue;
+
+                    const int target = anchor ? accent : ghost ? 27 : accent - (note == '+' ? 32 : 20);
+                    const int velocity = juce::jlimit (12, 125, target + juce::roundToInt ((priority - 0.5f) * (8.0f + variation * 22.0f)));
+                    auto& cell = row[static_cast<size_t> (step)];
+                    if (!cell.enabled || velocity > cell.velocity)
+                    {
+                        cell.enabled = true;
+                        cell.velocity = velocity;
+                    }
+                    if (anchor)
+                        anchors.set (static_cast<size_t> (step));
                 }
             }
-        }
-        const int firstTriplet = juce::jmin (phraseLength - coreSpan, phraseLength / (seed == 1 ? 4 : 2));
-        const int secondTriplet = seed == 1 ? juce::jmin (phraseLength - coreSpan, phraseLength * 3 / 4) : 0;
 
-        for (int step = 0; step < length;)
-        {
-            auto& cell = row[static_cast<size_t> (step)];
-            const int remaining = length - step;
-            const int phase = step % phraseLength;
-            const auto noise = [channel, step, seed] (int family) { return drumPatternNoise (channel, step, seed, family); };
-            if (coreSpan > 0 && coreSpan <= remaining && (cell.enabled || variation <= chaosStart)
-                && !openHatSteps.test (static_cast<size_t> (step))
-                && (phase == firstTriplet || (variation >= 0.38f && phase == secondTriplet)))
+            // At fine grid divisions a short loop can end before its first
+            // backbeat. Give it a snare near the middle of the loop.
+            if (channel == 1 && length > 1 && anchors.none())
             {
-                cell.enabled = true;
-                cell.roll = 3;
-                cell.span = coreSpan;
-                cell.velocity = juce::jmax (cell.velocity, 77);
-                cell.setSplitVelocity (1, juce::roundToInt (cell.velocity * 0.70));
-                cell.setSplitVelocity (2, juce::roundToInt (cell.velocity * 0.85));
+                const auto step = static_cast<size_t> (length / 2);
+                row[step] = Cell { .enabled = true, .velocity = accent };
+                anchors.set (step);
             }
-            else if (cell.enabled && noise (503) < amount * 0.76f)
+        }
+
+        void writeFill (std::span<Cell> row, int channel, int end, const DrumFill& fill,
+                        const Steps& anchors, const Steps& openHats, Steps& fills) const
+        {
+            if (fill.row != channel || variation < fill.variation)
+                return;
+
+            const int lead = juce::jmax (1, juce::roundToInt (fill.beatsBeforeEnd / beatsPerStep));
+            const int tail = juce::roundToInt ((fill.beatsBeforeEnd - fill.duration) / beatsPerStep);
+            const int start = end - lead;
+            const int span = lead - tail;
+            if (start < 0 || span < 1)
+                return;
+
+            for (int step = start; step < start + span; ++step)
             {
-                const bool stretch = remaining > 1 && noise (509) < amount * 0.67f;
-                int tripletSpan = 0;
-                if (stretch && tripletSeed && noise (521) < 0.66f)
+                const auto index = static_cast<size_t> (step);
+                if (fills[index] || openHats[index] || (channel < closedHatRow && step > start && anchors[index]))
+                    return;
+            }
+
+            const auto first = static_cast<size_t> (start);
+            auto& cell = row[first];
+            // Coarse divisions can put an existing kick or snare on the first
+            // split. Keep that stroke at the original time and velocity.
+            auto velocities = fill.velocities;
+            if (channel < closedHatRow && anchors[first])
+                velocities[0] = cell.velocity;
+
+            cell = {};
+            cell.enabled = true;
+            cell.velocity = *std::max_element (velocities.begin(), velocities.end());
+            cell.roll = fill.splits;
+            cell.span = span;
+            for (int part = 0; part < fill.splits; ++part)
+            {
+                const auto index = static_cast<size_t> (part);
+                // Zero velocity inherits the parent velocity. A zero-probability
+                // split leaves a true rest while the last stroke can still play.
+                if (velocities[index] == 0)
+                    cell.splitGates[index].setProbability (0);
+                else
+                    cell.setSplitVelocity (part, velocities[index]);
+            }
+
+            fills.set (first);
+            for (int offset = 1; offset < span; ++offset)
+            {
+                row[static_cast<size_t> (start + offset)] = {};
+                fills.set (static_cast<size_t> (start + offset));
+            }
+        }
+
+        void addChaos (std::span<Cell> row, int channel, float amount, const Steps& reserved) const
+        {
+            constexpr std::array rollCounts { 2, 3, 4, 5, 6, 8 };
+            const int length = static_cast<int> (row.size());
+            const int maxRollIndex = juce::roundToInt (amount * static_cast<float> (rollCounts.size() - 1));
+
+            for (int step = 0; step < length;)
+            {
+                const auto index = static_cast<size_t> (step);
+                auto& cell = row[index];
+                if (cell.enabled && !reserved[index])
                 {
-                    // B favours 16ths and 8ths. D also reaches quarter-note triplets.
-                    const int longest = seed == 1 ? 1 : 2;
-                    const int preferred = juce::roundToInt (noise (523) * static_cast<float> (longest));
-                    for (int i = preferred; i >= 0; --i)
+                    const auto noise = [=, this] (int family) { return drumPatternNoise (channel, step, groove, family); };
+                    cell.nudge = juce::roundToInt (amount * (noise (307) - 0.5f) * 90.0f);
+                    if (noise (401) <= amount)
+                        cell.probability = 100 - juce::jmax (1, juce::roundToInt (amount * juce::jmap (noise (409), 5.0f, 45.0f)));
+                    if (noise (419) <= amount)
                     {
-                        const int candidate = tripletSpans[static_cast<size_t> (i)];
-                        if (candidate > 0 && candidate <= remaining)
+                        cell.cycle = 2 + juce::roundToInt (noise (421) * 4.0f);
+                        const int skip = juce::roundToInt (noise (431) * static_cast<float> (cell.cycle - 1));
+                        cell.cycleMask = cycleMaskForLength (cell.cycle) & ~(1 << skip);
+                    }
+
+                    if (noise (503) < amount * 0.76f)
+                    {
+                        const auto roll = static_cast<size_t> (juce::roundToInt (noise (541) * static_cast<float> (maxRollIndex)));
+                        cell.roll = rollCounts[roll];
+                        if (noise (509) < amount * 0.66f)
                         {
-                            tripletSpan = candidate;
-                            break;
+                            const int maxSpan = juce::jmin (length - step, 2 + juce::roundToInt (noise (547) * amount * 2.0f));
+                            while (cell.span < maxSpan && !reserved[index + static_cast<size_t> (cell.span)])
+                            {
+                                row[index + static_cast<size_t> (cell.span)] = {};
+                                ++cell.span;
+                            }
+                        }
+
+                        for (int part = 0; part < cell.roll; ++part)
+                        {
+                            const float scale = part == cell.roll - 1 ? 1.15f : juce::jmap (noise (557 + part), 0.20f, 1.0f);
+                            cell.setSplitVelocity (part, juce::jlimit (1, 127, juce::roundToInt (cell.velocity * scale)));
                         }
                     }
                 }
-
-                const auto rollIndex = static_cast<size_t> (juce::roundToInt (noise (541) * static_cast<float> (maxRollIndex)));
-                cell.roll = tripletSpan > 0 ? 3 : rollCounts[rollIndex];
-                if (tripletSpan > 0)
-                    cell.span = tripletSpan;
-                else if (stretch)
-                    cell.span = juce::jmin (remaining, 2 + juce::roundToInt (noise (547) * amount * 2.0f));
-
-                for (int part = 0; part < cell.roll; ++part)
-                {
-                    const int offset = juce::roundToInt ((noise (557 + part) - 0.57f) * amount * 44.0f);
-                    cell.setSplitVelocity (part, juce::jlimit (1, 127, cell.velocity + offset));
-                }
+                step += cell.span;
             }
-            // The span replaces its covered steps, just as a hand-entered roll does.
-            for (int covered = 1; covered < cell.span; ++covered)
-                row[static_cast<size_t> (step + covered)] = {};
-            step += cell.span;
         }
-    }
+    };
 
     class PatternXYPad : public juce::Component
     {
     public:
+        int rowLimit = 8;
         explicit PatternXYPad (EditorController& c) : controller (c)
         {
             setTitle ("Drum pattern density and variation");
@@ -194,15 +296,14 @@ namespace ksh::ui
         }
         void visibilityChanged() override { if (!isVisible()) cancelGesture(); }
         bool hitTest (int x, int y) override { return padBounds().contains (static_cast<float> (x), static_cast<float> (y)); }
-        void selectSeed (int next)
+        void selectGroove (int next)
         {
-            if (next == seed)
-                return;
-            seed = next;
+            groove = next;
             if (controller.source() < 0)
                 return;
             cancelGesture();
-            controller.begin ("Change generator seed");
+            controller.commit();
+            controller.begin ("Generate drum groove");
             controller.command ("mode", { "static" });
             generate();
             controller.commit();
@@ -228,7 +329,7 @@ namespace ksh::ui
             g.setColour (Palette::text);
             g.drawEllipse (point.x - 8, point.y - 8, 16, 16, 1.5f);
             text (g, "Chaotic", { area.getX(), 0, area.getWidth(), 22 }, 14, Palette::muted);
-            text (g, "Straight", { area.getX(), area.getBottom() + 4, area.getWidth(), 22 }, 14, Palette::muted);
+            text (g, "Basic", { area.getX(), area.getBottom() + 4, area.getWidth(), 22 }, 14, Palette::muted);
             text (g, "Sparse", { area.getX() + 10, area.getBottom() - 28, 80, 22 }, 14, Palette::muted, false, juce::Justification::centredLeft);
             text (g, "Dense", { area.getRight() - 90, area.getBottom() - 28, 80, 22 }, 14, Palette::muted, false, juce::Justification::centredRight);
         }
@@ -270,31 +371,34 @@ namespace ksh::ui
         void generate()
         {
             const auto& pattern = controller.state.playback;
-            for (int ch = 0; ch < pattern.channelCount; ++ch)
+            const DrumGenerator generator { groove, density, variation, pattern.beatsPerStep };
+            const int rows = juce::jmin (pattern.channelCount, rowLimit);
+            DrumGenerator::Steps openHatSteps;
+            const auto generateRow = [&] (int channel)
             {
-                if (controller.isControllerRow (ch))
-                    continue;
-                const auto loop = controller.loop (ch);
+                if (controller.isControllerRow (channel))
+                    return;
+                const auto loop = controller.loop (channel);
                 std::array<Cell, Constants::maxSteps> cells;
-                std::bitset<Constants::maxSteps> openHatSteps;
                 const int length = juce::jlimit (0, loop.loopLength, pattern.stepCount - loop.loopStart);
-                auto row = std::span (cells).first (static_cast<size_t> (length));
+                const auto row = std::span (cells).first (static_cast<size_t> (length));
+                generator.generateRow (row, channel, channel == closedHatRow ? openHatSteps >> static_cast<size_t> (loop.loopStart) : DrumGenerator::Steps {});
                 for (int step = 0; step < length; ++step)
                 {
-                    auto& cell = row[static_cast<size_t> (step)];
-                    cell = generatedDrumCell (ch, step, density, variation, seed);
-                    // An open hat takes the place of its closed counterpart.
-                    if (ch == 2 && pattern.channelCount > 3 && !controller.isControllerRow (3)
-                        && generatedDrumCell (3, step, density, variation, seed).enabled)
-                    {
-                        openHatSteps.set (static_cast<size_t> (step));
-                        cell.enabled = false;
-                    }
+                    const auto& cell = row[static_cast<size_t> (step)];
+                    const int position = loop.loopStart + step;
+                    if (channel == openHatRow && cell.enabled)
+                        for (int part = 0; part < cell.span; ++part)
+                            openHatSteps.set (static_cast<size_t> (position + part));
+                    controller.editCell ({ channel, position }, cell);
                 }
-                addGeneratedDrumRolls (row, ch, seed, variation, pattern.beatsPerStep, openHatSteps);
-                for (int step = 0; step < length; ++step)
-                    controller.editCell ({ ch, loop.loopStart + step }, row[static_cast<size_t> (step)]);
-            }
+            };
+            // Generate open hats first so closed hats can respect their actual loop and splits.
+            if (rows > openHatRow)
+                generateRow (openHatRow);
+            for (int channel = 0; channel < rows; ++channel)
+                if (channel != openHatRow)
+                    generateRow (channel);
             controller.flush();
             controller.notify();
             repaint();
@@ -307,7 +411,7 @@ namespace ksh::ui
         }
         EditorController& controller;
         bool dragging = false;
-        int source = -1, seed = 0;
+        int source = -1, groove = 0;
         uint64_t epoch = 0;
         float density = 0.4f, variation = 0.0f;
     };

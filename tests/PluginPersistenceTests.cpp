@@ -125,15 +125,18 @@ TEST_CASE ("plugin state roundtrips through getStateInformation", "[plugin][pers
 
     const auto engine = restored.engineStateSnapshot();
     REQUIRE (engine.stepCount == 16);
-    REQUIRE (engine.channelCount == 2);
+    REQUIRE (engine.channelCount == Constants::maxChannels);
     REQUIRE (engine.channels[1].note == 38);
     REQUIRE (engine.sources[0][1][4].enabled);
     REQUIRE (engine.sources[0][1][4].velocity == 90);
+    CHECK (engine.channels[15].note == Constants::defaultChannelNotes[15]);
+    CHECK_FALSE (engine.sources[0][15][4].enabled);
 }
 
 TEST_CASE ("Replacing a clean DAW project leaves all patterns recoverable", "[plugin][persistence][project-recovery]")
 {
-    PluginProcessor original;
+    auto originalStorage = std::make_unique<PluginProcessor>();
+    auto& original = *originalStorage;
     original.setProjectMetadata ("DAW project", "All patterns", {}, {});
     for (int pattern = 1; pattern <= Constants::sourceCount; ++pattern)
         REQUIRE (original.dispatchUiEngineCommand ("cell", { pattern, 1, pattern, 1, 60 + pattern }));
@@ -144,7 +147,8 @@ TEST_CASE ("Replacing a clean DAW project leaves all patterns recoverable", "[pl
     const auto firstFile = folder.getChildFile ("01.kshproject");
     const auto secondFile = folder.getChildFile ("02.kshproject");
     REQUIRE (firstFile.replaceWithText (original.enginePersistenceState().dump()));
-    PluginProcessor replacement;
+    auto replacementStorage = std::make_unique<PluginProcessor>();
+    auto& replacement = *replacementStorage;
     replacement.setProjectMetadata ("Replacement", {}, {}, {});
     REQUIRE (secondFile.replaceWithText (replacement.enginePersistenceState().dump()));
 
@@ -171,18 +175,13 @@ TEST_CASE ("Replacing a clean DAW project leaves all patterns recoverable", "[pl
     REQUIRE_FALSE (processor.loadStateFromData (badProject.data(), static_cast<int> (badProject.size())));
     PluginEditor reopened (processor);
     auto& view = PluginEditorTestPeer::view (reopened);
-    view.projectAction (1);
-    ksh::ui::ProjectDetails* details = nullptr;
+    view.projectAction (5);
+    juce::TextButton* restore = nullptr;
     for (auto* child : view.getChildren())
         if (auto* browser = dynamic_cast<ksh::ui::ProjectBrowser*> (child); browser && browser->isVisible())
             for (auto* component : browser->getChildren())
-                if (auto* project = dynamic_cast<ksh::ui::ProjectDetails*> (component)) details = project;
-    REQUIRE (details != nullptr);
-    REQUIRE (details->isVisible());
-    juce::TextButton* restore = nullptr;
-    for (auto* child : details->getChildren())
-        if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "RESTORE PREVIOUS PROJECT")
-            restore = button;
+                if (auto* button = dynamic_cast<juce::TextButton*> (component); button && button->getButtonText() == "RESTORE PREVIOUS")
+                    restore = button;
     REQUIRE (restore != nullptr);
     REQUIRE (restore->isVisible());
     restore->onClick();
@@ -280,7 +279,7 @@ TEST_CASE ("plugin state restore works off the message thread", "[plugin][persis
 
     REQUIRE (restoredState.getSize() > 0);
     const auto engine = restored.engineStateSnapshot();
-    REQUIRE (engine.channelCount == 2);
+    REQUIRE (engine.channelCount == Constants::maxChannels);
     REQUIRE (engine.sources[0][1][4].enabled);
 }
 
@@ -489,7 +488,7 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
     const auto button = [&] (const juce::String& label)
     {
         for (auto* child : browser->getChildren())
-            if (auto* control = dynamic_cast<juce::TextButton*> (child); control != nullptr && control->getButtonText() == label)
+            if (auto* control = dynamic_cast<juce::TextButton*> (child); control != nullptr && (control->getButtonText() == label || control->getTitle() == label))
                 return control;
         return static_cast<juce::TextButton*> (nullptr);
     };
@@ -500,12 +499,12 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
                 return control;
         return static_cast<juce::TextEditor*> (nullptr);
     };
-    REQUIRE (button ("NEW FOLDER") != nullptr);
+    REQUIRE (button ("New Folder") != nullptr);
     REQUIRE (button ("CREATE") != nullptr);
     REQUIRE (field ("Folder name") != nullptr);
     for (const auto* folder : { "Sessions", "Live" })
     {
-        button ("NEW FOLDER")->onClick();
+        button ("New Folder")->onClick();
         REQUIRE (field ("Folder name")->isVisible());
         field ("Folder name")->setText (folder);
         button ("CREATE")->onClick();
@@ -545,18 +544,15 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
             CHECK ((front == browser || browser->isParentOf (front)));
         }
     juce::ListBox* list = nullptr;
-    ProjectDetails* current = nullptr;
     for (auto* child : browser->getChildren())
     {
         if (auto* projectList = dynamic_cast<juce::ListBox*> (child)) list = projectList;
-        if (auto* details = dynamic_cast<ProjectDetails*> (child)) current = details;
+        if (auto* control = dynamic_cast<juce::TextEditor*> (child); control && control->getTitle().startsWith ("Project"))
+            CHECK_FALSE (control->isVisible());
     }
     REQUIRE (list != nullptr);
-    REQUIRE (current != nullptr);
-    REQUIRE (current->isVisible());
-    CHECK (current->getX() > list->getRight());
+    CHECK (list->getSelectedRow() == -1);
     list->selectRow (1);
-    CHECK_FALSE (current->isVisible());
     juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
     const juce::TextEditor* preview = nullptr;
     for (auto* child : browser->getChildren())
@@ -568,14 +564,14 @@ TEST_CASE ("Save As writes project details to nested folders from the project br
     CHECK (preview->getText() == "Preview another project");
     CHECK (preview->getX() > list->getRight());
     CHECK (processor.getProjectFile() == saved);
-    auto* showCurrent = button ("CURRENT PROJECT");
-    REQUIRE (showCurrent != nullptr);
-    REQUIRE (showCurrent->isVisible());
-    showCurrent->onClick();
-    CHECK (current->isVisible());
-    CHECK_FALSE (preview->isVisible());
-    for (auto* child : browser->getChildren())
-        if (const auto* action = dynamic_cast<juce::TextButton*> (child); action && action->isVisible())
+    CHECK (button ("Current Project") == nullptr);
+    CHECK (button ("SHOW IN FINDER") == nullptr);
+    const auto* browseFiles = button ("Browse Files");
+    REQUIRE (browseFiles != nullptr);
+    CHECK (browseFiles->isVisible());
+    CHECK (browseFiles->getBottom() <= list->getY());
+    for (const auto* label : { "CANCEL", "OPEN", "DISCARD AND OPEN" })
+        if (const auto* action = button (label); action && action->isVisible())
         {
             CHECK (static_cast<bool> (action->getProperties()["insetProjectArtwork"]));
             CHECK (action->getButtonText() == action->getButtonText().toUpperCase());
@@ -638,9 +634,84 @@ TEST_CASE ("A dropped KSH project opens in place and protects unsaved edits", "[
     CHECK_FALSE (processor.isDocumentModified());
 }
 
+TEST_CASE ("Project browser breadcrumbs and history navigate folders and restore selection", "[plugin][persistence][project-browser]")
+{
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-browser-navigation", {});
+    const juce::ScopeGuard cleanup { [&] { root.deleteRecursively(); } };
+    const auto sessions = root.getChildFile ("Sessions");
+    const auto nested = sessions.getChildFile ("Live");
+    REQUIRE (nested.createDirectory().wasOk());
+    REQUIRE (sessions.getChildFile ("Studio").createDirectory().wasOk());
+    for (const auto* name : { "Take 2.kshproject", "Take 10.kshproject" })
+        REQUIRE (nested.getChildFile (name).create().wasOk());
+    const auto deep = nested.getChildFile ("A long folder name/Another long folder name/Even deeper/Final folder");
+    REQUIRE (deep.createDirectory().wasOk());
+
+    juce::PropertiesFile preferences (root.getChildFile ("settings.xml"), {});
+    PluginProcessor processor;
+    ksh::ui::ProjectBrowser browser (preferences, processor);
+    browser.setSize (814, 409);
+    juce::File browsed;
+    auto enumerate = [&] (const juce::File& folder)
+    {
+        browsed = folder;
+        return folder.findChildFiles (juce::File::findFiles, false, "*.kshproject");
+    };
+    browser.open (root, {}, std::nullopt, enumerate, {}, {}, false, {}, nested);
+    const auto button = [&] (const juce::String& title) -> juce::Button*
+    {
+        for (auto* child : browser.getChildren())
+            if (auto* control = dynamic_cast<juce::Button*> (child); control != nullptr && control->getTitle() == title)
+                return control;
+        return nullptr;
+    };
+    juce::ListBox* list = nullptr;
+    for (auto* child : browser.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<juce::ListBox*> (child)) list = candidate;
+    }
+    REQUIRE (list != nullptr);
+    REQUIRE (button ("Back") != nullptr);
+    REQUIRE (button ("Forward") != nullptr);
+    CHECK_FALSE (button ("Back")->isEnabled());
+    CHECK_FALSE (button ("Forward")->isEnabled());
+
+    list->selectRow (2);
+    REQUIRE (button ("Sessions") != nullptr);
+    REQUIRE (button ("Sessions")->isVisible());
+    auto navigate = button ("Sessions")->onClick;
+    navigate();
+    CHECK (browsed == sessions);
+    CHECK (list->getSelectedRow() == 0);
+    CHECK (button ("Back")->isEnabled());
+    button ("Back")->onClick();
+    CHECK (browsed == nested);
+    CHECK (list->getSelectedRow() == 2);
+    CHECK (button ("Forward")->isEnabled());
+    button ("Forward")->onClick();
+    CHECK (browsed == sessions);
+    REQUIRE (button ("Projects") != nullptr);
+    REQUIRE (button ("Projects")->isVisible());
+    CHECK (list->keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (browsed == nested);
+    CHECK_FALSE (button ("Forward")->isEnabled());
+
+    CHECK (list->getListBoxModel()->getNumRows() == 3);
+    CHECK (list->getListBoxModel()->getNameForRow (1) == "Take 2");
+    CHECK (list->getListBoxModel()->getNameForRow (2) == "Take 10");
+    browser.dismiss();
+
+    browser.open (root, {}, std::nullopt, enumerate, {}, {}, false, {}, deep);
+    REQUIRE (button ("Parent folders") != nullptr);
+    CHECK (button ("Parent folders")->isVisible());
+    REQUIRE (button ("Final folder (current location)") != nullptr);
+    CHECK (button ("Final folder (current location)")->isVisible());
+}
+
 TEST_CASE ("The project browser remembers favorites and protects unsaved changes", "[plugin][persistence][project-browser]")
 {
     using ksh::ui::ProjectBrowser;
+    const bool compact = GENERATE (false, true);
     const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("ksh-favorites", {});
     const juce::ScopeGuard cleanup { [&] { root.deleteRecursively(); } };
     REQUIRE (root.getChildFile ("Sessions").createDirectory().wasOk());
@@ -683,16 +754,33 @@ TEST_CASE ("The project browser remembers favorites and protects unsaved changes
     }
     juce::PropertiesFile preferences (settings, options);
     ProjectBrowser browser (preferences, processor);
-    browser.setSize (814, 409);
+    browser.setSize (compact ? 814 : 1200, compact ? 409 : 800);
     juce::File opened;
     browser.open (root, {}, std::nullopt, enumerate, [&] (const juce::File& file, const auto&, auto done)
     {
         opened = file;
         done ({});
-    }, {}, true);
-    auto* favorites = findButton (browser, "FAVORITES");
+    }, {}, true, [&] (const juce::File&, auto done)
+    {
+        done (ProjectBrowser::Details { "Favorite", {}, {}, {}, {} });
+    });
+    auto* favorites = findButton (browser, "Favorites");
     REQUIRE (favorites != nullptr);
     favorites->onClick();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (160);
+    juce::TextEditor* description = nullptr;
+    juce::ListBox* list = nullptr;
+    for (auto* child : browser.getChildren())
+    {
+        if (child->getTitle() == "Project description" && child->isVisible())
+            description = dynamic_cast<juce::TextEditor*> (child);
+        if (auto* candidate = dynamic_cast<juce::ListBox*> (child))
+            list = candidate;
+    }
+    REQUIRE (description != nullptr);
+    REQUIRE (list != nullptr);
+    CHECK (description->getText() == "No description");
+    CHECK (list->getBottom() - description->getBottom() >= 42);
     auto* open = findButton (browser, "OPEN");
     REQUIRE (open != nullptr);
     REQUIRE (open->isEnabled());
@@ -704,7 +792,7 @@ TEST_CASE ("The project browser remembers favorites and protects unsaved changes
     CHECK_FALSE (browser.isVisible());
 }
 
-TEST_CASE ("The project browser keeps Save As details when choosing a cloud folder", "[plugin][persistence][project-browser]")
+TEST_CASE ("The project browser supports Save As and Open through a cloud folder picker", "[plugin][persistence][project-browser]")
 {
     using ksh::ui::ProjectBrowser;
     juce::TemporaryFile temporary (".settings");
@@ -735,7 +823,7 @@ TEST_CASE ("The project browser keeps Save As details when choosing a cloud fold
                 return control;
         return nullptr;
     };
-    auto* cloudButton = button ("ICLOUD DRIVE");
+    auto* cloudButton = button ("iCloud Drive");
     auto* save = button ("SAVE");
     REQUIRE (cloudButton != nullptr);
     REQUIRE (cloudButton->isVisible());
@@ -756,6 +844,44 @@ TEST_CASE ("The project browser keeps Save As details when choosing a cloud fold
     CHECK (saved.author == "Author");
     CHECK (saved.description == "Notes");
     CHECK_FALSE (browser.isVisible());
+
+    const auto cloudProject = cloud.getChildFile ("Sequence.kshproject");
+    juce::File opened;
+    bool browsedExternal = false;
+    browser.open (local, {}, std::nullopt, [&] (const juce::File& folder)
+    {
+        return folder == cloud ? juce::Array<juce::File> { cloudProject } : juce::Array<juce::File> {};
+    }, [&] (const juce::File& file, const auto&, auto done)
+    {
+        opened = file;
+        done ({});
+    }, [&] { browsedExternal = true; }, false, {}, {}, { "Local projects", cloud, [&] (auto done) { chooseFolder = std::move (done); } });
+    REQUIRE (cloudButton->isVisible());
+    const auto* browseFiles = button ("Browse Files");
+    const auto* favorites = button ("Favorites");
+    REQUIRE (browseFiles != nullptr);
+    REQUIRE (favorites != nullptr);
+    CHECK (browseFiles->isVisible());
+    CHECK (browseFiles->getY() == cloudButton->getY());
+    CHECK (browseFiles->getX() == cloudButton->getRight());
+    CHECK (favorites->getX() == browseFiles->getRight());
+    SECTION ("Browse Files opens the external picker")
+    {
+        browseFiles->onClick();
+        CHECK (browsedExternal);
+        CHECK_FALSE (browser.isVisible());
+    }
+    SECTION ("iCloud Drive opens the in-app project list")
+    {
+        cloudButton->onClick();
+        chooseFolder (cloud);
+        auto* open = button ("OPEN");
+        REQUIRE (open != nullptr);
+        REQUIRE (open->isEnabled());
+        open->onClick();
+        CHECK (opened == cloudProject);
+        CHECK_FALSE (browsedExternal);
+    }
 }
 
 TEST_CASE ("Project arrows wrap within the current folder", "[plugin][persistence][project-browser]")

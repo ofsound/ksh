@@ -110,6 +110,7 @@ namespace ksh::ui
                 control->captionGap = 5;
                 control->sensitivity = 2.0f;
                 control->horizontalDragOnTouch = true;
+                control->useInlineTextDisplay();
                 control->onEnd = [this] { updateController (true, ccNumber.value, ccChannel.value); };
             }
             ccNumber.caption = "CC number";
@@ -194,12 +195,12 @@ namespace ksh::ui
             ccChannel.setVisible (row.controller);
             repaint();
         }
-        void setGridCells (juce::Rectangle<float> bounds, bool visible)
+        void setGridCells (juce::Rectangle<float> bounds, juce::Rectangle<float> dimBounds)
         {
-            if (gridCells == bounds && dimGrid == visible)
+            if (gridCells == bounds && gridDimmingBounds == dimBounds)
                 return;
             gridCells = bounds;
-            dimGrid = visible;
+            gridDimmingBounds = dimBounds;
             resized();
             repaint();
         }
@@ -209,9 +210,13 @@ namespace ksh::ui
             if (std::exchange (menuPage, enabled) == enabled)
                 return;
             setAlwaysOnTop (!enabled);
+            scalePresets.getProperties().set ("dropdownInsetReduction", enabled ? phoneDropdownInsetReduction : 0);
             resized();
+            resetKeyboard();
             repaint();
         }
+
+        void setMenuArea (juce::Rectangle<int> area) { setBounds (area); }
 
         void open (const juce::String& rowName, int note, juce::Component* input)
         {
@@ -222,8 +227,6 @@ namespace ksh::ui
             setVisible (true);
             toFront (false);
             repaint();
-            // The full-editor overlay already catches clicks outside the panel.
-            // JUCE modality would also block native window and app commands.
             if (isShowing())
                 grabKeyboardFocus();
         }
@@ -269,9 +272,14 @@ namespace ksh::ui
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (!menuPage && !panel.contains (e.getPosition()) && !modeBounds.contains (e.getPosition()))
+            if (!panel.contains (e.getPosition()) && !modeBounds.contains (e.getPosition()))
             {
                 ValueControl::endPendingWheelGesture();
+                if (menuPage)
+                {
+                    dismiss();
+                    return;
+                }
                 juce::Component::SafePointer<NoteInput> nextInput;
                 if (auto* parent = getParentComponent())
                 {
@@ -310,12 +318,14 @@ namespace ksh::ui
                 modeBounds = { panel.getX(), panel.getY() - modeGap - modeHeight, std::min (modeWidth, panel.getWidth()), modeHeight };
             }
             const auto content = panel.reduced (menuPage ? menuInset : contentInset, 0);
-            auto toolbar = content.withY (panel.getY() + (menuPage ? menuInset : allRowsPadding))
-                                  .withHeight (menuPage ? modeHeight : Layout::touchTarget);
+            auto toolbar = content.withY (panel.getY() + (menuPage ? 0 : allRowsPadding))
+                                  .withHeight (menuPage ? 42 : Layout::touchTarget);
             if (menuPage)
             {
-                modeBounds = toolbar.removeFromLeft (modeWidth);
-                toolbar.removeFromLeft (16);
+                modeBounds = toolbar.withWidth (126);
+                const int presetsWidth = dropdownWidth (scalePresets.getButtonText()) - 2 * phoneDropdownInsetReduction + 2;
+                scalePresets.setBounds (toolbar.withRight (content.getRight()).removeFromRight (presetsWidth));
+                toolbar = toolbar.translated (0, toolbar.getHeight() + 5);
             }
             const int segmentWidth = modeBounds.getWidth() / 2;
             noteMode.setBounds (modeBounds.withWidth (std::min (modeBounds.getWidth(), segmentWidth + 1)));
@@ -325,13 +335,14 @@ namespace ksh::ui
                                      : content.withSizeKeepingCentre (controlsWidth, 77);
             ccNumber.setBounds (controls.removeFromLeft (controls.getWidth() / 2).reduced (5, 0));
             ccChannel.setBounds (controls.reduced (5, 0));
-            constexpr int controlGap = 8;
+            const int controlGap = menuPage ? 4 : 8;
             constexpr int buttonCount = static_cast<int> (transposeOffsets.size());
-            constexpr int gapWidth = (buttonCount - 1) * controlGap;
-            constexpr int labelGap = 12;
+            const int gapWidth = (buttonCount - 1) * controlGap;
+            const int labelGap = menuPage ? 8 : 12;
             const int labelWidth = juce::GlyphArrangement::getStringWidthInt (font (menuPage ? 16 : 19, true), transposeLabel);
-            allRowsLabelBounds = toolbar.removeFromLeft (menuPage ? 72 : 96);
-            scalePresets.setBounds (toolbar.removeFromRight (menuPage ? 136 : 156));
+            allRowsLabelBounds = toolbar.removeFromLeft (menuPage ? 66 : 96);
+            if (!menuPage)
+                scalePresets.setBounds (toolbar.removeFromRight (156));
             const int fixedWidth = labelWidth + labelGap + gapWidth;
             const int buttonWidth = juce::jlimit (0, Layout::touchTarget, (toolbar.getWidth() - fixedWidth) / buttonCount);
             auto transposeGroup = toolbar.withSizeKeepingCentre (buttonCount * buttonWidth + fixedWidth, toolbar.getHeight());
@@ -344,14 +355,14 @@ namespace ksh::ui
             }
             constexpr int octaveButtonSize = 42;
             constexpr int octaveButtonGap = 8;
-            const int keyY = menuPage ? modeBounds.getBottom() + 24 + octaveButtonSize + octaveButtonGap
+            const int keyY = menuPage ? toolbar.getBottom() + 6 + octaveButtonSize + octaveButtonGap
                                       : panel.getBottom() - contentInset - whiteKeyHeight;
             const int keyHeight = menuPage ? juce::jmax (0, panel.getBottom() - menuInset - keyY) : whiteKeyHeight;
             const int octaveButtonY = keyY - octaveButtonGap - octaveButtonSize;
             previous.setBounds (content.getX(), octaveButtonY, octaveButtonSize, octaveButtonSize);
             next.setBounds (content.getRight() - octaveButtonSize, octaveButtonY, octaveButtonSize, octaveButtonSize);
             const int keyboardWidth = content.getWidth();
-            if (keyboard.getWidth() != keyboardWidth || keyboard.getHeight() != keyHeight)
+            if (keyboard.getWidth() != keyboardWidth || keyboard.getHeight() != keyHeight || laidOutOctaves != visibleOctaves())
                 layoutKeys (keyboardWidth, keyHeight);
             keyboard.setBounds (content.getX(), keyY, keyboardWidth, keyHeight);
             positionKeyboard();
@@ -363,10 +374,10 @@ namespace ksh::ui
         }
         void paint (juce::Graphics& g) override
         {
-            if (!menuPage && dimGrid)
+            if (!menuPage && !gridDimmingBounds.isEmpty())
             {
                 g.setColour (juce::Colours::black.withAlpha (0.80f));
-                g.fillRect (gridCells);
+                g.fillRect (gridDimmingBounds);
             }
             const auto accent = findColour (juce::TextButton::buttonOnColourId);
             if (const auto* input = dynamic_cast<NoteInput*> (returnFocus.getComponent()); !menuPage && input != nullptr && input->isVisible())
@@ -383,7 +394,7 @@ namespace ksh::ui
                 paintPopupPanel (g, panelOutline, accent, panelGlow);
             if (!controllerMode || menuPage)
             {
-                const int dividerY = menuPage ? modeBounds.getBottom() + 11 : panel.getY() + allRowsHeight;
+                const int dividerY = menuPage ? modeBounds.getBottom() + 2 : panel.getY() + allRowsHeight;
                 g.setColour (Palette::muted.withAlpha (0.40f));
                 g.fillRect (r.reduced (menuPage ? menuInset : contentInset, 0.0f).withY (static_cast<float> (dividerY)).withHeight (1.5f));
             }
@@ -420,8 +431,9 @@ namespace ksh::ui
     private:
         void layoutKeys (int keyboardWidth, int height)
         {
-            constexpr int visibleWhiteKeys = visibleOctaves * 7;
-            const auto whiteKeyX = [keyboardWidth] (int index) { return static_cast<double> (index * keyboardWidth) / visibleWhiteKeys; };
+            laidOutOctaves = visibleOctaves();
+            const int visibleWhiteKeys = laidOutOctaves * 7;
+            const auto whiteKeyX = [keyboardWidth, visibleWhiteKeys] (int index) { return static_cast<double> (index * keyboardWidth) / visibleWhiteKeys; };
             const double whiteWidth = whiteKeyX (1);
             const int blackKeyHeight = juce::roundToInt (74.0f * static_cast<float> (height) / whiteKeyHeight);
             int white = 0;
@@ -489,10 +501,11 @@ namespace ksh::ui
             const bool leftSegment;
         };
         static constexpr int notesPerOctave = 12;
-        static constexpr int visibleOctaves = 4;
-        static constexpr int visibleNotes = visibleOctaves * notesPerOctave;
-        static constexpr int lastFirstNote = 84;
-        static constexpr int keyCount = lastFirstNote + visibleNotes;
+        static constexpr int keyCount = 132;
+        int visibleOctaves() const { return menuPage ? 2 : 4; }
+        int visibleNotes() const { return visibleOctaves() * notesPerOctave; }
+        int lastFirstNote() const { return keyCount - visibleNotes(); }
+        int laidOutOctaves = 0;
         static constexpr double scrollDurationMs = 150.0;
         static constexpr int contentInset = 20, menuInset = 14;
         static constexpr int whiteKeyHeight = 116;
@@ -508,8 +521,8 @@ namespace ksh::ui
         ModeButton noteMode { "NOTE", true }, ccMode { "CC", false };
         ValueControl ccNumber, ccChannel;
         bool controllerMode = false;
-        bool dimGrid = false, menuPage = false;
-        juce::Rectangle<float> gridCells;
+        bool menuPage = false;
+        juce::Rectangle<float> gridCells, gridDimmingBounds;
         juce::Rectangle<int> panel, modeBounds, allRowsLabelBounds, transposeLabelBounds;
         juce::Path panelOutline;
         melatonin::DropShadow panelGlow { juce::Colours::transparentBlack, 10, {}, 1 };
@@ -534,15 +547,15 @@ namespace ksh::ui
                 PresetOctave octave = PresetOctave::current;
             };
             static constexpr std::array presets {
-                Preset { "Chromatic", { 0, 1, 2, 3, 4, 5, 6, 7 } },
-                Preset { "Ruismaker", { 49, 51, 54, 56, 58, 61, 63, 66 }, PresetOctave::fixed },
-                Preset { "Major", { 0, 2, 4, 5, 7, 9, 11, 12 } },
-                Preset { "Natural minor", { 0, 2, 3, 5, 7, 8, 10, 12 } },
-                Preset { "Dorian", { 0, 2, 3, 5, 7, 9, 10, 12 } },
-                Preset { "Mixolydian", { 0, 2, 4, 5, 7, 9, 10, 12 } },
-                Preset { "Major pentatonic", { 0, 2, 4, 7, 9, 12, 14, 16 } },
-                Preset { "Minor pentatonic", { 0, 3, 5, 7, 10, 12, 15, 17 } },
-                Preset { "Whole tone", { 0, 2, 4, 6, 8, 10, 12, 14 } },
+                Preset { "Chromatic", { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 } },
+                Preset { "Ruismaker", { 49, 51, 54, 56, 58, 61, 63, 66, -1, -1, -1, -1, -1, -1, -1, -1 }, PresetOctave::fixed },
+                Preset { "Major", { 0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24, 26 } },
+                Preset { "Natural minor", { 0, 2, 3, 5, 7, 8, 10, 12, 14, 15, 17, 19, 20, 22, 24, 26 } },
+                Preset { "Dorian", { 0, 2, 3, 5, 7, 9, 10, 12, 14, 15, 17, 19, 21, 22, 24, 26 } },
+                Preset { "Mixolydian", { 0, 2, 4, 5, 7, 9, 10, 12, 14, 16, 17, 19, 21, 22, 24, 26 } },
+                Preset { "Major pentatonic", { 0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36 } },
+                Preset { "Minor pentatonic", { 0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24, 27, 29, 31, 34, 36 } },
+                Preset { "Whole tone", { 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30 } },
             };
             juce::PopupMenu menu;
             menu.setLookAndFeel (&getLookAndFeel());
@@ -575,19 +588,19 @@ namespace ksh::ui
 
         void revealCandidate()
         {
-            if (candidate < firstNote || candidate >= firstNote + visibleNotes)
+            if (candidate < firstNote || candidate >= firstNote + visibleNotes())
                 resetKeyboard();
         }
 
         void updateScrollButtons()
         {
             previous.setEnabled (firstNote > 0);
-            next.setEnabled (firstNote < lastFirstNote);
+            next.setEnabled (firstNote < lastFirstNote());
         }
 
         void positionKeyboard()
         {
-            const int left = juce::roundToInt (static_cast<double> (displayedOctave) * keyboard.getWidth() / visibleOctaves);
+            const int left = juce::roundToInt (static_cast<double> (displayedOctave) * keyboard.getWidth() / visibleOctaves());
             keyStrip.setTopLeftPosition (-left, 0);
             const auto visible = keyboard.getLocalBounds().translated (left, 0);
             for (auto& key : keys)
@@ -597,7 +610,7 @@ namespace ksh::ui
         void resetKeyboard()
         {
             stopTimer();
-            firstNote = juce::jlimit (0, lastFirstNote, (candidate / notesPerOctave - 1) * notesPerOctave);
+            firstNote = juce::jlimit (0, lastFirstNote(), (candidate / notesPerOctave - 1) * notesPerOctave);
             displayedOctave = static_cast<float> (firstNote / notesPerOctave);
             updateScrollButtons();
             positionKeyboard();
@@ -605,7 +618,7 @@ namespace ksh::ui
 
         void scroll (int offset)
         {
-            const int target = juce::jlimit (0, lastFirstNote, firstNote + offset);
+            const int target = juce::jlimit (0, lastFirstNote(), firstNote + offset);
             if (firstNote == target)
                 return;
             firstNote = target;
@@ -647,7 +660,7 @@ namespace ksh::ui
             setCandidate (assignedNote = midi);
             if (onChoose)
                 onChoose (midi);
-            if (closeAfter)
+            if (closeAfter && !menuPage)
                 dismiss();
         }
     };

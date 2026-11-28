@@ -1,6 +1,13 @@
 #pragma once
 #include <PluginProcessor.h>
 
+inline std::unique_ptr<ksh::DocumentState> snapshotEditorDocument (PluginProcessor& processor)
+{
+    auto document = std::make_unique<ksh::DocumentState>();
+    processor.copyEditorDocument (*document);
+    return document;
+}
+
 /* This is a helper function to run tests within the context of a plugin editor.
  *
  * Read more here: https://github.com/sudara/pamplejuce/issues/18#issuecomment-1425836807

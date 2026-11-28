@@ -20,21 +20,34 @@ namespace ksh::ui
     }
 
     inline void showAnchoredPopup (juce::PopupMenu& menu, const juce::PopupMenu::Options& options,
-                                   std::function<void (int)> onClose)
+                                   std::function<void (int)> onClose, bool consumeOutsideClick = false)
     {
         const juce::Component::SafePointer<juce::Component> anchor (options.getTargetComponent());
         if (anchor == nullptr || menu.getNumItems() == 0)
             return;
 
+        // JUCE can dismiss the popup synchronously and deliver the same press below it.
+        // Give that press a component with no action while the popup is open.
+        std::shared_ptr<juce::Component> dismissShield;
+        if (consumeOutsideClick)
+            if (auto* parent = options.getParentComponent())
+            {
+                dismissShield = std::make_shared<juce::Component>();
+                dismissShield->setBounds (parent->getLocalBounds());
+                dismissShield->setAlwaysOnTop (true);
+                parent->addAndMakeVisible (*dismissShield);
+            }
         const juce::var popupState (new AnchoredPopup());
         const auto* previousModal = juce::Component::getCurrentlyModalComponent();
-        menu.showMenuAsync (options, [anchor, popupState, completion = std::move (onClose)] (int result)
+        menu.showMenuAsync (options, [anchor, popupState, dismissShield, completion = std::move (onClose)] (int result)
         {
             if (anchor != nullptr && anchor->getProperties()[anchoredPopupProperty].getObject() == popupState.getObject())
             {
                 anchor->getProperties().remove (anchoredPopupProperty);
                 anchor->repaint();
             }
+            if (dismissShield != nullptr)
+                dismissShield->setVisible (false);
             completion (result);
         });
         // JUCE creates the modal menu window synchronously before dispatching its result later.
